@@ -1,0 +1,24 @@
+{
+  "id": 1,
+  "grid": {
+    "cols": 4,
+    "rows": 4,
+    "cars": [
+      { "id": 1, "x": 0, "y": 0, "w": 1, "h": 1, "dir": "up", "color": "red", "cap": "small" },
+      { "id": 2, "x": 3, "y": 0, "w": 1, "h": 1, "dir": "up", "color": "red", "cap": "small" },
+      { "id": 3, "x": 0, "y": 2, "w": 2, "h": 1, "dir": "up", "color": "blue", "cap": "medium" },
+      { "id": 4, "x": 2, "y": 2, "w": 2, "h": 1, "dir": "up", "color": "green", "cap": "big" }
+    ]
+  },
+  "parking": { "slots": 7, "unlocked": 4 },
+  "loop": {
+    "capacity": 12,
+    "boardIndex": 6,
+    "queue": [
+      { "color": "red", "count": 32 },
+      { "color": "blue", "count": 24 },
+      { "color": "green", "count": 32 }
+    ]
+  },
+  "powerups": { "refresh": 3, "hardClear": 1, "magnet": 1 }
+}
