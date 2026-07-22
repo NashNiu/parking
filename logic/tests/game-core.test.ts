@@ -1,0 +1,57 @@
+import { GameCore } from '../src/game-core';
+import { LevelData } from '../src/types';
+
+// Minimal solvable level: one small red car (cap 16), 16 red passengers.
+function soloLevel(): LevelData {
+  return {
+    id: 1,
+    grid: { cols: 1, rows: 1, cars: [
+      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    ] },
+    parking: { slots: 4, unlocked: 4 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+}
+
+test('tapCar parks an exitable car and removes it from the grid', () => {
+  const game = new GameCore(soloLevel());
+  expect(game.tapCar(1)).toBe(true);
+  expect(game.grid.isEmpty()).toBe(true);
+  expect(game.parking.parked[0]?.carId).toBe(1);
+});
+
+test('tapCar fails when no free slot', () => {
+  const game = new GameCore(soloLevel());
+  game.parking.parked = [
+    { carId: 99, color: 'x', capacity: 16, filled: 0 },
+  ]; // force all-occupied (unlocked collapsed to 1 for the test)
+  expect(game.tapCar(1)).toBe(false);
+});
+
+test('playing a full level reaches won state', () => {
+  const game = new GameCore(soloLevel());
+  game.tapCar(1);
+  for (let i = 0; i < 200 && game.getState() === 'playing'; i++) {
+    game.stepLoop();
+  }
+  expect(game.getState()).toBe('won');
+});
+
+test('deadlock is detected when no progress is possible', () => {
+  // Grid car is blue but the only passengers are red -> blue car can never fill,
+  // and once parked there is no other car to move.
+  const level: LevelData = {
+    id: 2,
+    grid: { cols: 1, rows: 1, cars: [
+      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'small' },
+    ] },
+    parking: { slots: 1, unlocked: 1 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+  const game = new GameCore(level);
+  game.tapCar(1);          // blue car now occupies the only slot
+  game.stepLoop();         // red passengers cannot board a blue car
+  expect(game.getState()).toBe('deadlock');
+});
