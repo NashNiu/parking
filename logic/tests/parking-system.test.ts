@@ -1,5 +1,5 @@
-import { ParkingSystem } from '../src/parking-system';
-import { CarSpec } from '../src/types';
+import { ParkingSystem } from '../../game/assets/scripts/core/parking-system';
+import { CarSpec } from '../../game/assets/scripts/core/types';
 
 const car = (over: Partial<CarSpec>): CarSpec => ({
   id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small', ...over,

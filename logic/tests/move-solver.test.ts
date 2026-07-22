@@ -1,5 +1,5 @@
-import { footprint, pathClear } from '../src/move-solver';
-import { CarSpec } from '../src/types';
+import { footprint, pathClear } from '../../game/assets/scripts/core/move-solver';
+import { CarSpec } from '../../game/assets/scripts/core/types';
 
 const car = (over: Partial<CarSpec>): CarSpec => ({
   id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small', ...over,

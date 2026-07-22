@@ -1,5 +1,5 @@
-import { GameCore } from '../src/game-core';
-import { LevelData } from '../src/types';
+import { GameCore } from '../../game/assets/scripts/core/game-core';
+import { LevelData } from '../../game/assets/scripts/core/types';
 
 // Minimal solvable level: one small red car (cap 16), 16 red passengers.
 function soloLevel(): LevelData {

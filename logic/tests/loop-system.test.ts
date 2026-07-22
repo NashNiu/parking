@@ -1,4 +1,4 @@
-import { LoopSystem } from '../src/loop-system';
+import { LoopSystem } from '../../game/assets/scripts/core/loop-system';
 
 test('ring fills from pool on construction, rest stays in pool', () => {
   const loop = new LoopSystem(4, 2, [{ color: 'red', count: 6 }]);

@@ -1,4 +1,4 @@
-import { CAP_SIZE } from '../src/types';
+import { CAP_SIZE } from '../../game/assets/scripts/core/types';
 
 test('CAP_SIZE maps car sizes to capacities', () => {
   expect(CAP_SIZE.small).toBe(16);

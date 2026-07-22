@@ -1,4 +1,4 @@
-import { GameCore, validateLevel, LevelData } from '../src/index';
+import { GameCore, validateLevel, LevelData } from '../../game/assets/scripts/core/index';
 
 // Two colors, two cars; blue car is initially blocked by the red car above it,
 // so the player must move red first. Conservation: red 16, blue 24.

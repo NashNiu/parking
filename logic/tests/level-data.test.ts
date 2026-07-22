@@ -1,5 +1,5 @@
-import { validateLevel } from '../src/level-data';
-import { LevelData } from '../src/types';
+import { validateLevel } from '../../game/assets/scripts/core/level-data';
+import { LevelData } from '../../game/assets/scripts/core/types';
 
 function baseLevel(): LevelData {
   return {
