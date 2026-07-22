@@ -22,6 +22,7 @@ export class GameCore {
       level.loop.queue,
     );
     this.boarding = new BoardingSystem(this.loop, this.parking);
+    this.updateState();
   }
 
   tapCar(carId: number): boolean {

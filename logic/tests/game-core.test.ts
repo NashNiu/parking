@@ -51,7 +51,11 @@ test('deadlock is detected when no progress is possible', () => {
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
   const game = new GameCore(level);
-  game.tapCar(1);          // blue car now occupies the only slot
-  game.stepLoop();         // red passengers cannot board a blue car
+  expect(game.getState()).toBe('playing');
+  expect(game.tapCar(1)).toBe(true); // blue car occupies the only slot
+  // No red passenger can ever board a blue car and no other car can move,
+  // so the game is unrecoverable — deadlock is detected immediately.
+  expect(game.getState()).toBe('deadlock');
+  game.stepLoop(); // guarded no-op once state is no longer 'playing'
   expect(game.getState()).toBe('deadlock');
 });
