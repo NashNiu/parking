@@ -2,15 +2,20 @@ import { LevelData } from './types';
 import { GridSystem } from './grid-system';
 import { ParkingSystem } from './parking-system';
 import { LoopSystem } from './loop-system';
-import { BoardingSystem } from './boarding-system';
+import { BoardingSystem, BoardResult } from './boarding-system';
 
 export type GameState = 'playing' | 'won' | 'deadlock';
 
+export interface TapResult {
+  ok: boolean;
+  slotIndex: number;
+}
+
 export class GameCore {
-  grid: GridSystem;
-  parking: ParkingSystem;
-  loop: LoopSystem;
-  boarding: BoardingSystem;
+  readonly grid: GridSystem;
+  readonly parking: ParkingSystem;
+  readonly loop: LoopSystem;
+  readonly boarding: BoardingSystem;
   private state: GameState = 'playing';
 
   constructor(level: LevelData) {
@@ -25,21 +30,22 @@ export class GameCore {
     this.updateState();
   }
 
-  tapCar(carId: number): boolean {
-    if (this.state !== 'playing') return false;
-    if (!this.grid.canExit(carId)) return false;
-    if (!this.parking.hasFreeSlot()) return false;
+  tapCar(carId: number): TapResult {
+    if (this.state !== 'playing') return { ok: false, slotIndex: -1 };
+    if (!this.grid.canExit(carId)) return { ok: false, slotIndex: -1 };
+    if (!this.parking.hasFreeSlot()) return { ok: false, slotIndex: -1 };
     const car = this.grid.cars.get(carId)!;
-    this.parking.park(car);
+    const slotIndex = this.parking.park(car);
     this.grid.removeCar(carId);
     this.updateState();
-    return true;
+    return { ok: true, slotIndex };
   }
 
-  stepLoop(): void {
-    if (this.state !== 'playing') return;
-    this.boarding.tick();
+  stepLoop(): BoardResult {
+    if (this.state !== 'playing') return { boardedColor: null, departedCarIds: [] };
+    const res = this.boarding.tick();
     this.updateState();
+    return res;
   }
 
   getState(): GameState {

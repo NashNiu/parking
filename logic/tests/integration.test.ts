@@ -24,9 +24,9 @@ test('level passes conservation validation', () => {
 
 test('blocked car cannot be tapped until blocker is removed', () => {
   const game = new GameCore(level());
-  expect(game.tapCar(2)).toBe(false); // blue blocked by red
-  expect(game.tapCar(1)).toBe(true);  // red exits
-  expect(game.tapCar(2)).toBe(true);  // blue now free
+  expect(game.tapCar(2).ok).toBe(false); // blue blocked by red
+  expect(game.tapCar(1).ok).toBe(true);  // red exits
+  expect(game.tapCar(2).ok).toBe(true);  // blue now free
 });
 
 test('full playthrough reaches won', () => {
