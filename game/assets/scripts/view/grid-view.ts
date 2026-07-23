@@ -2,11 +2,13 @@ import { Node, Vec3 } from 'cc';
 import { GridSystem } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
-import { makeCar, Dir } from './placeholder';
+import { Dir } from './placeholder';
+import { buildCar, Cap } from './car-builder';
 
 interface CarEntry {
     id: number;
     node: Node;
+    body: Node;
     hw: number; // half width (world)
     hh: number; // half height (world)
 }
@@ -28,11 +30,13 @@ export class GridView {
     render(): void {
         for (const [id, car] of this.grid.cars) {
             const size = this.layout.footprintSize(car.w, car.h);
-            const node = makeCar(`car-${id}`, size.x, size.y, colorOf(car.color), car.dir as Dir);
-            node.setPosition(this.layout.cellCenter(car.x, car.y, car.w, car.h));
-            this.parent.addChild(node);
-            this.carNodes.set(id, node);
-            this.entries.push({ id, node, hw: size.x / 2, hh: size.y / 2 });
+            const { root, body } = buildCar(
+                `car-${id}`, size.x, size.y, colorOf(car.color), car.dir as Dir, car.cap as Cap,
+            );
+            root.setPosition(this.layout.cellCenter(car.x, car.y, car.w, car.h));
+            this.parent.addChild(root);
+            this.carNodes.set(id, root);
+            this.entries.push({ id, node: root, body, hw: size.x / 2, hh: size.y / 2 });
         }
     }
 
@@ -49,6 +53,11 @@ export class GridView {
 
     getCarNode(id: number): Node | undefined {
         return this.carNodes.get(id);
+    }
+
+    /** Returns the animatable body node (chassis/cabin/wheels/windows/arrow) for a car, if tracked. */
+    getCarBody(id: number): Node | undefined {
+        return this.entries.find((e) => e.id === id)?.body;
     }
 
     /** Stop tracking a car and return its node WITHOUT destroying it (for park animation). */
