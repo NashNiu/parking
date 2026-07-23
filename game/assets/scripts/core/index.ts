@@ -6,3 +6,4 @@ export * from './parking-system';
 export * from './loop-system';
 export * from './boarding-system';
 export * from './game-core';
+export * from './solvability';
