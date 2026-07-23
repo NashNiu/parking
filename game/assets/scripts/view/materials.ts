@@ -1,4 +1,4 @@
-import { Node, MeshRenderer, Material, Color } from 'cc';
+import { Node, MeshRenderer, Material, Color, EffectAsset } from 'cc';
 
 const litCache = new Map<string, Material>();
 
@@ -6,20 +6,39 @@ function key(c: Color): string {
     return `${c.r},${c.g},${c.b}`;
 }
 
-/** Cartoon-ish lit material (builtin-standard, matte with a faint sheen). Cached per color. */
+/**
+ * Try to build a lit builtin-standard material. Returns null if the effect isn't
+ * usable at runtime (in some pipeline/scene setups builtin-standard yields zero
+ * passes when created via `new Material()`, which later crashes the renderer).
+ * We only accept it once we've confirmed it actually built passes.
+ */
+function tryStandard(color: Color): Material | null {
+    const eff = EffectAsset.get('builtin-standard');
+    if (!eff) return null;
+    const mat = new Material();
+    try {
+        mat.initialize({ effectAsset: eff });
+        if (!mat.passes || mat.passes.length === 0) return null;
+        // builtin-standard's albedo color property is named `mainColor` (its
+        // shader target is `albedo`). roughness (0.5) / metallic (0) defaults
+        // already give the matte cartoon look we want.
+        mat.setProperty('mainColor', color);
+        return mat;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Cartoon material. Prefers builtin-standard (real lighting); falls back to
+ * builtin-unlit (flat, but always renders) if standard can't build passes here.
+ * Cached per color.
+ */
 export function litMaterial(color: Color): Material {
     const k = key(color);
     const hit = litCache.get(k);
     if (hit) return hit;
-    const mat = new Material();
-    mat.initialize({ effectName: 'builtin-standard' });
-    // In builtin-standard the albedo color's property NAME is `mainColor` (its
-    // shader `target` is `albedo`). Setting `albedo`/`roughness`/`metallic` by
-    // those names is rejected as "illegal property", which leaves the material's
-    // passes null and crashes MeshRenderer's skin-pass update on enable. We set
-    // only `mainColor`; roughness (0.5) / metallic (0) defaults already give the
-    // matte cartoon look we want.
-    mat.setProperty('mainColor', color);
+    const mat = tryStandard(color) ?? unlitMaterial(color);
     litCache.set(k, mat);
     return mat;
 }
