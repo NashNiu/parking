@@ -1,24 +1,33 @@
-import { Node, DirectionalLight, Vec3, Color, director } from 'cc';
+import { Node, DirectionalLight, Color, director } from 'cc';
 import { makeLitBox } from './placeholder';
 
 /**
  * Adds cartoon lighting + a soft stage floor + warm background decor.
  * Lights are attached to the scene; floor/decor become children of `root`.
+ *
+ * The scene-level light + ambient setup is idempotent (guarded by a
+ * `KeyLight` name check) so repeated calls across restarts don't leak
+ * additional DirectionalLight nodes or keep re-lifting ambient values.
+ * Floor/decor are parented under `root` and are destroyed/recreated with
+ * the board on every restart, so those are intentionally left unguarded.
  */
 export function setupEnvironment(root: Node): void {
-    // Key directional light, angled from upper-front for soft cartoon shading.
-    const lightNode = new Node('KeyLight');
-    const dl = lightNode.addComponent(DirectionalLight);
-    dl.illuminance = 80000;
-    dl.color = new Color(255, 250, 235);
-    lightNode.setRotationFromEuler(-50, -30, 0);
-    director.getScene()!.addChild(lightNode);
+    const scene = director.getScene()!;
+    if (!scene.getChildByName('KeyLight')) {
+        // Key directional light, angled from upper-front for soft cartoon shading.
+        const lightNode = new Node('KeyLight');
+        const dl = lightNode.addComponent(DirectionalLight);
+        dl.illuminance = 80000;
+        dl.color = new Color(255, 250, 235);
+        lightNode.setRotationFromEuler(-50, -30, 0);
+        scene.addChild(lightNode);
 
-    // Lift ambient so shadows read as soft, not black (warm sky / warm ground bounce).
-    const globals = director.getScene()!.globals;
-    if (globals && globals.ambient) {
-        globals.ambient.skyColor = new Color(180, 200, 235, 255) as unknown as any;
-        globals.ambient.groundAlbedo = new Color(150, 130, 110, 255) as unknown as any;
+        // Lift ambient so shadows read as soft, not black (warm sky / warm ground bounce).
+        const globals = scene.globals;
+        if (globals && globals.ambient) {
+            globals.ambient.skyColor = new Color(180, 200, 235, 255) as unknown as any;
+            globals.ambient.groundAlbedo = new Color(150, 130, 110, 255) as unknown as any;
+        }
     }
 
     // Soft rounded stage floor sitting behind/under the board.
