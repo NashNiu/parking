@@ -1,0 +1,124 @@
+{
+  "id": 1,
+  "grid": {
+    "cols": 5,
+    "rows": 6,
+    "cars": [
+      {
+        "id": 1,
+        "x": 2,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 2,
+        "x": 2,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 3,
+        "x": 3,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "yellow",
+        "cap": "small"
+      },
+      {
+        "id": 4,
+        "x": 1,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 5,
+        "x": 3,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 6,
+        "x": 1,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 7,
+        "x": 3,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "purple",
+        "cap": "small"
+      },
+      {
+        "id": 8,
+        "x": 1,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "purple",
+        "cap": "small"
+      }
+    ]
+  },
+  "parking": {
+    "slots": 7,
+    "unlocked": 4
+  },
+  "loop": {
+    "capacity": 12,
+    "boardIndex": 6,
+    "queue": [
+      {
+        "color": "purple",
+        "count": 32
+      },
+      {
+        "color": "red",
+        "count": 16
+      },
+      {
+        "color": "green",
+        "count": 48
+      },
+      {
+        "color": "yellow",
+        "count": 16
+      },
+      {
+        "color": "blue",
+        "count": 16
+      }
+    ]
+  },
+  "powerups": {
+    "refresh": 3,
+    "hardClear": 1,
+    "magnet": 1
+  }
+}

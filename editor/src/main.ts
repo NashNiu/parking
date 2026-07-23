@@ -57,6 +57,30 @@ function render(): void {
 function renderLibrary(): void {
     const lib = document.getElementById('library')!;
     lib.innerHTML = '<h3>关卡库</h3>';
+
+    const nameInput = document.createElement('input');
+    nameInput.id = 'nameInput';
+    nameInput.className = 'nameInput';
+    nameInput.value = activeName;
+    nameInput.placeholder = '关卡名';
+    lib.appendChild(nameInput);
+
+    const bar = el('div', 'libbar');
+    const save = el('button', 'primary', '💾 保存');
+    save.onclick = saveLevel;
+    const neo = el('button', '', '+ 新建');
+    neo.onclick = newLevel;
+    const copy = el('button', '', '复制');
+    copy.onclick = copyLevel;
+    const del = el('button', 'danger', '删除');
+    del.onclick = deleteLevel;
+    bar.appendChild(save); bar.appendChild(neo); bar.appendChild(copy); bar.appendChild(del);
+    lib.appendChild(bar);
+
+    const status = el('div', 'savestatus', '');
+    status.id = 'saveStatus';
+    lib.appendChild(status);
+
     for (const e of levels) {
         const div = el('div', 'lvitem' + (e.name === activeName ? ' active' : ''), e.name);
         div.onclick = () => { loadIntoEditor(e); };
@@ -255,7 +279,9 @@ function autoBalance(): void {
 }
 
 function commit(): void {
-    render();
+    // Re-render only the editing surfaces, not the library (keeps the name input stable).
+    renderCanvas();
+    renderInspector();
 }
 
 function loadIntoEditor(entry: LevelEntry): void {
@@ -263,6 +289,70 @@ function loadIntoEditor(entry: LevelEntry): void {
     level = clone(entry.json);
     selectedId = null;
     render();
+}
+
+function blankLevel(): LevelData {
+    return {
+        id: 1,
+        grid: { cols: 5, rows: 6, cars: [] },
+        parking: { slots: 7, unlocked: 4 },
+        loop: { capacity: 12, boardIndex: 6, queue: [] },
+        powerups: { refresh: 3, hardClear: 1, magnet: 1 },
+    };
+}
+
+function suggestName(): string {
+    let n = 1;
+    const taken = new Set(levels.map((l) => l.name));
+    while (taken.has(`level-${n}`)) n++;
+    return `level-${n}`;
+}
+
+function newLevel(): void {
+    activeName = suggestName();
+    level = blankLevel();
+    selectedId = null;
+    render();
+}
+
+function copyLevel(): void {
+    activeName = (activeName || 'level') + '-copy';
+    selectedId = null;
+    render();
+}
+
+function setStatus(msg: string, ok: boolean): void {
+    const s = document.getElementById('saveStatus');
+    if (s) { s.textContent = msg; s.className = 'savestatus ' + (ok ? 'ok' : 'bad'); }
+}
+
+async function saveLevel(): Promise<void> {
+    const input = document.getElementById('nameInput') as HTMLInputElement | null;
+    const name = (input?.value || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) { setStatus('名称需为字母/数字/-/_', false); return; }
+    const res = await fetch(`/api/levels/${encodeURIComponent(name)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(level),
+    });
+    const r = await res.json();
+    activeName = name;
+    await refreshLevels();
+    render();
+    if (!r.conserved) setStatus('已保存(⚠️不守恒)', false);
+    else if (!r.solvable) setStatus('已保存(⚠️无解)', false);
+    else setStatus('已保存 ✅', true);
+}
+
+async function deleteLevel(): Promise<void> {
+    if (!activeName) return;
+    if (!confirm(`删除关卡 "${activeName}"?`)) return;
+    await fetch(`/api/levels/${encodeURIComponent(activeName)}`, { method: 'DELETE' });
+    await refreshLevels();
+    if (levels.length > 0) loadIntoEditor(levels[0]);
+    else newLevel();
+}
+
+async function refreshLevels(): Promise<void> {
+    levels = await (await fetch('/api/levels')).json();
 }
 
 async function main(): Promise<void> {
