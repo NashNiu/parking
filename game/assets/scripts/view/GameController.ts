@@ -1,5 +1,5 @@
 import {
-    _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3,
+    _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
     math, input, Input, EventTouch, EventMouse, geometry, tween,
 } from 'cc';
 import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
@@ -8,6 +8,7 @@ import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
 import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
+import { makeBox } from './placeholder';
 
 const { ccclass, property } = _decorator;
 
@@ -36,19 +37,21 @@ export class GameController extends Component {
     private loopView: LoopView | null = null;
     private hud: HudView | null = null;
     private cam: Camera | null = null;
+    private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
 
     private busy = false;
     private ended = false;
     private tickAcc = 0;
     private readonly TICK = 0.12;
-    private parked = new Map<number, Node>();
+    private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
     start() {
         this.setupCamera(0, 11);
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
+            this.uiCam = canvas.getComponentInChildren(Camera);
         } else {
             console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
         }
@@ -133,6 +136,10 @@ export class GameController extends Component {
         const dist = frameHeight / 2 / Math.tan(math.toRadian(fovDeg) / 2);
         camNode.setPosition(new Vec3(0, centerY, dist));
         camNode.setRotationFromEuler(0, 0, 0);
+        if (this.cam) {
+            this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
+            this.cam.clearColor = new Color(38, 42, 55, 255);
+        }
     }
 
     update(dt: number): void {
@@ -143,6 +150,7 @@ export class GameController extends Component {
             const res = this.core.stepLoop();
             this.loopView?.update(this.core.loop.ring);
             this.hud?.setProgress(this.core.loop.remainingCount());
+            this.updateFillBars();
             if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
@@ -153,10 +161,42 @@ export class GameController extends Component {
 
     private onDeparted(ids: number[]): void {
         for (const id of ids) {
-            const node = this.parked.get(id);
-            if (!node) continue;
+            const e = this.parked.get(id);
+            if (!e) continue;
             this.parked.delete(id);
-            tween(node).by(0.4, { position: new Vec3(0, 9, 0) }).call(() => node.destroy()).start();
+            if (e.label) e.label.node.destroy();
+            tween(e.node).by(0.4, { position: new Vec3(0, 9, 0) }).call(() => e.node.destroy()).start();
+        }
+    }
+
+    /** Project a car's world position to the UI layer and place a label there. */
+    private positionLabelOverCar(label: Label, carNode: Node): void {
+        if (!this.cam || !this.uiCam) return;
+        const screen = this.cam.worldToScreen(carNode.worldPosition, new Vec3());
+        const uiWorld = this.uiCam.screenToWorld(screen, new Vec3());
+        label.node.setWorldPosition(uiWorld);
+    }
+
+    /** A thin bar under each parked car showing filled / capacity. */
+    private attachFillBar(car: Node): Node {
+        const bg = makeBox('fillbg', 0.9, 0.18, 0.08, new Color(30, 30, 35));
+        bg.setPosition(0, -0.5, 0.42);
+        car.addChild(bg);
+        const bar = makeBox('fill', 0.9, 0.18, 0.12, new Color(255, 215, 70));
+        bar.setPosition(-0.45, -0.5, 0.44);
+        bar.setScale(0.001, 1, 1);
+        car.addChild(bar);
+        return bar;
+    }
+
+    private updateFillBars(): void {
+        for (const [id, e] of this.parked) {
+            const pc = this.core!.parking.parked[e.slot];
+            if (!pc || pc.carId !== id) continue;
+            const r = pc.capacity > 0 ? pc.filled / pc.capacity : 0;
+            e.bar.setScale(Math.max(0.001, r), 1, 1);
+            e.bar.setPosition(-0.45 + 0.45 * r, -0.5, 0.44);
+            if (e.label) e.label.string = `${pc.capacity - pc.filled}`;
         }
     }
 
@@ -222,7 +262,10 @@ export class GameController extends Component {
             .to(0.28, { position: slot, scale: new Vec3(0.55, 0.55, 0.55) })
             .call(() => {
                 this.busy = false;
-                this.parked.set(id, node);
+                const bar = this.attachFillBar(node);
+                const label = this.hud ? this.hud.newSeatLabel() : null;
+                this.parked.set(id, { node, bar, slot: slotIndex, label });
+                if (label) this.positionLabelOverCar(label, node);
             })
             .start();
     }

@@ -23,16 +23,25 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number): Lab
  * a remaining-passengers label, and a center banner for win/lose.
  */
 export class HudView {
+    private canvas: Node;
     private levelLabel: Label;
     private progressLabel: Label;
     private bannerLabel: Label;
 
     constructor(canvas: Node) {
+        this.canvas = canvas;
         const h = canvasHeight(canvas);
         this.levelLabel = makeLabel(canvas, 'LevelLabel', 44, h / 2 - 70);
         this.progressLabel = makeLabel(canvas, 'ProgressLabel', 32, h / 2 - 130);
         this.bannerLabel = makeLabel(canvas, 'Banner', 64, 0);
         this.bannerLabel.node.active = false;
+    }
+
+    /** A small floating label (for per-car seat counts); caller positions/updates/destroys it. */
+    newSeatLabel(): Label {
+        const label = makeLabel(this.canvas, 'seat', 30, 0);
+        label.color = new Color(255, 255, 255);
+        return label;
     }
 
     setLevel(id: number): void {
