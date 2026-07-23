@@ -1,0 +1,11 @@
+{
+  "name": "parking-editor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.0"
+  }
+}
