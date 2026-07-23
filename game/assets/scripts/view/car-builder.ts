@@ -1,4 +1,4 @@
-import { Node, Vec3, Color, MeshRenderer, utils, primitives } from 'cc';
+import { Node, Color, MeshRenderer, utils, primitives } from 'cc';
 import { litMaterial, unlitMaterial } from './materials';
 import { Dir } from './placeholder';
 
