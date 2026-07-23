@@ -66,12 +66,12 @@ export class GameController extends Component {
         this.preloadLitEffect(() => this.loadLevel(this.levelName));
     }
 
-    /** Load the builtin-standard EffectAsset from the internal bundle, then continue. */
+    /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */
     private preloadLitEffect(done: () => void): void {
         if (EffectAsset.get('builtin-standard')) { done(); return; }
-        const bundle = assetManager.getBundle('internal');
-        if (!bundle) { done(); return; }
-        bundle.load('effects/builtin-standard', EffectAsset, (err) => {
+        // Fixed engine uuid for effects/builtin-standard.effect.
+        const uuid = 'c8f66d17-351a-48da-a12c-0212d28575c4';
+        assetManager.loadAny({ uuid }, (err) => {
             if (err) console.warn('[Game] builtin-standard preload failed, using flat shading:', err);
             done();
         });
