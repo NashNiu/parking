@@ -32,8 +32,15 @@ export class GameController extends Component {
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
     private parkingView: ParkingView | null = null;
+    private loopView: LoopView | null = null;
     private cam: Camera | null = null;
     private busy = false;
+
+    /** Parked cars awaiting departure, keyed by carId. */
+    private parked = new Map<number, Node>();
+    private tickAcc = 0;
+    private readonly TICK = 0.12;
+    private ended = false;
 
     start() {
         resources.load(`levels/${this.levelName}`, JsonAsset, (err, asset) => {
@@ -65,6 +72,38 @@ export class GameController extends Component {
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
     }
 
+    update(dt: number): void {
+        if (!this.core || this.ended || this.core.getState() !== 'playing') return;
+        this.tickAcc += dt;
+        while (this.tickAcc >= this.TICK) {
+            this.tickAcc -= this.TICK;
+            const res = this.core.stepLoop();
+            this.loopView?.update(this.core.loop.ring);
+            if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
+            if (this.core.getState() !== 'playing') {
+                this.onEnd(this.core.getState());
+                break;
+            }
+        }
+    }
+
+    private onDeparted(ids: number[]): void {
+        for (const id of ids) {
+            const node = this.parked.get(id);
+            if (!node) continue;
+            this.parked.delete(id);
+            tween(node)
+                .by(0.4, { position: new Vec3(0, 9, 0) })
+                .call(() => node.destroy())
+                .start();
+        }
+    }
+
+    private onEnd(state: string): void {
+        this.ended = true;
+        console.log(`[Game] level ended: ${state}`);
+    }
+
     private renderBoard(level: LevelData): void {
         // Vertical stack (XY plane, facing camera): loop on top, parking in the
         // middle, grid at the bottom.
@@ -74,7 +113,8 @@ export class GameController extends Component {
 
         const loopRoot = new Node('LoopRoot');
         this.node.addChild(loopRoot);
-        new LoopView(loopRoot, this.core!.loop.ring, LOOP_Y).render();
+        this.loopView = new LoopView(loopRoot, level.loop.capacity, LOOP_Y);
+        this.loopView.update(this.core!.loop.ring);
 
         const parkingRoot = new Node('ParkingRoot');
         this.node.addChild(parkingRoot);
@@ -164,7 +204,10 @@ export class GameController extends Component {
         tween(node)
             .to(0.12, { position: nudge })
             .to(0.28, { position: slot, scale: new Vec3(0.55, 0.55, 0.55) })
-            .call(() => { this.busy = false; })
+            .call(() => {
+                this.busy = false;
+                this.parked.set(id, node);
+            })
             .start();
     }
 

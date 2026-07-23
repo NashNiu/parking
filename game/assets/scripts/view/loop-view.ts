@@ -1,27 +1,37 @@
-import { Node } from 'cc';
+import { Node, Color } from 'cc';
 import { colorOf } from './colors';
-import { makeBox } from './placeholder';
+import { makeBox, setBoxColor } from './placeholder';
 
 /**
- * Renders the loop's current ring contents as a horizontal row of colored dots.
- * A real oval/looping track comes later; this is a static placeholder for M2.1.
+ * Renders the loop ring as a fixed row of `capacity` dots. Each tick, update()
+ * reflects the current ring contents: a filled slot shows its color, an empty
+ * slot (boarded / not yet refilled) is hidden. As the ring rotates and refills,
+ * the colors visibly move along the row (a conveyor feel).
  */
 export class LoopView {
-    constructor(
-        private parent: Node,
-        private ring: (string | null)[],
-        private y: number,
-    ) {}
+    private dots: Node[] = [];
 
-    render(): void {
+    constructor(parent: Node, capacity: number, y: number) {
         const gap = 0.55;
-        const n = this.ring.length;
-        const startX = -((n - 1) * gap) / 2;
-        this.ring.forEach((c, i) => {
-            if (!c) return;
-            const dot = makeBox(`pax-${i}`, 0.38, 0.38, 0.38, colorOf(c));
-            dot.setPosition(startX + i * gap, this.y, 0);
-            this.parent.addChild(dot);
-        });
+        const startX = -((capacity - 1) * gap) / 2;
+        for (let i = 0; i < capacity; i++) {
+            const dot = makeBox(`pax-${i}`, 0.38, 0.38, 0.38, Color.WHITE.clone());
+            dot.setPosition(startX + i * gap, y, 0);
+            dot.active = false;
+            parent.addChild(dot);
+            this.dots.push(dot);
+        }
+    }
+
+    update(ring: (string | null)[]): void {
+        for (let i = 0; i < this.dots.length; i++) {
+            const c = ring[i];
+            if (c) {
+                this.dots[i].active = true;
+                setBoxColor(this.dots[i], colorOf(c));
+            } else {
+                this.dots[i].active = false;
+            }
+        }
     }
 }
