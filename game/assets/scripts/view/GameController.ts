@@ -7,6 +7,7 @@ import { GridLayout } from './grid-layout';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
 import { LoopView } from './loop-view';
+import { HudView } from './hud-view';
 
 const { ccclass, property } = _decorator;
 
@@ -20,9 +21,9 @@ function dirVec(d: Dir): Vec3 {
 }
 
 /**
- * M2.2a: loads/renders a level and wires tap input — screen tap → ray to the
- * z=0 board plane → pick a car → GameCore.tapCar. On success the car node is
- * removed (drive-out animation comes in M2.2b).
+ * M2.4: full playable demo loop. Loads/renders a level, handles tap-to-move,
+ * drives the passenger loop each frame, shows a HUD + win/lose banner, and
+ * restarts on tap once a level ends.
  */
 @ccclass('GameController')
 export class GameController extends Component {
@@ -33,19 +34,37 @@ export class GameController extends Component {
     private gridView: GridView | null = null;
     private parkingView: ParkingView | null = null;
     private loopView: LoopView | null = null;
+    private hud: HudView | null = null;
     private cam: Camera | null = null;
-    private busy = false;
+    private boardRoot: Node | null = null;
 
-    /** Parked cars awaiting departure, keyed by carId. */
-    private parked = new Map<number, Node>();
+    private busy = false;
+    private ended = false;
     private tickAcc = 0;
     private readonly TICK = 0.12;
-    private ended = false;
+    private parked = new Map<number, Node>();
 
     start() {
-        resources.load(`levels/${this.levelName}`, JsonAsset, (err, asset) => {
+        this.setupCamera(0, 11);
+        const canvas = find('Canvas');
+        if (canvas) {
+            this.hud = new HudView(canvas);
+        } else {
+            console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
+        }
+        this.registerInput();
+        this.loadLevel(this.levelName);
+    }
+
+    onDestroy() {
+        input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
+        input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+    }
+
+    private loadLevel(name: string): void {
+        resources.load(`levels/${name}`, JsonAsset, (err, asset) => {
             if (err) {
-                console.error('[Game] failed to load level', this.levelName, err);
+                console.error('[Game] failed to load level', name, err);
                 return;
             }
             const level = asset.json as unknown as LevelData;
@@ -55,21 +74,65 @@ export class GameController extends Component {
                 return;
             }
             this.core = new GameCore(level);
-            console.log(
-                `[Game] level '${this.levelName}' loaded: ` +
-                    `${level.grid.cars.length} cars, ` +
-                    `parking ${level.parking.unlocked}/${level.parking.slots} unlocked, ` +
-                    `${level.loop.queue.length} passenger groups, ` +
-                    `state=${this.core.getState()}`,
-            );
-            this.renderBoard(level);
-            this.registerInput();
+            this.buildBoard(level);
+            this.hud?.setLevel(level.id);
+            this.hud?.setProgress(this.core.loop.remainingCount());
+            this.hud?.hideBanner();
+            this.ended = false;
+            this.busy = false;
+            this.tickAcc = 0;
+            console.log(`[Game] level '${name}' started, state=${this.core.getState()}`);
         });
     }
 
-    onDestroy() {
-        input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
-        input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+    private restart(): void {
+        if (this.boardRoot) {
+            this.boardRoot.destroy();
+            this.boardRoot = null;
+        }
+        this.parked.clear();
+        this.loadLevel(this.levelName);
+    }
+
+    private buildBoard(level: LevelData): void {
+        const LOOP_Y = 3.4;
+        const PARKING_Y = 1.2;
+        const GRID_Y = -3.2;
+
+        this.boardRoot = new Node('Board');
+        this.node.addChild(this.boardRoot);
+
+        const loopRoot = new Node('LoopRoot');
+        this.boardRoot.addChild(loopRoot);
+        this.loopView = new LoopView(loopRoot, level.loop.capacity, LOOP_Y);
+        this.loopView.update(this.core!.loop.ring);
+
+        const parkingRoot = new Node('ParkingRoot');
+        this.boardRoot.addChild(parkingRoot);
+        this.parkingView = new ParkingView(
+            parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y,
+        );
+        this.parkingView.render();
+
+        const gridRoot = new Node('GridRoot');
+        gridRoot.setPosition(0, GRID_Y, 0);
+        this.boardRoot.addChild(gridRoot);
+        const layout = new GridLayout(level.grid.cols, level.grid.rows);
+        this.gridView = new GridView(gridRoot, this.core!.grid, layout);
+        this.gridView.render();
+    }
+
+    private setupCamera(centerY: number, frameHeight: number): void {
+        const camNode = find('Main Camera');
+        if (!camNode) {
+            console.warn('[Game] Main Camera not found — cannot frame the board');
+            return;
+        }
+        this.cam = camNode.getComponent(Camera);
+        const fovDeg = this.cam ? this.cam.fov : 45;
+        const dist = frameHeight / 2 / Math.tan(math.toRadian(fovDeg) / 2);
+        camNode.setPosition(new Vec3(0, centerY, dist));
+        camNode.setRotationFromEuler(0, 0, 0);
     }
 
     update(dt: number): void {
@@ -79,6 +142,7 @@ export class GameController extends Component {
             this.tickAcc -= this.TICK;
             const res = this.core.stepLoop();
             this.loopView?.update(this.core.loop.ring);
+            this.hud?.setProgress(this.core.loop.remainingCount());
             if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
@@ -92,62 +156,14 @@ export class GameController extends Component {
             const node = this.parked.get(id);
             if (!node) continue;
             this.parked.delete(id);
-            tween(node)
-                .by(0.4, { position: new Vec3(0, 9, 0) })
-                .call(() => node.destroy())
-                .start();
+            tween(node).by(0.4, { position: new Vec3(0, 9, 0) }).call(() => node.destroy()).start();
         }
     }
 
     private onEnd(state: string): void {
         this.ended = true;
+        this.hud?.showBanner(state === 'won' ? '过关!\n点击重玩' : '卡住了\n点击重试');
         console.log(`[Game] level ended: ${state}`);
-    }
-
-    private renderBoard(level: LevelData): void {
-        // Vertical stack (XY plane, facing camera): loop on top, parking in the
-        // middle, grid at the bottom.
-        const LOOP_Y = 3.4;
-        const PARKING_Y = 1.2;
-        const GRID_Y = -3.2;
-
-        const loopRoot = new Node('LoopRoot');
-        this.node.addChild(loopRoot);
-        this.loopView = new LoopView(loopRoot, level.loop.capacity, LOOP_Y);
-        this.loopView.update(this.core!.loop.ring);
-
-        const parkingRoot = new Node('ParkingRoot');
-        this.node.addChild(parkingRoot);
-        this.parkingView = new ParkingView(
-            parkingRoot,
-            level.parking.slots,
-            level.parking.unlocked,
-            PARKING_Y,
-        );
-        this.parkingView.render();
-
-        const gridRoot = new Node('GridRoot');
-        gridRoot.setPosition(0, GRID_Y, 0);
-        this.node.addChild(gridRoot);
-        const layout = new GridLayout(level.grid.cols, level.grid.rows);
-        this.gridView = new GridView(gridRoot, this.core!.grid, layout);
-        this.gridView.render();
-
-        this.setupCamera(0, 11);
-    }
-
-    /** Position the Main Camera straight-on to frame `frameHeight` world units centered at y=centerY. */
-    private setupCamera(centerY: number, frameHeight: number): void {
-        const camNode = find('Main Camera');
-        if (!camNode) {
-            console.warn('[Game] Main Camera not found — cannot frame the board');
-            return;
-        }
-        this.cam = camNode.getComponent(Camera);
-        const fovDeg = this.cam ? this.cam.fov : 45;
-        const dist = frameHeight / 2 / Math.tan(math.toRadian(fovDeg) / 2);
-        camNode.setPosition(new Vec3(0, centerY, dist));
-        camNode.setRotationFromEuler(0, 0, 0);
     }
 
     private registerInput(): void {
@@ -166,6 +182,10 @@ export class GameController extends Component {
     }
 
     private handleTap(screenX: number, screenY: number): void {
+        if (this.ended) {
+            this.restart();
+            return;
+        }
         if (!this.core || !this.gridView || !this.parkingView || !this.cam) return;
         if (this.busy) return;
 
@@ -178,11 +198,8 @@ export class GameController extends Component {
         const id = this.gridView.pickCar(hit);
         if (id == null) return;
 
-        // Capture the car's exit direction before tapCar removes it from the grid.
         const dir = this.core.grid.cars.get(id)?.dir as Dir | undefined;
         const res = this.core.tapCar(id);
-        console.log(`[Game] tap car ${id} ->`, JSON.stringify(res), 'state=', this.core.getState());
-
         if (res.ok) {
             this.playDriveToSlot(id, dir ?? 'up', res.slotIndex);
         } else {
@@ -190,11 +207,10 @@ export class GameController extends Component {
         }
     }
 
-    /** Animate a car driving out along its arrow then into its parking slot. */
     private playDriveToSlot(id: number, dir: Dir, slotIndex: number): void {
         const node = this.gridView!.detachCar(id);
         if (!node) return;
-        node.setParent(this.node, true); // keep world position; board roots sit at origin
+        node.setParent(this.boardRoot!, true); // keep world position
 
         const start = node.position.clone();
         const nudge = start.clone().add(dirVec(dir).multiplyScalar(0.8));
@@ -211,7 +227,6 @@ export class GameController extends Component {
             .start();
     }
 
-    /** Wobble a blocked / can't-park car in place. */
     private playShake(id: number): void {
         const node = this.gridView!.getCarNode(id);
         if (!node) return;
