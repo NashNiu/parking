@@ -4,6 +4,16 @@ import { unlitMaterial, setEmissive } from './materials';
 let activeParticles = 0;
 const MAX_PARTICLES = 80;
 
+/**
+ * Reset the particle budget. Call on level (re)load: particles are parented to
+ * the board, and when the board is destroyed mid-flight their tweens are dropped
+ * without running killParticle, so the counter would otherwise ratchet up across
+ * restarts until it permanently hits the cap and blocks all effects.
+ */
+export function resetParticleBudget(): void {
+    activeParticles = 0;
+}
+
 /** Tap feedback: quick squash then spring back. */
 export function squash(body: Node): void {
     const s = body.scale.clone();

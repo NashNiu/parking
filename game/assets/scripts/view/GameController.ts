@@ -10,7 +10,7 @@ import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
-import { squash, flash, dustBurst, overshoot } from './effects';
+import { squash, flash, dustBurst, overshoot, resetParticleBudget } from './effects';
 
 const { ccclass, property } = _decorator;
 
@@ -98,6 +98,9 @@ export class GameController extends Component {
                 this.loading = false;
                 return;
             }
+            // Old board (and any in-flight particles parented to it) is destroyed
+            // on restart without running killParticle, so reset the budget here.
+            resetParticleBudget();
             this.core = new GameCore(level);
             this.buildBoard(level);
             this.hud?.setLevel(level.id);
