@@ -12,11 +12,19 @@ export class LoopView {
     private dots: Node[] = [];
 
     constructor(parent: Node, capacity: number, y: number) {
-        const gap = 0.55;
-        const startX = -((capacity - 1) * gap) / 2;
+        // Lay passengers around an ellipse (a looping track). On the tilted board
+        // this reads as a perspective loop receding into the distance.
+        const cx = 0;
+        const cy = y;
+        const rx = 3.3;
+        const ry = 1.4;
         for (let i = 0; i < capacity; i++) {
-            const dot = makeBox(`pax-${i}`, 0.38, 0.38, 0.38, Color.WHITE.clone());
-            dot.setPosition(startX + i * gap, y, 0);
+            // Start at the bottom of the ellipse (nearest the parking area) and go around.
+            const ang = Math.PI / 2 + (i / capacity) * Math.PI * 2;
+            const px = cx + rx * Math.cos(ang);
+            const py = cy + ry * Math.sin(ang);
+            const dot = makeBox(`pax-${i}`, 0.4, 0.4, 0.4, Color.WHITE.clone());
+            dot.setPosition(px, py, 0);
             dot.active = false;
             parent.addChild(dot);
             this.dots.push(dot);
