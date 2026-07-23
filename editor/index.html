@@ -15,12 +15,41 @@
         #library { background: #262b3c; border-right: 1px solid #333a4f; }
         #inspector { background: #262b3c; border-left: 1px solid #333a4f; }
         h3 { margin: 4px 0 12px; font-size: 15px; color: #aab2c8; letter-spacing: 1px; }
+        h4 { margin: 16px 0 6px; font-size: 13px; color: #8b93a8; }
         .lvitem { padding: 8px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; background: #2f3650; }
         .lvitem:hover { background: #3a4260; }
         .lvitem.active { background: #4661c0; }
         p { margin: 6px 0; font-size: 14px; line-height: 1.5; }
         .ok { color: #6ad48c; }
         .bad { color: #ee6d6d; }
+        .dim { color: #7a8399; }
+        .hint { color: #7a8399; font-size: 12px; margin-top: 10px; }
+
+        .paintbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+        .paintbar .lbl { color: #8b93a8; font-size: 13px; margin-right: 4px; }
+        .swatch { width: 22px; height: 22px; border-radius: 5px; cursor: pointer; border: 2px solid transparent; display: inline-block; }
+        .swatch.small { width: 16px; height: 16px; }
+        .swatch.sel { border-color: #fff; }
+
+        button { background: #2f3650; color: #e6e8ee; border: 1px solid #3a4260; border-radius: 5px;
+            padding: 4px 9px; cursor: pointer; font-size: 13px; }
+        button:hover { background: #3a4260; }
+        button.sel { background: #4661c0; border-color: #5a78d8; }
+        button.primary { background: #2f7a48; border-color: #3a9a5a; margin-top: 8px; width: 100%; }
+        button.danger { background: #7a2f2f; border-color: #9a3a3a; margin-top: 8px; width: 100%; }
+        button.step { padding: 2px 8px; }
+
+        .grid { display: grid; gap: 3px; background: #333a4f; padding: 3px; border-radius: 6px; width: max-content; position: relative; }
+        .cell { background: #2a3042; border-radius: 4px; cursor: pointer; }
+        .cell:hover { background: #333c55; }
+        .car { border-radius: 5px; display: flex; align-items: center; justify-content: center;
+            font-size: 20px; font-weight: bold; color: rgba(255,255,255,.85); cursor: pointer; z-index: 2; }
+        .car.sel { outline: 3px solid #fff; }
+
+        .row { display: flex; align-items: center; gap: 6px; margin: 5px 0; font-size: 13px; }
+        .row label { width: 78px; color: #aab2c8; }
+        .row select { flex: 1; background: #2a3042; color: #e6e8ee; border: 1px solid #3a4260; border-radius: 4px; padding: 3px; }
+        .row .num { min-width: 28px; text-align: center; }
     </style>
 </head>
 <body>
