@@ -36,11 +36,11 @@ export class GridView {
         }
     }
 
-    /** Returns the id of the car whose footprint contains `world` (XY), or null. */
-    pickCar(world: Vec3): number | null {
+    /** Returns the id of the car whose footprint contains `local` (in gridRoot-local space), or null. */
+    pickCar(local: Vec3): number | null {
         for (const e of this.entries) {
-            const p = e.node.worldPosition;
-            if (Math.abs(world.x - p.x) <= e.hw && Math.abs(world.y - p.y) <= e.hh) {
+            const p = e.node.position; // gridRoot-local, stable under board tilt
+            if (Math.abs(local.x - p.x) <= e.hw && Math.abs(local.y - p.y) <= e.hh) {
                 return e.id;
             }
         }

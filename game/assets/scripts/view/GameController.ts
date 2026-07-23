@@ -1,6 +1,6 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
-    math, input, Input, EventTouch, EventMouse, geometry, tween,
+    input, Input, EventTouch, EventMouse, geometry, tween, Mat4,
 } from 'cc';
 import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
 import { GridLayout } from './grid-layout';
@@ -39,15 +39,18 @@ export class GameController extends Component {
     private cam: Camera | null = null;
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
+    private gridRoot: Node | null = null;
+    private readonly BOARD_TILT = 52; // degrees, tilt the board back for a 2.5D look
 
     private busy = false;
     private ended = false;
+    private loading = false;
     private tickAcc = 0;
     private readonly TICK = 0.12;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
     start() {
-        this.setupCamera(0, 11);
+        this.setupCamera();
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
@@ -65,15 +68,18 @@ export class GameController extends Component {
     }
 
     private loadLevel(name: string): void {
+        this.loading = true;
         resources.load(`levels/${name}`, JsonAsset, (err, asset) => {
             if (err) {
                 console.error('[Game] failed to load level', name, err);
+                this.loading = false;
                 return;
             }
             const level = asset.json as unknown as LevelData;
             const errors = validateLevel(level);
             if (errors.length > 0) {
                 console.error('[Game] invalid level:', errors);
+                this.loading = false;
                 return;
             }
             this.core = new GameCore(level);
@@ -84,6 +90,7 @@ export class GameController extends Component {
             this.ended = false;
             this.busy = false;
             this.tickAcc = 0;
+            this.loading = false;
             console.log(`[Game] level '${name}' started, state=${this.core.getState()}`);
         });
     }
@@ -92,6 +99,9 @@ export class GameController extends Component {
         if (this.boardRoot) {
             this.boardRoot.destroy();
             this.boardRoot = null;
+        }
+        for (const [, e] of this.parked) {
+            if (e.label) e.label.node.destroy();
         }
         this.parked.clear();
         this.loadLevel(this.levelName);
@@ -103,6 +113,7 @@ export class GameController extends Component {
         const GRID_Y = -3.2;
 
         this.boardRoot = new Node('Board');
+        this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
 
         const loopRoot = new Node('LoopRoot');
@@ -120,22 +131,22 @@ export class GameController extends Component {
         const gridRoot = new Node('GridRoot');
         gridRoot.setPosition(0, GRID_Y, 0);
         this.boardRoot.addChild(gridRoot);
+        this.gridRoot = gridRoot;
         const layout = new GridLayout(level.grid.cols, level.grid.rows);
         this.gridView = new GridView(gridRoot, this.core!.grid, layout);
         this.gridView.render();
     }
 
-    private setupCamera(centerY: number, frameHeight: number): void {
+    private setupCamera(): void {
         const camNode = find('Main Camera');
         if (!camNode) {
             console.warn('[Game] Main Camera not found — cannot frame the board');
             return;
         }
         this.cam = camNode.getComponent(Camera);
-        const fovDeg = this.cam ? this.cam.fov : 45;
-        const dist = frameHeight / 2 / Math.tan(math.toRadian(fovDeg) / 2);
-        camNode.setPosition(new Vec3(0, centerY, dist));
-        camNode.setRotationFromEuler(0, 0, 0);
+        // Elevated, looking down at the board center for a 2.5D three-quarter view.
+        camNode.setPosition(new Vec3(0, 5, 12));
+        camNode.lookAt(new Vec3(0, -0.3, 0));
         if (this.cam) {
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
             this.cam.clearColor = new Color(38, 42, 55, 255);
@@ -222,20 +233,38 @@ export class GameController extends Component {
     }
 
     private handleTap(screenX: number, screenY: number): void {
+        if (this.loading) return; // ignore taps while a level is (re)loading
         if (this.ended) {
             this.restart();
             return;
         }
-        if (!this.core || !this.gridView || !this.parkingView || !this.cam) return;
+        if (!this.core || !this.gridView || !this.parkingView || !this.cam || !this.gridRoot) return;
         if (this.busy) return;
 
+        // Ray from the tap, intersected with the (possibly tilted) board plane, then
+        // converted into gridRoot-local space where car footprints are defined.
         const ray = new geometry.Ray();
         this.cam.screenPointToRay(screenX, screenY, ray);
-        if (Math.abs(ray.d.z) < 1e-6) return;
-        const t = -ray.o.z / ray.d.z;
-        const hit = new Vec3(ray.o.x + ray.d.x * t, ray.o.y + ray.d.y * t, 0);
+        const gr = this.gridRoot;
+        const normal = new Vec3();
+        Vec3.transformQuat(normal, Vec3.UNIT_Z, gr.worldRotation);
+        const denom = Vec3.dot(normal, ray.d);
+        if (Math.abs(denom) < 1e-6) return;
+        const p = gr.worldPosition;
+        const diff = new Vec3(p.x - ray.o.x, p.y - ray.o.y, p.z - ray.o.z);
+        const tHit = Vec3.dot(normal, diff) / denom;
+        if (tHit < 0) return;
+        const worldHit = new Vec3(
+            ray.o.x + ray.d.x * tHit,
+            ray.o.y + ray.d.y * tHit,
+            ray.o.z + ray.d.z * tHit,
+        );
+        const inv = new Mat4();
+        Mat4.invert(inv, gr.worldMatrix);
+        const localHit = new Vec3();
+        Vec3.transformMat4(localHit, worldHit, inv);
 
-        const id = this.gridView.pickCar(hit);
+        const id = this.gridView.pickCar(localHit);
         if (id == null) return;
 
         const dir = this.core.grid.cars.get(id)?.dir as Dir | undefined;
