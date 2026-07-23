@@ -9,6 +9,7 @@ import { ParkingView } from './parking-view';
 import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
+import { setupEnvironment } from './environment';
 
 const { ccclass, property } = _decorator;
 
@@ -115,6 +116,7 @@ export class GameController extends Component {
         this.boardRoot = new Node('Board');
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
+        setupEnvironment(this.boardRoot);
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
@@ -149,7 +151,7 @@ export class GameController extends Component {
         camNode.lookAt(new Vec3(0, -0.3, 0));
         if (this.cam) {
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
-            this.cam.clearColor = new Color(38, 42, 55, 255);
+            this.cam.clearColor = new Color(255, 224, 186, 255);
         }
     }
 

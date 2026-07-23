@@ -1,4 +1,5 @@
-import { Node, MeshRenderer, utils, primitives, Material, Color } from 'cc';
+import { Node, MeshRenderer, utils, primitives, Color } from 'cc';
+import { litMaterial, unlitMaterial } from './materials';
 
 export type Dir = 'up' | 'down' | 'left' | 'right';
 
@@ -13,10 +14,16 @@ export function makeBox(name: string, w: number, h: number, d: number, color: Co
     const node = new Node(name);
     const mr = node.addComponent(MeshRenderer);
     mr.mesh = utils.createMesh(primitives.box({ width: w, height: h, length: d }));
-    const mat = new Material();
-    mat.initialize({ effectName: 'builtin-unlit' });
-    mat.setProperty('mainColor', color);
-    mr.material = mat;
+    mr.material = unlitMaterial(color);
+    return node;
+}
+
+/** Create a Node rendering a solid-colored box that responds to scene lighting. */
+export function makeLitBox(name: string, w: number, h: number, d: number, color: Color): Node {
+    const node = new Node(name);
+    const mr = node.addComponent(MeshRenderer);
+    mr.mesh = utils.createMesh(primitives.box({ width: w, height: h, length: d }));
+    mr.material = litMaterial(color);
     return node;
 }
 
