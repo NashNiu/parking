@@ -1,15 +1,23 @@
-import { Node } from 'cc';
+import { Node, Vec3 } from 'cc';
 import { GridSystem } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
 import { makeCar, Dir } from './placeholder';
 
+interface CarEntry {
+    id: number;
+    node: Node;
+    hw: number; // half width (world)
+    hh: number; // half height (world)
+}
+
 /**
  * Renders the bottom grid: one placeholder car node per car in the GridSystem,
- * positioned by GridLayout. Static for M2.1 (no interaction yet).
+ * positioned by GridLayout. Supports world-space picking and removal.
  */
 export class GridView {
     private carNodes = new Map<number, Node>();
+    private entries: CarEntry[] = [];
 
     constructor(
         private parent: Node,
@@ -24,6 +32,29 @@ export class GridView {
             node.setPosition(this.layout.cellCenter(car.x, car.y, car.w, car.h));
             this.parent.addChild(node);
             this.carNodes.set(id, node);
+            this.entries.push({ id, node, hw: size.x / 2, hh: size.y / 2 });
         }
+    }
+
+    /** Returns the id of the car whose footprint contains `world` (XY), or null. */
+    pickCar(world: Vec3): number | null {
+        for (const e of this.entries) {
+            const p = e.node.worldPosition;
+            if (Math.abs(world.x - p.x) <= e.hw && Math.abs(world.y - p.y) <= e.hh) {
+                return e.id;
+            }
+        }
+        return null;
+    }
+
+    getCarNode(id: number): Node | undefined {
+        return this.carNodes.get(id);
+    }
+
+    removeCar(id: number): void {
+        const node = this.carNodes.get(id);
+        if (node) node.destroy();
+        this.carNodes.delete(id);
+        this.entries = this.entries.filter((e) => e.id !== id);
     }
 }

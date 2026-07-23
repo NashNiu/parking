@@ -1,4 +1,7 @@
-import { _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, math } from 'cc';
+import {
+    _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Vec2,
+    math, input, Input, EventTouch, EventMouse, geometry,
+} from 'cc';
 import { GameCore, validateLevel, LevelData } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { GridView } from './grid-view';
@@ -8,9 +11,9 @@ import { LoopView } from './loop-view';
 const { ccclass, property } = _decorator;
 
 /**
- * M2.1: loads a level JSON, validates it, builds a GameCore, and renders the
- * static bottom grid with placeholder cars. Parking/loop rendering and
- * interaction come in later M2.1/M2.2 steps.
+ * M2.2a: loads/renders a level and wires tap input — screen tap → ray to the
+ * z=0 board plane → pick a car → GameCore.tapCar. On success the car node is
+ * removed (drive-out animation comes in M2.2b).
  */
 @ccclass('GameController')
 export class GameController extends Component {
@@ -18,6 +21,8 @@ export class GameController extends Component {
     levelName: string = 'level-1';
 
     private core: GameCore | null = null;
+    private gridView: GridView | null = null;
+    private cam: Camera | null = null;
 
     start() {
         resources.load(`levels/${this.levelName}`, JsonAsset, (err, asset) => {
@@ -40,7 +45,13 @@ export class GameController extends Component {
                     `state=${this.core.getState()}`,
             );
             this.renderBoard(level);
+            this.registerInput();
         });
+    }
+
+    onDestroy() {
+        input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
+        input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
     }
 
     private renderBoard(level: LevelData): void {
@@ -67,7 +78,8 @@ export class GameController extends Component {
         gridRoot.setPosition(0, GRID_Y, 0);
         this.node.addChild(gridRoot);
         const layout = new GridLayout(level.grid.cols, level.grid.rows);
-        new GridView(gridRoot, this.core!.grid, layout).render();
+        this.gridView = new GridView(gridRoot, this.core!.grid, layout);
+        this.gridView.render();
 
         this.setupCamera(0, 11);
     }
@@ -79,10 +91,44 @@ export class GameController extends Component {
             console.warn('[Game] Main Camera not found — cannot frame the board');
             return;
         }
-        const cam = camNode.getComponent(Camera);
-        const fovDeg = cam ? cam.fov : 45;
+        this.cam = camNode.getComponent(Camera);
+        const fovDeg = this.cam ? this.cam.fov : 45;
         const dist = frameHeight / 2 / Math.tan(math.toRadian(fovDeg) / 2);
         camNode.setPosition(new Vec3(0, centerY, dist));
         camNode.setRotationFromEuler(0, 0, 0);
+    }
+
+    private registerInput(): void {
+        input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
+        input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+    }
+
+    private onTouchEnd(e: EventTouch): void {
+        const p = e.getLocation();
+        this.handleTap(p.x, p.y);
+    }
+
+    private onMouseUp(e: EventMouse): void {
+        const p = e.getLocation();
+        this.handleTap(p.x, p.y);
+    }
+
+    private handleTap(screenX: number, screenY: number): void {
+        if (!this.core || !this.gridView || !this.cam) return;
+
+        const ray = new geometry.Ray();
+        this.cam.screenPointToRay(screenX, screenY, ray);
+        if (Math.abs(ray.d.z) < 1e-6) return;
+        const t = -ray.o.z / ray.d.z;
+        const hit = new Vec3(ray.o.x + ray.d.x * t, ray.o.y + ray.d.y * t, 0);
+
+        const id = this.gridView.pickCar(hit);
+        if (id == null) return;
+
+        const res = this.core.tapCar(id);
+        console.log(`[Game] tap car ${id} ->`, JSON.stringify(res), 'state=', this.core.getState());
+        if (res.ok) {
+            this.gridView.removeCar(id);
+        }
     }
 }
