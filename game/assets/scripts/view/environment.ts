@@ -14,19 +14,21 @@ import { makeLitBox } from './placeholder';
 export function setupEnvironment(root: Node): void {
     const scene = director.getScene()!;
     if (!scene.getChildByName('KeyLight')) {
-        // Key directional light, angled from upper-front for soft cartoon shading.
+        // Strong key light from the upper-front-right for clear cartoon shading.
         const lightNode = new Node('KeyLight');
         const dl = lightNode.addComponent(DirectionalLight);
-        dl.illuminance = 80000;
+        dl.illuminance = 130000;
         dl.color = new Color(255, 250, 235);
-        lightNode.setRotationFromEuler(-50, -30, 0);
+        lightNode.setRotationFromEuler(-55, -40, 0);
         scene.addChild(lightNode);
 
-        // Lift ambient so shadows read as soft, not black (warm sky / warm ground bounce).
+        // Keep ambient LOW so the directional light actually shapes the forms
+        // (a bright ambient washes shading out to flat). Warm, dim fill.
         const globals = scene.globals;
         if (globals && globals.ambient) {
-            globals.ambient.skyColor = new Color(180, 200, 235, 255) as unknown as any;
-            globals.ambient.groundAlbedo = new Color(150, 130, 110, 255) as unknown as any;
+            globals.ambient.skyColor = new Color(120, 135, 160, 255) as unknown as any;
+            globals.ambient.skyIllum = 8000;
+            globals.ambient.groundAlbedo = new Color(90, 80, 70, 255) as unknown as any;
         }
     }
 

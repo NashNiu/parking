@@ -34,11 +34,20 @@ function tryStandard(color: Color): Material | null {
  * builtin-unlit (flat, but always renders) if standard can't build passes here.
  * Cached per color.
  */
+let loggedLitMode = false;
+
 export function litMaterial(color: Color): Material {
     const k = key(color);
     const hit = litCache.get(k);
     if (hit) return hit;
-    const mat = tryStandard(color) ?? unlitMaterial(color);
+    const std = tryStandard(color);
+    if (!loggedLitMode) {
+        loggedLitMode = true;
+        console.log(std
+            ? `[Game] lit rendering: builtin-standard ACTIVE (${std.passes.length} passes)`
+            : '[Game] lit rendering: builtin-standard unavailable → flat unlit fallback');
+    }
+    const mat = std ?? unlitMaterial(color);
     litCache.set(k, mat);
     return mat;
 }
