@@ -10,6 +10,7 @@ import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
+import { squash, flash, dustBurst, overshoot } from './effects';
 
 const { ccclass, property } = _decorator;
 
@@ -283,6 +284,9 @@ export class GameController extends Component {
         const id = this.gridView.pickCar(localHit);
         if (id == null) return;
 
+        const body = this.gridView.getCarBody(id);
+        if (body) squash(body);
+
         const dir = this.core.grid.cars.get(id)?.dir as Dir | undefined;
         const res = this.core.tapCar(id);
         if (res.ok) {
@@ -302,22 +306,27 @@ export class GameController extends Component {
         const slot = this.parkingView!.getSlotPosition(slotIndex);
 
         this.busy = true;
+        dustBurst(this.boardRoot!, start.clone());
         tween(node)
-            .to(0.12, { position: nudge })
-            .to(0.28, { position: slot, scale: new Vec3(0.55, 0.55, 0.55) })
+            .to(0.12, { position: nudge }, { easing: 'quadIn' })
             .call(() => {
-                this.busy = false;
-                const bar = this.attachFillBar(node);
-                const label = this.hud ? this.hud.newSeatLabel() : null;
-                this.parked.set(id, { node, bar, slot: slotIndex, label });
-                if (label) this.positionLabelOverCar(label, node);
+                tween(node).to(0.28, { scale: new Vec3(0.55, 0.55, 0.55) }).start();
+                overshoot(node, slot, 0.28, () => {
+                    this.busy = false;
+                    const bar = this.attachFillBar(node);
+                    const label = this.hud ? this.hud.newSeatLabel() : null;
+                    this.parked.set(id, { node, bar, slot: slotIndex, label });
+                    if (label) this.positionLabelOverCar(label, node);
+                });
             })
             .start();
     }
 
     private playShake(id: number): void {
         const node = this.gridView!.getCarNode(id);
+        const body = this.gridView!.getCarBody(id);
         if (!node) return;
+        if (body) flash(body);
         this.busy = true;
         tween(node)
             .by(0.05, { position: new Vec3(0.12, 0, 0) })
