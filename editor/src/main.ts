@@ -1,5 +1,5 @@
 import {
-    validateLevel, isSolvable, estimateDifficulty, LevelData, CarSpec, CAP_SIZE,
+    validateLevel, isSolvable, estimateDifficulty, LevelData, CarSpec, CAP_SIZE, GameCore,
 } from '../../game/assets/scripts/core/index';
 
 interface LevelEntry { name: string; json: LevelData; }
@@ -91,8 +91,14 @@ function renderLibrary(): void {
 function renderCanvas(): void {
     const canvas = document.getElementById('canvas')!;
     canvas.innerHTML = '';
+    if (playing) { renderPlaytest(canvas); return; }
     canvas.appendChild(el('h3', undefined, `编辑区 · ${activeName || '(未命名)'}`));
     canvas.appendChild(renderPaintbar());
+    const playRow = el('div', 'row2');
+    const play = el('button', 'primary', '▶ 试玩');
+    play.onclick = enterPlaytest;
+    playRow.appendChild(play);
+    canvas.appendChild(playRow);
     canvas.appendChild(renderGrid());
     canvas.appendChild(el('p', 'hint', '点空格放车 · 点车选中(右栏改属性)'));
 }
@@ -353,6 +359,89 @@ async function deleteLevel(): Promise<void> {
 
 async function refreshLevels(): Promise<void> {
     levels = await (await fetch('/api/levels')).json();
+}
+
+// ---------- playtest ----------
+
+let playing = false;
+let pcore: GameCore | null = null;
+let playTimer: number | null = null;
+
+function enterPlaytest(): void {
+    if (validateLevel(level).length > 0) { alert('关卡不守恒,请先"自动配平"再试玩'); return; }
+    pcore = new GameCore(clone(level));
+    playing = true;
+    renderCanvas();
+    playTimer = window.setInterval(playTick, 150);
+}
+
+function exitPlaytest(): void {
+    if (playTimer !== null) { clearInterval(playTimer); playTimer = null; }
+    playing = false;
+    pcore = null;
+    renderCanvas();
+}
+
+function playTick(): void {
+    if (!pcore) return;
+    if (pcore.getState() === 'playing') pcore.stepLoop();
+    updatePlayStatus();
+    if (pcore.getState() !== 'playing' && playTimer !== null) {
+        clearInterval(playTimer); playTimer = null;
+    }
+}
+
+function renderPlaytest(canvas: HTMLElement): void {
+    canvas.appendChild(el('h3', undefined, `试玩 · ${activeName}`));
+    const stop = el('button', 'danger', '■ 停止试玩');
+    stop.onclick = exitPlaytest;
+    canvas.appendChild(stop);
+    canvas.appendChild(renderPlayGrid());
+    const status = el('div', 'playstatus');
+    status.id = 'playStatus';
+    canvas.appendChild(status);
+    canvas.appendChild(el('p', 'hint', '点车开进车位;乘客自动上车、坐满开走'));
+    updatePlayStatus();
+}
+
+function renderPlayGrid(): HTMLElement {
+    const g = el('div', 'grid');
+    const cols = pcore!.grid.cols;
+    const rows = pcore!.grid.rows;
+    g.style.gridTemplateColumns = `repeat(${cols}, ${CELL}px)`;
+    g.style.gridTemplateRows = `repeat(${rows}, ${CELL}px)`;
+    for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+            const cell = el('div', 'cell');
+            cell.style.gridColumn = `${x + 1}`;
+            cell.style.gridRow = `${y + 1}`;
+            g.appendChild(cell);
+        }
+    }
+    for (const c of pcore!.grid.cars.values()) {
+        const car = el('div', 'car', DIR_ARROW[c.dir]);
+        car.style.gridColumn = `${c.x + 1} / span ${c.w}`;
+        car.style.gridRow = `${c.y + 1} / span ${c.h}`;
+        car.style.background = COLOR_HEX[c.color] || '#888';
+        car.onclick = () => {
+            const r = pcore!.tapCar(c.id);
+            if (r.ok) renderCanvas();
+        };
+        g.appendChild(car);
+    }
+    return g;
+}
+
+function updatePlayStatus(): void {
+    const s = document.getElementById('playStatus');
+    if (!s || !pcore) return;
+    const state = pcore.getState();
+    const remaining = pcore.loop.remainingCount();
+    const parked = pcore.parking.parked
+        .map((p, i) => (p ? `位${i}:${p.color} ${p.filled}/${p.capacity}` : `位${i}:空`))
+        .join('   ');
+    const banner = state === 'won' ? '🎉 过关!' : state === 'deadlock' ? '💀 卡住了(死锁)' : '进行中…';
+    s.innerHTML = `<p><b>${banner}</b> · 剩余乘客 ${remaining}</p><p class="dim">${parked}</p>`;
 }
 
 async function main(): Promise<void> {
