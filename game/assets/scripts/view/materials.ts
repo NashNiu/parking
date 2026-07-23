@@ -13,9 +13,13 @@ export function litMaterial(color: Color): Material {
     if (hit) return hit;
     const mat = new Material();
     mat.initialize({ effectName: 'builtin-standard' });
-    mat.setProperty('albedo', color);
-    mat.setProperty('roughness', 0.85);
-    mat.setProperty('metallic', 0.0);
+    // In builtin-standard the albedo color's property NAME is `mainColor` (its
+    // shader `target` is `albedo`). Setting `albedo`/`roughness`/`metallic` by
+    // those names is rejected as "illegal property", which leaves the material's
+    // passes null and crashes MeshRenderer's skin-pass update on enable. We set
+    // only `mainColor`; roughness (0.5) / metallic (0) defaults already give the
+    // matte cartoon look we want.
+    mat.setProperty('mainColor', color);
     litCache.set(k, mat);
     return mat;
 }
