@@ -4,18 +4,15 @@ import { litMaterial } from './materials';
 /**
  * A tiny person silhouette: capsule body + sphere head, tinted to `color`.
  *
- * Note on `primitives.capsule`: in Cocos Creator 3.8.7 the signature is
- * `capsule(radius = 0.5, height = 2, opts?)` — a single radius (both caps are
- * hemispheres of the same size), unlike `cylinder`'s `(radiusTop, radiusBottom, height, opts?)`
- * which can taper. The brief's example call assumed a 4-arg
- * `(radiusTop, radiusBottom, height, opts)` form; since it always passed equal
- * top/bottom radii anyway, we adapt to the real 3-arg form with no visual change.
+ * `primitives.capsule` in Cocos 3.8.7 is `capsule(radiusTop=0.5, radiusBottom=0.5,
+ * height=2, opts?)` (verified against the engine source). We use equal top/bottom
+ * radii of 0.14 and a torso height of 0.36.
  */
 export function buildPassenger(name: string, color: Color): Node {
     const root = new Node(name);
     const body = new Node('body');
     const bmr = body.addComponent(MeshRenderer);
-    bmr.mesh = utils.createMesh(primitives.capsule(0.14, 0.36, { sides: 12 }));
+    bmr.mesh = utils.createMesh(primitives.capsule(0.14, 0.14, 0.36, { sides: 12 }));
     bmr.material = litMaterial(color);
     body.setPosition(0, 0, 0);
     root.addChild(body);
