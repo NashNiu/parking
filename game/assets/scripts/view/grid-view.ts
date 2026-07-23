@@ -51,6 +51,14 @@ export class GridView {
         return this.carNodes.get(id);
     }
 
+    /** Stop tracking a car and return its node WITHOUT destroying it (for park animation). */
+    detachCar(id: number): Node | null {
+        const node = this.carNodes.get(id) ?? null;
+        this.carNodes.delete(id);
+        this.entries = this.entries.filter((e) => e.id !== id);
+        return node;
+    }
+
     removeCar(id: number): void {
         const node = this.carNodes.get(id);
         if (node) node.destroy();

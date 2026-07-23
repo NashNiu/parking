@@ -1,14 +1,23 @@
 import {
-    _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Vec2,
-    math, input, Input, EventTouch, EventMouse, geometry,
+    _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3,
+    math, input, Input, EventTouch, EventMouse, geometry, tween,
 } from 'cc';
-import { GameCore, validateLevel, LevelData } from '../core/index';
+import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
 import { LoopView } from './loop-view';
 
 const { ccclass, property } = _decorator;
+
+function dirVec(d: Dir): Vec3 {
+    switch (d) {
+        case 'up': return new Vec3(0, 1, 0);
+        case 'down': return new Vec3(0, -1, 0);
+        case 'left': return new Vec3(-1, 0, 0);
+        case 'right': return new Vec3(1, 0, 0);
+    }
+}
 
 /**
  * M2.2a: loads/renders a level and wires tap input — screen tap → ray to the
@@ -22,7 +31,9 @@ export class GameController extends Component {
 
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
+    private parkingView: ParkingView | null = null;
     private cam: Camera | null = null;
+    private busy = false;
 
     start() {
         resources.load(`levels/${this.levelName}`, JsonAsset, (err, asset) => {
@@ -67,12 +78,13 @@ export class GameController extends Component {
 
         const parkingRoot = new Node('ParkingRoot');
         this.node.addChild(parkingRoot);
-        new ParkingView(
+        this.parkingView = new ParkingView(
             parkingRoot,
             level.parking.slots,
             level.parking.unlocked,
             PARKING_Y,
-        ).render();
+        );
+        this.parkingView.render();
 
         const gridRoot = new Node('GridRoot');
         gridRoot.setPosition(0, GRID_Y, 0);
@@ -114,7 +126,8 @@ export class GameController extends Component {
     }
 
     private handleTap(screenX: number, screenY: number): void {
-        if (!this.core || !this.gridView || !this.cam) return;
+        if (!this.core || !this.gridView || !this.parkingView || !this.cam) return;
+        if (this.busy) return;
 
         const ray = new geometry.Ray();
         this.cam.screenPointToRay(screenX, screenY, ray);
@@ -125,10 +138,47 @@ export class GameController extends Component {
         const id = this.gridView.pickCar(hit);
         if (id == null) return;
 
+        // Capture the car's exit direction before tapCar removes it from the grid.
+        const dir = this.core.grid.cars.get(id)?.dir as Dir | undefined;
         const res = this.core.tapCar(id);
         console.log(`[Game] tap car ${id} ->`, JSON.stringify(res), 'state=', this.core.getState());
+
         if (res.ok) {
-            this.gridView.removeCar(id);
+            this.playDriveToSlot(id, dir ?? 'up', res.slotIndex);
+        } else {
+            this.playShake(id);
         }
+    }
+
+    /** Animate a car driving out along its arrow then into its parking slot. */
+    private playDriveToSlot(id: number, dir: Dir, slotIndex: number): void {
+        const node = this.gridView!.detachCar(id);
+        if (!node) return;
+        node.setParent(this.node, true); // keep world position; board roots sit at origin
+
+        const start = node.position.clone();
+        const nudge = start.clone().add(dirVec(dir).multiplyScalar(0.8));
+        const slot = this.parkingView!.getSlotPosition(slotIndex);
+
+        this.busy = true;
+        tween(node)
+            .to(0.12, { position: nudge })
+            .to(0.28, { position: slot, scale: new Vec3(0.55, 0.55, 0.55) })
+            .call(() => { this.busy = false; })
+            .start();
+    }
+
+    /** Wobble a blocked / can't-park car in place. */
+    private playShake(id: number): void {
+        const node = this.gridView!.getCarNode(id);
+        if (!node) return;
+        this.busy = true;
+        tween(node)
+            .by(0.05, { position: new Vec3(0.12, 0, 0) })
+            .by(0.05, { position: new Vec3(-0.24, 0, 0) })
+            .by(0.05, { position: new Vec3(0.24, 0, 0) })
+            .by(0.05, { position: new Vec3(-0.12, 0, 0) })
+            .call(() => { this.busy = false; })
+            .start();
     }
 }
