@@ -1,6 +1,6 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
-    input, Input, EventTouch, EventMouse, geometry, tween, Mat4,
+    input, Input, EventTouch, EventMouse, geometry, tween, Mat4, assetManager, EffectAsset,
 } from 'cc';
 import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
 import { GridLayout } from './grid-layout';
@@ -60,7 +60,21 @@ export class GameController extends Component {
             console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
         }
         this.registerInput();
-        this.loadLevel(this.levelName);
+        // Preload builtin-standard so lit materials get real lighting; it lives in
+        // the `internal` bundle but isn't preloaded unless something already uses it.
+        // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
+        this.preloadLitEffect(() => this.loadLevel(this.levelName));
+    }
+
+    /** Load the builtin-standard EffectAsset from the internal bundle, then continue. */
+    private preloadLitEffect(done: () => void): void {
+        if (EffectAsset.get('builtin-standard')) { done(); return; }
+        const bundle = assetManager.getBundle('internal');
+        if (!bundle) { done(); return; }
+        bundle.load('effects/builtin-standard', EffectAsset, (err) => {
+            if (err) console.warn('[Game] builtin-standard preload failed, using flat shading:', err);
+            done();
+        });
     }
 
     onDestroy() {
