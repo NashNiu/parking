@@ -1,6 +1,6 @@
 import { Node, Color } from 'cc';
 import { colorOf } from './colors';
-import { makeBox, setBoxColor } from './placeholder';
+import { buildPassenger, recolorPassenger } from './passenger-builder';
 
 /**
  * Renders the loop ring as a fixed row of `capacity` dots. Each tick, update()
@@ -23,7 +23,7 @@ export class LoopView {
             const ang = Math.PI / 2 + (i / capacity) * Math.PI * 2;
             const px = cx + rx * Math.cos(ang);
             const py = cy + ry * Math.sin(ang);
-            const dot = makeBox(`pax-${i}`, 0.4, 0.4, 0.4, Color.WHITE.clone());
+            const dot = buildPassenger(`pax-${i}`, Color.WHITE.clone());
             dot.setPosition(px, py, 0);
             dot.active = false;
             parent.addChild(dot);
@@ -36,7 +36,7 @@ export class LoopView {
             const c = ring[i];
             if (c) {
                 this.dots[i].active = true;
-                setBoxColor(this.dots[i], colorOf(c));
+                recolorPassenger(this.dots[i], colorOf(c));
             } else {
                 this.dots[i].active = false;
             }
