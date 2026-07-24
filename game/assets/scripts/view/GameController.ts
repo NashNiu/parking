@@ -52,7 +52,6 @@ export class GameController extends Component {
     private tickAcc = 0;
     private readonly TICK = 0.12;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
-    private highlighted = new Set<number>();
 
     start() {
         this.setupCamera();
@@ -126,7 +125,6 @@ export class GameController extends Component {
             if (e.label) e.label.node.destroy();
         }
         this.parked.clear();
-        this.highlighted.clear();
         this.loadLevel(this.levelName);
     }
 
@@ -200,8 +198,11 @@ export class GameController extends Component {
             const e = this.parked.get(id);
             if (!e) continue;
             this.parked.delete(id);
-            this.highlighted.delete(id);
             if (e.label) e.label.node.destroy();
+            // A departing car is exactly one that just filled up (the core boards +
+            // removes a full car in the same tick), so the "full" highlight belongs
+            // here: pulse the car green and burst stars as it drives off.
+            flash(e.node, new Color(120, 255, 140));
             if (this.boardRoot) {
                 stars(this.boardRoot, e.node.position.clone(), [
                     new Color(255, 210, 60), new Color(120, 255, 140), new Color(90, 170, 255),
@@ -234,6 +235,9 @@ export class GameController extends Component {
         tween({ t: 0 })
             .to(0.4, { t: 1 }, {
                 onUpdate: (target?: { t: number }) => {
+                    // The tween targets a plain object, so a restart mid-flight won't
+                    // stop it — bail if the passenger node was already destroyed.
+                    if (!p.isValid) return;
                     const t = target ? target.t : 1;
                     const u = 1 - t;
                     const x = u * u * start.x + 2 * u * t * ctrl.x + t * t * end.x;
@@ -242,13 +246,13 @@ export class GameController extends Component {
                     p.setWorldPosition(new Vec3(x, y, z));
                 },
             })
-            .call(() => { p.destroy(); this.bumpSeat(e); })
+            .call(() => { if (p.isValid) p.destroy(); this.bumpSeat(e); })
             .start();
     }
 
     /** Quick scale bump on a parked car's remaining-seats label. */
     private bumpSeat(e: { label: Label | null }): void {
-        if (!e.label) return;
+        if (!e.label || !e.label.node.isValid) return;
         tween(e.label.node)
             .to(0.08, { scale: new Vec3(1.4, 1.4, 1.4) })
             .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
@@ -283,10 +287,6 @@ export class GameController extends Component {
             e.bar.setScale(Math.max(0.001, r), 1, 1);
             e.bar.setPosition(-0.45 + 0.45 * r, -0.5, 0.44);
             if (e.label) e.label.string = `${pc.capacity - pc.filled}`;
-            if (pc.filled >= pc.capacity && !this.highlighted.has(id)) {
-                this.highlighted.add(id);
-                flash(e.node, new Color(120, 255, 140));
-            }
         }
     }
 
