@@ -59,21 +59,18 @@ export function setLitColor(node: Node, color: Color): void {
 }
 
 /**
- * Set emissive glow on every MeshRenderer in a node's subtree; falls back to
- * brightening mainColor on unlit nodes. Composed nodes (e.g. cars) have no
- * MeshRenderer on the root/body — the meshes live on descendant nodes
- * (chassis/cabin/etc.) — so we must walk the whole subtree, not just `node`.
+ * Set emissive glow on every builtin-standard MeshRenderer in a node's subtree.
+ * Composed nodes (e.g. cars) have no MeshRenderer on the root/body — the meshes
+ * live on descendant nodes (chassis/cabin/etc.) — so we walk the whole subtree.
+ * Unlit meshes (direction arrow, fill bars) are skipped: `builtin-unlit` has no
+ * `emissive` uniform, so touching it only spams "illegal property" warnings and
+ * risks clobbering their `mainColor`. Only `builtin-standard` supports emissive.
  */
 export function setEmissive(node: Node, color: Color): void {
     const mrs = node.getComponentsInChildren(MeshRenderer);
     for (const mr of mrs) {
-        if (!mr.material) continue;
         const mat = mr.material;
-        // builtin-standard exposes 'emissive'; builtin-unlit does not — guard by trying standard first.
-        try {
-            mat.setProperty('emissive', color);
-        } catch {
-            mat.setProperty('mainColor', color);
-        }
+        if (!mat || mat.effectName !== 'builtin-standard') continue;
+        mat.setProperty('emissive', color);
     }
 }
