@@ -252,8 +252,11 @@ export class GameController extends Component {
 
     /** Quick scale bump on a parked car's remaining-seats label. */
     private bumpSeat(e: { label: Label | null }): void {
-        if (!e.label || !e.label.node.isValid) return;
-        tween(e.label.node)
+        // The car may have departed while a boarding tween was still in flight,
+        // in which case its label component is destroyed and its `.node` is null.
+        const label = e.label;
+        if (!label || !label.isValid || !label.node || !label.node.isValid) return;
+        tween(label.node)
             .to(0.08, { scale: new Vec3(1.4, 1.4, 1.4) })
             .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
             .start();
