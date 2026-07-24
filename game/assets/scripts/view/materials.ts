@@ -58,15 +58,22 @@ export function setLitColor(node: Node, color: Color): void {
     mr.material = litMaterial(color);
 }
 
-/** Set emissive glow on a lit node; falls back to brightening mainColor on unlit nodes. */
+/**
+ * Set emissive glow on every MeshRenderer in a node's subtree; falls back to
+ * brightening mainColor on unlit nodes. Composed nodes (e.g. cars) have no
+ * MeshRenderer on the root/body — the meshes live on descendant nodes
+ * (chassis/cabin/etc.) — so we must walk the whole subtree, not just `node`.
+ */
 export function setEmissive(node: Node, color: Color): void {
-    const mr = node.getComponent(MeshRenderer);
-    if (!mr || !mr.material) return;
-    const mat = mr.material;
-    // builtin-standard exposes 'emissive'; builtin-unlit does not — guard by trying standard first.
-    try {
-        mat.setProperty('emissive', color);
-    } catch {
-        mat.setProperty('mainColor', color);
+    const mrs = node.getComponentsInChildren(MeshRenderer);
+    for (const mr of mrs) {
+        if (!mr.material) continue;
+        const mat = mr.material;
+        // builtin-standard exposes 'emissive'; builtin-unlit does not — guard by trying standard first.
+        try {
+            mat.setProperty('emissive', color);
+        } catch {
+            mat.setProperty('mainColor', color);
+        }
     }
 }

@@ -1,4 +1,4 @@
-import { Node, Color } from 'cc';
+import { Node, Color, Vec3 } from 'cc';
 import { colorOf } from './colors';
 import { buildPassenger, recolorPassenger } from './passenger-builder';
 
@@ -10,6 +10,7 @@ import { buildPassenger, recolorPassenger } from './passenger-builder';
  */
 export class LoopView {
     private dots: Node[] = [];
+    private ringColors: (string | null)[] = [];
 
     constructor(parent: Node, capacity: number, y: number) {
         // Lay passengers around an ellipse (a looping track). On the tilted board
@@ -32,6 +33,7 @@ export class LoopView {
     }
 
     update(ring: (string | null)[]): void {
+        this.ringColors = ring.slice();
         for (let i = 0; i < this.dots.length; i++) {
             const c = ring[i];
             if (c) {
@@ -41,5 +43,13 @@ export class LoopView {
                 this.dots[i].active = false;
             }
         }
+    }
+
+    /** World position of the first visible dot currently showing `color` (best-effort "boarding source"). */
+    nearestVisibleWorldPos(color: string): Vec3 | null {
+        for (let i = 0; i < this.dots.length; i++) {
+            if (this.ringColors[i] === color && this.dots[i].active) return this.dots[i].worldPosition.clone();
+        }
+        return null;
     }
 }

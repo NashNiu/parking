@@ -10,7 +10,9 @@ import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
-import { squash, flash, dustBurst, overshoot, resetParticleBudget } from './effects';
+import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars } from './effects';
+import { buildPassenger } from './passenger-builder';
+import { colorOf } from './colors';
 
 const { ccclass, property } = _decorator;
 
@@ -50,6 +52,7 @@ export class GameController extends Component {
     private tickAcc = 0;
     private readonly TICK = 0.12;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
+    private highlighted = new Set<number>();
 
     start() {
         this.setupCamera();
@@ -123,6 +126,7 @@ export class GameController extends Component {
             if (e.label) e.label.node.destroy();
         }
         this.parked.clear();
+        this.highlighted.clear();
         this.loadLevel(this.levelName);
     }
 
@@ -182,6 +186,7 @@ export class GameController extends Component {
             this.loopView?.update(this.core.loop.ring);
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.updateFillBars();
+            if (res.boardedColor) this.playBoarding(res.boardedColor);
             if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
@@ -195,9 +200,59 @@ export class GameController extends Component {
             const e = this.parked.get(id);
             if (!e) continue;
             this.parked.delete(id);
+            this.highlighted.delete(id);
             if (e.label) e.label.node.destroy();
+            if (this.boardRoot) {
+                stars(this.boardRoot, e.node.position.clone(), [
+                    new Color(255, 210, 60), new Color(120, 255, 140), new Color(90, 170, 255),
+                ]);
+            }
             tween(e.node).by(0.4, { position: new Vec3(0, 9, 0) }).call(() => e.node.destroy()).start();
         }
+    }
+
+    /** Fly a temporary passenger along an arc from the loop ring to its matching parked car, then bump the seat count. */
+    private playBoarding(color: string): void {
+        let match: { node: Node; bar: Node; slot: number; label: Label | null } | null = null;
+        for (const [, e] of this.parked) {
+            if (this.core!.parking.parked[e.slot]?.color === color) { match = e; break; }
+        }
+        if (!match) return;
+        const e = match;
+
+        const start = this.loopView?.nearestVisibleWorldPos(color) ?? null;
+        if (!start) { this.bumpSeat(e); return; }
+        if (!this.boardRoot) { this.bumpSeat(e); return; }
+
+        const p = buildPassenger('fly', colorOf(color));
+        this.boardRoot.addChild(p);
+        p.setWorldPosition(start);
+
+        const end = e.node.worldPosition.clone();
+        const ctrl = new Vec3((start.x + end.x) / 2, Math.max(start.y, end.y) + 1.2, (start.z + end.z) / 2);
+
+        tween({ t: 0 })
+            .to(0.4, { t: 1 }, {
+                onUpdate: (target?: { t: number }) => {
+                    const t = target ? target.t : 1;
+                    const u = 1 - t;
+                    const x = u * u * start.x + 2 * u * t * ctrl.x + t * t * end.x;
+                    const y = u * u * start.y + 2 * u * t * ctrl.y + t * t * end.y;
+                    const z = u * u * start.z + 2 * u * t * ctrl.z + t * t * end.z;
+                    p.setWorldPosition(new Vec3(x, y, z));
+                },
+            })
+            .call(() => { p.destroy(); this.bumpSeat(e); })
+            .start();
+    }
+
+    /** Quick scale bump on a parked car's remaining-seats label. */
+    private bumpSeat(e: { label: Label | null }): void {
+        if (!e.label) return;
+        tween(e.label.node)
+            .to(0.08, { scale: new Vec3(1.4, 1.4, 1.4) })
+            .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
+            .start();
     }
 
     /** Project a car's world position to the UI layer and place a label there. */
@@ -228,6 +283,10 @@ export class GameController extends Component {
             e.bar.setScale(Math.max(0.001, r), 1, 1);
             e.bar.setPosition(-0.45 + 0.45 * r, -0.5, 0.44);
             if (e.label) e.label.string = `${pc.capacity - pc.filled}`;
+            if (pc.filled >= pc.capacity && !this.highlighted.has(id)) {
+                this.highlighted.add(id);
+                flash(e.node, new Color(120, 255, 140));
+            }
         }
     }
 
