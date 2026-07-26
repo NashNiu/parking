@@ -13,6 +13,8 @@ import { setupEnvironment } from './environment';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars } from './effects';
 import { buildPassenger } from './passenger-builder';
 import { colorOf } from './colors';
+import { SfxManager } from './sfx';
+import { vibrate } from './haptics';
 
 const { ccclass, property } = _decorator;
 
@@ -44,6 +46,7 @@ export class GameController extends Component {
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
+    private sfx: SfxManager | null = null;
     private readonly BOARD_TILT = 52; // degrees, tilt the board back for a 2.5D look
 
     private busy = false;
@@ -54,6 +57,7 @@ export class GameController extends Component {
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
     start() {
+        this.sfx = new SfxManager(this.node);
         this.setupCamera();
         const canvas = find('Canvas');
         if (canvas) {
@@ -194,6 +198,10 @@ export class GameController extends Component {
     }
 
     private onDeparted(ids: number[]): void {
+        if (ids.length > 0) {
+            this.sfx?.play('depart');
+            vibrate('medium');
+        }
         for (const id of ids) {
             const e = this.parked.get(id);
             if (!e) continue;
@@ -221,6 +229,7 @@ export class GameController extends Component {
         if (!match) return;
         const e = match;
 
+        this.sfx?.play('board');
         const start = this.loopView?.nearestVisibleWorldPos(color) ?? null;
         if (!start) { this.bumpSeat(e); return; }
         if (!this.boardRoot) { this.bumpSeat(e); return; }
@@ -296,6 +305,7 @@ export class GameController extends Component {
     private onEnd(state: string): void {
         this.ended = true;
         this.hud?.showBanner(state === 'won' ? '过关!\n点击重玩' : '卡住了\n点击重试');
+        this.sfx?.play(state === 'won' ? 'win' : 'lose');
         console.log(`[Game] level ended: ${state}`);
     }
 
@@ -349,6 +359,9 @@ export class GameController extends Component {
         const id = this.gridView.pickCar(localHit);
         if (id == null) return;
 
+        this.sfx?.play('tap');
+        vibrate('light');
+
         const body = this.gridView.getCarBody(id);
         if (body) squash(body);
 
@@ -371,6 +384,7 @@ export class GameController extends Component {
         const slot = this.parkingView!.getSlotPosition(slotIndex);
 
         this.busy = true;
+        this.sfx?.play('drive');
         dustBurst(this.boardRoot!, start.clone());
         tween(node)
             .to(0.12, { position: nudge }, { easing: 'quadIn' })
@@ -378,6 +392,7 @@ export class GameController extends Component {
                 tween(node).to(0.28, { scale: new Vec3(0.55, 0.55, 0.55) }).start();
                 overshoot(node, slot, 0.28, () => {
                     this.busy = false;
+                    this.sfx?.play('park');
                     const bar = this.attachFillBar(node);
                     const label = this.hud ? this.hud.newSeatLabel() : null;
                     this.parked.set(id, { node, bar, slot: slotIndex, label });
@@ -392,6 +407,7 @@ export class GameController extends Component {
         const body = this.gridView!.getCarBody(id);
         if (!node) return;
         if (body) flash(body);
+        vibrate('medium');
         this.busy = true;
         tween(node)
             .by(0.05, { position: new Vec3(0.12, 0, 0) })
