@@ -10,7 +10,7 @@ import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
-import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars } from './effects';
+import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
 import { buildPassenger } from './passenger-builder';
 import { colorOf } from './colors';
 import { SfxManager } from './sfx';
@@ -304,7 +304,24 @@ export class GameController extends Component {
 
     private onEnd(state: string): void {
         this.ended = true;
-        this.hud?.showBanner(state === 'won' ? '过关!\n点击重玩' : '卡住了\n点击重试');
+        if (state === 'won') {
+            if (this.boardRoot) {
+                confetti(this.boardRoot, new Vec3(0, 1, 0));
+                stars(this.boardRoot, new Vec3(0, 1, 0), [
+                    new Color(255, 210, 60), new Color(120, 255, 140), new Color(90, 170, 255),
+                ]);
+            }
+            // Star rating is a placeholder (always 3): a real rule based on
+            // moves/time/powerups is deferred — not computed by the core.
+            this.hud?.showWin(3);
+        } else {
+            // Deadlock: highlight every remaining stuck car on the grid.
+            for (const [id] of this.core!.grid.cars) {
+                const body = this.gridView?.getCarBody(id);
+                if (body) flash(body, new Color(255, 80, 80));
+            }
+            this.hud?.showLose();
+        }
         this.sfx?.play(state === 'won' ? 'win' : 'lose');
         console.log(`[Game] level ended: ${state}`);
     }

@@ -1,4 +1,4 @@
-import { Node, Label, UITransform, Color, Layers } from 'cc';
+import { Node, Label, UITransform, Color, Layers, Vec3, tween } from 'cc';
 
 function canvasHeight(canvas: Node): number {
     const ct = canvas.getComponent(UITransform);
@@ -27,6 +27,7 @@ export class HudView {
     private levelLabel: Label;
     private progressLabel: Label;
     private bannerLabel: Label;
+    private starLabels: Label[] = [];
 
     constructor(canvas: Node) {
         this.canvas = canvas;
@@ -35,6 +36,12 @@ export class HudView {
         this.progressLabel = makeLabel(canvas, 'ProgressLabel', 32, h / 2 - 130);
         this.bannerLabel = makeLabel(canvas, 'Banner', 64, 0);
         this.bannerLabel.node.active = false;
+        for (let i = 0; i < 3; i++) {
+            const label = makeLabel(canvas, `Star${i}`, 60, 100);
+            label.node.setPosition((i - 1) * 80, 100, 0);
+            label.node.active = false;
+            this.starLabels.push(label);
+        }
     }
 
     /** A small floating label (for per-car seat counts); caller positions/updates/destroys it. */
@@ -57,7 +64,34 @@ export class HudView {
         this.bannerLabel.node.active = true;
     }
 
+    /** Victory panel: big banner + a row of 3 stars, filled left-to-right up to `starCount`, each popping in in turn. */
+    showWin(starCount: number): void {
+        this.bannerLabel.string = '过关!\n点击重玩';
+        this.bannerLabel.node.active = true;
+        this.starLabels.forEach((label, i) => {
+            const filled = i < starCount;
+            label.string = filled ? '★' : '☆'; // ★ / ☆
+            label.color = filled ? new Color(255, 210, 60) : new Color(120, 120, 120);
+            label.node.active = true;
+            label.node.setScale(0.01, 0.01, 0.01);
+            tween(label.node)
+                .delay(i * 0.12)
+                .to(0.18, { scale: new Vec3(1.3, 1.3, 1.3) }, { easing: 'backOut' })
+                .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
+                .start();
+        });
+    }
+
+    /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */
+    showLose(): void {
+        this.bannerLabel.string = '卡住了\n点击重试';
+        this.bannerLabel.node.active = true;
+        for (const label of this.starLabels) label.node.active = false;
+    }
+
+    /** Hides the banner and any win-panel stars; used on restart to clear whichever panel was shown. */
     hideBanner(): void {
         this.bannerLabel.node.active = false;
+        for (const label of this.starLabels) label.node.active = false;
     }
 }

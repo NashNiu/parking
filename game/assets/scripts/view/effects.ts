@@ -67,6 +67,64 @@ function killParticle(n: Node): void {
     n.destroy();
 }
 
+function spawnBoxParticle(parent: Node, at: Vec3, color: Color, size: number): Node | null {
+    if (activeParticles >= MAX_PARTICLES) return null;
+    activeParticles++;
+    const n = new Node('confetti');
+    const mr = n.addComponent(MeshRenderer);
+    mr.mesh = utils.createMesh(primitives.box({ width: size, height: size * 0.3, length: size }));
+    mr.material = unlitMaterial(color);
+    n.setPosition(at);
+    parent.addChild(n);
+    return n;
+}
+
+const CONFETTI_COLORS = [
+    new Color(255, 80, 80), new Color(255, 200, 40), new Color(80, 200, 255),
+    new Color(120, 255, 140), new Color(200, 120, 255), new Color(255, 140, 200),
+];
+
+/**
+ * Victory confetti: ~16 small colored boxes launched outward from `at`, falling
+ * under simulated gravity while spinning and shrinking, then self-destructing.
+ * Shares the `spawnBoxParticle`/`killParticle` accounting with the sphere
+ * particles above, so it respects the same MAX_PARTICLES cap and is swept by
+ * `resetParticleBudget()` on restart along with everything else.
+ */
+export function confetti(parent: Node, at: Vec3): void {
+    const g = 4.5; // gravity, world units/s^2
+    for (let i = 0; i < 16; i++) {
+        const color = CONFETTI_COLORS[i % CONFETTI_COLORS.length];
+        const size = 0.1 + Math.random() * 0.08;
+        const p = spawnBoxParticle(parent, at, color, size);
+        if (!p) break;
+        const vx = (Math.random() - 0.5) * 3.0;
+        const vz = (Math.random() - 0.5) * 3.0;
+        const vy = 1.2 + Math.random() * 1.6;
+        const spinX = (Math.random() - 0.5) * 720;
+        const spinY = (Math.random() - 0.5) * 720;
+        const dur = 0.8 + Math.random() * 0.4;
+        tween({ t: 0 })
+            .to(dur, { t: 1 }, {
+                onUpdate: (target?: { t: number }) => {
+                    if (!p.isValid) return;
+                    const t = target ? target.t : 1;
+                    const elapsed = t * dur;
+                    p.setPosition(
+                        at.x + vx * elapsed,
+                        at.y + vy * elapsed - 0.5 * g * elapsed * elapsed,
+                        at.z + vz * elapsed,
+                    );
+                    p.setRotationFromEuler(spinX * t, spinY * t, 0);
+                    const s = Math.max(0.001, 1 - t);
+                    p.setScale(s, s, s);
+                },
+            })
+            .call(() => killParticle(p))
+            .start();
+    }
+}
+
 /** A small puff of dust that drifts up and fades (scales to zero) then self-destructs. */
 export function dustBurst(parent: Node, at: Vec3): void {
     for (let i = 0; i < 5; i++) {
