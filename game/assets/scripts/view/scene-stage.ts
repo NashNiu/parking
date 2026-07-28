@@ -45,7 +45,34 @@ export function setupStage(root: Node, cols: number, rows: number, gridY: number
     // No lane lines: cars face varying directions, so column lanes don't fit the
     // gameplay (matches the reference art, which uses a plain lot + dashed border).
     const lotW = cols * step, lotH = rows * step;
-    const lot = makeLitBox('Lot', lotW + 0.3, lotH + 0.3, 0.12, new Color(84, 90, 104));
+    const bw = lotW + 0.3, bh = lotH + 0.3;
+    const lot = makeLitBox('Lot', bw, bh, 0.12, new Color(84, 90, 104));
     lot.setPosition(0, gridY, -0.16);
     root.addChild(lot);
+
+    // White dashed border around the lot (matches the reference art). Short dash
+    // boxes laid along each edge, on the lot surface (just in front, behind shadows).
+    const white = new Color(240, 243, 250);
+    const dash = 0.28, gap = 0.16, zBorder = -0.1;
+    // horizontal edge: dashes run along X at a fixed Y-offset from the lot center.
+    // vertical edge: dashes run along Y at a fixed X.
+    const addDashes = (len: number, horizontal: boolean, offset: number) => {
+        const span = dash + gap;
+        const n = Math.max(1, Math.floor(len / span));
+        const start = -len / 2 + (len - (n - 1) * span) / 2;
+        for (let i = 0; i < n; i++) {
+            const p = start + i * span;
+            const w = horizontal ? dash : 0.05;
+            const h = horizontal ? 0.05 : dash;
+            const s = makeLitBox('dash', w, h, 0.06, white);
+            const x = horizontal ? p : offset;
+            const y = gridY + (horizontal ? offset : p);
+            s.setPosition(x, y, zBorder);
+            root.addChild(s);
+        }
+    };
+    addDashes(bw, true, bh / 2);   // top edge
+    addDashes(bw, true, -bh / 2);  // bottom edge
+    addDashes(bh, false, -bw / 2); // left edge
+    addDashes(bh, false, bw / 2);  // right edge
 }
