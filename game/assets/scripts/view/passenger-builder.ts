@@ -12,9 +12,9 @@ import { blobShadow } from './blob-shadow';
 export function buildPassenger(name: string, color: Color): Node {
     const root = new Node(name);
 
-    // Fake contact shadow beneath the passenger.
-    const shadow = blobShadow('shadow', 0.34, 0.22);
-    shadow.setPosition(0, -0.14, 0.02);
+    // Fake contact shadow tucked under the passenger.
+    const shadow = blobShadow('shadow', 0.3, 0.18);
+    shadow.setPosition(0, -0.12, -0.04);
     root.addChild(shadow);
 
     const body = new Node('body');

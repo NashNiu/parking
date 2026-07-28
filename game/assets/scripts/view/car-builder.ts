@@ -31,9 +31,9 @@ export function buildCar(
 ): { root: Node; body: Node } {
     const root = new Node(name);
 
-    // Fake contact shadow beneath the car (lies against the board plane).
-    const shadow = blobShadow('shadow', sizeX * 1.02, sizeY * 0.62);
-    shadow.setPosition(0, -sizeY * 0.42, 0.02);
+    // Fake contact shadow tucked under the car (lies against the board plane).
+    const shadow = blobShadow('shadow', sizeX * 0.9, sizeY * 0.5);
+    shadow.setPosition(0, -sizeY * 0.32, -0.06);
     root.addChild(shadow);
 
     const depth = 0.55;

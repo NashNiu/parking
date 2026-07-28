@@ -15,7 +15,7 @@ function shadowMaterial(): Material {
     const mat = new Material();
     // technique 1 = builtin-unlit "transparent" (blend enabled) → honors mainColor alpha.
     mat.initialize({ effectName: 'builtin-unlit', technique: 1 });
-    mat.setProperty('mainColor', new Color(0, 0, 0, 60));
+    mat.setProperty('mainColor', new Color(0, 0, 0, 45));
     shadowMat = mat;
     return mat;
 }
