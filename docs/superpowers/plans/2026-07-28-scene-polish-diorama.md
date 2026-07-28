@@ -162,69 +162,76 @@ git commit -am "feat(view): M5.B rounded platform + parking-lot ground + lane li
 
 ---
 
-## Task C: 候车厅转盘(乘客平滑 riding)
+## Task C: 候车厅赛道(蜿蜒轨道 + 密集彩色小球串)—— 对齐参考图
+
+> 设计改版:原"转盘"改为参考图的**环形赛道 + 密集小球串**(用户 2026-07-28 拍板)。乘客用抽象彩色小球(能表现大数量),沿带白边的椭圆/stadium 赛道平滑流动,底部为上车口。
 
 **Files:**
-- Create: `game/assets/scripts/view/turntable-view.ts`
-- Modify: `game/assets/scripts/view/GameController.ts`(用 turntable 替换 loop-view 接线;飞人起点用转盘车站世界坐标)
-- Delete/retire: `game/assets/scripts/view/loop-view.ts`(被取代;若保留则不再实例化)
+- Create: `game/assets/scripts/view/track-view.ts`
+- Modify: `game/assets/scripts/view/GameController.ts`(用 TrackView 替换 loop-view 接线)
+- Delete/retire: `game/assets/scripts/view/loop-view.ts`(被取代)
 
 **Interfaces:**
-- Produces:`turntable-view.ts` `class TurntableView { constructor(parent, capacity, y); update(ring: (string|null)[]): void; nearestVisibleWorldPos(color): Vec3 | null }`——与 LoopView 同签名,便于替换。内部:装饰圆台 + `capacity` 个固定车站(圆周,车站 0 在最下=最靠近停车场);乘客节点每 tick 用补间平滑前移一站。
-- Consumes:`buildPassenger`/`recolorPassenger`、`colorOf`、`makeLitBox`(圆台)。
+- Produces:`track-view.ts` `class TrackView { constructor(parent, capacity, y); update(ring: (string|null)[]): void; nearestVisibleWorldPos(color): Vec3 | null }`——与 LoopView 同签名,便于替换。
+- Consumes:`colorOf`、`makeLitBox`(赛道白边)、`litMaterial`(小球)、`tween`。
 
-- [ ] **Step 1: turntable-view.ts**
+- [ ] **Step 1: track-view.ts**
 
-机制(首版,预览调参):
-- 构造:一块装饰圆台(扁 cylinder,半径 rx≈3.4)在 y;`capacity` 个车站角度 `ang(i)=Math.PI/2 + (i/capacity)*2π`(车站 0 在底部,靠停车场);车站世界/局部坐标 `pos(i)=(rx*cos, ry-ish*sin)`(沿用椭圆 rx=3.3 ry=1.4 保持透视一致)。
-- 维护 `capacity` 个乘客节点(池),`node[i]` 表示车站 i 的当前乘客。`update(ring)`:对每个 i,若 `ring[i]` 有色则显示并 `recolorPassenger`,否则隐藏;**平滑**:记录上一次 ring,若内容整体前移一位,用 `tween` 让每个乘客节点从"上一车站位置"补间到"当前车站位置"(时长≈0.12s TICK)。首版可先实现"每 tick tween node[i] 到 pos(i)"的软过渡;若视觉不顺,再改为按内容流动。
-- `nearestVisibleWorldPos(color)`:遍历车站,返回第一个该色可见乘客的 `worldPosition.clone()`(车站 0 优先——即最靠近上车口)。
-- 圆台可缓慢自转(纯装饰):在一个 update 里 `disc.setRotationFromEuler(0,0, t)` 递增——但注意板已倾斜,自转轴用局部 Z;若视觉怪则去掉自转,仅靠乘客补间体现"转"。
+结构(首版,预览调参):
+- **赛道路径**:一个 stadium/椭圆闭合路径(参数化),参数 `t∈[0,1)` → 世界局部坐标 `pathPoint(t)`。用椭圆近似即可:`x=rx*cos(θ), y=cy+ry*sin(θ)`,`θ=2π*t`,`rx≈3.4, ry≈1.5`,中心在 `y`。**上车口** = 路径最下点(最靠近停车场),对应 `t0`(使 y 最小的 t)。
+- **白边**:沿路径外/内侧各铺一圈短白 box(`makeLitBox`,白色,细长,沿切线方向朝向),形成赛道两侧路肩(参考图的白色轨道边)。数量适中(如每侧 40 段)。
+- **乘客小球串**:`capacity` 个 ring 槽 → 沿路径均匀分布的 `capacity` 个"槽位"(槽 i 在 `t = i/capacity`)。每个**非空**槽渲染一个**小球簇**(如 3~4 个小 `sphere`,半径 ~0.12,该色,紧挨成一小团),读作密集乘客;空槽不显示。
+- **平滑流动**:维护一个相位 `phase`(0..1),每 tick 目标相位前移 `1/capacity`,用 `tween` 平滑到目标(时长≈TICK)。每帧根据 `phase` 把槽 i 的球簇放到 `pathPoint((i/capacity + phase) mod 1)`。这样球簇沿赛道平滑绕行。`update(ring)` 只更新每个槽的颜色/显隐(按 ring 内容);相位推进在内部按 tick 计数。
+  - 简化保底:若相位补间不顺,退化为"每 tick 把每个球簇 tween 到下一槽位"。
+- `nearestVisibleWorldPos(color)`:返回当前**最靠近上车口**(路径最下点)的该色可见球簇的世界坐标(遍历槽,按到上车口的路径距离排序取该色第一个);供飞人动画起点。
+- 性能:capacity(~12)× 每簇 3~4 球 ≈ 40 球 + 白边 ~80 段,注意基元分段克制、材质走 litMaterial 缓存。
 
-(完整首版代码由实现者按上述结构写出,复用 loop-view 的椭圆布局常量与 update 显隐逻辑;补间部分是新增。)
+(完整首版代码由实现者按结构写出;椭圆/相位/球簇均为预览驱动微调。)
 
 - [ ] **Step 2: GameController 接线**
 
-`buildBoard`:把 `new LoopView(...)` 换成 `new TurntableView(loopRoot, level.loop.capacity, LOOP_Y)`;`this.loopView` 字段类型改为 TurntableView(或保留名字)。`update()` 里 `this.loopView.update(ring)` 不变。`playBoarding` 里 `nearestVisibleWorldPos` 调用不变(同签名)。
+`buildBoard`:`new LoopView(...)` → `new TrackView(loopRoot, level.loop.capacity, LOOP_Y)`;字段/类型改为 TrackView。`update()` 的 `this.loopView.update(ring)` 与 `playBoarding` 的 `nearestVisibleWorldPos` 调用不变(同签名)。移除 loop-view 实例化。
 
 - [ ] **Step 3: jest 绿** → 44 PASS。
 
 - [ ] **Step 4: Commit**
 ```bash
-git commit -am "feat(view): M5.C waiting-hall turntable with smoothly riding passengers"
+git commit -am "feat(view): M5.C waiting-hall race-track with dense passenger ball clusters"
 ```
 
-**交付:** 顶部是一个会转的候车厅圆台,乘客坐着平滑转圈,转到底部上车口时上车(飞人仍生效)。
+**交付:** 顶部是带白边的环形赛道,彩色小球串沿轨道平滑流动,底部上车口处上车(飞人生效)。
 
 ---
 
-## Task D: 车造型重做(挡风/车灯/朝向,去箭头)
+## Task D: 车造型重做(挡风/车灯/侧窗 + 美化车顶箭头)—— 保留箭头
+
+> 设计修正:参考图**保留**车顶白箭头(方向可读性招牌),原计划"去箭头"作废。本任务做**漂亮的扁平白箭头** + 更精致车身。
 
 **Files:**
 - Modify: `game/assets/scripts/view/car-builder.ts`
 
 **Interfaces:**
-- Produces:`buildCar(name, sizeX, sizeY, color, dir, cap): { root, body }` 签名不变。内部重做:更圆润车身 + 斜挡风玻璃 + 前后车灯 + **车头朝向 `dir`**;去掉车顶白箭头。root 的定位/尺寸不变。
+- Produces:`buildCar(name, sizeX, sizeY, color, dir, cap): { root, body }` 签名不变。内部:更圆润车身 + 斜挡风玻璃 + 侧窗 + 前后车灯 + **车顶扁平白箭头指向 `dir`**。root 定位/尺寸不变(拾取不受影响)。
 - Consumes:`litMaterial`/`unlitMaterial`。
 
 - [ ] **Step 1: 重做 buildCar**
 
-- 车身:底盘 + 略缩车厢,边角用额外小 box/缩放做出更圆润观感。
-- 挡风玻璃:车头上方一块斜置深色玻璃(`setRotationFromEuler` 前倾)。
-- 车灯:车头两个亮色小 box(`unlitMaterial` 暖白/黄,恒亮)在 `dir` 侧;车尾两个红色小 box。
-- **朝向**:根据 `dir` 把"车头"朝向 dir(up/down/left/right)。实现:车身默认车头朝 +Y(up),按 dir 对 body 内部整体 `setRotationFromEuler(0,0,angle)`(up=0,left=90,down=180,right=-90)——注意 body 旋转不改 root footprint,拾取不受影响。宽车(w>h)与高车(h>w)朝向后视觉比例要对(实现者用 sizeX/sizeY 组织,旋转后长边沿行驶方向)。
-- 每个 MeshRenderer 设 `shadowCastingMode=ON`(Task A 起沿用)。
-- 三种 cap 仍有区分(车厢高矮/车窗数)。
-- (完整代码由实现者写出,保留 Task 2 的 cap 区分逻辑,替换箭头为朝向+车灯。)
+- 车身:底盘 + 略缩车厢,边角缩放更圆润;`cap` 仍区分(车厢高矮/长度/侧窗数)。
+- 挡风玻璃 + 侧窗:深色/浅蓝薄 box。
+- 车灯:车头两个暖白小 box(`unlitMaterial` 恒亮)在 `dir` 侧,车尾两个红色小 box。
+- **车顶箭头(保留、美化)**:一个**扁平**白色箭头贴在车顶(不再是凸起白方块),用一段箭身 box + 一个三角/两段斜 box 组成箭头,平躺在车顶(法线朝相机侧),按 `dir` 旋转(up=0/left=90/down=180/right=-90)。`unlitMaterial` 恒亮白,醒目。
+- 车头朝向可选跟随 `dir`(若与箭头一起显得冗余,则以箭头为主、车身对称即可)。
+- 每个 MeshRenderer 设 `shadowCastingMode=ON`。
+- (完整代码实现者写出,保留 cap 区分,重点是扁平箭头 + 侧窗/车灯。)
 
 - [ ] **Step 2: jest 绿** → 44 PASS。
 
 - [ ] **Step 3: Commit**
 ```bash
-git commit -am "feat(view): M5.D restyle cars — windshield/headlights, front faces exit dir, drop roof arrow"
+git commit -am "feat(view): M5.D restyle cars — flat roof arrow, windshield/side windows/headlights"
 ```
 
-**交付:** 车更圆润可爱,车头朝行驶方向、有车灯,无车顶箭头;点击拾取正常。
+**交付:** 车更精致(侧窗/车灯),车顶是干净的扁平白箭头指示方向;点击拾取正常。
 
 ---
 
