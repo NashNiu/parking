@@ -42,18 +42,10 @@ export function setupStage(root: Node, cols: number, rows: number, gridY: number
     root.addChild(platform);
 
     // Parking-lot ground under the grid cars (near face ≈ -0.10, behind the shadows).
+    // No lane lines: cars face varying directions, so column lanes don't fit the
+    // gameplay (matches the reference art, which uses a plain lot + dashed border).
     const lotW = cols * step, lotH = rows * step;
     const lot = makeLitBox('Lot', lotW + 0.3, lotH + 0.3, 0.12, new Color(84, 90, 104));
     lot.setPosition(0, gridY, -0.16);
     root.addChild(lot);
-
-    // Lane separator lines on the lot surface (thin, just in front of the lot but
-    // still behind the shadows at z ≈ -0.06).
-    const line = new Color(210, 214, 224);
-    for (let c = 1; c < cols; c++) {
-        const x = c * step - lotW / 2;
-        const s = makeLitBox('lane', 0.04, lotH, 0.03, line);
-        s.setPosition(x, gridY, -0.095);
-        root.addChild(s);
-    }
 }
