@@ -1,6 +1,7 @@
 import { Node, Color, MeshRenderer, utils, primitives } from 'cc';
 import { litMaterial, unlitMaterial } from './materials';
 import { Dir } from './placeholder';
+import { blobShadow } from './blob-shadow';
 
 export type Cap = 'small' | 'medium' | 'big';
 
@@ -29,6 +30,12 @@ export function buildCar(
     name: string, sizeX: number, sizeY: number, color: Color, dir: Dir, cap: Cap,
 ): { root: Node; body: Node } {
     const root = new Node(name);
+
+    // Fake contact shadow beneath the car (lies against the board plane).
+    const shadow = blobShadow('shadow', sizeX * 1.02, sizeY * 0.62);
+    shadow.setPosition(0, -sizeY * 0.42, 0.02);
+    root.addChild(shadow);
+
     const depth = 0.55;
     const dark = new Color(40, 44, 52);
     const glass = new Color(150, 205, 235);

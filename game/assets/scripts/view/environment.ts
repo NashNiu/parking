@@ -1,15 +1,5 @@
-import { Node, DirectionalLight, Color, director, MeshRenderer, renderer } from 'cc';
+import { Node, DirectionalLight, Color, director, MeshRenderer } from 'cc';
 import { makeLitBox } from './placeholder';
-
-/*
- * Shadow-related enums (ShadowType, PCFType) are NOT flat exports of the 'cc'
- * module in Cocos Creator 3.8.7 — verified against the engine's own
- * `editor/assets/default_renderpipeline/builtin-pipeline.ts`, which accesses
- * them as `renderer.scene.ShadowType` / `renderer.scene.PCFType` after
- * `import { renderer } from 'cc'`. `import { ShadowType } from 'cc'` would
- * fail to resolve (scene-graph/scene-globals.ts imports ShadowType from
- * render-scene internally but never re-exports it). Use `renderer.scene.*`.
- */
 
 /**
  * Adds cartoon lighting + a soft stage floor + warm background decor.
@@ -29,9 +19,10 @@ export function setupEnvironment(root: Node): void {
         const dl = lightNode.addComponent(DirectionalLight);
         dl.illuminance = 150000;
         dl.color = new Color(255, 248, 230);
-        dl.shadowEnabled = true;
-        dl.shadowDistance = 40;
-        dl.shadowPcf = renderer.scene.PCFType.SOFT_2X; // soft shadow edges
+        // Real-time ShadowMap is disabled: on the ~52°-tilted board it casts long,
+        // offset, hard shadows onto the slanted ground and is expensive. We use
+        // fake blob shadows (blob-shadow.ts) attached to each car/passenger instead.
+        dl.shadowEnabled = false;
         lightNode.setRotationFromEuler(-55, -35, 0);
         scene.addChild(lightNode);
 
@@ -44,12 +35,9 @@ export function setupEnvironment(root: Node): void {
             globals.ambient.groundAlbedo = new Color(90, 80, 70, 255) as unknown as any;
         }
 
-        // Real-time shadow map so cars/passengers ground themselves visually.
+        // ShadowMap disabled (see note above) — fake blob shadows are used instead.
         if (globals && globals.shadows) {
-            globals.shadows.enabled = true;
-            globals.shadows.type = renderer.scene.ShadowType.ShadowMap;
-            globals.shadows.shadowMapSize = 2048;
-            globals.shadows.maxReceived = 4;
+            globals.shadows.enabled = false;
         }
     }
 

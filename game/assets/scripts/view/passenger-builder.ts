@@ -1,5 +1,6 @@
 import { Node, Color, MeshRenderer, utils, primitives } from 'cc';
 import { litMaterial } from './materials';
+import { blobShadow } from './blob-shadow';
 
 /**
  * A tiny person silhouette: capsule body + sphere head, tinted to `color`.
@@ -10,6 +11,12 @@ import { litMaterial } from './materials';
  */
 export function buildPassenger(name: string, color: Color): Node {
     const root = new Node(name);
+
+    // Fake contact shadow beneath the passenger.
+    const shadow = blobShadow('shadow', 0.34, 0.22);
+    shadow.setPosition(0, -0.14, 0.02);
+    root.addChild(shadow);
+
     const body = new Node('body');
     const bmr = body.addComponent(MeshRenderer);
     bmr.mesh = utils.createMesh(primitives.capsule(0.14, 0.14, 0.36, { sides: 12 }));
