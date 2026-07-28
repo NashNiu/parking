@@ -9,6 +9,7 @@ function litBox(name: string, w: number, h: number, d: number, color: Color): No
     const mr = n.addComponent(MeshRenderer);
     mr.mesh = utils.createMesh(primitives.box({ width: w, height: h, length: d }));
     mr.material = litMaterial(color);
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     return n;
 }
 
@@ -18,6 +19,7 @@ function wheel(name: string, r: number, color: Color): Node {
     // cylinder axis is Y by default; rotate so it lies like a wheel (axis along X).
     mr.mesh = utils.createMesh(primitives.cylinder(r, r, r * 0.5, { radialSegments: 16 }));
     mr.material = litMaterial(color);
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     n.setRotationFromEuler(0, 0, 90);
     return n;
 }
@@ -66,6 +68,7 @@ export function buildCar(
     const amr = arrow.addComponent(MeshRenderer);
     amr.mesh = utils.createMesh(primitives.box({ width: 0.16, height: 0.5, length: 0.12 }));
     amr.material = unlitMaterial(new Color(255, 255, 255));
+    amr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     const off = 0.3 * Math.min(sizeX, sizeY);
     const z = depth / 2 + 0.12;
     switch (dir) {

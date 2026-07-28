@@ -10,6 +10,7 @@ import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
+import { setupBackground } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
 import { buildPassenger } from './passenger-builder';
 import { colorOf } from './colors';
@@ -141,6 +142,7 @@ export class GameController extends Component {
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
+        setupBackground(this.boardRoot);
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);

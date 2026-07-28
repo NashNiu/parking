@@ -14,6 +14,7 @@ export function buildPassenger(name: string, color: Color): Node {
     const bmr = body.addComponent(MeshRenderer);
     bmr.mesh = utils.createMesh(primitives.capsule(0.14, 0.14, 0.36, { sides: 12 }));
     bmr.material = litMaterial(color);
+    bmr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     body.setPosition(0, 0, 0);
     root.addChild(body);
 
@@ -21,6 +22,7 @@ export function buildPassenger(name: string, color: Color): Node {
     const hmr = head.addComponent(MeshRenderer);
     hmr.mesh = utils.createMesh(primitives.sphere(0.13, { segments: 12 }));
     hmr.material = litMaterial(new Color(255, 224, 189)); // skin-ish head
+    hmr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     head.setPosition(0, 0.32, 0);
     root.addChild(head);
 

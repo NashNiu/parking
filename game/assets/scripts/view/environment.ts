@@ -1,5 +1,15 @@
-import { Node, DirectionalLight, Color, director } from 'cc';
+import { Node, DirectionalLight, Color, director, MeshRenderer, renderer } from 'cc';
 import { makeLitBox } from './placeholder';
+
+/*
+ * Shadow-related enums (ShadowType, PCFType) are NOT flat exports of the 'cc'
+ * module in Cocos Creator 3.8.7 — verified against the engine's own
+ * `editor/assets/default_renderpipeline/builtin-pipeline.ts`, which accesses
+ * them as `renderer.scene.ShadowType` / `renderer.scene.PCFType` after
+ * `import { renderer } from 'cc'`. `import { ShadowType } from 'cc'` would
+ * fail to resolve (scene-graph/scene-globals.ts imports ShadowType from
+ * render-scene internally but never re-exports it). Use `renderer.scene.*`.
+ */
 
 /**
  * Adds cartoon lighting + a soft stage floor + warm background decor.
@@ -17,9 +27,12 @@ export function setupEnvironment(root: Node): void {
         // Strong key light from the upper-front-right for clear cartoon shading.
         const lightNode = new Node('KeyLight');
         const dl = lightNode.addComponent(DirectionalLight);
-        dl.illuminance = 130000;
-        dl.color = new Color(255, 250, 235);
-        lightNode.setRotationFromEuler(-55, -40, 0);
+        dl.illuminance = 150000;
+        dl.color = new Color(255, 248, 230);
+        dl.shadowEnabled = true;
+        dl.shadowDistance = 40;
+        dl.shadowPcf = renderer.scene.PCFType.SOFT_2X; // soft shadow edges
+        lightNode.setRotationFromEuler(-55, -35, 0);
         scene.addChild(lightNode);
 
         // Keep ambient LOW so the directional light actually shapes the forms
@@ -30,18 +43,21 @@ export function setupEnvironment(root: Node): void {
             globals.ambient.skyIllum = 8000;
             globals.ambient.groundAlbedo = new Color(90, 80, 70, 255) as unknown as any;
         }
+
+        // Real-time shadow map so cars/passengers ground themselves visually.
+        if (globals && globals.shadows) {
+            globals.shadows.enabled = true;
+            globals.shadows.type = renderer.scene.ShadowType.ShadowMap;
+            globals.shadows.shadowMapSize = 2048;
+            globals.shadows.maxReceived = 4;
+        }
     }
 
-    // Soft rounded stage floor sitting behind/under the board.
+    // Soft rounded stage floor sitting behind/under the board; receives shadows
+    // from cars/passengers above it (Task B replaces this with a real platform).
     const floor = makeLitBox('Floor', 16, 10, 0.4, new Color(250, 236, 210));
     floor.setPosition(0, -0.5, -2.2);
+    const floorMr = floor.getComponent(MeshRenderer);
+    if (floorMr) floorMr.receiveShadow = MeshRenderer.ShadowReceivingMode.ON;
     root.addChild(floor);
-
-    // A couple of far background slabs for depth (warm gradient feel, no textures).
-    const back1 = makeLitBox('BackFar', 30, 18, 0.4, new Color(255, 214, 170));
-    back1.setPosition(0, 4, -6);
-    root.addChild(back1);
-    const back2 = makeLitBox('BackNear', 26, 14, 0.4, new Color(255, 232, 196));
-    back2.setPosition(0, 2, -4.5);
-    root.addChild(back2);
 }
