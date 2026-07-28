@@ -1,15 +1,13 @@
-import { Node, DirectionalLight, Color, director, MeshRenderer } from 'cc';
-import { makeLitBox } from './placeholder';
+import { Node, DirectionalLight, Color, director } from 'cc';
 
 /**
- * Adds cartoon lighting + a soft stage floor + warm background decor.
- * Lights are attached to the scene; floor/decor become children of `root`.
+ * Adds cartoon lighting attached to the scene.
  *
  * The scene-level light + ambient setup is idempotent (guarded by a
  * `KeyLight` name check) so repeated calls across restarts don't leak
  * additional DirectionalLight nodes or keep re-lifting ambient values.
- * Floor/decor are parented under `root` and are destroyed/recreated with
- * the board on every restart, so those are intentionally left unguarded.
+ * (The old stage floor lived here; it's replaced by the platform/lot
+ * created in scene-stage.ts's setupStage.)
  */
 export function setupEnvironment(root: Node): void {
     const scene = director.getScene()!;
@@ -40,12 +38,4 @@ export function setupEnvironment(root: Node): void {
             globals.shadows.enabled = false;
         }
     }
-
-    // Soft rounded stage floor sitting behind/under the board; receives shadows
-    // from cars/passengers above it (Task B replaces this with a real platform).
-    const floor = makeLitBox('Floor', 16, 10, 0.4, new Color(250, 236, 210));
-    floor.setPosition(0, -0.5, -2.2);
-    const floorMr = floor.getComponent(MeshRenderer);
-    if (floorMr) floorMr.receiveShadow = MeshRenderer.ShadowReceivingMode.ON;
-    root.addChild(floor);
 }

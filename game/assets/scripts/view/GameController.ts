@@ -10,7 +10,7 @@ import { LoopView } from './loop-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
-import { setupBackground } from './scene-stage';
+import { setupBackground, setupStage } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
 import { buildPassenger } from './passenger-builder';
 import { colorOf } from './colors';
@@ -143,6 +143,7 @@ export class GameController extends Component {
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
         setupBackground(this.boardRoot);
+        setupStage(this.boardRoot, level.grid.cols, level.grid.rows, GRID_Y);
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
