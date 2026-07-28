@@ -29,27 +29,31 @@ export function setupBackground(root: Node): void {
  */
 export function setupStage(root: Node, cols: number, rows: number, gridY: number): void {
     const step = 1.12;
-    // Rounded-ish platform tray under everything (thin big box, receives shadow).
-    const platform = makeLitBox('Platform', 12, 15, 0.5, new Color(247, 238, 222));
-    platform.setPosition(0, 0, -0.35);
-    const pmr = platform.getComponent(MeshRenderer);
-    if (pmr) pmr.receiveShadow = MeshRenderer.ShadowReceivingMode.ON;
+    // Depth ordering note: cars/passengers straddle the board plane — their geometry
+    // spans roughly z ∈ [-0.35, +0.28] and their blob shadows sit at z ≈ -0.06. Any
+    // opaque slab with a near face in front of that would bury shadows/rear wheels.
+    // So the lot sits just BEHIND the shadows (near face ≈ -0.10): shadows render on
+    // top of it (grounded look) and cars read as sitting IN the lot. The platform
+    // sits further back as the overall tray.
+
+    // Rounded-ish platform tray behind everything.
+    const platform = makeLitBox('Platform', 12, 15, 0.35, new Color(247, 238, 222));
+    platform.setPosition(0, 0, -0.5);
     root.addChild(platform);
 
-    // Parking-lot ground under the grid cars.
+    // Parking-lot ground under the grid cars (near face ≈ -0.10, behind the shadows).
     const lotW = cols * step, lotH = rows * step;
     const lot = makeLitBox('Lot', lotW + 0.3, lotH + 0.3, 0.12, new Color(84, 90, 104));
-    lot.setPosition(0, gridY, 0.02);
-    const lmr = lot.getComponent(MeshRenderer);
-    if (lmr) lmr.receiveShadow = MeshRenderer.ShadowReceivingMode.ON;
+    lot.setPosition(0, gridY, -0.16);
     root.addChild(lot);
 
-    // Lane separator lines (light dashed feel via thin boxes between columns).
+    // Lane separator lines on the lot surface (thin, just in front of the lot but
+    // still behind the shadows at z ≈ -0.06).
     const line = new Color(210, 214, 224);
     for (let c = 1; c < cols; c++) {
         const x = c * step - lotW / 2;
-        const s = makeLitBox('lane', 0.04, lotH, 0.14, line);
-        s.setPosition(x, gridY, 0.06);
+        const s = makeLitBox('lane', 0.04, lotH, 0.03, line);
+        s.setPosition(x, gridY, -0.095);
         root.addChild(s);
     }
 }
