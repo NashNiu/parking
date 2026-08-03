@@ -6,7 +6,7 @@ import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
-import { LoopView } from './loop-view';
+import { TrackView } from './track-view';
 import { HudView } from './hud-view';
 import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
@@ -41,7 +41,7 @@ export class GameController extends Component {
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
     private parkingView: ParkingView | null = null;
-    private loopView: LoopView | null = null;
+    private loopView: TrackView | null = null;
     private hud: HudView | null = null;
     private cam: Camera | null = null;
     private uiCam: Camera | null = null;
@@ -147,7 +147,7 @@ export class GameController extends Component {
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
-        this.loopView = new LoopView(loopRoot, level.loop.capacity, LOOP_Y);
+        this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y);
         this.loopView.update(this.core!.loop.ring);
 
         const parkingRoot = new Node('ParkingRoot');
