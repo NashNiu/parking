@@ -61,6 +61,7 @@ function normalDir(t: number): { nx: number; ny: number } {
 export class TrackView {
     private readonly capacity: number;
     private readonly cy: number;
+    private readonly tick: number;
     /** One cluster root node per ring slot; each holds a few small colored spheres. */
     private clusters: Node[] = [];
     private ringColors: (string | null)[] = [];
@@ -70,12 +71,24 @@ export class TrackView {
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
-    constructor(parent: Node, capacity: number, y: number) {
+    constructor(parent: Node, capacity: number, y: number, tick = 0.12) {
         this.capacity = capacity;
         this.cy = y;
+        this.tick = tick;
 
         this.buildCurbs(parent);
         this.buildClusters(parent);
+    }
+
+    /**
+     * Stop the internal phase tween. MUST be called before the board (and this
+     * view's cluster nodes) are destroyed on restart — the tween targets a plain
+     * object, so it isn't auto-stopped by node destruction and would otherwise keep
+     * calling repositionAll() on freed nodes.
+     */
+    destroy(): void {
+        this.phaseTween?.stop();
+        this.phaseTween = null;
     }
 
     private buildCurbs(parent: Node): void {
@@ -138,7 +151,7 @@ export class TrackView {
         this.phaseTween?.stop();
         const target = this.phaseHolder.p + 1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
-            .to(0.12, { p: target }, {
+            .to(this.tick, { p: target }, {
                 onUpdate: () => this.repositionAll(),
             })
             .start();
@@ -147,9 +160,12 @@ export class TrackView {
     private repositionAll(): void {
         this.phase = this.phaseHolder.p % 1;
         for (let i = 0; i < this.clusters.length; i++) {
+            const cluster = this.clusters[i];
+            // Guard against a tween tick landing after the board was destroyed on restart.
+            if (!cluster || !cluster.isValid) continue;
             const t = (i / this.capacity + this.phase) % 1;
             const p = pathPoint(t, this.cy);
-            this.clusters[i].setPosition(p.x, p.y, 0);
+            cluster.setPosition(p.x, p.y, 0);
         }
     }
 

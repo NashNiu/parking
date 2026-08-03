@@ -122,6 +122,9 @@ export class GameController extends Component {
     }
 
     private restart(): void {
+        // Stop the track's phase tween before its cluster nodes are destroyed
+        // (the tween targets a plain object, so node destruction won't stop it).
+        this.loopView?.destroy();
         if (this.boardRoot) {
             this.boardRoot.destroy();
             this.boardRoot = null;
@@ -147,7 +150,7 @@ export class GameController extends Component {
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
-        this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y);
+        this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y, this.TICK);
         this.loopView.update(this.core!.loop.ring);
 
         const parkingRoot = new Node('ParkingRoot');
