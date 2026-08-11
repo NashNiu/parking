@@ -13,6 +13,7 @@ import { setupEnvironment } from './environment';
 import { setupBackground, setupStage } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
 import { buildPassenger } from './passenger-builder';
+import { preloadCarModels } from './car-builder';
 import { colorOf } from './colors';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
@@ -54,7 +55,10 @@ export class GameController extends Component {
     private ended = false;
     private loading = false;
     private tickAcc = 0;
-    private readonly TICK = 0.12;
+    // Seconds per loop step. Also the cluster-flow tween duration (passed to
+    // TrackView), so the passenger carousel rotates one slot per TICK. Raised from
+    // 0.12 to slow the carousel to a calmer pace.
+    private readonly TICK = 0.18;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
     start() {
@@ -71,7 +75,9 @@ export class GameController extends Component {
         // Preload builtin-standard so lit materials get real lighting; it lives in
         // the `internal` bundle but isn't preloaded unless something already uses it.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
-        this.preloadLitEffect(() => this.loadLevel(this.levelName));
+        // Then preload the car GLB models (buildCar is synchronous and needs the
+        // prefabs resident) before loading the level.
+        this.preloadLitEffect(() => preloadCarModels(() => this.loadLevel(this.levelName)));
     }
 
     /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */
