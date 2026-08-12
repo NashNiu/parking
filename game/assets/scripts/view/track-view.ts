@@ -1,6 +1,5 @@
-import { Node, Color, Vec3, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
+import { Node, Color, Vec3, Mesh, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
-import { makeLitBox } from './placeholder';
 import { litMaterial } from './materials';
 
 /** Path parameter (t in [0,1)) of the boarding point: the lowest point on the
@@ -10,9 +9,7 @@ const T_BOARD = 0.75;
 const RX = 3.4;
 const RY = 1.5;
 
-/** Number of curb segments laid along each side (inner/outer) of the track. */
-const CURB_SEGMENTS = 48;
-/** Half-offset of the curb from the path centerline, along the local normal. */
+/** Half-offset of the two curb rails from the path centerline. */
 const CURB_OFFSET = 0.35;
 
 /** Balls per passenger cluster and their layout offsets (small clump). */
@@ -24,6 +21,31 @@ const BALL_OFFSETS: [number, number][] = [
 ];
 const BALL_RADIUS = 0.12;
 
+/**
+ * One merged mesh for a whole passenger cluster (all four balls baked in at their
+ * offsets), built once and shared by every cluster node. Collapses 4 draw calls per
+ * cluster to 1 — the balls never move relative to each other, so merging is safe.
+ */
+let CLUSTER_MESH: Mesh | null = null;
+function clusterMesh(): Mesh {
+    if (CLUSTER_MESH) return CLUSTER_MESH;
+    const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
+    let base = 0;
+    for (const [ox, oy] of BALL_OFFSETS) {
+        const g = primitives.sphere(BALL_RADIUS, { segments: 8 });
+        const vc = g.positions.length / 3;
+        for (let i = 0; i < vc; i++) {
+            positions.push(g.positions[i * 3] + ox, g.positions[i * 3 + 1] + oy, g.positions[i * 3 + 2]);
+            if (g.normals) normals.push(g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]);
+            if (g.uvs) uvs.push(g.uvs[i * 2], g.uvs[i * 2 + 1]);
+        }
+        for (const ii of (g.indices || [])) indices.push(ii + base);
+        base += vc;
+    }
+    CLUSTER_MESH = utils.createMesh({ positions, normals, uvs, indices });
+    return CLUSTER_MESH;
+}
+
 /** Point on the closed ellipse path at parameter t in [0,1). */
 function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
     const theta = t * Math.PI * 2;
@@ -31,25 +53,6 @@ function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
     out.y = cy + RY * Math.sin(theta);
     out.z = 0;
     return out;
-}
-
-/** Tangent direction angle (degrees) at path parameter t, for orienting curb segments. */
-function tangentAngleDeg(t: number): number {
-    const theta = t * Math.PI * 2;
-    // d/dtheta [rx*cos, ry*sin] = [-rx*sin, ry*cos]
-    const dx = -RX * Math.sin(theta);
-    const dy = RY * Math.cos(theta);
-    return (Math.atan2(dy, dx) * 180) / Math.PI;
-}
-
-/** Outward normal direction (unit-ish, ellipse-aware) at path parameter t. */
-function normalDir(t: number): { nx: number; ny: number } {
-    const theta = t * Math.PI * 2;
-    // Gradient of x^2/rx^2 + y^2/ry^2 (ignoring the cy offset, which doesn't affect direction).
-    const nx = Math.cos(theta) / RX;
-    const ny = Math.sin(theta) / RY;
-    const len = Math.hypot(nx, ny) || 1;
-    return { nx: nx / len, ny: ny / len };
 }
 
 /**
@@ -93,31 +96,34 @@ export class TrackView {
 
     private buildCurbs(parent: Node): void {
         const white = Color.WHITE.clone();
-        for (const side of [1, -1]) {
-            for (let i = 0; i < CURB_SEGMENTS; i++) {
-                const t = i / CURB_SEGMENTS;
-                const p = pathPoint(t, this.cy);
-                const { nx, ny } = normalDir(t);
-                const seg = makeLitBox(`curb-${side}-${i}`, 0.5, 0.1, 0.05, white);
-                seg.setPosition(p.x + nx * CURB_OFFSET * side, p.y + ny * CURB_OFFSET * side, 0);
-                seg.setRotationFromEuler(0, 0, tangentAngleDeg(t));
-                parent.addChild(seg);
-            }
+        // Two white rails (outer + inner edge) as scaled tori — a torus built at unit
+        // radius, laid into the board plane (Rx 90) and scaled to the ellipse semi-axes,
+        // gives the exact double-line oval the 96 curb boxes used to approximate, at 2
+        // draw calls instead of 96. Tube ≈ 0.06 → ~0.12 rail thickness (matches the old).
+        const off = CURB_OFFSET;
+        const rails: [number, number, string][] = [
+            [RX + off, RY + off, 'curb-outer'],
+            [RX - off, RY - off, 'curb-inner'],
+        ];
+        for (const [rx, ry, name] of rails) {
+            const n = new Node(name);
+            const mr = n.addComponent(MeshRenderer);
+            mr.mesh = utils.createMesh(primitives.torus(1, 0.06, { radialSegments: 6, tubularSegments: 56 }));
+            mr.material = litMaterial(white);
+            n.setPosition(0, this.cy, 0);
+            n.setRotationFromEuler(90, 0, 0); // ring from XZ into the board's XY plane
+            n.setScale(rx, 1, ry);            // unit ring → ellipse (semi-axes rx, ry)
+            parent.addChild(n);
         }
     }
 
     private buildClusters(parent: Node): void {
+        const mesh = clusterMesh();
         for (let i = 0; i < this.capacity; i++) {
             const cluster = new Node(`pax-cluster-${i}`);
-            for (let b = 0; b < BALL_OFFSETS.length; b++) {
-                const ball = new Node(`ball-${b}`);
-                const mr = ball.addComponent(MeshRenderer);
-                mr.mesh = utils.createMesh(primitives.sphere(BALL_RADIUS, { segments: 8 }));
-                mr.material = litMaterial(Color.WHITE.clone());
-                const [ox, oy] = BALL_OFFSETS[b];
-                ball.setPosition(ox, oy, 0);
-                cluster.addChild(ball);
-            }
+            const mr = cluster.addComponent(MeshRenderer);
+            mr.mesh = mesh; // shared merged 4-ball mesh
+            mr.material = litMaterial(Color.WHITE.clone());
             const t = i / this.capacity;
             const p = pathPoint(t, this.cy);
             cluster.setPosition(p.x, p.y, 0);
@@ -135,11 +141,8 @@ export class TrackView {
             const cluster = this.clusters[i];
             if (c) {
                 cluster.active = true;
-                const mat = litMaterial(colorOf(c));
-                for (const ball of cluster.children) {
-                    const mr = ball.getComponent(MeshRenderer);
-                    if (mr) mr.material = mat;
-                }
+                const mr = cluster.getComponent(MeshRenderer);
+                if (mr) mr.material = litMaterial(colorOf(c));
             } else {
                 cluster.active = false;
             }
