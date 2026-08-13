@@ -12,7 +12,7 @@ import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
-import { buildPassenger } from './passenger-builder';
+import { buildPassengerBall } from './passenger-builder';
 import { preloadCarModels } from './car-builder';
 import { colorOf } from './colors';
 import { SfxManager } from './sfx';
@@ -246,7 +246,7 @@ export class GameController extends Component {
         if (!start) { this.bumpSeat(e); return; }
         if (!this.boardRoot) { this.bumpSeat(e); return; }
 
-        const p = buildPassenger('fly', colorOf(color));
+        const p = buildPassengerBall('fly', colorOf(color));
         this.boardRoot.addChild(p);
         p.setWorldPosition(start);
 

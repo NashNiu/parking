@@ -36,6 +36,20 @@ export function buildPassenger(name: string, color: Color): Node {
     return root;
 }
 
+/**
+ * A single colored ball, matching the loop's ball-cluster passengers. Used for the
+ * boarding fly animation so the figure that flies to the car is the same art as the
+ * queue it came from (not the old capsule person).
+ */
+export function buildPassengerBall(name: string, color: Color): Node {
+    const n = new Node(name);
+    const mr = n.addComponent(MeshRenderer);
+    mr.mesh = utils.createMesh(primitives.sphere(0.16, { segments: 12 }));
+    mr.material = litMaterial(color);
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
+    return n;
+}
+
 /** Retint a passenger's body (head stays skin-colored). */
 export function recolorPassenger(node: Node, color: Color): void {
     const body = node.getChildByName('body');
