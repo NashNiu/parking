@@ -2,12 +2,9 @@ import { Node, Color, Vec3, Mesh, MeshRenderer, utils, primitives, tween, Tween 
 import { colorOf } from './colors';
 import { litMaterial } from './materials';
 
-/** Path parameter (t in [0,1)) of the boarding point: the lowest point on the
- *  ellipse (nearest the parking area below), i.e. where sin(2*pi*t) = -1. */
-const T_BOARD = 0.75;
-
-const RX = 3.4;
-const RY = 1.5;
+const W = 3.4;   // half width of the circuit centerline
+const H = 1.5;   // half height
+const R = 0.9;   // corner radius
 
 /** Half-offset of the two curb rails from the path centerline. */
 const CURB_OFFSET = 0.35;
@@ -29,29 +26,94 @@ const BALL_RADIUS = 0.12;
 let CLUSTER_MESH: Mesh | null = null;
 function clusterMesh(): Mesh {
     if (CLUSTER_MESH) return CLUSTER_MESH;
+    const parts = BALL_OFFSETS.map(([ox, oy]) => {
+        const g = primitives.sphere(BALL_RADIUS, { segments: 8 });
+        const positions = g.positions.slice();
+        for (let v = 0; v < positions.length; v += 3) {
+            positions[v] += ox;
+            positions[v + 1] += oy;
+        }
+        return { positions, normals: g.normals, uvs: g.uvs, indices: g.indices };
+    });
+    CLUSTER_MESH = mergeParts(parts);
+    return CLUSTER_MESH;
+}
+
+/** Merge several primitive geometries into one mesh (one draw call). */
+function mergeParts(parts: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] }[]): Mesh {
     const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
     let base = 0;
-    for (const [ox, oy] of BALL_OFFSETS) {
-        const g = primitives.sphere(BALL_RADIUS, { segments: 8 });
+    for (const g of parts) {
         const vc = g.positions.length / 3;
         for (let i = 0; i < vc; i++) {
-            positions.push(g.positions[i * 3] + ox, g.positions[i * 3 + 1] + oy, g.positions[i * 3 + 2]);
+            positions.push(g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]);
             if (g.normals) normals.push(g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]);
             if (g.uvs) uvs.push(g.uvs[i * 2], g.uvs[i * 2 + 1]);
         }
         for (const ii of (g.indices || [])) indices.push(ii + base);
         base += vc;
     }
-    CLUSTER_MESH = utils.createMesh({ positions, normals, uvs, indices });
-    return CLUSTER_MESH;
+    return utils.createMesh({ positions, normals, uvs, indices });
 }
 
-/** Point on the closed ellipse path at parameter t in [0,1). */
+interface Seg { len: number; at: (u: number, out: Vec3) => void }
+
+/**
+ * The circuit as nine arc-length segments walked CLOCKWISE from the top centre,
+ * so t=0 is top centre, t=0.25 the right midpoint, t=0.5 the bottom centre (the
+ * boarding gap) and t=0.75 the left midpoint. The top straight is split in two so
+ * the walk can start at its middle; by symmetry the quarter marks then land
+ * exactly on the side midpoints.
+ */
+function buildSegments(cy: number): Seg[] {
+    const sx = W - R, sy = H - R;
+    const line = (x0: number, y0: number, x1: number, y1: number): Seg => ({
+        len: Math.hypot(x1 - x0, y1 - y0),
+        at: (u, out) => out.set(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, 0),
+    });
+    // a0 is the start angle; the sweep is -90 degrees (clockwise).
+    const corner = (cx: number, ccy: number, a0: number): Seg => ({
+        len: (Math.PI / 2) * R,
+        at: (u, out) => {
+            const a = a0 - (Math.PI / 2) * u;
+            out.set(cx + R * Math.cos(a), ccy + R * Math.sin(a), 0);
+        },
+    });
+    const HP = Math.PI / 2;
+    return [
+        line(0, cy + H, sx, cy + H),
+        corner(sx, cy + sy, HP),
+        line(W, cy + sy, W, cy - sy),
+        corner(sx, cy - sy, 0),
+        line(sx, cy - H, -sx, cy - H),
+        corner(-sx, cy - sy, -HP),
+        line(-W, cy - sy, -W, cy + sy),
+        corner(-sx, cy + sy, Math.PI),
+        line(-sx, cy + H, 0, cy + H),
+    ];
+}
+
+let SEGS: Seg[] | null = null;
+let SEG_CY = NaN;
+let PERIMETER = 0;
+
+function segments(cy: number): Seg[] {
+    if (SEGS && SEG_CY === cy) return SEGS;
+    SEGS = buildSegments(cy);
+    SEG_CY = cy;
+    PERIMETER = SEGS.reduce((a, s) => a + s.len, 0);
+    return SEGS;
+}
+
+/** Point at arc-length fraction t in [0,1) along the circuit. */
 function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
-    const theta = t * Math.PI * 2;
-    out.x = RX * Math.cos(theta);
-    out.y = cy + RY * Math.sin(theta);
-    out.z = 0;
+    const segs = segments(cy);
+    let s = ((t % 1) + 1) % 1 * PERIMETER;
+    for (const seg of segs) {
+        if (s <= seg.len) { seg.at(seg.len > 0 ? s / seg.len : 0, out); return out; }
+        s -= seg.len;
+    }
+    segs[segs.length - 1].at(1, out);
     return out;
 }
 
@@ -65,6 +127,9 @@ export class TrackView {
     private readonly capacity: number;
     private readonly cy: number;
     private readonly tick: number;
+    private readonly entries: { board: number; left: number; right: number };
+    /** Path parameters where the curb opens up; filled before buildCurbs runs. */
+    private gapTs: number[] = [];
     /** One cluster root node per ring slot; each holds a few small colored spheres. */
     private clusters: Node[] = [];
     private ringColors: (string | null)[] = [];
@@ -74,11 +139,15 @@ export class TrackView {
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
-    constructor(parent: Node, capacity: number, y: number, tick = 0.12) {
+    constructor(
+        parent: Node, capacity: number, y: number, tick = 0.12,
+        entries: { board: number; left: number; right: number },
+    ) {
         this.capacity = capacity;
         this.cy = y;
         this.tick = tick;
-
+        this.entries = entries;
+        this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
         this.buildCurbs(parent);
         this.buildClusters(parent);
     }
@@ -94,25 +163,41 @@ export class TrackView {
         this.phaseTween = null;
     }
 
+    // Two white rails (outer + inner edge), each a merged strip of small boxes laid
+    // along the rounded-rect path — replaces the ellipse's scaled tori, since a
+    // rounded rect isn't a torus, and lets the boarding/entry gaps be cut out by
+    // skipping the samples that fall inside them. One draw call per rail (2 total).
     private buildCurbs(parent: Node): void {
-        const white = Color.WHITE.clone();
-        // Two white rails (outer + inner edge) as scaled tori — a torus built at unit
-        // radius, laid into the board plane (Rx 90) and scaled to the ellipse semi-axes,
-        // gives the exact double-line oval the 96 curb boxes used to approximate, at 2
-        // draw calls instead of 96. Tube ≈ 0.06 → ~0.12 rail thickness (matches the old).
-        const off = CURB_OFFSET;
-        const rails: [number, number, string][] = [
-            [RX + off, RY + off, 'curb-outer'],
-            [RX - off, RY - off, 'curb-inner'],
-        ];
-        for (const [rx, ry, name] of rails) {
+        const SAMPLES = 96;
+        const half = 0.5 / this.capacity; // half a slot wide gap
+        for (const [off, name] of [[CURB_OFFSET, 'curb-outer'], [-CURB_OFFSET, 'curb-inner']] as const) {
+            const parts: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] }[] = [];
+            const p = new Vec3(), q = new Vec3();
+            for (let i = 0; i < SAMPLES; i++) {
+                const t = i / SAMPLES;
+                // Skip the samples that fall inside a gap.
+                if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < half)) continue;
+                pathPoint(t, this.cy, p);
+                pathPoint(t + 1 / SAMPLES, this.cy, q);
+                const dx = q.x - p.x, dy = q.y - p.y;
+                const len = Math.hypot(dx, dy) || 1e-4;
+                const nx = -dy / len, ny = dx / len;      // outward normal in the board plane
+                const box = primitives.box({ width: len * 1.2, height: 0.12, length: 0.12 });
+                // rotate the box about +Z so its width follows the path direction
+                const ang = Math.atan2(dy, dx), ca = Math.cos(ang), sa = Math.sin(ang);
+                const cx = p.x + nx * off, cyy = p.y + ny * off;
+                const pos = box.positions.slice();
+                for (let v = 0; v < pos.length; v += 3) {
+                    const x = pos[v], y = pos[v + 1];
+                    pos[v] = cx + x * ca - y * sa;
+                    pos[v + 1] = cyy + x * sa + y * ca;
+                }
+                parts.push({ positions: pos, normals: box.normals, uvs: box.uvs, indices: box.indices });
+            }
             const n = new Node(name);
             const mr = n.addComponent(MeshRenderer);
-            mr.mesh = utils.createMesh(primitives.torus(1, 0.06, { radialSegments: 6, tubularSegments: 56 }));
-            mr.material = litMaterial(white);
-            n.setPosition(0, this.cy, 0);
-            n.setRotationFromEuler(90, 0, 0); // ring from XZ into the board's XY plane
-            n.setScale(rx, 1, ry);            // unit ring → ellipse (semi-axes rx, ry)
+            mr.mesh = mergeParts(parts);
+            mr.material = litMaterial(Color.WHITE.clone());
             parent.addChild(n);
         }
     }
@@ -151,7 +236,14 @@ export class TrackView {
         // Stop any in-flight phase tween first: tick cadence and tween duration are
         // both ~0.12s, so without this a new tween would overlap the previous one
         // and the two would fight over `phaseHolder.p`, producing visible jitter.
+        //
+        // The ring's CONTENTS already advanced one index, which alone moves a passenger
+        // one slot. Pull the phase back a slot so the new index renders where the
+        // passenger visually was, then tween it forward: net motion is exactly one slot
+        // per tick and the resting phase stays 0, which is what keeps the boarding gap
+        // pinned to a fixed point on the track.
         this.phaseTween?.stop();
+        this.phaseHolder.p -= 1 / this.capacity;
         const target = this.phaseHolder.p + 1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
             .to(this.tick, { p: target }, {
@@ -179,7 +271,7 @@ export class TrackView {
         for (let i = 0; i < this.clusters.length; i++) {
             if (this.ringColors[i] !== color || !this.clusters[i].active) continue;
             const t = (i / this.capacity + this.phase) % 1;
-            const dist = (T_BOARD - t + 1) % 1;
+            const dist = (this.entries.board / this.capacity - t + 1) % 1;
             if (dist < bestDist) {
                 bestDist = dist;
                 best = this.clusters[i];

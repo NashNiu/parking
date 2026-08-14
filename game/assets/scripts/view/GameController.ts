@@ -177,8 +177,11 @@ export class GameController extends Component {
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
-        this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y, this.TICK);
-        this.loopView.update(this.core!.loop.ring);
+        const loop = this.core!.loop;
+        this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y, this.TICK, {
+            board: loop.boardIndex, left: loop.entryLeft, right: loop.entryRight,
+        });
+        this.loopView.update(loop.ring);
 
         const parkingRoot = new Node('ParkingRoot');
         this.boardRoot.addChild(parkingRoot);
