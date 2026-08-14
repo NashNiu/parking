@@ -170,27 +170,41 @@ function orientAngle(dir: Dir, sizeX: number, sizeY: number): number {
 
 /** Safety fallback if a model prefab failed to load: a plain colored box. */
 function fallbackBox(body: Node, sizeX: number, sizeY: number, color: Color): void {
-    const mr = body.addComponent(MeshRenderer);
+    const box = new Node('box');
+    const mr = box.addComponent(MeshRenderer);
     mr.mesh = utils.createMesh(primitives.box({ width: sizeX * 0.9, height: sizeY * 0.9, length: 0.5 }));
     mr.material = litMaterial(color);
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
+    box.setPosition(0, 0, 0.25); // rest on the board plane, not straddling it
+    body.addChild(box);
+    addShadow(body, sizeX * 0.9, sizeY * 0.9);
+}
+
+/**
+ * Contact shadow, parented to `body` and sized to the car's ACTUAL footprint
+ * (`len` along body X, `wid` along body Y) so the `dir` spin rotates it with the
+ * car — a car pointing up gets a tall narrow shadow, not a wide flat one. Sits
+ * centered under the car: in board space the key light travels almost straight
+ * into the board (-Z), so there's no meaningful lateral shadow offset to fake.
+ * z = -0.06 puts it between the lot surface (-0.10) and the wheels (0).
+ */
+function addShadow(body: Node, len: number, wid: number): void {
+    const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
+    shadow.setPosition(0, 0, -0.06);
+    body.addChild(shadow);
 }
 
 /**
  * Build a cartoon car sized to its footprint from the real 3D model. Returns
  * `root` (move this; kept unrotated so footprint picking stays valid) and `body`
- * (animate this — squash/flash/drive operate on it). The model is laid flat onto
- * the tilted board (roof facing the camera) and recolored to `color`.
+ * (animate this — squash/flash/drive operate on it). The model is laid onto the
+ * tilted board (roof facing the camera), lifted so its wheels rest on the board
+ * plane, given a footprint-matched contact shadow, and recolored to `color`.
  */
 export function buildCar(
     name: string, sizeX: number, sizeY: number, color: Color, dir: Dir, cap: Cap,
 ): { root: Node; body: Node } {
     const root = new Node(name);
-
-    // Fake contact shadow tucked under the car (lies against the board plane).
-    const shadow = blobShadow('shadow', sizeX * 0.9, sizeY * 0.5);
-    shadow.setPosition(0, -sizeY * 0.32, -0.06);
-    root.addChild(shadow);
 
     // body: the animatable node. Carries the dir spin (about the board normal) and
     // is what squash/flash target. Kept separate from `root` so movement tweens on
@@ -215,17 +229,27 @@ export function buildCar(
     const fill = 0.9;
     const s = Math.min((longDim * fill) / size.x, (shortDim * fill) / size.z);
 
+    // Fitted dimensions after the uniform scale: length along body X, width along
+    // body Y (model Z after the lay-down), height along board-out +Z.
+    const len = size.x * s, wid = size.z * s, hgt = size.y * s;
+
     // `lay` lays the upright model onto the board: Rx(90) turns model-up (+Y) into
     // board-out (+Z) so the roof faces the camera; the length stays along board X.
     const lay = new Node('lay');
     lay.setRotationFromEuler(90, 0, 0);
     lay.setScale(s, s, s);
-    // Center the geometry on the body origin (models sit on y=0, centered up).
+    // Lift by half the car's height so the wheels REST ON the board plane. Without
+    // this the centered geometry straddles the plane and its bottom half (0.3 for a
+    // car, 0.7 for a truck) is swallowed by the opaque lot slab, whose near face is
+    // at z = -0.10 — the car then reads as embedded in the asphalt at a wrong angle.
+    lay.setPosition(0, 0, hgt / 2);
+    // Center the geometry on the lay origin (models sit on y=0, centered up).
     model.setPosition(-center.x, -center.y, -center.z);
     lay.addChild(model);
     body.addChild(lay);
 
     recolorCar(model, color);
+    addShadow(body, len, wid);
 
     body.setRotationFromEuler(0, 0, orientAngle(dir, sizeX, sizeY));
     return { root, body };

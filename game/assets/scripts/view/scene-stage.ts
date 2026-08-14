@@ -29,12 +29,12 @@ export function setupBackground(root: Node): void {
  */
 export function setupStage(root: Node, cols: number, rows: number, gridY: number): void {
     const step = 1.12;
-    // Depth ordering note: cars/passengers straddle the board plane — their geometry
-    // spans roughly z ∈ [-0.35, +0.28] and their blob shadows sit at z ≈ -0.06. Any
-    // opaque slab with a near face in front of that would bury shadows/rear wheels.
-    // So the lot sits just BEHIND the shadows (near face ≈ -0.10): shadows render on
-    // top of it (grounded look) and cars read as sitting IN the lot. The platform
-    // sits further back as the overall tray.
+    // Depth ordering note: cars stand ON the board plane (wheels at z = 0, body
+    // extending out to +z) and their blob shadows sit at z ≈ -0.06. Any opaque slab
+    // with a near face in front of that would bury the shadows. So the lot sits just
+    // BEHIND them (near face ≈ -0.10): shadows render on top of it (grounded look)
+    // and cars read as sitting IN the lot. The platform sits further back as the
+    // overall tray. Passengers still straddle the plane (z ∈ [-0.1, +0.1]).
 
     // Rounded-ish platform tray behind everything.
     const platform = makeLitBox('Platform', 12, 15, 0.35, new Color(247, 238, 222));
