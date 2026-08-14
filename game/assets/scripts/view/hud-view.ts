@@ -64,9 +64,13 @@ export class HudView {
         this.bannerLabel.node.active = true;
     }
 
-    /** Victory panel: big banner + a row of 3 stars, filled left-to-right up to `starCount`, each popping in in turn. */
-    showWin(starCount: number): void {
-        this.bannerLabel.string = '过关!\n点击重玩';
+    /**
+     * Victory panel: big banner + a row of 3 stars, filled left-to-right up to
+     * `starCount`, each popping in in turn. `hasNext` switches the call-to-action
+     * between advancing and replaying, matching what the next tap will actually do.
+     */
+    showWin(starCount: number, hasNext: boolean = false): void {
+        this.bannerLabel.string = hasNext ? '过关!\n点击进入下一关' : '全部通关!\n点击重玩';
         this.bannerLabel.node.active = true;
         this.starLabels.forEach((label, i) => {
             const filled = i < starCount;
@@ -84,7 +88,7 @@ export class HudView {
 
     /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */
     showLose(): void {
-        this.bannerLabel.string = '卡住了\n点击重试';
+        this.bannerLabel.string = '游戏失败\n点击重试';
         this.bannerLabel.node.active = true;
         for (const label of this.starLabels) label.node.active = false;
     }

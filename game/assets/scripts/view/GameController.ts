@@ -96,8 +96,24 @@ export class GameController extends Component {
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
     }
 
+    /**
+     * Name of the level after the current one, or null if there isn't one. Levels are
+     * a numeric series in `resources/levels` (`level-1`, `level-2`, …), so the next one
+     * is the same name with its trailing number bumped — existence is checked against
+     * the bundle's index (`getInfoWithPath`, no load, no console error) so adding a
+     * `level-3.json` extends the chain with no code change. A level name without a
+     * trailing number (hand-set in the inspector) has no successor.
+     */
+    private nextLevelName(): string | null {
+        const m = /^(.*?)(\d+)$/.exec(this.levelName);
+        if (!m) return null;
+        const next = `${m[1]}${parseInt(m[2], 10) + 1}`;
+        return resources.getInfoWithPath(`levels/${next}`, JsonAsset) ? next : null;
+    }
+
     private loadLevel(name: string): void {
         this.loading = true;
+        this.levelName = name; // tracks the level in play, so nextLevelName() advances from it
         resources.load(`levels/${name}`, JsonAsset, (err, asset) => {
             if (err) {
                 console.error('[Game] failed to load level', name, err);
@@ -127,7 +143,8 @@ export class GameController extends Component {
         });
     }
 
-    private restart(): void {
+    /** Tear the current board down and load `name` — used for both replay and advancing. */
+    private switchTo(name: string): void {
         // Stop the track's phase tween before its cluster nodes are destroyed
         // (the tween targets a plain object, so node destruction won't stop it).
         this.loopView?.destroy();
@@ -139,7 +156,11 @@ export class GameController extends Component {
             if (e.label) e.label.node.destroy();
         }
         this.parked.clear();
-        this.loadLevel(this.levelName);
+        this.loadLevel(name);
+    }
+
+    private restart(): void {
+        this.switchTo(this.levelName);
     }
 
     private buildBoard(level: LevelData): void {
@@ -192,7 +213,16 @@ export class GameController extends Component {
     }
 
     update(dt: number): void {
-        if (!this.core || this.ended || this.core.getState() !== 'playing') return;
+        if (!this.core || this.ended) return;
+        // A tap can end the game too: parking into the last free slot can seal the
+        // level (nothing left to fill the parked cars, nothing left that can move).
+        // The old guard returned here without ever calling onEnd, so a tap-induced
+        // deadlock left the game silently frozen with no banner. Wait for an
+        // in-flight park animation to land first so the banner doesn't cut it off.
+        if (this.core.getState() !== 'playing') {
+            if (!this.busy) this.onEnd(this.core.getState());
+            return;
+        }
         this.tickAcc += dt;
         while (this.tickAcc >= this.TICK) {
             this.tickAcc -= this.TICK;
@@ -325,7 +355,9 @@ export class GameController extends Component {
             }
             // Star rating is a placeholder (always 3): a real rule based on
             // moves/time/powerups is deferred — not computed by the core.
-            this.hud?.showWin(3);
+            // `hasNext` only picks the banner's call-to-action; the tap handler
+            // re-resolves the next level, so the two can't disagree.
+            this.hud?.showWin(3, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
             for (const [id] of this.core!.grid.cars) {
@@ -356,7 +388,10 @@ export class GameController extends Component {
     private handleTap(screenX: number, screenY: number): void {
         if (this.loading) return; // ignore taps while a level is (re)loading
         if (this.ended) {
-            this.restart();
+            // Won and another level exists → advance. Deadlocked, or the series has
+            // run out → replay the same level.
+            const next = this.core?.getState() === 'won' ? this.nextLevelName() : null;
+            this.switchTo(next ?? this.levelName);
             return;
         }
         if (!this.core || !this.gridView || !this.parkingView || !this.cam || !this.gridRoot) return;
@@ -426,6 +461,10 @@ export class GameController extends Component {
                     const label = this.hud ? this.hud.newSeatLabel() : null;
                     this.parked.set(id, { node, bar, slot: slotIndex, label });
                     if (label) this.positionLabelOverCar(label, node);
+                    // Fill the seat count / bar now instead of waiting for the next
+                    // loop tick: a tap that ends the game (deadlock) stops the ticks,
+                    // which would leave this car showing Label's default 'label' text.
+                    this.updateFillBars();
                 });
             })
             .start();
