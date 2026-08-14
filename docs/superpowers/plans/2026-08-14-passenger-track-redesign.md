@@ -950,6 +950,156 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 6: 让两条规则在动画里看得见
+
+来源:用户第二轮预览。机制经截图自洽性核对是对的(剩余 6 = 轨道 4 + 右通道 2,左通道已空,三车各剩 2 座),但动画没表达出规则,其中上车起飞点是真 bug。
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`
+- Modify: `game/assets/scripts/view/GameController.ts`(`playBoarding` 的起飞点)
+
+**Interfaces:**
+- Produces:`TrackView.boardingWorldPos(): Vec3` —— 上车口(底部缺口)的**固定**世界坐标。
+- Removes:`TrackView.nearestVisibleWorldPos(color)` —— 它的语义就是错的(见下),删掉,`GameController` 是唯一调用者。
+
+### Part 1:上车飞人必须从底部缺口起飞
+
+根因:`GameController.update()` 的顺序是 `stepLoop()` → `loopView.update()` → `playBoarding()`。跑到 `playBoarding` 时,上车那名乘客早已被 `boardPassenger()` 置空并随 `step()` 转走,所以 `nearestVisibleWorldPos(color)` 找到的是**另一个**同色乘客;终局同色乘客不在轨道上时它返回 `null`,`playBoarding` 直接 `bumpSeat` 返回,一点动画都没有。上车口是固定的,起飞点不该去"找人"。
+
+- [ ] **Step 1: 存下 loopRoot,加 boardingWorldPos()**
+
+`track-view.ts`,构造函数里存一份 parent(字段和 `capacity` 放一起):
+
+```ts
+    /** loopRoot; needed to turn board-local path points into world positions. */
+    private readonly root: Node;
+```
+
+构造函数体开头加 `this.root = parent;`。
+
+然后加方法(放在 `nearestVisibleWorldPos` 原来的位置):
+
+```ts
+/**
+ * World position of the boarding gap. Fixed, not searched: ring index `board` rests
+ * at t = board/capacity, which is the bottom-centre gap. The passenger that boards
+ * is by definition the one standing there, and by the time the controller animates
+ * it the core has already cleared it from the ring — so looking for it by colour
+ * finds a different passenger (or none at all, late in a level, and then nothing
+ * animated at all). That was the bug this replaces.
+ */
+boardingWorldPos(): Vec3 {
+    const local = pathPoint(this.entries.board / this.capacity, this.cy);
+    const out = new Vec3();
+    Vec3.transformMat4(out, local, this.root.worldMatrix);
+    return out;
+}
+```
+
+删除整个 `nearestVisibleWorldPos` 方法,以及只被它用到的 `ringColors` 字段和 `update()` 里 `this.ringColors = ring.slice();` 这一行(若删掉后 `ringColors` 再无引用)。
+
+- [ ] **Step 2: 改调用点**
+
+`GameController.playBoarding` 里:
+
+```ts
+        const start = this.loopView?.boardingWorldPos() ?? null;
+```
+
+`if (!start) { this.bumpSeat(e); return; }` 保留不动(`loopView` 为空时仍要兜底)。
+
+### Part 2:进场要走进来
+
+新乘客现在只是在左缺口"凭空点亮"。改成:通道队首那个团**走进缺口**,同时整条通道前滑一格(前滑已有)。
+
+- [ ] **Step 3: 加进场动画**
+
+`track-view.ts` 加方法:
+
+```ts
+/**
+ * Walk the channel's head into the track through its entrance gap: the real ring
+ * slot is hidden for this one tick while a temporary cluster tweens from the lane
+ * head to the slot's resting spot, so "the hole came round to the entrance and the
+ * next passenger stepped in" is legible instead of a colour appearing from nowhere.
+ */
+private playEntry(side: 'left' | 'right', color: string): void {
+    const index = side === 'left' ? this.entries.left : this.entries.right;
+    const slot = this.clusters[index];
+    const from = this.laneHome[side][0];
+    if (!slot || !slot.isValid || !from) return;
+    slot.active = false;
+    const flier = new Node('pax-enter');
+    const mr = flier.addComponent(MeshRenderer);
+    mr.mesh = clusterMesh();
+    mr.material = litMaterial(colorOf(color));
+    flier.setPosition(from);
+    this.root.addChild(flier);
+    tween(flier)
+        .to(this.tick, { position: pathPoint(index / this.capacity, this.cy) })
+        .call(() => {
+            if (slot.isValid) slot.active = true;
+            if (flier.isValid) flier.destroy();
+        })
+        .start();
+}
+```
+
+- [ ] **Step 4: 在 updateLanes 里触发**
+
+`updateLanes` 末尾现在是:
+
+```ts
+    this.animateLaneShift(leftActive ? 'left' : 'right', left, right);
+```
+
+改成先算出"这一 tick 有没有人进场",再把同一个信号同时给前滑和进场动画:
+
+```ts
+    const active: 'left' | 'right' = leftActive ? 'left' : 'right';
+    const len = active === 'left' ? left.length : right.length;
+    const entered = this.lastLen[active] >= 0 && len < this.lastLen[active];
+    this.animateLaneShift(active, left, right);   // updates lastLen
+    if (entered) {
+        const index = active === 'left' ? this.entries.left : this.entries.right;
+        const color = ring[index];
+        if (color) this.playEntry(active, color);
+    }
+```
+
+`updateLanes` 的签名因此要多收一个 `ring`:改成 `private updateLanes(ring: (string | null)[], left: string[], right: string[])`,`update()` 里的调用改成 `this.updateLanes(ring, left, right);`。
+
+`animateLaneShift` 内部对 `lastLen` 的读写一行不改 —— 它自己算 `prev`、自己更新,上面这段只是先读一次 `lastLen` 再让它照常跑。
+
+- [ ] **Step 5: 编译与回归**
+
+Run: `cd logic && npx jest`
+Expected: PASS,54 个全绿(本任务不碰核心)。
+
+按前几个任务的办法核对 view 文件类型:`npx tsc --noEmit` 对着 `C:\ProgramData\cocos\editors\Creator\3.8.7\resources\resources\3d\engine\bin\.declarations\cc.d.ts`,引擎声明本身有 59 个既有报错,比对改动前后是否一致。
+
+- [ ] **Step 6: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts game/assets/scripts/view/GameController.ts
+git commit -m "fix(view): M6.F board from the gap, and walk passengers in
+
+The boarding fly started from the wrong place. playBoarding runs after stepLoop,
+by which point the core has already cleared the boarding passenger from the ring,
+so nearestVisibleWorldPos(colour) found a DIFFERENT passenger of that colour --
+or none at all late in a level, in which case nothing animated. The gap is a fixed
+point, so boardingWorldPos() returns it directly and the search is deleted.
+
+Entering the track was a colour switching on at the entrance slot. A temporary
+cluster now walks in from the lane head while the real slot stays hidden for that
+tick, so 'the hole came round to the entrance and the next passenger stepped in'
+is something you can actually see.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## 自查记录
 
 - **Spec 覆盖**:双入口左优先→Task 1 Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
