@@ -94,3 +94,27 @@ test('reachable colors span the left-to-right channel boundary', () => {
   // two holes -> the next two of (left ++ right) can get in
   expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
 });
+
+function counts(loop: LoopSystem): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const c of [...loop.ring, ...loop.left, ...loop.right]) {
+    if (c) out[c] = (out[c] || 0) + 1;
+  }
+  return out;
+}
+
+test('without a seed the queue keeps its authored order', () => {
+  const loop = new LoopSystem(4, 0, [{ color: 'a', count: 4 }, { color: 'b', count: 4 }]);
+  expect(loop.ring).toEqual(['a', 'a', 'a', 'a']);
+});
+
+test('a seed mixes the colors without changing how many of each there are', () => {
+  const loop = new LoopSystem(12, 6, [{ color: 'a', count: 12 }, { color: 'b', count: 12 }], 7);
+  expect(counts(loop)).toEqual({ a: 12, b: 12 });
+  expect(new Set(loop.ring.filter((c) => c !== null)).size).toBe(2); // both colors on the track
+});
+
+test('the same seed always shuffles the same way', () => {
+  const build = () => new LoopSystem(12, 6, [{ color: 'a', count: 12 }, { color: 'b', count: 12 }], 7);
+  expect(build().ring).toEqual(build().ring);
+});

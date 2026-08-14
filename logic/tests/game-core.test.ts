@@ -64,7 +64,11 @@ test('deadlock is detected when the ring is jammed with an unboardable color', (
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
   const game = new GameCore(level);
-  expect(game.loop.ring).toEqual(['green', 'green']); // ring saturated, red stuck in the pool
+  // Seal the ring by hand instead of relying on the authored queue order (the loop
+  // shuffles now): green fills the track, the reds behind it can never get in.
+  game.loop.ring = ['green', 'green'];
+  game.loop.left = new Array(8).fill('red');
+  game.loop.right = new Array(8).fill('red');
   expect(game.tapCar(1).ok).toBe(true); // red car takes the only slot
   expect(game.getState()).toBe('deadlock');
 });
@@ -85,7 +89,11 @@ test('a color still reachable through an emptied ring cell is not a deadlock', (
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
   const game = new GameCore(level);
-  expect(game.loop.ring).toEqual(['green', 'red']);
+  // Same shape, set by hand: a red passenger is on the track, so the parked red car
+  // can still fill and free its slot.
+  game.loop.ring = ['green', 'red'];
+  game.loop.left = new Array(8).fill('red');
+  game.loop.right = new Array(7).fill('red');
   expect(game.tapCar(1).ok).toBe(true);
   expect(game.getState()).toBe('playing');
 });

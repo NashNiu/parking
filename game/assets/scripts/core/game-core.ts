@@ -25,6 +25,7 @@ export class GameCore {
       level.loop.capacity,
       level.loop.boardIndex,
       level.loop.queue,
+      level.id, // seeded by level id: mixed colours, but the same mix on every replay
     );
     this.boarding = new BoardingSystem(this.loop, this.parking);
     this.updateState();

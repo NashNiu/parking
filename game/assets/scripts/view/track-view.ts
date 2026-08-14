@@ -3,17 +3,17 @@ import { colorOf } from './colors';
 import { litMaterial } from './materials';
 import { makeLitBox } from './placeholder';
 
-const W = 3.4;   // half width of the circuit centerline
-const H = 1.5;   // half height
-const R = 0.9;   // corner radius
+const W = 2.6;   // half width of the circuit centerline
+const H = 1.3;   // half height
+const R = 0.8;   // corner radius
 
 /** Half-offset of the two curb rails from the path centerline. */
 const CURB_OFFSET = 0.35;
 
 /** Waiting passengers drawn per channel; the rest of the queue is implied. */
-const LANE_VISIBLE = 4;
-const LANE_STEP = 0.5;      // spacing between waiting clusters
-const LANE_START = 0.75;    // gap between the track edge and the first waiting cluster
+const LANE_VISIBLE = 3;
+const LANE_STEP = 0.45;      // spacing between waiting clusters
+const LANE_START = 0.55;    // gap between the track edge and the first waiting cluster
 
 /** Balls per passenger cluster and their layout offsets (small clump). */
 const BALL_OFFSETS: [number, number][] = [

@@ -56,9 +56,10 @@ export class GameController extends Component {
     private loading = false;
     private tickAcc = 0;
     // Seconds per loop step. Also the cluster-flow tween duration (passed to
-    // TrackView), so the passenger carousel rotates one slot per TICK. Raised from
-    // 0.12 to slow the carousel to a calmer pace.
-    private readonly TICK = 0.18;
+    // TrackView), so the passenger carousel rotates one slot per TICK, and the
+    // boarding cadence (at most one passenger boards per tick). Raised from 0.18
+    // to slow the carousel further after the first preview.
+    private readonly TICK = 0.26;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
     start() {
@@ -164,7 +165,7 @@ export class GameController extends Component {
     }
 
     private buildBoard(level: LevelData): void {
-        const LOOP_Y = 3.4;
+        const LOOP_Y = 3.8;
         const PARKING_Y = 1.2;
         const GRID_Y = -3.2;
 
