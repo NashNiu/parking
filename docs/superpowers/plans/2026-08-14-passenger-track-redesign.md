@@ -732,6 +732,223 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 5: 预览反馈修正(版面 + 节奏 + 颜色打乱)
+
+来源:用户第一轮预览(第 2 关 254 draw call / 60 FPS,在 +15 预算内)提出四条:转盘转太快、停车位挡住转盘、通道几乎在画面外(计划算错了余量)、乘客颜色要打乱。
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`(几何与通道常量)
+- Modify: `game/assets/scripts/view/GameController.ts`(`LOOP_Y`、`TICK`、给 LoopSystem 传种子)
+- Modify: `game/assets/scripts/core/loop-system.ts`(可选种子 + 打乱)
+- Test: `logic/tests/loop-system.test.ts`(新增 3 个用例)
+- Test: `logic/tests/game-core.test.ts`(两个死局用例改为显式摆出卡死态)
+
+**Interfaces:**
+- Consumes: Task 1 的 `LoopSystem` 构造签名、Task 2/3 的几何与通道常量。
+- Produces:`new LoopSystem(capacity, boardIndex, queue, shuffleSeed?: number)` —— 不传种子时顺序与今天完全一致(保护现有用例),传种子时确定性打乱。
+
+### Part 1:版面与节奏(纯常量)
+
+- [ ] **Step 1: 改几何与通道常量**
+
+`track-view.ts`:
+
+```ts
+const W = 2.6;   // half width of the circuit centerline
+const H = 1.3;   // half height
+const R = 0.8;   // corner radius
+```
+
+```ts
+const LANE_VISIBLE = 3;
+const LANE_STEP = 0.45;
+const LANE_START = 0.55;
+```
+
+依据(不要改这些数之前先读):轨道那一层的**可视半宽约 4.67 单位**,由截图两个参照反推——停车位 7 格跨 ±3.94 单位量得 684px,轨道外圈跨 ±3.75 单位量得 580px。候车位最外一个落在 `W + CURB_OFFSET + LANE_START + (LANE_VISIBLE-1)*LANE_STEP` = 2.6+0.35+0.55+0.9 = **4.4 < 4.67**,三个候车位全部在画面内并留了余量。改动 W 或通道常量时必须重算这条不等式。
+
+- [ ] **Step 2: 抬高转盘、放慢节奏**
+
+`GameController.ts` 的 `buildBoard`:
+
+```ts
+        const LOOP_Y = 3.8;
+```
+
+`TICK` 字段:
+
+```ts
+    private readonly TICK = 0.26;
+```
+
+依据:轨道底边 = `LOOP_Y - H` = 3.8-1.3 = **2.5**,车位那一行的上沿 = `PARKING_Y + 0.49` = 1.69,净空 0.81(改动前是 1.9 vs 1.69,只有 0.21,底排乘客压在车位上)。轨道顶边 = 3.8+1.3+0.35 = 5.45,仍低于 HUD。`TICK` 是每格时间,同时也是每 tick 最多一人上车的节拍:0.18→0.26 意味着第 2 关 128 人的下限时长从约 23s 变成约 33s。
+
+### Part 2:颜色打乱(TDD)
+
+- [ ] **Step 3: 写失败测试**
+
+追加到 `logic/tests/loop-system.test.ts`:
+
+```ts
+function counts(loop: LoopSystem): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const c of [...loop.ring, ...loop.left, ...loop.right]) {
+    if (c) out[c] = (out[c] || 0) + 1;
+  }
+  return out;
+}
+
+test('without a seed the queue keeps its authored order', () => {
+  const loop = new LoopSystem(4, 0, [{ color: 'a', count: 4 }, { color: 'b', count: 4 }]);
+  expect(loop.ring).toEqual(['a', 'a', 'a', 'a']);
+});
+
+test('a seed mixes the colors without changing how many of each there are', () => {
+  const loop = new LoopSystem(12, 6, [{ color: 'a', count: 12 }, { color: 'b', count: 12 }], 7);
+  expect(counts(loop)).toEqual({ a: 12, b: 12 });
+  expect(new Set(loop.ring.filter((c) => c !== null)).size).toBe(2); // both colors on the track
+});
+
+test('the same seed always shuffles the same way', () => {
+  const build = () => new LoopSystem(12, 6, [{ color: 'a', count: 12 }, { color: 'b', count: 12 }], 7);
+  expect(build().ring).toEqual(build().ring);
+});
+```
+
+- [ ] **Step 4: 运行,确认失败**
+
+Run: `cd logic && npx jest tests/loop-system.test.ts`
+Expected: FAIL —— ts-jest 报第 4 个构造参数不存在(`Expected 3 arguments, but got 4`)。
+
+- [ ] **Step 5: 实现确定性打乱**
+
+`loop-system.ts` 模块级加两个纯函数:
+
+```ts
+/**
+ * Deterministic PRNG (mulberry32). The shuffle must be reproducible: a level has to
+ * look the same every time it is replayed, and the tests need a fixed answer.
+ */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** In-place Fisher-Yates driven by `next`. */
+function shuffleInPlace(arr: string[], next: () => number): void {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+}
+```
+
+构造函数签名加第四个可选参数,并在展开之后、装轨道之前打乱:
+
+```ts
+  constructor(capacity: number, boardIndex: number, queue: QueueGroup[], shuffleSeed?: number) {
+```
+
+```ts
+    // Shuffle before the ring is filled so the track shows a mix instead of one
+    // solid colour block per queue group. Optional and seeded: callers that pass
+    // no seed (the unit tests) keep the authored order.
+    if (shuffleSeed !== undefined) shuffleInPlace(all, rng(shuffleSeed));
+```
+
+(插在 `for (const g of queue)` 展开循环之后、`this.ring = new Array(capacity).fill(null);` 之前。)
+
+- [ ] **Step 6: 运行,确认通过**
+
+Run: `cd logic && npx jest tests/loop-system.test.ts`
+Expected: PASS,13 个用例全绿。
+
+- [ ] **Step 7: 游戏里接上种子**
+
+`game-core.ts` 的构造函数:
+
+```ts
+    this.loop = new LoopSystem(
+      level.loop.capacity,
+      level.loop.boardIndex,
+      level.loop.queue,
+      level.id, // seeded by level id: mixed colours, but the same mix on every replay
+    );
+```
+
+- [ ] **Step 8: 两个死局用例改为显式摆出卡死态**
+
+打乱之后,「紫色排在关卡最前」这个作者顺序不再成立,所以这两个用例不能再依赖构造出来的 ring 内容。改成直接摆状态——它们要验的是死局判定,不是关卡作者顺序。
+
+`logic/tests/game-core.test.ts` 里,把 `deadlock is detected when the ring is jammed with an unboardable color` 的
+```ts
+  const game = new GameCore(level);
+  expect(game.loop.ring).toEqual(['green', 'green']); // ring saturated, red stuck in the pool
+```
+替换成
+```ts
+  const game = new GameCore(level);
+  // Seal the ring by hand instead of relying on the authored queue order (the loop
+  // shuffles now): green fills the track, the reds behind it can never get in.
+  game.loop.ring = ['green', 'green'];
+  game.loop.left = new Array(8).fill('red');
+  game.loop.right = new Array(8).fill('red');
+```
+
+把 `a color still reachable through an emptied ring cell is not a deadlock` 的
+```ts
+  const game = new GameCore(level);
+  expect(game.loop.ring).toEqual(['green', 'red']);
+```
+替换成
+```ts
+  const game = new GameCore(level);
+  // Same shape, set by hand: a red passenger is on the track, so the parked red car
+  // can still fill and free its slot.
+  game.loop.ring = ['green', 'red'];
+  game.loop.left = new Array(8).fill('red');
+  game.loop.right = new Array(7).fill('red');
+```
+
+两个用例的其余部分(包括最后的 `expect(game.getState())`)一行不改。
+
+- [ ] **Step 9: 全量回归**
+
+Run: `cd logic && npx jest`
+Expected: PASS,54 个全绿(51 + 新增 3)。
+
+- [ ] **Step 10: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts game/assets/scripts/view/GameController.ts game/assets/scripts/core/loop-system.ts game/assets/scripts/core/game-core.ts logic/tests/loop-system.test.ts logic/tests/game-core.test.ts
+git commit -m "feat: M6.E fit the track on screen, slow the carousel, shuffle passengers
+
+The lanes were drawn off screen: the plan sized them against the platform's
+half-width of 6, but the camera only shows about 4.67 units either side at the
+track's depth. Shrinks the circuit (W 3.4->2.6, H 1.5->1.3) and pulls the lanes
+in so all three waiting slots are visible, and lifts the track (LOOP_Y 3.4->3.8)
+so its bottom straight no longer collides with the parking row -- which was
+hiding the boarding gap.
+
+TICK 0.18->0.26 slows the carousel; it is also the boarding cadence, so level 2's
+floor goes from ~23s to ~33s.
+
+Passengers now enter in a shuffled order (seeded by level id, so a replay looks
+the same) instead of solid colour blocks. The two deadlock tests set their jam
+state by hand now rather than leaning on the authored queue order.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## 自查记录
 
 - **Spec 覆盖**:双入口左优先→Task 1 Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
