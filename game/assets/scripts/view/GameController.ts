@@ -30,7 +30,8 @@ function dirVec(d: Dir): Vec3 {
 /**
  * M2.4: full playable demo loop. Loads/renders a level, handles tap-to-move,
  * drives the passenger loop each frame, shows a HUD + win/lose banner, and
- * restarts on tap once a level ends.
+ * on tap once a level ends either advances to the next level (on a win) or
+ * replays the current one (on a deadlock, or at the end of the level series).
  */
 @ccclass('GameController')
 export class GameController extends Component {
@@ -157,10 +158,6 @@ export class GameController extends Component {
         }
         this.parked.clear();
         this.loadLevel(name);
-    }
-
-    private restart(): void {
-        this.switchTo(this.levelName);
     }
 
     private buildBoard(level: LevelData): void {

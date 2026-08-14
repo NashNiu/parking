@@ -25,7 +25,10 @@ export class GameCore {
       level.loop.capacity,
       level.loop.boardIndex,
       level.loop.queue,
-      level.id, // seeded by level id: mixed colours, but the same mix on every replay
+      // Seeded by level id: mixed colours, but the same mix on every replay. `?? 0`
+      // guards against a level JSON missing `id` (validateLevel doesn't check it) --
+      // a level must never silently fall back to the unshuffled authored order.
+      level.id ?? 0,
     );
     this.boarding = new BoardingSystem(this.loop, this.parking);
     this.updateState();
@@ -67,7 +70,7 @@ export class GameCore {
 
   /**
    * Can a passenger of `color` still get to the boarding index? Not the same as
-   * "does one still exist": a pool passenger behind a ring that never empties can
+   * "does one still exist": a queued passenger behind a ring that never empties can
    * never board, which is exactly how a level jams (see `reachableColors`).
    */
   private hasRemainingColor(color: string): boolean {

@@ -14,11 +14,20 @@
 
 - 关卡数据格式、`validateLevel`、`solvability`、关卡编辑器**一行不改**。
 - `logic/tests/game-core.test.ts` 的两个死局用例**不改且必须绿**;每个任务结束 `cd logic && npx jest` 必须全绿(当前 46 个)。
+  > **2026-08-14 superseded:** Task 5 Step 8 rewrote both cases. The shuffle the
+  > user requested in Task 5 invalidated the authored-order premise these tests
+  > relied on (they built their jammed/reachable ring by relying on a known
+  > queue order); they now seal the ring by hand instead. What they verify —
+  > deadlock detection — is unchanged.
 - 零外部素材:仅 Cocos 内置基元 + 代码材质。
 - 保留 `BOARD_TILT=52`、相机 pos(0,5,12) lookAt(0,-0.3,0)、射线→gridRoot 局部→`pickCar` 流程。
 - 视图层无单元测试。视图任务的验收 = jest 全绿 + **用户预览截图确认**;实现者**不得声称已渲染验证**。
 - draw call 预算:第 2 关当前 244,本次新增控制在 +15 以内。
 - 轨道几何常量:`W=3.4`(中心线半宽)、`H=1.5`(半高)、`R=0.9`(圆角半径)、`CURB_OFFSET=0.35`。
+  > **2026-08-14 superseded:** Task 5 shipped `W=2.6 / H=1.3 / R=0.8`. The camera
+  > only shows about 4.67 units either side at the track's depth — not the
+  > platform's half-width of 6 that these numbers were sized against — so the
+  > original constants ran the lanes off screen.
 - 参数化约定:`t∈[0,1)` 按**弧长**、顺时针、`t=0` 在顶部正中;于是 `t=0.25` 右侧中点、`t=0.5` 底部正中、`t=0.75` 左侧中点。
 - ring 索引 `i` 恒定画在 `t = i/capacity`;`phase` 只做 tick 之间的补间,静止时为 0。
 

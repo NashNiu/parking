@@ -103,6 +103,10 @@ let SEGS: Seg[] | null = null;
 let SEG_CY = NaN;
 let PERIMETER = 0;
 
+/** Scratch output for `repositionAll`'s per-cluster, per-frame `pathPoint` calls
+ *  (12 clusters * ~60fps), so that hot path doesn't allocate a `Vec3` per call. */
+const REPOSITION_SCRATCH = new Vec3();
+
 function segments(cy: number): Seg[] {
     if (SEGS && SEG_CY === cy) return SEGS;
     SEGS = buildSegments(cy);
@@ -134,12 +138,10 @@ function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
 }
 
 /**
- * Renders the passenger loop as a closed race-track: a white-curbed oval that
- * dense little colored ball-clusters flow around smoothly, boarding at the
- * lowest point (nearest the parking area below). Started as a drop-in
- * replacement for LoopView; its public surface has since diverged
- * (`boardingWorldPos()` instead of a colour search, no `nearestVisibleWorldPos`)
- * to fix bugs LoopView's shape couldn't express.
+ * Renders the passenger loop as a closed race-track: a white-curbed rounded
+ * rectangle that dense little colored ball-clusters flow around smoothly,
+ * with a boarding gap at the bottom centre (nearest the parking area below)
+ * fed by two waiting lanes, one on either side of the gap.
  */
 export class TrackView {
     private readonly capacity: number;
@@ -159,13 +161,14 @@ export class TrackView {
     private laneHome: { left: Vec3[]; right: Vec3[] } = { left: [], right: [] };
     private lastLen = { left: -1, right: -1 };
 
-    /** Current/target flow phase (0..1), advanced by 1/capacity each tick and tweened smoothly. */
-    private phase = 0;
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
+    /** The in-flight entry flier for each side, if any (see `playEntry`). */
+    private pendingFlier: { left: Node | null; right: Node | null } = { left: null, right: null };
+
     constructor(
-        parent: Node, capacity: number, y: number, tick = 0.12,
+        parent: Node, capacity: number, y: number, tick: number,
         entries: { board: number; left: number; right: number },
     ) {
         this.capacity = capacity;
@@ -251,10 +254,15 @@ export class TrackView {
         for (const side of ['left', 'right'] as const) {
             const dir = side === 'left' ? -1 : 1;         // left lane runs out to -x
             const x0 = dir * (W + CURB_OFFSET + LANE_START);
-            // Lane floor: a light slab the waiting passengers stand on.
-            const slabW = LANE_STEP * LANE_VISIBLE + 0.3;
+            // Lane floor: a light slab the waiting passengers stand on. Sized to the
+            // clusters it carries (outermost cluster centre at x0 + dir*(LANE_VISIBLE-1)*LANE_STEP,
+            // half-extent ~0.21) rather than a fixed margin, so it can't run past the
+            // ~4.67-unit visible half-width the lane geometry was tuned against:
+            //   |x0| + (LANE_VISIBLE-1)*LANE_STEP + slabW/2 <= 4.67
+            // must hold whenever these constants change.
+            const slabW = LANE_STEP * (LANE_VISIBLE - 1) + 0.5;
             const slab = makeLitBox(`lane-${side}`, slabW, 0.55, 0.1, new Color(238, 236, 230));
-            slab.setPosition(x0 + dir * (slabW / 2 - LANE_STEP / 2), this.cy, -0.06);
+            slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, -0.06);
             parent.addChild(slab);
             for (let i = 0; i < LANE_VISIBLE; i++) {
                 const n = new Node(`wait-${side}-${i}`);
@@ -284,9 +292,9 @@ export class TrackView {
             }
         }
 
-        // Stop any in-flight phase tween first: tick cadence and tween duration are
-        // both ~0.12s, so without this a new tween would overlap the previous one
-        // and the two would fight over `phaseHolder.p`, producing visible jitter.
+        // Stop any in-flight phase tween first: the tween below lasts exactly one
+        // tick (`this.tick`), so without this a new tween would overlap the previous
+        // one and the two would fight over `phaseHolder.p`, producing visible jitter.
         //
         // The ring's CONTENTS already advanced one index, which alone moves a passenger
         // one slot. Pull the phase back a slot so the new index renders where the
@@ -368,13 +376,13 @@ export class TrackView {
     }
 
     private repositionAll(): void {
-        this.phase = this.phaseHolder.p % 1;
+        const phase = this.phaseHolder.p % 1;
         for (let i = 0; i < this.clusters.length; i++) {
             const cluster = this.clusters[i];
             // Guard against a tween tick landing after the board was destroyed on restart.
             if (!cluster || !cluster.isValid) continue;
-            const t = (i / this.capacity + this.phase) % 1;
-            const p = pathPoint(t, this.cy);
+            const t = (i / this.capacity + phase) % 1;
+            const p = pathPoint(t, this.cy, REPOSITION_SCRATCH);
             cluster.setPosition(p.x, p.y, 0);
         }
     }
@@ -423,6 +431,19 @@ export class TrackView {
         const slot = this.clusters[index];
         const from = this.laneHome[side][0];
         if (!slot || !slot.isValid || !from) return;
+
+        // The flier's tween and the tick are both exactly `this.tick` long, and
+        // `tickAcc`'s leftover usually fires the next tick a frame before this one
+        // lands -- so a second hole can reach this entrance while the previous
+        // flier is still in flight. Stop and drop it now so its completion callback
+        // (below) can't re-show `slot` after this cycle has already hidden it again.
+        const stale = this.pendingFlier[side];
+        if (stale) {
+            Tween.stopAllByTarget(stale);
+            if (stale.isValid) stale.destroy();
+            this.pendingFlier[side] = null;
+        }
+
         slot.active = false;
         const flier = new Node('pax-enter');
         const mr = flier.addComponent(MeshRenderer);
@@ -430,10 +451,17 @@ export class TrackView {
         mr.material = litMaterial(colorOf(color));
         flier.setPosition(from);
         this.root.addChild(flier);
+        this.pendingFlier[side] = flier;
         tween(flier)
             .to(this.tick, { position: pathPoint(index / this.capacity, this.cy) })
             .call(() => {
-                if (slot.isValid) slot.active = true;
+                // Only re-activate the slot if this flier is still the pending one
+                // for this side -- if not, a newer playEntry already stopped and
+                // destroyed it (see above), and that newer cycle owns `slot` now.
+                if (this.pendingFlier[side] === flier) {
+                    this.pendingFlier[side] = null;
+                    if (slot.isValid) slot.active = true;
+                }
                 if (flier.isValid) flier.destroy();
             })
             .start();

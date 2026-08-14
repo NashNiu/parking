@@ -47,8 +47,9 @@ export class LoopSystem {
     // solid colour block per queue group. Optional and seeded: callers that pass
     // no seed (the unit tests) keep the authored order.
     if (shuffleSeed !== undefined) shuffleInPlace(all, rng(shuffleSeed));
-    // The track is filled from the head of the queue exactly as before; only what
-    // is left over gets split, so the order passengers arrive in never changes.
+    // The split itself never reorders anything: the ring takes the head and the
+    // remainder is halved into `left`/`right` in the order it arrives in. A seed,
+    // when one is given, is what changes the order (via the shuffle above).
     this.ring = new Array(capacity).fill(null);
     for (let i = 0; i < capacity && all.length > 0; i++) this.ring[i] = all.shift()!;
     const half = Math.ceil(all.length / 2);
@@ -87,14 +88,15 @@ export class LoopSystem {
   /**
    * Colors that can still reach the boarding index.
    *
-   * Passengers only enter the ring through the channel cell, and only while it is
-   * empty — and cells are only emptied by boarding. So a full ring is sealed: the
-   * pool behind it can never get in. Reachable = whatever the ring holds now, plus
-   * (for each empty cell) the next pool entries in FIFO order, since every cell
-   * rotates past the channel and takes the pool's head.
+   * Passengers only enter the ring through the live entrance (left drains before
+   * right opens), and only while its cell is empty — and cells are only emptied
+   * by boarding. So a full ring is sealed: the queues behind it can never get in.
+   * Reachable = whatever the ring holds now, plus (for each empty cell) the next
+   * entries of `left ++ right` in order, since every cell rotates past an entrance
+   * and takes the head of whichever queue is live.
    *
    * This under-counts once boarding resumes (each boarding opens another cell and
-   * lets more of the pool in), but it is exact in the only case that matters: if
+   * lets more of the queues in), but it is exact in the only case that matters: if
    * nothing reachable can board, no cell is ever emptied, so the ring's contents
    * are frozen and this set can never grow.
    */
