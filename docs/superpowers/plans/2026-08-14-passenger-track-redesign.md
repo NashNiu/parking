@@ -1,0 +1,738 @@
+# 乘客转盘重做(双通道候车轨道)实现计划 (M6)
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 把椭圆转盘换成圆角矩形轨道:底部缺口是上车口,左右两条候车通道补充乘客,左通道抽空后右通道才供应,且只有空位转到入口时候补乘客才能进入。
+
+**Architecture:** 核心只改 `loop-system.ts`(单 pool + 单 channelIndex → 双队列 + 双入口,入口索引由 `boardIndex` 推出);视图重做 `track-view.ts`(圆角矩形按弧长参数化、ring 索引↔轨道位置固定绑定、出口/入口缺口、左右通道渲染),并修掉现有的双倍步进 bug。乘客到达顺序与今天完全一致,所以关卡数据、校验、编辑器、死局判定都不动。
+
+**Tech Stack:** TypeScript、Cocos Creator 3.8.7(内置 primitives + `builtin-standard`/`builtin-unlit` 代码材质、`tween`)、jest(仅覆盖 `core/`)。
+
+**Spec:** `docs/superpowers/specs/2026-08-14-passenger-track-redesign-design.md`
+
+## Global Constraints
+
+- 关卡数据格式、`validateLevel`、`solvability`、关卡编辑器**一行不改**。
+- `logic/tests/game-core.test.ts` 的两个死局用例**不改且必须绿**;每个任务结束 `cd logic && npx jest` 必须全绿(当前 46 个)。
+- 零外部素材:仅 Cocos 内置基元 + 代码材质。
+- 保留 `BOARD_TILT=52`、相机 pos(0,5,12) lookAt(0,-0.3,0)、射线→gridRoot 局部→`pickCar` 流程。
+- 视图层无单元测试。视图任务的验收 = jest 全绿 + **用户预览截图确认**;实现者**不得声称已渲染验证**。
+- draw call 预算:第 2 关当前 244,本次新增控制在 +15 以内。
+- 轨道几何常量:`W=3.4`(中心线半宽)、`H=1.5`(半高)、`R=0.9`(圆角半径)、`CURB_OFFSET=0.35`。
+- 参数化约定:`t∈[0,1)` 按**弧长**、顺时针、`t=0` 在顶部正中;于是 `t=0.25` 右侧中点、`t=0.5` 底部正中、`t=0.75` 左侧中点。
+- ring 索引 `i` 恒定画在 `t = i/capacity`;`phase` 只做 tick 之间的补间,静止时为 0。
+
+---
+
+## Task A: 核心双通道(TDD)
+
+**Files:**
+- Modify: `game/assets/scripts/core/loop-system.ts`
+- Test: `logic/tests/loop-system.test.ts`(全量改写)
+
+**Interfaces:**
+- Consumes: `QueueGroup` from `./types`(不变)。
+- Produces:
+  - `LoopSystem.left: string[]`、`LoopSystem.right: string[]`(取代 `pool`)
+  - `LoopSystem.entryLeft: number`、`LoopSystem.entryRight: number`(只读,构造时算好)
+  - 签名不变:`passengerAtBoard()`、`boardPassenger()`、`step()`、`remainingCount()`、`isDrained()`、`reachableColors(): Set<string>`
+  - Task B/C 会读 `left`/`right`/`entryLeft`/`entryRight`/`boardIndex`。
+
+- [ ] **Step 1: 改写测试文件(第一轮:构造与补位)**
+
+把 `logic/tests/loop-system.test.ts` 整个替换成:
+
+```ts
+import { LoopSystem } from '../../game/assets/scripts/core/loop-system';
+
+test('ring takes the head of the queue and the remainder splits in half', () => {
+  const loop = new LoopSystem(4, 2, [{ color: 'red', count: 6 }]);
+  expect(loop.ring).toEqual(['red', 'red', 'red', 'red']);
+  expect(loop.left).toEqual(['red']);
+  expect(loop.right).toEqual(['red']);
+  expect(loop.remainingCount()).toBe(6);
+});
+
+test('passengerAtBoard reads the board position', () => {
+  const loop = new LoopSystem(4, 2, [{ color: 'red', count: 6 }]);
+  expect(loop.passengerAtBoard()).toBe('red');
+  loop.boardPassenger();
+  expect(loop.passengerAtBoard()).toBeNull();
+});
+
+test('step rotates ring forward by one', () => {
+  const loop = new LoopSystem(4, 2, [
+    { color: 'a', count: 1 }, { color: 'b', count: 1 },
+    { color: 'c', count: 1 }, { color: 'd', count: 1 },
+  ]);
+  // ring = [a,b,c,d], both channels empty; index i moves to i+1 => [d,a,b,c]
+  loop.step();
+  expect(loop.ring).toEqual(['d', 'a', 'b', 'c']);
+});
+
+test('an emptied cell refills from the left channel when it reaches the entrance', () => {
+  const loop = new LoopSystem(2, 1, [{ color: 'x', count: 3 }]);
+  // ring=[x,x], left=[x], right=[]. capacity 2 => both entrances collapse to index 0.
+  loop.boardPassenger();
+  expect(loop.ring).toEqual(['x', null]);
+  loop.step(); // rotate -> [null, x]; the hole is now at the entrance
+  expect(loop.ring).toEqual(['x', 'x']);
+  expect(loop.left).toEqual([]);
+});
+
+test('isDrained true only when both channels are empty and the ring is cleared', () => {
+  const loop = new LoopSystem(2, 1, [{ color: 'x', count: 2 }]);
+  expect(loop.isDrained()).toBe(false);
+  loop.ring = [null, null];
+  loop.left = [];
+  loop.right = [];
+  expect(loop.isDrained()).toBe(true);
+});
+```
+
+- [ ] **Step 2: 运行,确认失败**
+
+Run: `cd logic && npx jest tests/loop-system.test.ts`
+Expected: FAIL —— ts-jest 编译错误 `Property 'left' does not exist on type 'LoopSystem'`。这是 TypeScript 里"接口还不存在"的正常红灯。
+
+- [ ] **Step 3: 实现构造与单入口补位**
+
+`game/assets/scripts/core/loop-system.ts`,替换 `pool` 字段、构造函数与 `step()` 的补位那几行:
+
+```ts
+export class LoopSystem {
+  capacity: number;
+  boardIndex: number;
+  ring: (string | null)[];
+  /** Waiting passengers in the left channel; drains before `right`. */
+  left: string[];
+  /** Waiting passengers in the right channel; only feeds once `left` is empty. */
+  right: string[];
+  /** Ring indices where each channel joins the track (a quarter lap either side of the exit). */
+  readonly entryLeft: number;
+  readonly entryRight: number;
+
+  constructor(capacity: number, boardIndex: number, queue: QueueGroup[]) {
+    this.capacity = capacity;
+    this.boardIndex = boardIndex;
+    const all: string[] = [];
+    for (const g of queue) {
+      for (let i = 0; i < g.count; i++) all.push(g.color);
+    }
+    // The track is filled from the head of the queue exactly as before; only what
+    // is left over gets split, so the order passengers arrive in never changes.
+    this.ring = new Array(capacity).fill(null);
+    for (let i = 0; i < capacity && all.length > 0; i++) this.ring[i] = all.shift()!;
+    const half = Math.ceil(all.length / 2);
+    this.left = all.slice(0, half);
+    this.right = all.slice(half);
+    const quarter = Math.round(capacity / 4);
+    this.entryLeft = (boardIndex + quarter) % capacity;
+    this.entryRight = (boardIndex - quarter + capacity) % capacity;
+  }
+```
+
+`step()` 暂时只用左入口(第二轮再加优先级):
+
+```ts
+  step(): void {
+    const rotated: (string | null)[] = new Array(this.capacity).fill(null);
+    for (let i = 0; i < this.capacity; i++) {
+      rotated[(i + 1) % this.capacity] = this.ring[i];
+    }
+    this.ring = rotated;
+    if (this.ring[this.entryLeft] === null && this.left.length > 0) {
+      this.ring[this.entryLeft] = this.left.shift()!;
+    }
+  }
+```
+
+`remainingCount()` 与 `reachableColors()` 里的 `pool` 全部换成两条队列:
+
+```ts
+  remainingCount(): number {
+    return this.left.length + this.right.length + this.ring.filter((x) => x !== null).length;
+  }
+```
+
+`reachableColors()` 里原来的 `this.pool[i]` 改成:
+
+```ts
+      const c = i < this.left.length ? this.left[i] : this.right[i - this.left.length];
+      if (c === undefined) break;
+      reachable.add(c);
+```
+
+- [ ] **Step 4: 运行,确认通过**
+
+Run: `cd logic && npx jest`
+Expected: PASS,46 个测试全绿(`game-core.test.ts` 的两个死局用例不许改也不许红)。
+
+- [ ] **Step 5: 写第二轮失败测试(双入口 + 左优先 + 空位放行)**
+
+追加到 `logic/tests/loop-system.test.ts`:
+
+```ts
+// capacity 8 / boardIndex 0 => quarter = 2, entryLeft = 2, entryRight = 6.
+function twoLane(): LoopSystem {
+  return new LoopSystem(8, 0, [{ color: 'a', count: 8 }, { color: 'b', count: 4 }]);
+}
+
+test('entrances sit a quarter lap either side of the boarding index', () => {
+  const loop = twoLane();
+  expect(loop.entryLeft).toBe(2);
+  expect(loop.entryRight).toBe(6);
+  expect(loop.left).toEqual(['b', 'b']);
+  expect(loop.right).toEqual(['b', 'b']);
+});
+
+test('the right entrance stays shut while the left channel still has passengers', () => {
+  const loop = twoLane();
+  loop.ring[5] = null;           // after the rotate this hole lands on entryRight
+  loop.step();
+  expect(loop.ring[6]).toBeNull();
+  expect(loop.right).toEqual(['b', 'b']); // untouched
+  expect(loop.left).toEqual(['b', 'b']);  // the hole never passed the left entrance
+});
+
+test('the right channel starts feeding once the left one is empty', () => {
+  const loop = twoLane();
+  loop.left = [];
+  loop.ring[5] = null;
+  loop.step();
+  expect(loop.ring[6]).toBe('b');
+  expect(loop.right).toEqual(['b']);
+});
+
+test('a hole that is not at an entrance is not refilled', () => {
+  const loop = twoLane();
+  loop.ring[0] = null;           // after the rotate this hole lands on index 1, no entrance
+  loop.step();
+  expect(loop.ring[1]).toBeNull();
+  expect(loop.left).toEqual(['b', 'b']);
+});
+```
+
+- [ ] **Step 6: 运行,确认失败**
+
+Run: `cd logic && npx jest tests/loop-system.test.ts`
+Expected: FAIL —— `the right channel starts feeding once the left one is empty` 报 `Expected: "b", Received: null`(此时 `step()` 只认左入口)。
+
+- [ ] **Step 7: 实现左优先双入口**
+
+把 `step()` 的补位部分改成:
+
+```ts
+    // One entrance is live at a time: the left channel drains first, and only then
+    // does the right one open. That keeps the arrival order identical to a single
+    // FIFO pool, which is what `reachableColors` (and the deadlock check) rely on.
+    const useLeft = this.left.length > 0;
+    const queue = useLeft ? this.left : this.right;
+    const entry = useLeft ? this.entryLeft : this.entryRight;
+    if (queue.length > 0 && this.ring[entry] === null) {
+      this.ring[entry] = queue.shift()!;
+    }
+```
+
+- [ ] **Step 8: 运行,确认通过**
+
+Run: `cd logic && npx jest`
+Expected: PASS,50 个测试全绿。
+
+- [ ] **Step 9: 写第三轮失败测试(reachableColors 跨通道边界)**
+
+追加:
+
+```ts
+test('reachable colors span the left-to-right channel boundary', () => {
+  const loop = new LoopSystem(4, 0, [
+    { color: 'a', count: 4 }, { color: 'b', count: 1 }, { color: 'c', count: 1 },
+  ]);
+  // ring = [a,a,a,a], left = ['b'], right = ['c']
+  expect(loop.reachableColors()).toEqual(new Set(['a'])); // full ring: nothing new can enter
+  loop.ring[0] = null;
+  loop.ring[1] = null;
+  // two holes -> the next two of (left ++ right) can get in
+  expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
+});
+```
+
+- [ ] **Step 10: 运行,确认通过或失败并修到通过**
+
+Run: `cd logic && npx jest tests/loop-system.test.ts`
+Expected: PASS(Step 3 已按 `left ++ right` 写好索引;若失败,说明越界处理写错,修 `reachableColors` 而不是改测试)。
+
+- [ ] **Step 11: 全量回归**
+
+Run: `cd logic && npx jest`
+Expected: PASS,51 个测试全绿。
+
+- [ ] **Step 12: 提交**
+
+```bash
+git add game/assets/scripts/core/loop-system.ts logic/tests/loop-system.test.ts
+git commit -m "feat(core): M6.A twin feeder channels with left priority
+
+Splits the hidden pool into left/right queues joined to the ring a quarter lap
+either side of the boarding index. One entrance is live at a time -- left drains
+first -- so the arrival order is identical to the single FIFO pool and both the
+deadlock detection and the level data stay untouched.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task B: 圆角矩形轨道 + 运动模型修正
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`
+- Modify: `game/assets/scripts/view/GameController.ts:180`(TrackView 构造参数)
+
+**Interfaces:**
+- Consumes: Task A 的 `loop.boardIndex`、`loop.entryLeft`、`loop.entryRight`。
+- Produces:
+  - `new TrackView(parent, capacity, y, tick, entries: { board: number; left: number; right: number })`
+  - `TrackView.update(ring: (string|null)[], left: string[], right: string[])`(左右两参 Task C 才用上,本任务先接住)
+  - `pathPoint(t, cy, out?)` 内部函数改成圆角矩形按弧长。
+
+- [ ] **Step 1: 换掉路径函数**
+
+`track-view.ts` 顶部常量 `RX`/`RY` 换成:
+
+```ts
+const W = 3.4;   // half width of the circuit centerline
+const H = 1.5;   // half height
+const R = 0.9;   // corner radius
+```
+
+替换 `pathPoint`:
+
+```ts
+interface Seg { len: number; at: (u: number, out: Vec3) => void }
+
+/**
+ * The circuit as nine arc-length segments walked CLOCKWISE from the top centre,
+ * so t=0 is top centre, t=0.25 the right midpoint, t=0.5 the bottom centre (the
+ * boarding gap) and t=0.75 the left midpoint. The top straight is split in two so
+ * the walk can start at its middle; by symmetry the quarter marks then land
+ * exactly on the side midpoints.
+ */
+function buildSegments(cy: number): Seg[] {
+    const sx = W - R, sy = H - R;
+    const line = (x0: number, y0: number, x1: number, y1: number): Seg => ({
+        len: Math.hypot(x1 - x0, y1 - y0),
+        at: (u, out) => out.set(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, 0),
+    });
+    // a0 is the start angle; the sweep is -90 degrees (clockwise).
+    const corner = (cx: number, ccy: number, a0: number): Seg => ({
+        len: (Math.PI / 2) * R,
+        at: (u, out) => {
+            const a = a0 - (Math.PI / 2) * u;
+            out.set(cx + R * Math.cos(a), ccy + R * Math.sin(a), 0);
+        },
+    });
+    const HP = Math.PI / 2;
+    return [
+        line(0, cy + H, sx, cy + H),
+        corner(sx, cy + sy, HP),
+        line(W, cy + sy, W, cy - sy),
+        corner(sx, cy - sy, 0),
+        line(sx, cy - H, -sx, cy - H),
+        corner(-sx, cy - sy, -HP),
+        line(-W, cy - sy, -W, cy + sy),
+        corner(-sx, cy + sy, Math.PI),
+        line(-sx, cy + H, 0, cy + H),
+    ];
+}
+
+let SEGS: Seg[] | null = null;
+let SEG_CY = NaN;
+let PERIMETER = 0;
+
+function segments(cy: number): Seg[] {
+    if (SEGS && SEG_CY === cy) return SEGS;
+    SEGS = buildSegments(cy);
+    SEG_CY = cy;
+    PERIMETER = SEGS.reduce((a, s) => a + s.len, 0);
+    return SEGS;
+}
+
+/** Point at arc-length fraction t in [0,1) along the circuit. */
+function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
+    const segs = segments(cy);
+    let s = ((t % 1) + 1) % 1 * PERIMETER;
+    for (const seg of segs) {
+        if (s <= seg.len) { seg.at(seg.len > 0 ? s / seg.len : 0, out); return out; }
+        s -= seg.len;
+    }
+    segs[segs.length - 1].at(1, out);
+    return out;
+}
+```
+
+- [ ] **Step 2: 用节点脚本自查参数化对不对**
+
+Run:
+
+```bash
+node -e "
+const W=3.4,H=1.5,R=0.9,sx=W-R,sy=H-R,arc=Math.PI/2*R;
+const P=4*sx+4*sy+4*arc;
+console.log('quarter', (sx+arc+sy).toFixed(4), 'vs P/4', (P/4).toFixed(4));
+"
+```
+
+Expected: 两个数字相等(证明 t=0.25 正好落在右侧中点,入口/出口位置才对得上)。
+
+- [ ] **Step 3: 路沿改成合并的盒子带,并在出口/入口开缺口**
+
+现在的两个 torus 只能画椭圆,换成沿路径铺小盒子再合并成一个 mesh(沿用 `clusterMesh` 的合并手法,内外圈各 1 个 draw call):
+
+(`gapTs` 字段在 Step 4 里声明,这里直接用。)
+
+```ts
+private buildCurbs(parent: Node): void {
+    const SAMPLES = 96;
+    const half = 0.5 / this.capacity; // half a slot wide gap
+    for (const [off, name] of [[CURB_OFFSET, 'curb-outer'], [-CURB_OFFSET, 'curb-inner']] as const) {
+        const parts: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] }[] = [];
+        const p = new Vec3(), q = new Vec3();
+        for (let i = 0; i < SAMPLES; i++) {
+            const t = i / SAMPLES;
+            // Skip the samples that fall inside a gap.
+            if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < half)) continue;
+            pathPoint(t, this.cy, p);
+            pathPoint(t + 1 / SAMPLES, this.cy, q);
+            const dx = q.x - p.x, dy = q.y - p.y;
+            const len = Math.hypot(dx, dy) || 1e-4;
+            const nx = -dy / len, ny = dx / len;      // outward normal in the board plane
+            const box = primitives.box({ width: len * 1.2, height: 0.12, length: 0.12 });
+            // rotate the box about +Z so its width follows the path direction
+            const ang = Math.atan2(dy, dx), ca = Math.cos(ang), sa = Math.sin(ang);
+            const cx = p.x + nx * off, cyy = p.y + ny * off;
+            const pos = box.positions.slice();
+            for (let v = 0; v < pos.length; v += 3) {
+                const x = pos[v], y = pos[v + 1];
+                pos[v] = cx + x * ca - y * sa;
+                pos[v + 1] = cyy + x * sa + y * ca;
+            }
+            parts.push({ positions: pos, normals: box.normals, uvs: box.uvs, indices: box.indices });
+        }
+        const n = new Node(name);
+        const mr = n.addComponent(MeshRenderer);
+        mr.mesh = mergeParts(parts);
+        mr.material = litMaterial(Color.WHITE.clone());
+        parent.addChild(n);
+    }
+}
+```
+
+把 `clusterMesh` 里的合并循环抽成模块级工具函数复用:
+
+```ts
+/** Merge several primitive geometries into one mesh (one draw call). */
+function mergeParts(parts: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] }[]): Mesh {
+    const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
+    let base = 0;
+    for (const g of parts) {
+        const vc = g.positions.length / 3;
+        for (let i = 0; i < vc; i++) {
+            positions.push(g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]);
+            if (g.normals) normals.push(g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]);
+            if (g.uvs) uvs.push(g.uvs[i * 2], g.uvs[i * 2 + 1]);
+        }
+        for (const ii of (g.indices || [])) indices.push(ii + base);
+        base += vc;
+    }
+    return utils.createMesh({ positions, normals, uvs, indices });
+}
+```
+
+`clusterMesh()` 改成用 `mergeParts` 拼四个球(行为不变,去掉重复代码)。
+
+- [ ] **Step 4: 构造函数接入口索引,算出缺口位置**
+
+先加两个字段(和 `capacity`/`cy`/`tick` 放一起):
+
+```ts
+private readonly entries: { board: number; left: number; right: number };
+/** Path parameters where the curb opens up; filled before buildCurbs runs. */
+private gapTs: number[] = [];
+```
+
+```ts
+constructor(
+    parent: Node, capacity: number, y: number, tick = 0.12,
+    entries: { board: number; left: number; right: number },
+) {
+    this.capacity = capacity;
+    this.cy = y;
+    this.tick = tick;
+    this.entries = entries;
+    this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
+    this.buildCurbs(parent);
+    this.buildClusters(parent);
+}
+```
+
+`GameController.ts` 的构造调用同步改:
+
+```ts
+const loop = this.core!.loop;
+this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y, this.TICK, {
+    board: loop.boardIndex, left: loop.entryLeft, right: loop.entryRight,
+});
+```
+
+- [ ] **Step 5: 修双倍步进**
+
+`update()` 里补间那段改成:
+
+```ts
+    // The ring's CONTENTS already advanced one index, which alone moves a passenger
+    // one slot. Pull the phase back a slot so the new index renders where the
+    // passenger visually was, then tween it forward: net motion is exactly one slot
+    // per tick and the resting phase stays 0, which is what keeps the boarding gap
+    // pinned to a fixed point on the track.
+    this.phaseTween?.stop();
+    this.phaseHolder.p -= 1 / this.capacity;
+    const target = this.phaseHolder.p + 1 / this.capacity;
+```
+
+同时把 `nearestVisibleWorldPos` 里的 `T_BOARD` 换成 `this.entries.board / this.capacity`,并删掉 `T_BOARD` 常量。
+
+- [ ] **Step 6: 跑测试确认核心没被带坏**
+
+Run: `cd logic && npx jest`
+Expected: PASS,51 个全绿(本任务不该碰核心)。
+
+- [ ] **Step 7: 请用户预览确认**
+
+请用户在 Cocos 预览里跑第 1、2 关并截图,确认:轨道是圆角矩形、乘客匀速平滑绕行**没有跳格**、底部正中有缺口且上车时乘客从缺口飞出、左右中点各有一个缺口。**实现者不得声称自己已渲染验证。**
+
+- [ ] **Step 8: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts game/assets/scripts/view/GameController.ts
+git commit -m "feat(view): M6.B rounded-rect track with a fixed boarding gap
+
+Replaces the ellipse with an arc-length parameterised rounded rectangle so ring
+index i is pinned to t = i/capacity, which is what lets the boarding gap and the
+two entrances sit at fixed points. Curbs become one merged box strip per rail
+(two draw calls) so the gaps can be cut out.
+
+Also fixes the double-stepping: step() rotated the contents AND the view advanced
+the phase a full slot, so passengers jumped a slot then slid a slot. The phase now
+only interpolates within the tick.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task C: 左右候车通道
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`
+- Modify: `game/assets/scripts/view/GameController.ts:206`(update 调用传两条队列)
+
+**Interfaces:**
+- Consumes: Task A 的 `loop.left`/`loop.right`,Task B 的 `pathPoint`/`mergeParts`/`entries`。
+- Produces: `TrackView.update(ring, left, right)` 三参版本正式生效。
+
+- [ ] **Step 1: 建通道底板与候车位**
+
+`track-view.ts` 加常量与构建:
+
+```ts
+/** Waiting passengers drawn per channel; the rest of the queue is implied. */
+const LANE_VISIBLE = 4;
+const LANE_STEP = 0.5;      // spacing between waiting clusters
+const LANE_START = 0.75;    // gap between the track edge and the first waiting cluster
+
+private laneClusters: { left: Node[]; right: Node[] } = { left: [], right: [] };
+
+private buildLanes(parent: Node): void {
+    const mesh = clusterMesh();
+    for (const side of ['left', 'right'] as const) {
+        const dir = side === 'left' ? -1 : 1;         // left lane runs out to -x
+        const x0 = dir * (W + CURB_OFFSET + LANE_START);
+        // Lane floor: a light slab the waiting passengers stand on.
+        const slabW = LANE_STEP * LANE_VISIBLE + 0.3;
+        const slab = makeLitBox(`lane-${side}`, slabW, 0.55, 0.1, new Color(238, 236, 230));
+        slab.setPosition(x0 + dir * (slabW / 2 - LANE_STEP / 2), this.cy, -0.06);
+        parent.addChild(slab);
+        for (let i = 0; i < LANE_VISIBLE; i++) {
+            const n = new Node(`wait-${side}-${i}`);
+            const mr = n.addComponent(MeshRenderer);
+            mr.mesh = mesh;
+            mr.material = litMaterial(Color.WHITE.clone());
+            n.setPosition(x0 + dir * i * LANE_STEP, this.cy, 0);
+            n.active = false;
+            parent.addChild(n);
+            this.laneClusters[side].push(n);
+        }
+    }
+}
+```
+
+在构造函数里 `this.buildClusters(parent)` 之后调用 `this.buildLanes(parent)`。`makeLitBox` 从 `./placeholder` import。
+
+- [ ] **Step 2: 每 tick 反映两条队列**
+
+`update()` 签名改成 `update(ring: (string|null)[], left: string[], right: string[])`,末尾加:
+
+```ts
+    this.updateLanes(left, right);
+```
+
+```ts
+/**
+ * Draw the head of each channel. The inactive channel (the right one while the
+ * left still has passengers) is dimmed, so "left goes first" is readable without
+ * a tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
+ */
+private updateLanes(left: string[], right: string[]): void {
+    const leftActive = left.length > 0;
+    for (const [side, queue] of [['left', left], ['right', right]] as const) {
+        const active = side === 'left' ? leftActive : !leftActive;
+        const nodes = this.laneClusters[side];
+        for (let i = 0; i < nodes.length; i++) {
+            const color = queue[i];
+            const n = nodes[i];
+            if (!color) { n.active = false; continue; }
+            n.active = true;
+            const mr = n.getComponent(MeshRenderer);
+            if (mr) mr.material = litMaterial(active ? colorOf(color) : dim(colorOf(color)));
+        }
+    }
+    this.animateLaneShift(leftActive ? 'left' : 'right', left, right);
+}
+
+(`dim` 是模块级函数,写在 class 外面,和 `pathPoint`/`mergeParts` 放一起。)
+
+```ts
+/** Desaturated/darkened tint for the channel that is not feeding yet. */
+function dim(c: Color): Color {
+    return new Color(
+        Math.round(c.r * 0.35 + 120 * 0.65),
+        Math.round(c.g * 0.35 + 120 * 0.65),
+        Math.round(c.b * 0.35 + 120 * 0.65),
+        255,
+    );
+}
+```
+
+- [ ] **Step 3: 队列前滑动画**
+
+```ts
+private lastLen = { left: -1, right: -1 };
+/** Resting position of every waiting slot, captured in buildLanes. */
+private laneHome: { left: Vec3[]; right: Vec3[] } = { left: [], right: [] };
+
+/**
+ * When the active channel loses its head, slide the whole lane one step toward the
+ * entrance: the colours are already the post-shift ones, so start the nodes one
+ * step out and tween them back to their resting slot. Purely cosmetic -- no core
+ * state involved. Homes come from `laneHome`, never from the node's current
+ * position, which may be mid-tween from the previous tick.
+ */
+private animateLaneShift(active: 'left' | 'right', left: string[], right: string[]): void {
+    const len = active === 'left' ? left.length : right.length;
+    const prev = this.lastLen[active];
+    this.lastLen.left = left.length;
+    this.lastLen.right = right.length;
+    if (prev < 0 || len >= prev) return;   // nothing left the lane this tick
+    const dir = active === 'left' ? -1 : 1;
+    const nodes = this.laneClusters[active];
+    for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        if (!n.isValid || !n.active) continue;
+        const home = this.laneHome[active][i];
+        Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
+        n.setPosition(home.x + dir * LANE_STEP, home.y, home.z);
+        tween(n).to(this.tick, { position: home.clone() }).start();
+    }
+}
+```
+
+`buildLanes` 里创建节点时同步记录 home(紧跟 `n.setPosition(...)` 之后):
+
+```ts
+            this.laneHome[side].push(n.position.clone());
+```
+
+- [ ] **Step 4: 调用点传参**
+
+`GameController.ts` 里两处 `this.loopView?.update(this.core!.loop.ring)` 改成:
+
+```ts
+const lp = this.core!.loop;
+this.loopView?.update(lp.ring, lp.left, lp.right);
+```
+
+(一处在 `buildBoard`,一处在 `update` 的 tick 循环里。)
+
+- [ ] **Step 5: 跑测试**
+
+Run: `cd logic && npx jest`
+Expected: PASS,51 个全绿。
+
+- [ ] **Step 6: 请用户预览确认**
+
+截图确认:左右各有一条候车通道;第 1、2 关开局时右通道是灰的、左通道彩色;左通道抽空后右通道点亮并开始供人;有人进轨道时队列平滑前滑一格。**实现者不得声称已渲染验证。**
+
+- [ ] **Step 7: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts game/assets/scripts/view/GameController.ts
+git commit -m "feat(view): M6.C draw the two feeder channels
+
+The waiting queues that used to be a hidden pool are now visible beside the
+track: the head of each channel is drawn, the one that is not feeding yet is
+dimmed, and the lane slides forward when a passenger steps onto the track.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## Task D: 收尾(开销核对 + 回归)
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`(仅在超预算时调参)
+
+**Interfaces:** 无新接口。
+
+- [ ] **Step 1: 记录 draw call 与帧率**
+
+请用户在预览里打开 FPS 面板,分别截第 1、2 关的开局画面。基线:第 2 关 244 draw call / 60 FPS。
+
+- [ ] **Step 2: 超预算就降可见数量**
+
+若新增超过 +15:把 `LANE_VISIBLE` 从 4 降到 3,或把 `SAMPLES` 从 96 降到 72,重新截图。若在预算内,跳过本步。
+
+- [ ] **Step 3: 通关回归**
+
+请用户完整打一遍第 1 关(确认过关后能跳到第 2 关),再故意在第 2 关走成死局(把 4 个车位停满非紫色车),确认「游戏失败/点击重试」照常弹出——Task A 改了补位入口,死局判定必须依旧生效。
+
+- [ ] **Step 4: 全量测试 + 提交**
+
+Run: `cd logic && npx jest`
+Expected: PASS,51 个全绿。
+
+```bash
+git add -A
+git commit -m "chore(view): M6.D track redesign perf pass
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+## 自查记录
+
+- **Spec 覆盖**:双入口左优先→Task A Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
+- **命名一致性**:`left`/`right`/`entryLeft`/`entryRight`/`gapTs`/`laneClusters`/`mergeParts`/`dim` 在 A/B/C 中拼写一致;`TrackView.update` 三参签名在 B(接住)与 C(生效)一致。
+- **已知取舍**:capacity=2 时 `entryLeft` 与 `entryRight` 会重合(`Math.round(2/4)=1`),对现有关卡(capacity=12)无影响,测试里已按重合行为断言。
