@@ -610,6 +610,7 @@ private updateLanes(left: string[], right: string[]): void {
     }
     this.animateLaneShift(leftActive ? 'left' : 'right', left, right);
 }
+```
 
 (`dim` 是模块级函数,写在 class 外面,和 `pathPoint`/`mergeParts` 放一起。)
 
