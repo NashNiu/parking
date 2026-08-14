@@ -277,7 +277,7 @@ export class GameController extends Component {
         const e = match;
 
         this.sfx?.play('board');
-        const start = this.loopView?.nearestVisibleWorldPos(color) ?? null;
+        const start = this.loopView?.boardingWorldPos() ?? null;
         if (!start) { this.bumpSeat(e); return; }
         if (!this.boardRoot) { this.bumpSeat(e); return; }
 

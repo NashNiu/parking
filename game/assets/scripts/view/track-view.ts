@@ -141,6 +141,8 @@ function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
  */
 export class TrackView {
     private readonly capacity: number;
+    /** loopRoot; needed to turn board-local path points into world positions. */
+    private readonly root: Node;
     private readonly cy: number;
     private readonly tick: number;
     private readonly entries: { board: number; left: number; right: number };
@@ -148,7 +150,6 @@ export class TrackView {
     private gapTs: number[] = [];
     /** One cluster root node per ring slot; each holds a few small colored spheres. */
     private clusters: Node[] = [];
-    private ringColors: (string | null)[] = [];
 
     /** Head-of-channel waiting clusters drawn beside the track, one array per side. */
     private laneClusters: { left: Node[]; right: Node[] } = { left: [], right: [] };
@@ -166,6 +167,7 @@ export class TrackView {
         entries: { board: number; left: number; right: number },
     ) {
         this.capacity = capacity;
+        this.root = parent;
         this.cy = y;
         this.tick = tick;
         this.entries = entries;
@@ -268,7 +270,6 @@ export class TrackView {
 
     /** Reflects ring contents (color/visibility) and advances the flow phase one step. */
     update(ring: (string | null)[], left: string[], right: string[]): void {
-        this.ringColors = ring.slice();
         for (let i = 0; i < this.clusters.length; i++) {
             const c = ring[i];
             const cluster = this.clusters[i];
@@ -299,7 +300,7 @@ export class TrackView {
             })
             .start();
 
-        this.updateLanes(left, right);
+        this.updateLanes(ring, left, right);
     }
 
     /**
@@ -307,7 +308,7 @@ export class TrackView {
      * left still has passengers) is dimmed, so "left goes first" is readable without
      * a tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
      */
-    private updateLanes(left: string[], right: string[]): void {
+    private updateLanes(ring: (string | null)[], left: string[], right: string[]): void {
         const leftActive = left.length > 0;
         for (const [side, queue] of [['left', left], ['right', right]] as const) {
             const active = side === 'left' ? leftActive : !leftActive;
@@ -321,7 +322,15 @@ export class TrackView {
                 if (mr) mr.material = litMaterial(active ? colorOf(color) : dim(colorOf(color)));
             }
         }
-        this.animateLaneShift(leftActive ? 'left' : 'right', left, right);
+        const active: 'left' | 'right' = leftActive ? 'left' : 'right';
+        const len = active === 'left' ? left.length : right.length;
+        const entered = this.lastLen[active] >= 0 && len < this.lastLen[active];
+        this.animateLaneShift(active, left, right);   // updates lastLen
+        if (entered) {
+            const index = active === 'left' ? this.entries.left : this.entries.right;
+            const color = ring[index];
+            if (color) this.playEntry(active, color);
+        }
     }
 
     /**
@@ -361,19 +370,45 @@ export class TrackView {
         }
     }
 
-    /** World position of the visible cluster showing `color` closest ahead of the boarding point. */
-    nearestVisibleWorldPos(color: string): Vec3 | null {
-        let best: Node | null = null;
-        let bestDist = Infinity;
-        for (let i = 0; i < this.clusters.length; i++) {
-            if (this.ringColors[i] !== color || !this.clusters[i].active) continue;
-            const t = (i / this.capacity + this.phase) % 1;
-            const dist = (this.entries.board / this.capacity - t + 1) % 1;
-            if (dist < bestDist) {
-                bestDist = dist;
-                best = this.clusters[i];
-            }
-        }
-        return best ? best.worldPosition.clone() : null;
+    /**
+     * World position of the boarding gap. Fixed, not searched: ring index `board` rests
+     * at t = board/capacity, which is the bottom-centre gap. The passenger that boards
+     * is by definition the one standing there, and by the time the controller animates
+     * it the core has already cleared it from the ring — so looking for it by colour
+     * finds a different passenger (or none at all, late in a level, and then nothing
+     * animated at all). That was the bug this replaces.
+     */
+    boardingWorldPos(): Vec3 {
+        const local = pathPoint(this.entries.board / this.capacity, this.cy);
+        const out = new Vec3();
+        Vec3.transformMat4(out, local, this.root.worldMatrix);
+        return out;
+    }
+
+    /**
+     * Walk the channel's head into the track through its entrance gap: the real ring
+     * slot is hidden for this one tick while a temporary cluster tweens from the lane
+     * head to the slot's resting spot, so "the hole came round to the entrance and the
+     * next passenger stepped in" is legible instead of a colour appearing from nowhere.
+     */
+    private playEntry(side: 'left' | 'right', color: string): void {
+        const index = side === 'left' ? this.entries.left : this.entries.right;
+        const slot = this.clusters[index];
+        const from = this.laneHome[side][0];
+        if (!slot || !slot.isValid || !from) return;
+        slot.active = false;
+        const flier = new Node('pax-enter');
+        const mr = flier.addComponent(MeshRenderer);
+        mr.mesh = clusterMesh();
+        mr.material = litMaterial(colorOf(color));
+        flier.setPosition(from);
+        this.root.addChild(flier);
+        tween(flier)
+            .to(this.tick, { position: pathPoint(index / this.capacity, this.cy) })
+            .call(() => {
+                if (slot.isValid) slot.active = true;
+                if (flier.isValid) flier.destroy();
+            })
+            .start();
     }
 }
