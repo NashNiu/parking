@@ -421,9 +421,10 @@ export class TrackView {
 
     /**
      * Walk the channel's head into the track through its entrance gap: the real ring
-     * slot is hidden for this one tick while a temporary cluster tweens from the lane
-     * head to the slot's resting spot, so "the hole came round to the entrance and the
-     * next passenger stepped in" is legible instead of a colour appearing from nowhere.
+     * slot is hidden for the slide portion of this tick while a temporary cluster tweens
+     * from the lane head to the slot's resting spot, so "the hole came round to the
+     * entrance and the next passenger stepped in" is legible instead of a colour
+     * appearing from nowhere.
      */
     private playEntry(side: 'left' | 'right', color: string): void {
         const index = side === 'left' ? this.entries.left : this.entries.right;
