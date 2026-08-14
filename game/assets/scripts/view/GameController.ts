@@ -181,7 +181,7 @@ export class GameController extends Component {
         this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y, this.TICK, {
             board: loop.boardIndex, left: loop.entryLeft, right: loop.entryRight,
         });
-        this.loopView.update(loop.ring);
+        this.loopView.update(loop.ring, loop.left, loop.right);
 
         const parkingRoot = new Node('ParkingRoot');
         this.boardRoot.addChild(parkingRoot);
@@ -230,7 +230,8 @@ export class GameController extends Component {
         while (this.tickAcc >= this.TICK) {
             this.tickAcc -= this.TICK;
             const res = this.core.stepLoop();
-            this.loopView?.update(this.core.loop.ring);
+            const lp = this.core.loop;
+            this.loopView?.update(lp.ring, lp.left, lp.right);
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.updateFillBars();
             if (res.boardedColor) this.playBoarding(res.boardedColor);

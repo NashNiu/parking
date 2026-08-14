@@ -1,6 +1,7 @@
 import { Node, Color, Vec3, Mesh, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
 import { litMaterial } from './materials';
+import { makeLitBox } from './placeholder';
 
 const W = 3.4;   // half width of the circuit centerline
 const H = 1.5;   // half height
@@ -8,6 +9,11 @@ const R = 0.9;   // corner radius
 
 /** Half-offset of the two curb rails from the path centerline. */
 const CURB_OFFSET = 0.35;
+
+/** Waiting passengers drawn per channel; the rest of the queue is implied. */
+const LANE_VISIBLE = 4;
+const LANE_STEP = 0.5;      // spacing between waiting clusters
+const LANE_START = 0.75;    // gap between the track edge and the first waiting cluster
 
 /** Balls per passenger cluster and their layout offsets (small clump). */
 const BALL_OFFSETS: [number, number][] = [
@@ -105,6 +111,16 @@ function segments(cy: number): Seg[] {
     return SEGS;
 }
 
+/** Desaturated/darkened tint for the channel that is not feeding yet. */
+function dim(c: Color): Color {
+    return new Color(
+        Math.round(c.r * 0.35 + 120 * 0.65),
+        Math.round(c.g * 0.35 + 120 * 0.65),
+        Math.round(c.b * 0.35 + 120 * 0.65),
+        255,
+    );
+}
+
 /** Point at arc-length fraction t in [0,1) along the circuit. */
 function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
     const segs = segments(cy);
@@ -134,6 +150,12 @@ export class TrackView {
     private clusters: Node[] = [];
     private ringColors: (string | null)[] = [];
 
+    /** Head-of-channel waiting clusters drawn beside the track, one array per side. */
+    private laneClusters: { left: Node[]; right: Node[] } = { left: [], right: [] };
+    /** Resting position of every waiting slot, captured in buildLanes. */
+    private laneHome: { left: Vec3[]; right: Vec3[] } = { left: [], right: [] };
+    private lastLen = { left: -1, right: -1 };
+
     /** Current/target flow phase (0..1), advanced by 1/capacity each tick and tweened smoothly. */
     private phase = 0;
     private phaseHolder = { p: 0 };
@@ -150,6 +172,7 @@ export class TrackView {
         this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
         this.buildCurbs(parent);
         this.buildClusters(parent);
+        this.buildLanes(parent);
     }
 
     /**
@@ -218,8 +241,33 @@ export class TrackView {
         }
     }
 
+    /** Builds the two feeder-channel lanes: a floor slab and the head waiting slots. */
+    private buildLanes(parent: Node): void {
+        const mesh = clusterMesh();
+        for (const side of ['left', 'right'] as const) {
+            const dir = side === 'left' ? -1 : 1;         // left lane runs out to -x
+            const x0 = dir * (W + CURB_OFFSET + LANE_START);
+            // Lane floor: a light slab the waiting passengers stand on.
+            const slabW = LANE_STEP * LANE_VISIBLE + 0.3;
+            const slab = makeLitBox(`lane-${side}`, slabW, 0.55, 0.1, new Color(238, 236, 230));
+            slab.setPosition(x0 + dir * (slabW / 2 - LANE_STEP / 2), this.cy, -0.06);
+            parent.addChild(slab);
+            for (let i = 0; i < LANE_VISIBLE; i++) {
+                const n = new Node(`wait-${side}-${i}`);
+                const mr = n.addComponent(MeshRenderer);
+                mr.mesh = mesh;
+                mr.material = litMaterial(Color.WHITE.clone());
+                n.setPosition(x0 + dir * i * LANE_STEP, this.cy, 0);
+                n.active = false;
+                parent.addChild(n);
+                this.laneClusters[side].push(n);
+                this.laneHome[side].push(n.position.clone());
+            }
+        }
+    }
+
     /** Reflects ring contents (color/visibility) and advances the flow phase one step. */
-    update(ring: (string | null)[]): void {
+    update(ring: (string | null)[], left: string[], right: string[]): void {
         this.ringColors = ring.slice();
         for (let i = 0; i < this.clusters.length; i++) {
             const c = ring[i];
@@ -250,6 +298,55 @@ export class TrackView {
                 onUpdate: () => this.repositionAll(),
             })
             .start();
+
+        this.updateLanes(left, right);
+    }
+
+    /**
+     * Draw the head of each channel. The inactive channel (the right one while the
+     * left still has passengers) is dimmed, so "left goes first" is readable without
+     * a tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
+     */
+    private updateLanes(left: string[], right: string[]): void {
+        const leftActive = left.length > 0;
+        for (const [side, queue] of [['left', left], ['right', right]] as const) {
+            const active = side === 'left' ? leftActive : !leftActive;
+            const nodes = this.laneClusters[side];
+            for (let i = 0; i < nodes.length; i++) {
+                const color = queue[i];
+                const n = nodes[i];
+                if (!color) { n.active = false; continue; }
+                n.active = true;
+                const mr = n.getComponent(MeshRenderer);
+                if (mr) mr.material = litMaterial(active ? colorOf(color) : dim(colorOf(color)));
+            }
+        }
+        this.animateLaneShift(leftActive ? 'left' : 'right', left, right);
+    }
+
+    /**
+     * When the active channel loses its head, slide the whole lane one step toward the
+     * entrance: the colours are already the post-shift ones, so start the nodes one
+     * step out and tween them back to their resting slot. Purely cosmetic -- no core
+     * state involved. Homes come from `laneHome`, never from the node's current
+     * position, which may be mid-tween from the previous tick.
+     */
+    private animateLaneShift(active: 'left' | 'right', left: string[], right: string[]): void {
+        const len = active === 'left' ? left.length : right.length;
+        const prev = this.lastLen[active];
+        this.lastLen.left = left.length;
+        this.lastLen.right = right.length;
+        if (prev < 0 || len >= prev) return;   // nothing left the lane this tick
+        const dir = active === 'left' ? -1 : 1;
+        const nodes = this.laneClusters[active];
+        for (let i = 0; i < nodes.length; i++) {
+            const n = nodes[i];
+            if (!n.isValid || !n.active) continue;
+            const home = this.laneHome[active][i];
+            Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
+            n.setPosition(home.x + dir * LANE_STEP, home.y, home.z);
+            tween(n).to(this.tick, { position: home.clone() }).start();
+        }
     }
 
     private repositionAll(): void {
