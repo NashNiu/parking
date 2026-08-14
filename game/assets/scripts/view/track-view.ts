@@ -256,10 +256,15 @@ export class TrackView {
             const x0 = dir * (W + CURB_OFFSET + LANE_START);
             // Lane floor: a light slab the waiting passengers stand on. Sized to the
             // clusters it carries (outermost cluster centre at x0 + dir*(LANE_VISIBLE-1)*LANE_STEP,
-            // half-extent ~0.21) rather than a fixed margin, so it can't run past the
-            // ~4.67-unit visible half-width the lane geometry was tuned against:
-            //   |x0| + (LANE_VISIBLE-1)*LANE_STEP + slabW/2 <= 4.67
-            // must hold whenever these constants change.
+            // half-extent ~0.21) rather than a fixed margin. Because slabW and its centre
+            // offset both scale with (LANE_VISIBLE-1)*LANE_STEP, the halves cancel and the
+            // slab's outer edge reduces to:
+            //   |x0| + (LANE_VISIBLE - 1) * LANE_STEP + 0.25
+            // which must stay within the ~4.67-unit visible half-width at the track's depth
+            // whenever these constants change. That one bound covers the passengers too:
+            // the outermost cluster's tip sits at |x0| + (LANE_VISIBLE-1)*LANE_STEP + 0.21,
+            // inside the slab's edge by construction (0.21 < 0.25). With the shipped
+            // constants those work out to 4.65 and 4.61, against the 4.67 limit.
             const slabW = LANE_STEP * (LANE_VISIBLE - 1) + 0.5;
             const slab = makeLitBox(`lane-${side}`, slabW, 0.55, 0.1, new Color(238, 236, 230));
             slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, -0.06);
