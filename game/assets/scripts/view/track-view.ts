@@ -136,8 +136,10 @@ function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
 /**
  * Renders the passenger loop as a closed race-track: a white-curbed oval that
  * dense little colored ball-clusters flow around smoothly, boarding at the
- * lowest point (nearest the parking area below). Same public interface as the
- * LoopView it replaces, so GameController can swap it in directly.
+ * lowest point (nearest the parking area below). Started as a drop-in
+ * replacement for LoopView; its public surface has since diverged
+ * (`boardingWorldPos()` instead of a colour search, no `nearestVisibleWorldPos`)
+ * to fix bugs LoopView's shape couldn't express.
  */
 export class TrackView {
     private readonly capacity: number;
@@ -322,14 +324,21 @@ export class TrackView {
                 if (mr) mr.material = litMaterial(active ? colorOf(color) : dim(colorOf(color)));
             }
         }
-        const active: 'left' | 'right' = leftActive ? 'left' : 'right';
-        const len = active === 'left' ? left.length : right.length;
-        const entered = this.lastLen[active] >= 0 && len < this.lastLen[active];
-        this.animateLaneShift(active, left, right);   // updates lastLen
-        if (entered) {
-            const index = active === 'left' ? this.entries.left : this.entries.right;
+        // Which channel actually lost its head this tick? NOT necessarily the one that is
+        // active now: the tick that drains the left channel flips `leftActive` to false,
+        // so keying off the active side would miss that entrant — and its lane slide —
+        // exactly once per level, at the hand-over. Compare both sides instead.
+        const dropped: 'left' | 'right' | null =
+            this.lastLen.left >= 0 && left.length < this.lastLen.left ? 'left'
+            : this.lastLen.right >= 0 && right.length < this.lastLen.right ? 'right'
+            : null;
+        // Always call animateLaneShift: it is what keeps `lastLen` up to date, and it
+        // early-returns on its own when nothing moved.
+        this.animateLaneShift(dropped ?? (leftActive ? 'left' : 'right'), left, right);
+        if (dropped) {
+            const index = dropped === 'left' ? this.entries.left : this.entries.right;
             const color = ring[index];
-            if (color) this.playEntry(active, color);
+            if (color) this.playEntry(dropped, color);
         }
     }
 
