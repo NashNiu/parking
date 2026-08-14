@@ -54,10 +54,10 @@ export class GameController extends Component {
     private loading = false;
     private tickAcc = 0;
     // Seconds per loop step: one slot of ring rotation and at most one boarding
-    // per TICK. TrackView (passed this value) spends the first 60% of it moving
-    // and holds still for the rest (see `slide` in track-view.ts) -- that hold is
-    // when the boarding fly leaves the gap. Raised from 0.18 to slow the carousel
-    // further after the first preview.
+    // per TICK. Raised from 0.18 to slow the carousel further after the first preview.
+    // The carousel runs continuous motion without a beat; what fixed boarding reading
+    // (passenger not vanishing) was spawnCluster() — the flier is the same four-ball
+    // clump the track uses, not a single sphere.
     private readonly TICK = 0.34;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 

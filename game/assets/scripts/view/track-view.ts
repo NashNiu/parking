@@ -147,14 +147,6 @@ export class TrackView {
     private readonly root: Node;
     private readonly cy: number;
     private readonly tick: number;
-    /**
-     * Slice of a tick spent moving; the rest is a hold. A carousel that never stops
-     * reads as chaos — the passenger reaches the boarding gap on the exact frame the
-     * core boards it, so the eye never sees it standing there. Moving for 60% and
-     * holding for 40% turns it into a legible step-pause-step conveyor, and the hold
-     * is when the boarding fly leaves the gap.
-     */
-    private readonly slide: number;
     private readonly entries: { board: number; left: number; right: number };
     /** Path parameters where the curb opens up; filled before buildCurbs runs. */
     private gapTs: number[] = [];
@@ -180,7 +172,6 @@ export class TrackView {
         this.root = parent;
         this.cy = y;
         this.tick = tick;
-        this.slide = tick * 0.6;
         this.entries = entries;
         this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
         this.buildCurbs(parent);
@@ -306,8 +297,7 @@ export class TrackView {
         this.phaseHolder.p -= 1 / this.capacity;
         const target = this.phaseHolder.p + 1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
-            .to(this.slide, { p: target }, {
-                easing: 'quadOut',
+            .to(this.tick, { p: target }, {
                 onUpdate: () => this.repositionAll(),
             })
             .start();
@@ -373,7 +363,7 @@ export class TrackView {
             const home = this.laneHome[active][i];
             Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
             n.setPosition(home.x + dir * LANE_STEP, home.y, home.z);
-            tween(n).to(this.slide, { position: home.clone() }).start();
+            tween(n).to(this.tick, { position: home.clone() }).start();
         }
     }
 
@@ -421,10 +411,12 @@ export class TrackView {
 
     /**
      * Walk the channel's head into the track through its entrance gap: the real ring
-     * slot is hidden for the slide portion of this tick while a temporary cluster tweens
-     * from the lane head to the slot's resting spot, so "the hole came round to the
-     * entrance and the next passenger stepped in" is legible instead of a colour
-     * appearing from nowhere.
+     * slot is hidden for this tick while a temporary cluster tweens from the lane head
+     * to the slot's resting spot, so "the hole came round to the entrance and the next
+     * passenger stepped in" is legible instead of a colour appearing from nowhere.
+     * The flier's tween duration must match the phase tween's: only if they finish at
+     * the same moment will the real slot render at the same position where the flier
+     * lands; unequal durations cause a visible backwards jump at hand-off.
      */
     private playEntry(side: 'left' | 'right', color: string): void {
         const index = side === 'left' ? this.entries.left : this.entries.right;
@@ -439,7 +431,7 @@ export class TrackView {
         flier.setPosition(from);
         this.root.addChild(flier);
         tween(flier)
-            .to(this.slide, { position: pathPoint(index / this.capacity, this.cy) })
+            .to(this.tick, { position: pathPoint(index / this.capacity, this.cy) })
             .call(() => {
                 if (slot.isValid) slot.active = true;
                 if (flier.isValid) flier.destroy();
