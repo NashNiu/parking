@@ -4,20 +4,31 @@ export class LoopSystem {
   capacity: number;
   boardIndex: number;
   ring: (string | null)[];
-  pool: string[];
-  private channelIndex = 0;
+  /** Waiting passengers in the left channel; drains before `right`. */
+  left: string[];
+  /** Waiting passengers in the right channel; only feeds once `left` is empty. */
+  right: string[];
+  /** Ring indices where each channel joins the track (a quarter lap either side of the exit). */
+  readonly entryLeft: number;
+  readonly entryRight: number;
 
   constructor(capacity: number, boardIndex: number, queue: QueueGroup[]) {
     this.capacity = capacity;
     this.boardIndex = boardIndex;
-    this.pool = [];
+    const all: string[] = [];
     for (const g of queue) {
-      for (let i = 0; i < g.count; i++) this.pool.push(g.color);
+      for (let i = 0; i < g.count; i++) all.push(g.color);
     }
+    // The track is filled from the head of the queue exactly as before; only what
+    // is left over gets split, so the order passengers arrive in never changes.
     this.ring = new Array(capacity).fill(null);
-    for (let i = 0; i < capacity && this.pool.length > 0; i++) {
-      this.ring[i] = this.pool.shift()!;
-    }
+    for (let i = 0; i < capacity && all.length > 0; i++) this.ring[i] = all.shift()!;
+    const half = Math.ceil(all.length / 2);
+    this.left = all.slice(0, half);
+    this.right = all.slice(half);
+    const quarter = Math.round(capacity / 4);
+    this.entryLeft = (boardIndex + quarter) % capacity;
+    this.entryRight = (boardIndex - quarter + capacity) % capacity;
   }
 
   passengerAtBoard(): string | null {
@@ -34,8 +45,14 @@ export class LoopSystem {
       rotated[(i + 1) % this.capacity] = this.ring[i];
     }
     this.ring = rotated;
-    if (this.ring[this.channelIndex] === null && this.pool.length > 0) {
-      this.ring[this.channelIndex] = this.pool.shift()!;
+    // One entrance is live at a time: the left channel drains first, and only then
+    // does the right one open. That keeps the arrival order identical to a single
+    // FIFO pool, which is what `reachableColors` (and the deadlock check) rely on.
+    const useLeft = this.left.length > 0;
+    const queue = useLeft ? this.left : this.right;
+    const entry = useLeft ? this.entryLeft : this.entryRight;
+    if (queue.length > 0 && this.ring[entry] === null) {
+      this.ring[entry] = queue.shift()!;
     }
   }
 
@@ -60,12 +77,16 @@ export class LoopSystem {
       if (c === null) empty++;
       else reachable.add(c);
     }
-    for (let i = 0; i < empty && i < this.pool.length; i++) reachable.add(this.pool[i]);
+    for (let i = 0; i < empty; i++) {
+      const c = i < this.left.length ? this.left[i] : this.right[i - this.left.length];
+      if (c === undefined) break;
+      reachable.add(c);
+    }
     return reachable;
   }
 
   remainingCount(): number {
-    return this.pool.length + this.ring.filter((x) => x !== null).length;
+    return this.left.length + this.right.length + this.ring.filter((x) => x !== null).length;
   }
 
   isDrained(): boolean {
