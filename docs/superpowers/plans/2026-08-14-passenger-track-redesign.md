@@ -1107,6 +1107,139 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 7: 节拍化 —— 动一拍、停一拍,飞出去的是同一簇
+
+来源:用户第三轮预览:「乘客上车前会消失,动画不连贯,也没有在正确的缺口位置上车,通道内的乘客进入转盘的动画也有这个问题」。
+
+两条根因(都已在代码里核实):
+
+1. **飞的不是同一个东西。** 轨道乘客是 `clusterMesh()` 的四球簇,而 `playBoarding` 用的 `buildPassengerBall` 是**单个 r=0.16 的球**(`passenger-builder.ts:44-51`)。上车瞬间形状就变了,读起来就是"消失 + 另一个东西出现"。
+2. **从来没有在缺口停过。** phase 补间时长 = 一个 tick(`track-view.ts:300`),所以轨道是连续流动的;乘客抵达缺口的那一帧正是它被 `stepLoop()` 判定上车的那一帧,立刻消失。眼睛没机会看到它站在缺口上。进场同理:走进入口的那一路整条环也在滑,两个动作叠在一起。
+
+修法:给一个节拍。**动 `tick*0.6`、停 `tick*0.4`**;所有与 tick 同步的动作都压进前 60%,后 40% 全场静止,上车的球就在这一拍静止里从缺口飞向车。时序上天然连续:乘客在第 N 拍的静止里站在缺口上,第 N+1 拍开头被判定上车、原地起飞。
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`
+- Modify: `game/assets/scripts/view/GameController.ts`
+- Modify: `game/assets/scripts/view/passenger-builder.ts`(删除只此一处使用的 `buildPassengerBall`)
+
+**Interfaces:**
+- Produces:`TrackView.spawnCluster(color: string): Node` —— 用轨道自己的共享簇 mesh 造一个临时乘客节点(挂在 loopRoot 下),供上车飞人复用,保证"飞出去的就是刚才站在缺口上的那一簇"。
+- Removes:`buildPassengerBall`(`passenger-builder.ts`)。**先 grep 确认除 `GameController.playBoarding` 外没有其他调用者**,有就停下报告。
+
+- [ ] **Step 1: 加节拍常量**
+
+`track-view.ts`,字段区(和 `tick` 放一起):
+
+```ts
+    /**
+     * Slice of a tick spent moving; the rest is a hold. A carousel that never stops
+     * reads as chaos — the passenger reaches the boarding gap on the exact frame the
+     * core boards it, so the eye never sees it standing there. Moving for 60% and
+     * holding for 40% turns it into a legible step-pause-step conveyor, and the hold
+     * is when the boarding fly leaves the gap.
+     */
+    private readonly slide: number;
+```
+
+构造函数里(紧跟 `this.tick = tick;`):
+
+```ts
+        this.slide = tick * 0.6;
+```
+
+- [ ] **Step 2: 环的前进压进 60%,并加减速**
+
+`update()` 里的 phase 补间,`.to(this.tick, ...)` 改成:
+
+```ts
+        this.phaseTween = tween(this.phaseHolder)
+            .to(this.slide, { p: target }, {
+                easing: 'quadOut',
+                onUpdate: () => this.repositionAll(),
+            })
+            .start();
+```
+
+- [ ] **Step 3: 通道前滑与走进入口也压进 60%**
+
+`animateLaneShift` 里 `tween(n).to(this.tick, { position: home.clone() })` 改成 `.to(this.slide, ...)`。
+
+`playEntry` 里 `tween(flier).to(this.tick, { position: ... })` 改成 `.to(this.slide, ...)`。这样进场的乘客和环上其他人一起在 60% 处停住,一起在静止拍里站着。
+
+- [ ] **Step 4: 让上车飞人用轨道自己的簇**
+
+`track-view.ts` 加方法(放在 `boardingWorldPos()` 旁边):
+
+```ts
+/**
+ * A throwaway passenger built from the track's own shared cluster mesh, parented to
+ * the track root. The boarding fly used a single sphere while the track uses a
+ * four-ball clump, so boarding read as one thing vanishing and a different thing
+ * appearing. Caller positions it, tweens it, and destroys it.
+ */
+spawnCluster(color: string): Node {
+    const n = new Node('pax-fly');
+    const mr = n.addComponent(MeshRenderer);
+    mr.mesh = clusterMesh();
+    mr.material = litMaterial(colorOf(color));
+    this.root.addChild(n);
+    return n;
+}
+```
+
+`GameController.playBoarding` 里:
+
+```ts
+        const p = this.loopView!.spawnCluster(color);
+```
+
+取代 `const p = buildPassengerBall('fly', colorOf(color)); this.boardRoot.addChild(p);` 这两行(`spawnCluster` 自己挂父节点)。删掉 `buildPassengerBall` 的 import;若 `colorOf` 在 GameController 里再无其他用处也一并删掉 import,**先确认**。
+
+`playBoarding` 的其余部分(0.4s 贝塞尔弧线、`p.isValid` 保护、结束时 `bumpSeat`)一行不改 —— 飞人从缺口起飞的那一刻正是静止拍的开头,不需要额外延迟。
+
+`passenger-builder.ts` 里删除 `buildPassengerBall` 整个函数及其文档注释。
+
+- [ ] **Step 5: 再放慢一档**
+
+`GameController.ts` 的 `TICK`:
+
+```ts
+    private readonly TICK = 0.34;
+```
+
+依据:节拍拆开后,动的部分只占 0.6 —— 若 tick 仍是 0.26,滑动只有 0.156s,反而更急。0.34 → 滑动 0.204s、静止 0.136s。代价:每 tick 最多一人上车,第 1 关 88 人的下限时长约 30s、第 2 关 128 人约 44s。这是本次唯一的节奏旋钮,嫌慢就调小它。
+
+- [ ] **Step 6: 编译与回归**
+
+Run: `cd logic && npx jest`
+Expected: PASS,54 个全绿(本任务不碰核心)。
+
+按前几个任务的办法核对 view 文件类型:`npx tsc --noEmit` 对着 `C:\ProgramData\cocos\editors\Creator\3.8.7\resources\resources\3d\engine\bin\.declarations\cc.d.ts`,引擎声明本身 59 个既有报错,比对改动前后一致。
+
+- [ ] **Step 7: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts game/assets/scripts/view/GameController.ts game/assets/scripts/view/passenger-builder.ts
+git commit -m "fix(view): M6.G give the carousel a beat, and fly the same cluster
+
+Boarding read as a passenger vanishing because two things were wrong. The fly was
+a single sphere while the track draws four-ball clumps, so the shape changed at the
+hand-off; spawnCluster() now builds the flier from the track's own shared mesh.
+
+And the phase tween lasted a whole tick, so the carousel never stopped: a passenger
+reached the gap on the exact frame the core boarded it and the eye never saw it
+standing there. Everything tick-synchronous now moves for 60% of a tick and holds
+for the other 40% -- the boarding fly leaves the gap during that hold -- which also
+untangles the entry walk-in from the ring's own motion.
+
+TICK 0.26 -> 0.34 so the moving 60% is not more hurried than before.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## 自查记录
 
 - **Spec 覆盖**:双入口左优先→Task 1 Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
