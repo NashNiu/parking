@@ -39,6 +39,31 @@ export class LoopSystem {
     }
   }
 
+  /**
+   * Colors that can still reach the boarding index.
+   *
+   * Passengers only enter the ring through the channel cell, and only while it is
+   * empty — and cells are only emptied by boarding. So a full ring is sealed: the
+   * pool behind it can never get in. Reachable = whatever the ring holds now, plus
+   * (for each empty cell) the next pool entries in FIFO order, since every cell
+   * rotates past the channel and takes the pool's head.
+   *
+   * This under-counts once boarding resumes (each boarding opens another cell and
+   * lets more of the pool in), but it is exact in the only case that matters: if
+   * nothing reachable can board, no cell is ever emptied, so the ring's contents
+   * are frozen and this set can never grow.
+   */
+  reachableColors(): Set<string> {
+    const reachable = new Set<string>();
+    let empty = 0;
+    for (const c of this.ring) {
+      if (c === null) empty++;
+      else reachable.add(c);
+    }
+    for (let i = 0; i < empty && i < this.pool.length; i++) reachable.add(this.pool[i]);
+    return reachable;
+  }
+
   remainingCount(): number {
     return this.pool.length + this.ring.filter((x) => x !== null).length;
   }

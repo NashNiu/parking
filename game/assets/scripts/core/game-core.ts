@@ -64,8 +64,13 @@ export class GameCore {
     if (this.isDeadlocked()) this.state = 'deadlock';
   }
 
+  /**
+   * Can a passenger of `color` still get to the boarding index? Not the same as
+   * "does one still exist": a pool passenger behind a ring that never empties can
+   * never board, which is exactly how a level jams (see `reachableColors`).
+   */
   private hasRemainingColor(color: string): boolean {
-    return this.loop.pool.includes(color) || this.loop.ring.includes(color);
+    return this.loop.reachableColors().has(color);
   }
 
   private isDeadlocked(): boolean {
