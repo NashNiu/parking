@@ -24,7 +24,7 @@
 
 ---
 
-## Task A: 核心双通道(TDD)
+## Task 1: 核心双通道(TDD)
 
 **Files:**
 - Modify: `game/assets/scripts/core/loop-system.ts`
@@ -36,7 +36,7 @@
   - `LoopSystem.left: string[]`、`LoopSystem.right: string[]`(取代 `pool`)
   - `LoopSystem.entryLeft: number`、`LoopSystem.entryRight: number`(只读,构造时算好)
   - 签名不变:`passengerAtBoard()`、`boardPassenger()`、`step()`、`remainingCount()`、`isDrained()`、`reachableColors(): Set<string>`
-  - Task B/C 会读 `left`/`right`/`entryLeft`/`entryRight`/`boardIndex`。
+  - Task 2/3 会读 `left`/`right`/`entryLeft`/`entryRight`/`boardIndex`。
 
 - [ ] **Step 1: 改写测试文件(第一轮:构造与补位)**
 
@@ -283,18 +283,19 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task B: 圆角矩形轨道 + 运动模型修正
+## Task 2: 圆角矩形轨道 + 运动模型修正
 
 **Files:**
 - Modify: `game/assets/scripts/view/track-view.ts`
 - Modify: `game/assets/scripts/view/GameController.ts:180`(TrackView 构造参数)
 
 **Interfaces:**
-- Consumes: Task A 的 `loop.boardIndex`、`loop.entryLeft`、`loop.entryRight`。
+- Consumes: Task 1 的 `loop.boardIndex`、`loop.entryLeft`、`loop.entryRight`。
 - Produces:
   - `new TrackView(parent, capacity, y, tick, entries: { board: number; left: number; right: number })`
-  - `TrackView.update(ring: (string|null)[], left: string[], right: string[])`(左右两参 Task C 才用上,本任务先接住)
   - `pathPoint(t, cy, out?)` 内部函数改成圆角矩形按弧长。
+  - `mergeParts(parts): Mesh` 模块级工具(Task 3 可复用)。
+  - **`update()` 保持单参 `update(ring)` 不动**;改三参签名和两处调用点(`GameController.ts:181`、`:230`)整体属于 Task 3,本任务不要动,否则调用点参数个数对不上编译不过。
 
 - [ ] **Step 1: 换掉路径函数**
 
@@ -531,14 +532,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task C: 左右候车通道
+## Task 3: 左右候车通道
 
 **Files:**
 - Modify: `game/assets/scripts/view/track-view.ts`
 - Modify: `game/assets/scripts/view/GameController.ts:206`(update 调用传两条队列)
 
 **Interfaces:**
-- Consumes: Task A 的 `loop.left`/`loop.right`,Task B 的 `pathPoint`/`mergeParts`/`entries`。
+- Consumes: Task 1 的 `loop.left`/`loop.right`,Task 2 的 `pathPoint`/`mergeParts`/`entries`。
 - Produces: `TrackView.update(ring, left, right)` 三参版本正式生效。
 
 - [ ] **Step 1: 建通道底板与候车位**
@@ -698,7 +699,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task D: 收尾(开销核对 + 回归)
+## Task 4: 收尾(开销核对 + 回归)
 
 **Files:**
 - Modify: `game/assets/scripts/view/track-view.ts`(仅在超预算时调参)
@@ -715,7 +716,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 - [ ] **Step 3: 通关回归**
 
-请用户完整打一遍第 1 关(确认过关后能跳到第 2 关),再故意在第 2 关走成死局(把 4 个车位停满非紫色车),确认「游戏失败/点击重试」照常弹出——Task A 改了补位入口,死局判定必须依旧生效。
+请用户完整打一遍第 1 关(确认过关后能跳到第 2 关),再故意在第 2 关走成死局(把 4 个车位停满非紫色车),确认「游戏失败/点击重试」照常弹出——Task 1 改了补位入口,死局判定必须依旧生效。
 
 - [ ] **Step 4: 全量测试 + 提交**
 
@@ -733,6 +734,6 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## 自查记录
 
-- **Spec 覆盖**:双入口左优先→Task A Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
+- **Spec 覆盖**:双入口左优先→Task 1 Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
 - **命名一致性**:`left`/`right`/`entryLeft`/`entryRight`/`gapTs`/`laneClusters`/`mergeParts`/`dim` 在 A/B/C 中拼写一致;`TrackView.update` 三参签名在 B(接住)与 C(生效)一致。
 - **已知取舍**:capacity=2 时 `entryLeft` 与 `entryRight` 会重合(`Math.round(2/4)=1`),对现有关卡(capacity=12)无影响,测试里已按重合行为断言。
