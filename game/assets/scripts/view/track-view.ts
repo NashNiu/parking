@@ -147,6 +147,14 @@ export class TrackView {
     private readonly root: Node;
     private readonly cy: number;
     private readonly tick: number;
+    /**
+     * Slice of a tick spent moving; the rest is a hold. A carousel that never stops
+     * reads as chaos — the passenger reaches the boarding gap on the exact frame the
+     * core boards it, so the eye never sees it standing there. Moving for 60% and
+     * holding for 40% turns it into a legible step-pause-step conveyor, and the hold
+     * is when the boarding fly leaves the gap.
+     */
+    private readonly slide: number;
     private readonly entries: { board: number; left: number; right: number };
     /** Path parameters where the curb opens up; filled before buildCurbs runs. */
     private gapTs: number[] = [];
@@ -172,6 +180,7 @@ export class TrackView {
         this.root = parent;
         this.cy = y;
         this.tick = tick;
+        this.slide = tick * 0.6;
         this.entries = entries;
         this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
         this.buildCurbs(parent);
@@ -297,7 +306,8 @@ export class TrackView {
         this.phaseHolder.p -= 1 / this.capacity;
         const target = this.phaseHolder.p + 1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
-            .to(this.tick, { p: target }, {
+            .to(this.slide, { p: target }, {
+                easing: 'quadOut',
                 onUpdate: () => this.repositionAll(),
             })
             .start();
@@ -363,7 +373,7 @@ export class TrackView {
             const home = this.laneHome[active][i];
             Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
             n.setPosition(home.x + dir * LANE_STEP, home.y, home.z);
-            tween(n).to(this.tick, { position: home.clone() }).start();
+            tween(n).to(this.slide, { position: home.clone() }).start();
         }
     }
 
@@ -395,6 +405,21 @@ export class TrackView {
     }
 
     /**
+     * A throwaway passenger built from the track's own shared cluster mesh, parented to
+     * the track root. The boarding fly used a single sphere while the track uses a
+     * four-ball clump, so boarding read as one thing vanishing and a different thing
+     * appearing. Caller positions it, tweens it, and destroys it.
+     */
+    spawnCluster(color: string): Node {
+        const n = new Node('pax-fly');
+        const mr = n.addComponent(MeshRenderer);
+        mr.mesh = clusterMesh();
+        mr.material = litMaterial(colorOf(color));
+        this.root.addChild(n);
+        return n;
+    }
+
+    /**
      * Walk the channel's head into the track through its entrance gap: the real ring
      * slot is hidden for this one tick while a temporary cluster tweens from the lane
      * head to the slot's resting spot, so "the hole came round to the entrance and the
@@ -413,7 +438,7 @@ export class TrackView {
         flier.setPosition(from);
         this.root.addChild(flier);
         tween(flier)
-            .to(this.tick, { position: pathPoint(index / this.capacity, this.cy) })
+            .to(this.slide, { position: pathPoint(index / this.capacity, this.cy) })
             .call(() => {
                 if (slot.isValid) slot.active = true;
                 if (flier.isValid) flier.destroy();

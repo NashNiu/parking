@@ -12,9 +12,7 @@ import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
-import { buildPassengerBall } from './passenger-builder';
 import { preloadCarModels } from './car-builder';
-import { colorOf } from './colors';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
 
@@ -59,7 +57,7 @@ export class GameController extends Component {
     // TrackView), so the passenger carousel rotates one slot per TICK, and the
     // boarding cadence (at most one passenger boards per tick). Raised from 0.18
     // to slow the carousel further after the first preview.
-    private readonly TICK = 0.26;
+    private readonly TICK = 0.34;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
     start() {
@@ -281,8 +279,7 @@ export class GameController extends Component {
         if (!start) { this.bumpSeat(e); return; }
         if (!this.boardRoot) { this.bumpSeat(e); return; }
 
-        const p = buildPassengerBall('fly', colorOf(color));
-        this.boardRoot.addChild(p);
+        const p = this.loopView!.spawnCluster(color);
         p.setWorldPosition(start);
 
         const end = e.node.worldPosition.clone();
