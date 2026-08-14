@@ -1240,6 +1240,79 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 8: 去掉停顿,回到连续流动
+
+来源:用户第四轮预览:「这次感觉好了,能不能把停顿的那一下给去掉,感觉一卡一卡的」。
+
+Task 7 的两条改动里,真正治好"上车前消失/不连贯"的是**飞出去的换成轨道自己的四球簇**(`spawnCluster`);「动 60% / 停 40%」的节拍只是额外的可读性,而它带来了用户不接受的顿感。因此**只回退节拍,保留簇**。
+
+**不可破的约束:** 环前进、通道前滑、走进入口这三个补间**必须同时长**。`playEntry` 的临时簇落地时会把真实槽位交还显示,而真实槽位的渲染位置是 `index/capacity + phase`;只有当 phase 补间与它同时结束(phase=0)时两者才重合。若时长不一致,交接会出现一次倒跳。
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`
+- Modify: `game/assets/scripts/view/GameController.ts`(仅注释)
+
+**Interfaces:** 无变化。`spawnCluster`、`boardingWorldPos`、`TICK = 0.34` 全部保留。
+
+- [ ] **Step 1: 删掉 slide 字段**
+
+`track-view.ts`:删除 `private readonly slide: number;` 及其上方那段文档注释,以及构造函数里的 `this.slide = tick * 0.6;`。
+
+- [ ] **Step 2: 三个补间回到整拍,并去掉减速**
+
+`update()` 里的 phase 补间改回:
+
+```ts
+        this.phaseTween = tween(this.phaseHolder)
+            .to(this.tick, { p: target }, {
+                onUpdate: () => this.repositionAll(),
+            })
+            .start();
+```
+
+(去掉 `easing: 'quadOut'` —— 它在每一拍结尾减速,本身就在强化顿感。线性匀速才是"连续流动"。)
+
+`animateLaneShift` 里:`.to(this.slide, { position: home.clone() })` → `.to(this.tick, { position: home.clone() })`。
+
+`playEntry` 里:`.to(this.slide, { position: pathPoint(...) })` → `.to(this.tick, { position: pathPoint(...) })`。
+
+改完后 `track-view.ts` 里**不应再出现 `this.slide`**,请 grep 确认。
+
+- [ ] **Step 3: 两处注释回到事实**
+
+`GameController.ts` 的 `TICK` 注释:去掉"前 60% 移动、其余静止"那句,改回陈述 TICK 就是每格时间与上车节拍,并保留"从 0.18 上调"的由来。**顺带写清为什么不再有停顿**:节拍化被用户否掉了(顿感),真正解决上车可读性的是 `spawnCluster` 让飞出去的和站在缺口上的是同一簇。
+
+`track-view.ts` 的 `playEntry` 文档注释:"hidden for the slide portion of this tick" 改回 "hidden for this tick"(现在确实是整拍)。同时在该注释里补一句:临时簇的时长必须与 phase 补间一致,否则交接会倒跳。
+
+- [ ] **Step 4: 编译与回归**
+
+Run: `cd logic && npx jest`
+Expected: PASS,54 个全绿(本任务不碰核心)。
+
+按前几个任务的办法核对 view 文件类型:`npx tsc --noEmit` 对着 `C:\ProgramData\cocos\editors\Creator\3.8.7\resources\resources\3d\engine\bin\.declarations\cc.d.ts`,引擎声明本身 59 个既有报错,比对改动前后一致。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts game/assets/scripts/view/GameController.ts
+git commit -m "fix(view): M6.H drop the beat, keep the cluster
+
+The move-60%-hold-40% beat read as a stutter, so the carousel goes back to
+continuous motion: all three tick-synchronous tweens run for a full tick again and
+the quadOut easing is gone, since decelerating into every tick boundary was itself
+part of the jerk.
+
+What actually fixed boarding reading as a passenger vanishing was spawnCluster --
+the flier is the same four-ball clump that was standing at the gap, not a single
+sphere -- and that stays. The three durations must remain equal: playEntry's flier
+hands its slot back when it lands, and only a phase tween finishing at the same
+moment puts the real slot in the same place.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## 自查记录
 
 - **Spec 覆盖**:双入口左优先→Task 1 Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
