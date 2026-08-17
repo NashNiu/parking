@@ -25,6 +25,31 @@ const { ccclass, property } = _decorator;
  */
 const BOARD_STAGGER = 0.07;
 
+/**
+ * Route a full car takes out of its stall: straight down into the empty corridor
+ * between the parking row (y = 1.2) and the lot (y = -3.2), then right and off screen.
+ *
+ * The two legs are timed differently on purpose. Every stall shares the parking row's
+ * y, so the drop is always the same 1.3 units and a fixed duration is exactly
+ * consistent — and it has to be long enough to see, since at driving speed 1.3 units
+ * would pass in less time than the turn into it. The run across, though, is 4 units
+ * from the rightmost stall and 11 from the leftmost, so it goes at a fixed speed;
+ * a fixed duration there would read as two cars of very different power.
+ */
+const EXIT_LANE_Y = -0.1;
+const EXIT_X = 7.5;
+const EXIT_DOWN_TIME = 0.26;
+const EXIT_SPEED = 9;
+
+/** Body angle (degrees about the board normal) for a car heading down / to the right. */
+const FACE_DOWN = 270;
+const FACE_RIGHT = 0;
+
+/** `to`, rewritten as the nearest equivalent angle to `from`, so a turn takes the short way. */
+function shortestAngle(from: number, to: number): number {
+    return from + ((((to - from) % 360) + 540) % 360) - 180;
+}
+
 function dirVec(d: Dir): Vec3 {
     switch (d) {
         case 'up': return new Vec3(0, 1, 0);
@@ -268,8 +293,51 @@ export class GameController extends Component {
                     new Color(255, 210, 60), new Color(120, 255, 140), new Color(90, 170, 255),
                 ]);
             }
-            tween(e.node).by(0.4, { position: new Vec3(0, 9, 0) }).call(() => e.node.destroy()).start();
+            this.playDriveOut(e.node);
         }
+    }
+
+    /**
+     * Drive a full car out of its stall instead of sliding it away: down into the
+     * corridor below the parking row, then right and off screen, turning to face each
+     * leg. It used to slide straight up by 9 units, which sent it back over the loop it
+     * had just been loaded from and read as vanishing rather than leaving.
+     *
+     * The turns tween a plain angle and write it through `setRotationFromEuler`, the
+     * same shape as the boarding arcs — the car's heading lives on its `body` child
+     * (see car-builder), which is also what carries the roof arrow.
+     */
+    private playDriveOut(node: Node): void {
+        const body = node.getChildByName('body');
+        const turn = (from: number, to: number, dur: number): number => {
+            const end = shortestAngle(from, to);
+            if (body) {
+                tween({ a: from })
+                    .to(dur, { a: end }, {
+                        onUpdate: (t?: { a: number }) => {
+                            // The tween targets a plain object, so it outlives the node
+                            // on a restart mid-drive — bail once the body is gone.
+                            if (!body.isValid) return;
+                            body.setRotationFromEuler(0, 0, t ? t.a : end);
+                        },
+                    })
+                    .start();
+            }
+            return end;
+        };
+
+        const from = node.position.clone();
+        const corner = new Vec3(from.x, EXIT_LANE_Y, from.z);
+        const exit = new Vec3(EXIT_X, EXIT_LANE_Y, from.z);
+        const across = Math.abs(exit.x - corner.x) / EXIT_SPEED;
+
+        const heading = turn(body ? body.eulerAngles.z : 0, FACE_DOWN, 0.14);
+        tween(node)
+            .to(EXIT_DOWN_TIME, { position: corner }, { easing: 'quadIn' })
+            .call(() => turn(heading, FACE_RIGHT, 0.14))
+            .to(across, { position: exit }, { easing: 'quadOut' })
+            .call(() => { if (node.isValid) node.destroy(); })
+            .start();
     }
 
     /**
