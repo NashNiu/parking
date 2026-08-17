@@ -44,10 +44,18 @@ export class HudView {
         }
     }
 
-    /** A small floating label (for per-car seat counts); caller positions/updates/destroys it. */
+    /**
+     * The floating seat count over a parked car; caller positions/updates/destroys it.
+     * This number is now the ONLY readout of how full a car is — the fill bar under the
+     * car is gone — so it is large and carries a dark outline, which is what keeps white
+     * digits legible against a car of any colour without needing a backing plate.
+     */
     newSeatLabel(): Label {
-        const label = makeLabel(this.canvas, 'seat', 30, 0);
+        const label = makeLabel(this.canvas, 'seat', 44, 0);
         label.color = new Color(255, 255, 255);
+        label.enableOutline = true;
+        label.outlineColor = new Color(20, 22, 30, 255);
+        label.outlineWidth = 3;
         return label;
     }
 

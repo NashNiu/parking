@@ -8,7 +8,6 @@ import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
 import { TrackView } from './track-view';
 import { HudView } from './hud-view';
-import { makeBox } from './placeholder';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
@@ -60,7 +59,6 @@ function shortestAngle(from: number, to: number): number {
 /** A car sitting in a parking stall, with everything the display needs. */
 interface ParkedCar {
     node: Node;
-    bar: Node;
     slot: number;
     label: Label | null;
     /** Seats this car has. Captured on park, so reusing its slot can't confuse the display. */
@@ -442,17 +440,11 @@ export class GameController extends Component {
     }
 
     /** A thin bar under each parked car showing filled / capacity. */
-    private attachFillBar(car: Node): Node {
-        const bg = makeBox('fillbg', 0.9, 0.18, 0.08, new Color(30, 30, 35));
-        bg.setPosition(0, -0.5, 0.42);
-        car.addChild(bg);
-        const bar = makeBox('fill', 0.9, 0.18, 0.12, new Color(255, 215, 70));
-        bar.setPosition(-0.45, -0.5, 0.44);
-        bar.setScale(0.001, 1, 1);
-        car.addChild(bar);
-        return bar;
-    }
-
+    /**
+     * Sync every parked car's seat readout with the core. Named for the fill bars it
+     * used to drive: those are gone, and the outlined number over the car is now the
+     * only readout of how full it is.
+     */
     private updateFillBars(): void {
         for (const [id, e] of this.parked) {
             const pc = this.core!.parking.parked[e.slot];
@@ -467,12 +459,8 @@ export class GameController extends Component {
         }
     }
 
-    /** Paint one car's seat label and fill bar from the seat count it is showing. */
+    /** Paint one car's seat readout from the seat count it is showing. */
     private renderSeats(e: ParkedCar): void {
-        if (!e.bar.isValid) return;
-        const r = e.capacity > 0 ? (e.capacity - e.shown) / e.capacity : 0;
-        e.bar.setScale(Math.max(0.001, r), 1, 1);
-        e.bar.setPosition(-0.45 + 0.45 * r, -0.5, 0.44);
         if (e.label && e.label.isValid) e.label.string = `${e.shown}`;
     }
 
@@ -596,12 +584,11 @@ export class GameController extends Component {
                 overshoot(node, slot, 0.28, () => {
                     this.busy = false;
                     this.sfx?.play('park');
-                    const bar = this.attachFillBar(node);
                     const label = this.hud ? this.hud.newSeatLabel() : null;
                     const pc = this.core!.parking.parked[slotIndex];
                     const capacity = pc ? pc.capacity : 0;
                     this.parked.set(id, {
-                        node, bar, slot: slotIndex, label, capacity,
+                        node, slot: slotIndex, label, capacity,
                         // Starts empty: a car is only ever parked with no passengers on it.
                         shown: capacity,
                     });
