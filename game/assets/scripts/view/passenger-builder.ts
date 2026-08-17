@@ -1,6 +1,6 @@
 import {
-    Node, Color, Mesh, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
-    Vec3, Mat4, gfx, utils,
+    Node, Color, Mesh, MeshRenderer, LODGroup, Material, Prefab, resources, assetManager,
+    instantiate, Vec3, Mat4, gfx, utils,
 } from 'cc';
 import { litMaterial, readMainColor } from './materials';
 
@@ -25,6 +25,17 @@ const MODEL_PATH = 'models/passenger';
  * `passenger.glb.meta`; re-exporting the model changes it.
  */
 const MODEL_UUID = '5e130d29-2afb-4d1b-bba3-f90534c5422c@72429';
+
+/**
+ * Which generated LOD level to bake, counted from the COARSEST end (0 = coarsest).
+ * The raw model is ~19.7k triangles, which is authored for a model viewer showing one
+ * figure; on the board a passenger is about 40px tall and 18 of them are on screen at
+ * once, so the full-detail mesh costs ~354k triangles a frame for detail nobody can
+ * see. `passenger.glb.meta` enables the importer's LOD generation (levels at 100% /
+ * 25% / 10% of the faces), and the coarsest level puts a passenger near 2k triangles.
+ * Raise this to 1 if the silhouette reads as lumpy at 10%.
+ */
+const LOD_FROM_COARSEST = 0;
 
 /** Material roles the model exports. `paint` is the one recolored per passenger. */
 const ROLES = ['paint', 'trim', 'skin', 'eye', 'shoe'] as const;
@@ -94,12 +105,28 @@ function bake(source: Prefab): Baked | null {
     const root = instantiate(source) as unknown as Node;
     Mat4.invert(_rootInv, root.worldMatrix);
 
+    // With LOD generation enabled, the importer puts EVERY level's geometry in the
+    // prefab at once (full detail + 25% + 10%), so an untargeted walk would merge all
+    // three and bake something heavier than the original. Collect the renderers of
+    // every level we don't want and skip them below. Levels run finest-first, so the
+    // coarsest is the last one — which is what these 40px-tall figures should use.
+    const skip = new Set<MeshRenderer>();
+    for (const group of root.getComponentsInChildren(LODGroup)) {
+        const wanted = Math.max(0, group.lodCount - 1 - LOD_FROM_COARSEST);
+        for (let i = 0; i < group.lodCount; i++) {
+            if (i === wanted) continue;
+            const lod = group.getLOD(i);
+            if (lod) for (const mr of lod.renderers) skip.add(mr);
+        }
+    }
+
     const groups = new Map<Role, Group>();
     const colors: Partial<Record<Role, Color>> = {};
     let minx = Infinity, miny = Infinity, minz = Infinity;
     let maxx = -Infinity, maxy = -Infinity, maxz = -Infinity;
 
     for (const mr of root.getComponentsInChildren(MeshRenderer)) {
+        if (skip.has(mr)) continue;
         const mesh = mr.mesh;
         if (!mesh) continue;
         Mat4.multiply(_m, _rootInv, mr.node.worldMatrix);
@@ -221,6 +248,10 @@ export function buildPassenger(name: string, color: Color, height: number): Node
     const fit = new Node('fit');
     const s = height / model.size.y;
     fit.setScale(s, s, s);
+    // The figure is authored facing -Z, so it showed the camera its back. Turn it
+    // about the board's up axis (+Y) to face +Z, which is out of the board toward
+    // the camera. No lay-down rotation: unlike the cars it stands on the board.
+    fit.setRotationFromEuler(0, 180, 0);
     root.addChild(fit);
 
     for (const { role, mesh } of model.meshes) {

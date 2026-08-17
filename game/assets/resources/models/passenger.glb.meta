@@ -447,7 +447,7 @@
   "userData": {
     "imageMetas": [],
     "lods": {
-      "enable": false,
+      "enable": true,
       "hasBuiltinLOD": false,
       "options": [
         {
