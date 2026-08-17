@@ -1322,6 +1322,86 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+## Task 9: 相位漂移(乘客没到缺口就被判定上车)
+
+来源:用户第五轮预览:「乘客还没到底部缺口的时候,就已经跳过来了,好像在右侧缺口就跳上车了」。
+
+**根因(代码已核实,`track-view.ts:309-316`):相位是相对累加的。**
+
+```ts
+this.phaseTween?.stop();
+this.phaseHolder.p -= 1 / this.capacity;
+const target = this.phaseHolder.p + 1 / this.capacity;   // ← 相对上一次的残值
+```
+
+补间时长与 tick 都是 `TICK`,但 `.stop()` 会把**还没跑完**的上一条补间截断在半路;差一帧(1/60 ÷ 0.34 ≈ 5%)就有 5% 的欠账被写进 `p`,而下一拍的 `target` 又是从这个欠账值上算的 —— **欠账逐拍累积,永不归零**。掉帧、或一帧内 `while` 触发两拍(此时 `p` 减两格却只跑一条补间),漂移更大。`buildBoard` 里那次开局的 `update()` 也会多起一条会被截断的补间。
+
+**症状对应:**漂移方向为负 → cluster `i` 画在 `i/capacity + phase`,沿路径**偏早**。路径顺序是右侧中点(t=0.25)→ 右下角 → 底部正中(t=0.5),所以逻辑上正在上车的 `ring[boardIndex]` 被画在"还没走到底部缺口、偏右"的位置,而飞人仍从固定缺口起飞,看起来就是在右侧缺口上的车。
+
+**Files:**
+- Modify: `game/assets/scripts/view/track-view.ts`
+
+**Interfaces:** 无变化。
+
+- [ ] **Step 1: 相位改成绝对量**
+
+`update()` 里那三行改成:
+
+```ts
+        // Absolute, never relative. The resting phase is 0 by definition, so each tick
+        // starts exactly one slot back and tweens to exactly 0. The previous form
+        // (`p -= 1/capacity; target = p + 1/capacity`) inherited whatever the stopped
+        // tween had not yet delivered, and that shortfall accumulated every tick —
+        // dragging the whole ring backwards until the passenger the core boards was
+        // drawn short of the boarding gap, toward the right side, while the fly still
+        // departed from the gap. Resetting absolutely discards the shortfall instead.
+        this.phaseTween?.stop();
+        this.phaseHolder.p = -1 / this.capacity;
+        this.phaseTween = tween(this.phaseHolder)
+            .to(this.tick, { p: 0 }, {
+                onUpdate: () => this.repositionAll(),
+            })
+            .start();
+```
+
+(把上面那段旧注释里"Pull the phase back a slot ... resting phase stays 0"的解释一并替换掉,不要留两段互相重复的说明。)
+
+- [ ] **Step 2: 确认负相位的取模是安全的**
+
+`repositionAll` 用 `const phase = this.phaseHolder.p % 1;` 再算 `t = (i/capacity + phase) % 1`,`i=0` 时 `t` 会是小负数。`pathPoint` 开头必须有 `((t % 1) + 1) % 1` 这样的归一化才不会走到最后一段的兜底分支。**读代码确认它在,并把确认结果写进报告**;若不在,补上。
+
+- [ ] **Step 3: 编译与回归**
+
+Run: `cd logic && npx jest`
+Expected: PASS,54 个全绿(本任务不碰核心)。
+
+按前几个任务的办法核对 view 文件类型:`npx tsc --noEmit` 对着 `C:\ProgramData\cocos\editors\Creator\3.8.7\resources\resources\3d\engine\bin\.declarations\cc.d.ts`,引擎声明本身 59 个既有报错,比对改动前后一致。
+
+- [ ] **Step 4: 提交**
+
+```bash
+git add game/assets/scripts/view/track-view.ts
+git commit -m "fix(view): M6.I stop the carousel phase from drifting backwards
+
+The phase was advanced relatively: each tick subtracted a slot and tweened back to
+whatever the previous, stopped tween had actually reached. Since the tween and the
+tick are the same length, being cut a frame short left a ~5% shortfall that the next
+tick's target inherited -- so it accumulated, dragging the rendered ring further and
+further behind its logical position. After a dozen ticks the passenger the core was
+boarding got drawn short of the boarding gap, over toward the right side, while the
+fly still departed from the fixed gap: it looked like passengers boarded at the right
+entrance instead of the bottom one.
+
+The resting phase is 0 by definition, so each tick now sets it absolutely to one slot
+back and tweens to exactly 0. Any shortfall is discarded rather than inherited.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+**备选方案(本次不做):**把相位改成 `tickAcc` 的纯函数(每帧由控制器把 `tickAcc/TICK` 传进来算相位,完全不用补间),那样从原理上不可能漂移,但要给视图加一个每帧调用。当前修法已消除累积项,先用它。
+
+---
+
 ## 自查记录
 
 - **Spec 覆盖**:双入口左优先→Task 1 Step 7;对半分→A Step 3;空位才放行→A Step 5 第四个用例;圆角矩形+弧长→B Step 1;索引↔位置绑定→B Step 4;运动模型修正→B Step 5;出口缺口→B Step 3;通道渲染/前滑/灰显→C Step 1-3;开销预算→D Step 1-2;死局不退化→A Step 4/11 + D Step 3。
