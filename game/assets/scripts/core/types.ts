@@ -23,6 +23,19 @@ export interface QueueGroup {
   count: number;
 }
 
+/**
+ * Passengers occupy the loop in same-colour groups rather than one per cell: a ring
+ * cell holds a group, and the view draws it as a row of up to `GROUP_SIZE` figures.
+ * `capacity` therefore counts ROWS, so a capacity-12 track carries up to 48 people.
+ */
+export const GROUP_SIZE = 4;
+
+/** One row of same-coloured passengers. `count` falls as they board, 1..GROUP_SIZE. */
+export interface PaxGroup {
+  color: string;
+  count: number;
+}
+
 export interface LevelData {
   id: number;
   grid: { cols: number; rows: number; cars: CarSpec[] };

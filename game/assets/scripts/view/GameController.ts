@@ -19,6 +19,12 @@ import { vibrate } from './haptics';
 
 const { ccclass, property } = _decorator;
 
+/**
+ * Delay between the boarding flights of one row. Small enough that a row of four is
+ * clearly one event, large enough that four people read as four rather than one blob.
+ */
+const BOARD_STAGGER = 0.07;
+
 function dirVec(d: Dir): Vec3 {
     switch (d) {
         case 'up': return new Vec3(0, 1, 0);
@@ -55,11 +61,11 @@ export class GameController extends Component {
     private ended = false;
     private loading = false;
     private tickAcc = 0;
-    // Seconds per loop step: one slot of ring rotation and at most one boarding
+    // Seconds per loop step: one slot of ring rotation, and one row's worth of boarding
     // per TICK. Raised from 0.18 to slow the carousel further after the first preview.
     // The carousel runs continuous motion without a beat; what fixed boarding reading
-    // (passenger not vanishing) was spawnCluster() — the flier is the same four-ball
-    // clump the track uses, not a single sphere.
+    // (passengers not vanishing) was flying the same figure the track itself draws, one
+    // per seat taken, staggered by BOARD_STAGGER.
     private readonly TICK = 0.34;
     private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
 
@@ -234,7 +240,7 @@ export class GameController extends Component {
             this.loopView?.update(lp.ring, lp.left, lp.right);
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.updateFillBars();
-            if (res.boardedColor) this.playBoarding(res.boardedColor);
+            if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedCount);
             if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
@@ -266,8 +272,17 @@ export class GameController extends Component {
         }
     }
 
-    /** Fly a temporary passenger along an arc from the loop ring to its matching parked car, then bump the seat count. */
-    private playBoarding(color: string): void {
+    /**
+     * Fly the passengers that just boarded from the gap to their matching parked car,
+     * one arc each, staggered so a row of four reads as four people getting on rather
+     * than one thing moving. `count` comes from the core: a row can be partly boarded
+     * when the car runs out of seats mid-row.
+     *
+     * All of them fly to the first matching car even in the rare case where the core
+     * split the row across two cars of the same colour. Only the arcs would differ —
+     * the seat numbers come from `updateFillBars`, which reads the core.
+     */
+    private playBoarding(color: string, count: number): void {
         let match: { node: Node; bar: Node; slot: number; label: Label | null } | null = null;
         for (const [, e] of this.parked) {
             if (this.core!.parking.parked[e.slot]?.color === color) { match = e; break; }
@@ -276,32 +291,35 @@ export class GameController extends Component {
         const e = match;
 
         this.sfx?.play('board');
-        const start = this.loopView?.boardingWorldPos() ?? null;
-        if (!start) { this.bumpSeat(e); return; }
-        if (!this.boardRoot) { this.bumpSeat(e); return; }
-
-        const p = this.loopView!.spawnCluster(color);
-        p.setWorldPosition(start);
+        if (!this.loopView || !this.boardRoot) { this.bumpSeat(e); return; }
 
         const end = e.node.worldPosition.clone();
-        const ctrl = new Vec3((start.x + end.x) / 2, Math.max(start.y, end.y) + 1.2, (start.z + end.z) / 2);
-
-        tween({ t: 0 })
-            .to(0.4, { t: 1 }, {
-                onUpdate: (target?: { t: number }) => {
-                    // The tween targets a plain object, so a restart mid-flight won't
-                    // stop it — bail if the passenger node was already destroyed.
-                    if (!p.isValid) return;
-                    const t = target ? target.t : 1;
-                    const u = 1 - t;
-                    const x = u * u * start.x + 2 * u * t * ctrl.x + t * t * end.x;
-                    const y = u * u * start.y + 2 * u * t * ctrl.y + t * t * end.y;
-                    const z = u * u * start.z + 2 * u * t * ctrl.z + t * t * end.z;
-                    p.setWorldPosition(new Vec3(x, y, z));
-                },
-            })
-            .call(() => { if (p.isValid) p.destroy(); this.bumpSeat(e); })
-            .start();
+        for (let i = 0; i < count; i++) {
+            // Leave from where this figure actually stood in the row, not the row centre.
+            const start = this.loopView.boardingFigureWorldPos(i, count);
+            const p = this.loopView.spawnPassenger(color);
+            p.setWorldPosition(start);
+            const ctrl = new Vec3(
+                (start.x + end.x) / 2, Math.max(start.y, end.y) + 1.2, (start.z + end.z) / 2,
+            );
+            tween({ t: 0 })
+                .delay(i * BOARD_STAGGER)
+                .to(0.4, { t: 1 }, {
+                    onUpdate: (target?: { t: number }) => {
+                        // The tween targets a plain object, so a restart mid-flight won't
+                        // stop it — bail if the passenger node was already destroyed.
+                        if (!p.isValid) return;
+                        const t = target ? target.t : 1;
+                        const u = 1 - t;
+                        const x = u * u * start.x + 2 * u * t * ctrl.x + t * t * end.x;
+                        const y = u * u * start.y + 2 * u * t * ctrl.y + t * t * end.y;
+                        const z = u * u * start.z + 2 * u * t * ctrl.z + t * t * end.z;
+                        p.setWorldPosition(new Vec3(x, y, z));
+                    },
+                })
+                .call(() => { if (p.isValid) p.destroy(); this.bumpSeat(e); })
+                .start();
+        }
     }
 
     /** Quick scale bump on a parked car's remaining-seats label. */

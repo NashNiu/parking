@@ -3,6 +3,8 @@ import { ParkingSystem } from './parking-system';
 
 export interface BoardResult {
   boardedColor: string | null;
+  /** How many of the row got on this tick — the view flies exactly this many figures. */
+  boardedCount: number;
   departedCarIds: number[];
 }
 
@@ -13,18 +15,23 @@ export class BoardingSystem {
   ) {}
 
   tick(): BoardResult {
-    let boardedColor: string | null = null;
     const color = this.loop.passengerAtBoard();
+    let boardedCount = 0;
     if (color) {
-      const slot = this.parking.findMatchingSlot(color);
-      if (slot !== -1) {
+      // Drain the whole row this tick, as far as the matching cars can take it: the
+      // row is at the gap for one tick only, and holding it there for four ticks would
+      // stall the loop. Seats can run out mid-row (and can span two cars of the same
+      // colour) — whoever is left stays in the row and rides round again.
+      while (this.loop.passengerAtBoard() === color) {
+        const slot = this.parking.findMatchingSlot(color);
+        if (slot === -1) break;
         this.parking.board(slot);
         this.loop.boardPassenger();
-        boardedColor = color;
+        boardedCount++;
       }
     }
     const departedCarIds = this.parking.removeFull();
     this.loop.step();
-    return { boardedColor, departedCarIds };
+    return { boardedColor: boardedCount > 0 ? color : null, boardedCount, departedCarIds };
   }
 }

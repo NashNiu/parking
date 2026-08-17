@@ -3,6 +3,7 @@ import { colorOf } from './colors';
 import { litMaterial } from './materials';
 import { makeLitBox } from './placeholder';
 import { buildPassenger, recolorPassenger } from './passenger-builder';
+import { GROUP_SIZE, PaxGroup } from '../core/index';
 
 const W = 2.6;   // half width of the circuit centerline
 const H = 1.3;   // half height
@@ -57,6 +58,26 @@ const PAX_HEIGHT = 0.55;
 const NO_SHADE = (c: Color): Color => c;
 
 /**
+ * Spacing between the figures of one row. A row holds GROUP_SIZE passengers laid out
+ * ACROSS its direction of travel, so this is measured along the path normal (or along
+ * the board's y for the lanes, which feed inward along x).
+ */
+const ROW_STEP = 0.26;
+
+/**
+ * Lay a row's figures along the unit direction (dx, dy), centred on the row's origin.
+ * Called every frame for ring rows, because the direction is the path normal and turns
+ * as the row travels; once at build time for the lanes, whose feed direction is fixed.
+ */
+function layoutRow(figures: Node[], dx: number, dy: number): void {
+    const mid = (figures.length - 1) / 2;
+    for (let i = 0; i < figures.length; i++) {
+        const off = (i - mid) * ROW_STEP;
+        figures[i].setPosition(off * dx, off * dy, 0);
+    }
+}
+
+/**
  * One passenger node: the real 3D figure when the model loaded, else the original
  * four-ball clump. Both forms answer the same contract — a root node whose own
  * transform is free for the caller to set and tween — so every position, tween and
@@ -81,6 +102,29 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
     const own = node.getComponent(MeshRenderer);
     if (own) { own.material = litMaterial(shade(color)); return; }
     recolorPassenger(node, color, shade);
+}
+
+/**
+ * A row node holding GROUP_SIZE passenger figures as children. The row's own transform
+ * is the group's position on the track; the children carry the across-the-track offsets,
+ * which `layoutRow` sets. The row is never rotated — the figures stand along the board's
+ * +Y and face +Z, and spinning the row about the board normal would tip them over.
+ */
+function makeRow(name: string): Node {
+    const row = new Node(name);
+    for (let i = 0; i < GROUP_SIZE; i++) {
+        row.addChild(makePassenger(`${name}-${i}`, Color.WHITE));
+    }
+    return row;
+}
+
+/** Show the first `count` figures of a row in `color`, hide the rest. */
+function paintRow(figures: Node[], color: Color, count: number, shade: (c: Color) => Color): void {
+    for (let i = 0; i < figures.length; i++) {
+        const on = i < count;
+        figures[i].active = on;
+        if (on) paintPassenger(figures[i], color, shade);
+    }
 }
 
 /** Merge several primitive geometries into one mesh (one draw call). */
@@ -144,6 +188,8 @@ let PERIMETER = 0;
 /** Scratch output for `repositionAll`'s per-cluster, per-frame `pathPoint` calls
  *  (12 clusters * ~60fps), so that hot path doesn't allocate a `Vec3` per call. */
 const REPOSITION_SCRATCH = new Vec3();
+/** Scratch for the per-row path normal, same hot path as REPOSITION_SCRATCH. */
+const NORMAL_SCRATCH = new Vec3();
 
 function segments(cy: number): Seg[] {
     if (SEGS && SEG_CY === cy) return SEGS;
@@ -175,11 +221,32 @@ function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
     return out;
 }
 
+// Scratch for the finite-difference normal (two path samples per call).
+const _nA = new Vec3();
+const _nB = new Vec3();
+
 /**
- * Renders the passenger loop as a closed race-track: a white-curbed rounded
- * rectangle that dense little colored ball-clusters flow around smoothly,
- * with a boarding gap at the bottom centre (nearest the parking area below)
- * fed by two waiting lanes, one on either side of the gap.
+ * Unit normal to the path at t, in the board plane — the direction a row of passengers
+ * runs, since a row stands ACROSS the track rather than along it. Taken as a finite
+ * difference of the path rather than analytically per segment: the segments only answer
+ * positions, and a 1/2000-lap difference reads as smooth straight through the corners.
+ */
+function pathNormal(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
+    const d = 1 / 2000;
+    pathPoint(t + d, cy, _nA);
+    pathPoint(t - d, cy, _nB);
+    const dx = _nA.x - _nB.x, dy = _nA.y - _nB.y;
+    const len = Math.hypot(dx, dy) || 1;
+    out.set(-dy / len, dx / len, 0);
+    return out;
+}
+
+/**
+ * Renders the passenger loop as a closed race-track: a white-curbed rounded rectangle
+ * that rows of same-coloured passengers flow around smoothly, with a boarding gap at
+ * the bottom centre (nearest the parking area below) fed by two waiting lanes, one on
+ * either side of the gap. One ring cell carries one row of up to GROUP_SIZE figures,
+ * laid out across the direction of travel.
  */
 export class TrackView {
     private readonly capacity: number;
@@ -190,11 +257,15 @@ export class TrackView {
     private readonly entries: { board: number; left: number; right: number };
     /** Path parameters where the curb opens up; filled before buildCurbs runs. */
     private gapTs: number[] = [];
-    /** One cluster root node per ring slot; each holds a few small colored spheres. */
+    /** One row node per ring slot, positioned on the path centreline. */
     private clusters: Node[] = [];
+    /** The GROUP_SIZE figures inside each ring row; `count` of them are shown. */
+    private rowFigures: Node[][] = [];
 
-    /** Head-of-channel waiting clusters drawn beside the track, one array per side. */
+    /** Head-of-channel waiting rows drawn beside the track, one array per side. */
     private laneClusters: { left: Node[]; right: Node[] } = { left: [], right: [] };
+    /** The figures inside each waiting row, same shape as `laneClusters`. */
+    private laneFigures: { left: Node[][]; right: Node[][] } = { left: [], right: [] };
     /** Resting position of every waiting slot, captured in buildLanes. */
     private laneHome: { left: Vec3[]; right: Vec3[] } = { left: [], right: [] };
     private lastLen = { left: -1, right: -1 };
@@ -272,7 +343,8 @@ export class TrackView {
 
     private buildClusters(parent: Node): void {
         for (let i = 0; i < this.capacity; i++) {
-            const cluster = makePassenger(`pax-cluster-${i}`, Color.WHITE);
+            const cluster = makeRow(`pax-row-${i}`);
+            this.rowFigures.push(cluster.children.slice());
             const t = i / this.capacity;
             const p = pathPoint(t, this.cy);
             cluster.setPosition(p.x, p.y, 0);
@@ -303,7 +375,12 @@ export class TrackView {
             slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, -0.06);
             parent.addChild(slab);
             for (let i = 0; i < LANE_VISIBLE; i++) {
-                const n = makePassenger(`wait-${side}-${i}`, Color.WHITE);
+                const n = makeRow(`wait-${side}-${i}`);
+                // A lane feeds inward along x, so its rows run across that: along y.
+                // Fixed, unlike the ring's rows, because a lane never turns.
+                const figures = n.children.slice();
+                layoutRow(figures, 0, 1);
+                this.laneFigures[side].push(figures);
                 n.setPosition(x0 + dir * i * LANE_STEP, this.cy, 0);
                 n.active = false;
                 parent.addChild(n);
@@ -314,13 +391,13 @@ export class TrackView {
     }
 
     /** Reflects ring contents (color/visibility) and advances the flow phase one step. */
-    update(ring: (string | null)[], left: string[], right: string[]): void {
+    update(ring: (PaxGroup | null)[], left: PaxGroup[], right: PaxGroup[]): void {
         for (let i = 0; i < this.clusters.length; i++) {
-            const c = ring[i];
+            const group = ring[i];
             const cluster = this.clusters[i];
-            if (c) {
+            if (group) {
                 cluster.active = true;
-                paintPassenger(cluster, colorOf(c), NO_SHADE);
+                paintRow(this.rowFigures[i], colorOf(group.color), group.count, NO_SHADE);
             } else {
                 cluster.active = false;
             }
@@ -349,17 +426,18 @@ export class TrackView {
      * left still has passengers) is dimmed, so "left goes first" is readable without
      * a tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
      */
-    private updateLanes(ring: (string | null)[], left: string[], right: string[]): void {
+    private updateLanes(ring: (PaxGroup | null)[], left: PaxGroup[], right: PaxGroup[]): void {
         const leftActive = left.length > 0;
         for (const [side, queue] of [['left', left], ['right', right]] as const) {
             const active = side === 'left' ? leftActive : !leftActive;
             const nodes = this.laneClusters[side];
             for (let i = 0; i < nodes.length; i++) {
-                const color = queue[i];
+                const group = queue[i];
                 const n = nodes[i];
-                if (!color) { n.active = false; continue; }
+                if (!group) { n.active = false; continue; }
                 n.active = true;
-                paintPassenger(n, colorOf(color), active ? NO_SHADE : dim);
+                paintRow(this.laneFigures[side][i], colorOf(group.color), group.count,
+                    active ? NO_SHADE : dim);
             }
         }
         // Which channel actually lost its head this tick? NOT necessarily the one that is
@@ -375,8 +453,8 @@ export class TrackView {
         this.animateLaneShift(dropped ?? (leftActive ? 'left' : 'right'), left, right);
         if (dropped) {
             const index = dropped === 'left' ? this.entries.left : this.entries.right;
-            const color = ring[index];
-            if (color) this.playEntry(dropped, color);
+            const group = ring[index];
+            if (group) this.playEntry(dropped, group);
         }
     }
 
@@ -387,7 +465,7 @@ export class TrackView {
      * state involved. Homes come from `laneHome`, never from the node's current
      * position, which may be mid-tween from the previous tick.
      */
-    private animateLaneShift(active: 'left' | 'right', left: string[], right: string[]): void {
+    private animateLaneShift(active: 'left' | 'right', left: PaxGroup[], right: PaxGroup[]): void {
         const len = active === 'left' ? left.length : right.length;
         const prev = this.lastLen[active];
         this.lastLen.left = left.length;
@@ -414,34 +492,42 @@ export class TrackView {
             const t = (i / this.capacity + phase) % 1;
             const p = pathPoint(t, this.cy, REPOSITION_SCRATCH);
             cluster.setPosition(p.x, p.y, 0);
+            // The row runs across the track, so its spread turns with the path. Rows
+            // that are hidden this tick are skipped — nothing to lay out, and it keeps
+            // the per-frame cost at the rows actually on screen.
+            if (!cluster.active) continue;
+            const n = pathNormal(t, this.cy, NORMAL_SCRATCH);
+            layoutRow(this.rowFigures[i], n.x, n.y);
         }
     }
 
     /**
-     * World position of the boarding gap. Fixed, not searched: ring index `board` rests
-     * at t = board/capacity, which is the bottom-centre gap. The passenger that boards
-     * is by definition the one standing there, and by the time the controller animates
-     * it the core has already cleared it from the ring — so looking for it by colour
-     * finds a different passenger (or none at all, late in a level, and then nothing
-     * animated at all). That was the bug this replaces.
+     * A throwaway passenger figure, the same one the track itself draws, parented to the
+     * track root. Boarding used to fly a single sphere while the track drew a four-ball
+     * clump, so it read as one thing vanishing and a different thing appearing; flying
+     * the real figure is what fixed that. Caller positions it, tweens it, destroys it.
      */
-    boardingWorldPos(): Vec3 {
-        const local = pathPoint(this.entries.board / this.capacity, this.cy);
-        const out = new Vec3();
-        Vec3.transformMat4(out, local, this.root.worldMatrix);
-        return out;
-    }
-
-    /**
-     * A throwaway passenger built from the track's own shared cluster mesh, parented to
-     * the track root. The boarding fly used a single sphere while the track uses a
-     * four-ball clump, so boarding read as one thing vanishing and a different thing
-     * appearing. Caller positions it, tweens it, and destroys it.
-     */
-    spawnCluster(color: string): Node {
+    spawnPassenger(color: string): Node {
         const n = makePassenger('pax-fly', colorOf(color));
         this.root.addChild(n);
         return n;
+    }
+
+    /**
+     * Where the `i`th of `count` figures stands within the row at the boarding gap, in
+     * world space. The boarding flight has to start from the figure that actually left,
+     * not from the row's centre — with four abreast, a flight from the middle reads as
+     * the wrong passenger lifting off.
+     */
+    boardingFigureWorldPos(i: number, count: number): Vec3 {
+        const t = this.entries.board / this.capacity;
+        const local = pathPoint(t, this.cy, new Vec3());
+        const n = pathNormal(t, this.cy);
+        const off = (i - (count - 1) / 2) * ROW_STEP;
+        local.set(local.x + off * n.x, local.y + off * n.y, 0);
+        const out = new Vec3();
+        Vec3.transformMat4(out, local, this.root.worldMatrix);
+        return out;
     }
 
     /**
@@ -453,7 +539,7 @@ export class TrackView {
      * the same moment will the real slot render at the same position where the flier
      * lands; unequal durations cause a visible backwards jump at hand-off.
      */
-    private playEntry(side: 'left' | 'right', color: string): void {
+    private playEntry(side: 'left' | 'right', group: PaxGroup): void {
         const index = side === 'left' ? this.entries.left : this.entries.right;
         const slot = this.clusters[index];
         const from = this.laneHome[side][0];
@@ -472,7 +558,14 @@ export class TrackView {
         }
 
         slot.active = false;
-        const flier = makePassenger('pax-enter', colorOf(color));
+        // A whole row walks in, laid out the way it will rest once it joins the track,
+        // so the hand-off to the real row at the end is invisible.
+        const flier = makeRow('pax-enter');
+        const figures = flier.children.slice();
+        const entryT = index / this.capacity;
+        const n = pathNormal(entryT, this.cy);
+        layoutRow(figures, n.x, n.y);
+        paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
         this.root.addChild(flier);
         this.pendingFlier[side] = flier;

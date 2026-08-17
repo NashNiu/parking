@@ -1,5 +1,10 @@
 import { GameCore } from '../../game/assets/scripts/core/game-core';
-import { LevelData } from '../../game/assets/scripts/core/types';
+import { LevelData, PaxGroup } from '../../game/assets/scripts/core/types';
+
+/** `n` full rows of red, each its own object so boarding one never touches another. */
+function reds(n: number): PaxGroup[] {
+  return Array.from({ length: n }, () => ({ color: 'red', count: 4 }));
+}
 
 // Minimal solvable level: one small red car (cap 16), 16 red passengers.
 function soloLevel(): LevelData {
@@ -66,9 +71,11 @@ test('deadlock is detected when the ring is jammed with an unboardable color', (
   const game = new GameCore(level);
   // Seal the ring by hand instead of relying on the authored queue order (the loop
   // shuffles now): green fills the track, the reds behind it can never get in.
-  game.loop.ring = ['green', 'green'];
-  game.loop.left = new Array(8).fill('red');
-  game.loop.right = new Array(8).fill('red');
+  // Each cell is a row of passengers, so build distinct objects — a shared literal
+  // would have every row decrement together once one of them boards.
+  game.loop.ring = [{ color: 'green', count: 4 }, { color: 'green', count: 4 }];
+  game.loop.left = reds(8);
+  game.loop.right = reds(8);
   expect(game.tapCar(1).ok).toBe(true); // red car takes the only slot
   expect(game.getState()).toBe('deadlock');
 });
@@ -89,11 +96,11 @@ test('a color still reachable through an emptied ring cell is not a deadlock', (
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
   const game = new GameCore(level);
-  // Same shape, set by hand: a red passenger is on the track, so the parked red car
-  // can still fill and free its slot.
-  game.loop.ring = ['green', 'red'];
-  game.loop.left = new Array(8).fill('red');
-  game.loop.right = new Array(7).fill('red');
+  // Same shape, set by hand: a red row is on the track, so the parked red car can
+  // still fill and free its slot.
+  game.loop.ring = [{ color: 'green', count: 4 }, { color: 'red', count: 4 }];
+  game.loop.left = reds(8);
+  game.loop.right = reds(7);
   expect(game.tapCar(1).ok).toBe(true);
   expect(game.getState()).toBe('playing');
 });
