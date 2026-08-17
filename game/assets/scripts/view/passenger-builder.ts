@@ -1,5 +1,5 @@
 import {
-    Node, Color, Mesh, MeshRenderer, LODGroup, Material, Prefab, resources, assetManager,
+    Node, Color, Mesh, MeshRenderer, Material, Prefab, resources, assetManager,
     instantiate, Vec3, Mat4, gfx, utils,
 } from 'cc';
 import { litMaterial, readMainColor } from './materials';
@@ -27,15 +27,27 @@ const MODEL_PATH = 'models/passenger';
 const MODEL_UUID = '5e130d29-2afb-4d1b-bba3-f90534c5422c@72429';
 
 /**
- * Which generated LOD level to bake, counted from the COARSEST end (0 = coarsest).
- * The raw model is ~19.7k triangles, which is authored for a model viewer showing one
- * figure; on the board a passenger is about 40px tall and 18 of them are on screen at
- * once, so the full-detail mesh costs ~354k triangles a frame for detail nobody can
- * see. `passenger.glb.meta` enables the importer's LOD generation (levels at 100% /
- * 25% / 10% of the faces), and the coarsest level puts a passenger near 2k triangles.
- * Raise this to 1 if the silhouette reads as lumpy at 10%.
+ * Which `_LOD<n>` level to bake, counted from the COARSEST end (0 = coarsest).
+ *
+ * Selecting exactly one level is required for correctness: with LOD generation on,
+ * the prefab is a FLAT list of every level's renderers (57 for this model) with no
+ * LODGroup component to read, so baking whatever the walk finds stacks all three
+ * levels into one mesh and triples the triangle count.
+ *
+ * It buys no reduction on this asset, though: all three generated levels measure the
+ * same 19,684 triangles. The meshes are non-indexed, and an edge-collapse simplifier
+ * needs the shared topology an index buffer provides, so meshopt had no connectivity
+ * to collapse and emitted copies. Reducing this model has to happen before import.
+ *
+ * So `passenger.glb.meta` has LOD generation back OFF, and this selection normally
+ * finds no levels at all and bakes everything. It stays because the imported library
+ * keeps the LOD nodes until the asset is reimported, and because a future model that
+ * does simplify would need exactly this.
  */
 const LOD_FROM_COARSEST = 0;
+
+/** Suffix the importer appends to each LOD level's node name (`torso_LOD2`). */
+const LOD_SUFFIX = /_LOD(\d+)$/;
 
 /** Material roles the model exports. `paint` is the one recolored per passenger. */
 const ROLES = ['paint', 'trim', 'skin', 'eye', 'shoe'] as const;
@@ -82,6 +94,27 @@ const _rootInv = new Mat4();
 const _m = new Mat4();
 const _v = new Vec3();
 
+/**
+ * The renderers to bake: exactly one LOD level when the model carries them, else null
+ * meaning "everything" (a model imported without LOD generation). Levels are read off
+ * the node-name suffix because the importer creates no LODGroup to ask.
+ */
+function chosenLevel(root: Node): Set<MeshRenderer> | null {
+    const levels = new Map<number, Set<MeshRenderer>>();
+    for (const mr of root.getComponentsInChildren(MeshRenderer)) {
+        const m = LOD_SUFFIX.exec(mr.node.name);
+        if (!m) continue;
+        const lvl = parseInt(m[1], 10);
+        let set = levels.get(lvl);
+        if (!set) { set = new Set(); levels.set(lvl, set); }
+        set.add(mr);
+    }
+    if (levels.size === 0) return null;
+    const sorted = [...levels.keys()].sort((a, b) => a - b);
+    const wanted = sorted[Math.max(0, sorted.length - 1 - LOD_FROM_COARSEST)];
+    return levels.get(wanted) ?? null;
+}
+
 interface Group { positions: number[]; normals: number[]; uvs: number[]; indices: number[] }
 
 function emptyGroup(): Group {
@@ -105,28 +138,14 @@ function bake(source: Prefab): Baked | null {
     const root = instantiate(source) as unknown as Node;
     Mat4.invert(_rootInv, root.worldMatrix);
 
-    // With LOD generation enabled, the importer puts EVERY level's geometry in the
-    // prefab at once (full detail + 25% + 10%), so an untargeted walk would merge all
-    // three and bake something heavier than the original. Collect the renderers of
-    // every level we don't want and skip them below. Levels run finest-first, so the
-    // coarsest is the last one — which is what these 40px-tall figures should use.
-    const skip = new Set<MeshRenderer>();
-    for (const group of root.getComponentsInChildren(LODGroup)) {
-        const wanted = Math.max(0, group.lodCount - 1 - LOD_FROM_COARSEST);
-        for (let i = 0; i < group.lodCount; i++) {
-            if (i === wanted) continue;
-            const lod = group.getLOD(i);
-            if (lod) for (const mr of lod.renderers) skip.add(mr);
-        }
-    }
-
+    const level = chosenLevel(root);
     const groups = new Map<Role, Group>();
     const colors: Partial<Record<Role, Color>> = {};
     let minx = Infinity, miny = Infinity, minz = Infinity;
     let maxx = -Infinity, maxy = -Infinity, maxz = -Infinity;
 
     for (const mr of root.getComponentsInChildren(MeshRenderer)) {
-        if (skip.has(mr)) continue;
+        if (level && !level.has(mr)) continue;
         const mesh = mr.mesh;
         if (!mesh) continue;
         Mat4.multiply(_m, _rootInv, mr.node.worldMatrix);
