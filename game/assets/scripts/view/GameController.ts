@@ -29,17 +29,24 @@ const BOARD_STAGGER = 0.07;
  * Route a full car takes out of its stall: straight down into the empty corridor
  * between the parking row (y = 1.2) and the lot (y = -3.2), then right and off screen.
  *
- * The two legs are timed differently on purpose. Every stall shares the parking row's
- * y, so the drop is always the same 1.3 units and a fixed duration is exactly
- * consistent — and it has to be long enough to see, since at driving speed 1.3 units
- * would pass in less time than the turn into it. The run across, though, is 4 units
- * from the rightmost stall and 11 from the leftmost, so it goes at a fixed speed;
- * a fixed duration there would read as two cars of very different power.
+ * Read as four beats — turn, pull out, turn, accelerate away — because a car that
+ * simply translates off screen reads as flying, not driving. The car HOLDS STILL for
+ * each turn (hence the delays matching TURN_TIME) so the change of heading is visible,
+ * pulls out of the stall slowly enough to see, and leaves on `quadIn` so it speeds up
+ * as it goes. An earlier attempt overlapped the turns with the movement and left on
+ * `quadOut`, which meant it hit top speed the instant it cleared the stall and then
+ * decelerated — indistinguishable from the slide it replaced.
+ *
+ * Every stall shares the parking row's y, so the pull-out is always the same 1.3 units
+ * and a fixed duration is exactly consistent. The run across is 4 units from the
+ * rightmost stall and 11 from the leftmost, so that leg goes at a fixed speed instead;
+ * a fixed duration would read as two cars of very different power.
  */
 const EXIT_LANE_Y = -0.1;
 const EXIT_X = 7.5;
-const EXIT_DOWN_TIME = 0.26;
-const EXIT_SPEED = 9;
+const EXIT_TURN_TIME = 0.16;
+const EXIT_DOWN_TIME = 0.4;
+const EXIT_SPEED = 8;
 
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
@@ -331,11 +338,13 @@ export class GameController extends Component {
         const exit = new Vec3(EXIT_X, EXIT_LANE_Y, from.z);
         const across = Math.abs(exit.x - corner.x) / EXIT_SPEED;
 
-        const heading = turn(body ? body.eulerAngles.z : 0, FACE_DOWN, 0.14);
+        const heading = turn(body ? body.eulerAngles.z : 0, FACE_DOWN, EXIT_TURN_TIME);
         tween(node)
-            .to(EXIT_DOWN_TIME, { position: corner }, { easing: 'quadIn' })
-            .call(() => turn(heading, FACE_RIGHT, 0.14))
-            .to(across, { position: exit }, { easing: 'quadOut' })
+            .delay(EXIT_TURN_TIME)                                        // turn in place
+            .to(EXIT_DOWN_TIME, { position: corner }, { easing: 'sineInOut' })  // pull out
+            .call(() => turn(heading, FACE_RIGHT, EXIT_TURN_TIME))
+            .delay(EXIT_TURN_TIME)                                        // turn in place
+            .to(across, { position: exit }, { easing: 'quadIn' })         // accelerate off
             .call(() => { if (node.isValid) node.destroy(); })
             .start();
     }
