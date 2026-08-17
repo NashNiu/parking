@@ -297,20 +297,17 @@ export class TrackView {
             }
         }
 
-        // Stop any in-flight phase tween first: the tween below lasts exactly one
-        // tick (`this.tick`), so without this a new tween would overlap the previous
-        // one and the two would fight over `phaseHolder.p`, producing visible jitter.
-        //
-        // The ring's CONTENTS already advanced one index, which alone moves a passenger
-        // one slot. Pull the phase back a slot so the new index renders where the
-        // passenger visually was, then tween it forward: net motion is exactly one slot
-        // per tick and the resting phase stays 0, which is what keeps the boarding gap
-        // pinned to a fixed point on the track.
+        // Absolute, never relative. The resting phase is 0 by definition, so each tick
+        // starts exactly one slot back and tweens to exactly 0. The previous form
+        // (`p -= 1/capacity; target = p + 1/capacity`) inherited whatever the stopped
+        // tween had not yet delivered, and that shortfall accumulated every tick —
+        // dragging the whole ring backwards until the passenger the core boards was
+        // drawn short of the boarding gap, toward the right side, while the fly still
+        // departed from the gap. Resetting absolutely discards the shortfall instead.
         this.phaseTween?.stop();
-        this.phaseHolder.p -= 1 / this.capacity;
-        const target = this.phaseHolder.p + 1 / this.capacity;
+        this.phaseHolder.p = -1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
-            .to(this.tick, { p: target }, {
+            .to(this.tick, { p: 0 }, {
                 onUpdate: () => this.repositionAll(),
             })
             .start();
