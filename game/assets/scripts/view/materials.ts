@@ -43,6 +43,24 @@ export function litMaterial(color: Color): Material {
     return mat;
 }
 
+/**
+ * Read a material's albedo as 0-255 RGB, tolerating a 0-1 (linear/Vec4) return.
+ * Imported glTF materials answer `mainColor` in either range depending on how the
+ * property was authored, so callers that compare against a known 0-255 reference
+ * (car-builder's role detection) or rebuild a `litMaterial` from it (the passenger
+ * model's non-recolored roles) must normalize first. Returns null if the material
+ * has no readable `mainColor`.
+ */
+export function readMainColor(m: Material): Color | null {
+    const v = m.getProperty('mainColor') as
+        { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number } | undefined;
+    if (!v) return null;
+    const r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
+    if (r == null || g == null || b == null) return null;
+    const s = (r <= 1 && g <= 1 && b <= 1) ? 255 : 1;
+    return new Color(Math.round(r * s), Math.round(g * s), Math.round(b * s), 255);
+}
+
 /** Unlit solid color (for UI-ish bits that must stay bright regardless of lighting). */
 export function unlitMaterial(color: Color): Material {
     const mat = new Material();

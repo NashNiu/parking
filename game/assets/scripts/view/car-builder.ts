@@ -3,7 +3,7 @@ import {
     Vec3, Mat4, utils, primitives,
 } from 'cc';
 import { Dir } from './placeholder';
-import { litMaterial } from './materials';
+import { litMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 
 export type Cap = 'small' | 'medium' | 'big';
@@ -101,16 +101,6 @@ function localAABB(root: Node): { center: Vec3; size: Vec3 } {
 // imported Material's `.name` is stripped) and fall back to a name match.
 const PAINT_TEAL = { r: 8, g: 143, b: 184 };
 const GLASS_NAVY = { r: 8, g: 18, b: 38 };
-
-/** Read a material's mainColor as 0-255 RGB, tolerating a 0-1 (linear/Vec4) return. */
-function readMainColor(m: Material): { r: number; g: number; b: number } | null {
-    const v = m.getProperty('mainColor') as { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number } | undefined;
-    if (!v) return null;
-    const r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
-    if (r == null || g == null || b == null) return null;
-    const s = (r <= 1 && g <= 1 && b <= 1) ? 255 : 1;
-    return { r: r * s, g: g * s, b: b * s };
-}
 
 function matchesRole(m: Material, role: 'paint' | 'glass'): boolean {
     if ((m.name || '').toLowerCase().includes(role)) return true;

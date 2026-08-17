@@ -2,6 +2,7 @@ import { Node, Color, Vec3, Mesh, MeshRenderer, utils, primitives, tween, Tween 
 import { colorOf } from './colors';
 import { litMaterial } from './materials';
 import { makeLitBox } from './placeholder';
+import { buildPassenger, recolorPassenger } from './passenger-builder';
 
 const W = 2.6;   // half width of the circuit centerline
 const H = 1.3;   // half height
@@ -43,6 +44,43 @@ function clusterMesh(): Mesh {
     });
     CLUSTER_MESH = mergeParts(parts);
     return CLUSTER_MESH;
+}
+
+/**
+ * Height of a passenger figure on the board. Calibrated against LANE_STEP (0.45):
+ * the model is roughly 0.45 as wide as it is tall, so this keeps waiting passengers
+ * clear of each other while reading larger than the ball clump it replaced.
+ */
+const PAX_HEIGHT = 0.55;
+
+/** Identity shade — the active/undimmed case for `paintPassenger`. */
+const NO_SHADE = (c: Color): Color => c;
+
+/**
+ * One passenger node: the real 3D figure when the model loaded, else the original
+ * four-ball clump. Both forms answer the same contract — a root node whose own
+ * transform is free for the caller to set and tween — so every position, tween and
+ * `active` toggle in this file is identical either way.
+ */
+function makePassenger(name: string, color: Color): Node {
+    const model = buildPassenger(name, color, PAX_HEIGHT);
+    if (model) return model;
+    const n = new Node(name);
+    const mr = n.addComponent(MeshRenderer);
+    mr.mesh = clusterMesh();
+    mr.material = litMaterial(color);
+    return n;
+}
+
+/**
+ * Recolor a node from `makePassenger`, whichever form it took. The ball clump wears
+ * its color on its own renderer; the model carries it on the `paint` role only, and
+ * keeps skin/eyes/shoes as authored.
+ */
+function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): void {
+    const own = node.getComponent(MeshRenderer);
+    if (own) { own.material = litMaterial(shade(color)); return; }
+    recolorPassenger(node, color, shade);
 }
 
 /** Merge several primitive geometries into one mesh (one draw call). */
@@ -233,12 +271,8 @@ export class TrackView {
     }
 
     private buildClusters(parent: Node): void {
-        const mesh = clusterMesh();
         for (let i = 0; i < this.capacity; i++) {
-            const cluster = new Node(`pax-cluster-${i}`);
-            const mr = cluster.addComponent(MeshRenderer);
-            mr.mesh = mesh; // shared merged 4-ball mesh
-            mr.material = litMaterial(Color.WHITE.clone());
+            const cluster = makePassenger(`pax-cluster-${i}`, Color.WHITE);
             const t = i / this.capacity;
             const p = pathPoint(t, this.cy);
             cluster.setPosition(p.x, p.y, 0);
@@ -250,7 +284,6 @@ export class TrackView {
 
     /** Builds the two feeder-channel lanes: a floor slab and the head waiting slots. */
     private buildLanes(parent: Node): void {
-        const mesh = clusterMesh();
         for (const side of ['left', 'right'] as const) {
             const dir = side === 'left' ? -1 : 1;         // left lane runs out to -x
             const x0 = dir * (W + CURB_OFFSET + LANE_START);
@@ -270,10 +303,7 @@ export class TrackView {
             slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, -0.06);
             parent.addChild(slab);
             for (let i = 0; i < LANE_VISIBLE; i++) {
-                const n = new Node(`wait-${side}-${i}`);
-                const mr = n.addComponent(MeshRenderer);
-                mr.mesh = mesh;
-                mr.material = litMaterial(Color.WHITE.clone());
+                const n = makePassenger(`wait-${side}-${i}`, Color.WHITE);
                 n.setPosition(x0 + dir * i * LANE_STEP, this.cy, 0);
                 n.active = false;
                 parent.addChild(n);
@@ -290,8 +320,7 @@ export class TrackView {
             const cluster = this.clusters[i];
             if (c) {
                 cluster.active = true;
-                const mr = cluster.getComponent(MeshRenderer);
-                if (mr) mr.material = litMaterial(colorOf(c));
+                paintPassenger(cluster, colorOf(c), NO_SHADE);
             } else {
                 cluster.active = false;
             }
@@ -330,8 +359,7 @@ export class TrackView {
                 const n = nodes[i];
                 if (!color) { n.active = false; continue; }
                 n.active = true;
-                const mr = n.getComponent(MeshRenderer);
-                if (mr) mr.material = litMaterial(active ? colorOf(color) : dim(colorOf(color)));
+                paintPassenger(n, colorOf(color), active ? NO_SHADE : dim);
             }
         }
         // Which channel actually lost its head this tick? NOT necessarily the one that is
@@ -411,10 +439,7 @@ export class TrackView {
      * appearing. Caller positions it, tweens it, and destroys it.
      */
     spawnCluster(color: string): Node {
-        const n = new Node('pax-fly');
-        const mr = n.addComponent(MeshRenderer);
-        mr.mesh = clusterMesh();
-        mr.material = litMaterial(colorOf(color));
+        const n = makePassenger('pax-fly', colorOf(color));
         this.root.addChild(n);
         return n;
     }
@@ -447,10 +472,7 @@ export class TrackView {
         }
 
         slot.active = false;
-        const flier = new Node('pax-enter');
-        const mr = flier.addComponent(MeshRenderer);
-        mr.mesh = clusterMesh();
-        mr.material = litMaterial(colorOf(color));
+        const flier = makePassenger('pax-enter', colorOf(color));
         flier.setPosition(from);
         this.root.addChild(flier);
         this.pendingFlier[side] = flier;
