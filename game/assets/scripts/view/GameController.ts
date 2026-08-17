@@ -57,6 +57,23 @@ function shortestAngle(from: number, to: number): number {
     return from + ((((to - from) % 360) + 540) % 360) - 180;
 }
 
+/** A car sitting in a parking stall, with everything the display needs. */
+interface ParkedCar {
+    node: Node;
+    bar: Node;
+    slot: number;
+    label: Label | null;
+    /** Seats this car has. Captured on park, so reusing its slot can't confuse the display. */
+    capacity: number;
+    /**
+     * Seat count the label and bar currently SHOW, which lags the core on purpose. A
+     * whole row boards in one tick, and jumping the number down by four while four
+     * passengers are still in the air reads as the car emptying before anyone arrives.
+     * `seatBoarded` walks this down one seat per landing flight instead.
+     */
+    shown: number;
+}
+
 function dirVec(d: Dir): Vec3 {
     switch (d) {
         case 'up': return new Vec3(0, 1, 0);
@@ -99,7 +116,7 @@ export class GameController extends Component {
     // (passengers not vanishing) was flying the same figure the track itself draws, one
     // per seat taken, staggered by BOARD_STAGGER.
     private readonly TICK = 0.34;
-    private parked = new Map<number, { node: Node; bar: Node; slot: number; label: Label | null }>();
+    private parked = new Map<number, ParkedCar>();
 
     start() {
         this.sfx = new SfxManager(this.node);
@@ -360,7 +377,7 @@ export class GameController extends Component {
      * the seat numbers come from `updateFillBars`, which reads the core.
      */
     private playBoarding(color: string, count: number): void {
-        let match: { node: Node; bar: Node; slot: number; label: Label | null } | null = null;
+        let match: ParkedCar | null = null;
         for (const [, e] of this.parked) {
             if (this.core!.parking.parked[e.slot]?.color === color) { match = e; break; }
         }
@@ -368,7 +385,12 @@ export class GameController extends Component {
         const e = match;
 
         this.sfx?.play('board');
-        if (!this.loopView || !this.boardRoot) { this.bumpSeat(e); return; }
+        // Without a track to fly from, nothing will land to walk the count down, so
+        // apply the whole row at once rather than leaving the number stale.
+        if (!this.loopView || !this.boardRoot) {
+            for (let i = 0; i < count; i++) this.seatBoarded(e);
+            return;
+        }
 
         const end = e.node.worldPosition.clone();
         for (let i = 0; i < count; i++) {
@@ -394,7 +416,7 @@ export class GameController extends Component {
                         p.setWorldPosition(new Vec3(x, y, z));
                     },
                 })
-                .call(() => { if (p.isValid) p.destroy(); this.bumpSeat(e); })
+                .call(() => { if (p.isValid) p.destroy(); this.seatBoarded(e); })
                 .start();
         }
     }
@@ -435,11 +457,30 @@ export class GameController extends Component {
         for (const [id, e] of this.parked) {
             const pc = this.core!.parking.parked[e.slot];
             if (!pc || pc.carId !== id) continue;
-            const r = pc.capacity > 0 ? pc.filled / pc.capacity : 0;
-            e.bar.setScale(Math.max(0.001, r), 1, 1);
-            e.bar.setPosition(-0.45 + 0.45 * r, -0.5, 0.44);
-            if (e.label) e.label.string = `${pc.capacity - pc.filled}`;
+            // The display lags the core on purpose (see ParkedCar.shown), so never pull
+            // it DOWN to the truth here — the landing flights do that one seat at a
+            // time. Only push it up, which self-heals a flight that never landed
+            // (a restart mid-air) rather than leaving the car showing too few seats.
+            const truth = pc.capacity - pc.filled;
+            if (e.shown < truth) e.shown = truth;
+            this.renderSeats(e);
         }
+    }
+
+    /** Paint one car's seat label and fill bar from the seat count it is showing. */
+    private renderSeats(e: ParkedCar): void {
+        if (!e.bar.isValid) return;
+        const r = e.capacity > 0 ? (e.capacity - e.shown) / e.capacity : 0;
+        e.bar.setScale(Math.max(0.001, r), 1, 1);
+        e.bar.setPosition(-0.45 + 0.45 * r, -0.5, 0.44);
+        if (e.label && e.label.isValid) e.label.string = `${e.shown}`;
+    }
+
+    /** One passenger just landed: tick the count down a single seat and pop the label. */
+    private seatBoarded(e: ParkedCar): void {
+        e.shown = Math.max(0, e.shown - 1);
+        this.renderSeats(e);
+        this.bumpSeat(e);
     }
 
     private onEnd(state: string): void {
@@ -557,7 +598,13 @@ export class GameController extends Component {
                     this.sfx?.play('park');
                     const bar = this.attachFillBar(node);
                     const label = this.hud ? this.hud.newSeatLabel() : null;
-                    this.parked.set(id, { node, bar, slot: slotIndex, label });
+                    const pc = this.core!.parking.parked[slotIndex];
+                    const capacity = pc ? pc.capacity : 0;
+                    this.parked.set(id, {
+                        node, bar, slot: slotIndex, label, capacity,
+                        // Starts empty: a car is only ever parked with no passengers on it.
+                        shown: capacity,
+                    });
                     if (label) this.positionLabelOverCar(label, node);
                     // Fill the seat count / bar now instead of waiting for the next
                     // loop tick: a tap that ends the game (deadlock) stops the ticks,
