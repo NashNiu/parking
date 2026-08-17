@@ -106,9 +106,21 @@ function bake(source: Prefab): Baked | null {
 
         const count = mesh.struct.primitives.length;
         for (let sub = 0; sub < count; sub++) {
+            // Only a plain triangle list can be concatenated by offsetting indices;
+            // a strip or fan would need its topology expanded first. The field is
+            // optional and defaults to TRIANGLE_LIST, which is what these models use.
+            const mode = mesh.struct.primitives[sub].primitiveMode;
+            if (mode !== undefined && mode !== gfx.PrimitiveMode.TRIANGLE_LIST) {
+                root.destroy();
+                return null;
+            }
             const pos = mesh.readAttribute(sub, gfx.AttributeName.ATTR_POSITION);
+            if (!pos) { root.destroy(); return null; }
+            // These models export NON-INDEXED triangle lists (the imported struct has
+            // no indexView at all), so readIndices answers null and the vertices are
+            // already in draw order. Synthesize the identity index run in that case —
+            // treating null as failure is what sent the first attempt to the fallback.
             const idx = mesh.readIndices(sub);
-            if (!pos || !idx) { root.destroy(); return null; }
             const nrm = mesh.readAttribute(sub, gfx.AttributeName.ATTR_NORMAL);
             const uv = mesh.readAttribute(sub, gfx.AttributeName.ATTR_TEX_COORD);
 
@@ -140,7 +152,8 @@ function bake(source: Prefab): Baked | null {
                 }
                 if (uv) g.uvs.push(uv[i * 2], uv[i * 2 + 1]);
             }
-            for (let i = 0; i < idx.length; i++) g.indices.push(idx[i] + base);
+            if (idx) for (let i = 0; i < idx.length; i++) g.indices.push(idx[i] + base);
+            else for (let i = 0; i < verts; i++) g.indices.push(base + i);
         }
     }
     root.destroy();
