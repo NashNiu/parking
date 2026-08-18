@@ -42,3 +42,24 @@ test('park throws when no free slot', () => {
   expect(p.hasFreeSlot()).toBe(false);
   expect(() => p.park(car({ id: 2 }))).toThrow();
 });
+
+test('a slot marked not-ready is skipped by findMatchingSlot', () => {
+  // The view parks a car over one to two seconds of driving, while the core has it in
+  // the slot from the moment of the tap. Without this gate the loop fills — and can
+  // even depart — a car the view still has in transit.
+  const p = new ParkingSystem(4, 2);
+  const slot = p.park(car({ id: 1, color: 'red', cap: 'small' }));
+  expect(p.findMatchingSlot('red')).toBe(slot);   // ready by default
+  p.setReady(slot, false);
+  expect(p.findMatchingSlot('red')).toBe(-1);
+  p.setReady(slot, true);
+  expect(p.findMatchingSlot('red')).toBe(slot);
+});
+
+test('setReady on an empty slot is a no-op rather than a throw', () => {
+  // An arrival can land after its car already departed on a restart, so the view can
+  // legitimately mark a slot that is no longer occupied.
+  const p = new ParkingSystem(4, 2);
+  expect(() => p.setReady(0, true)).not.toThrow();
+  expect(() => p.setReady(99, true)).not.toThrow();
+});

@@ -5,6 +5,15 @@ export interface ParkedCar {
   color: string;
   capacity: number;
   filled: number;
+  /**
+   * Whether this car is in place and can take passengers. A car is parked in the core
+   * the instant it is tapped, but the view spends a second or two driving it to the
+   * stall; boarding it during that time let the loop fill and even depart a car that
+   * had not arrived yet. Parking yields a READY car so core-only callers (the
+   * solvability checker, the tests) behave exactly as before, and the view clears the
+   * flag for as long as its drive animation runs.
+   */
+  ready: boolean;
 }
 
 export class ParkingSystem {
@@ -30,14 +39,25 @@ export class ParkingSystem {
       color: car.color,
       capacity: CAP_SIZE[car.cap],
       filled: 0,
+      ready: true,
     };
     return idx;
   }
 
   findMatchingSlot(color: string): number {
     return this.parked.findIndex(
-      (p) => p !== null && p.color === color && p.filled < p.capacity,
+      (p) => p !== null && p.ready && p.color === color && p.filled < p.capacity,
     );
+  }
+
+  /**
+   * Mark whether the car in `slotIndex` can take passengers yet (see ParkedCar.ready).
+   * Silently ignores an empty or out-of-range slot: an arrival animation can land after
+   * its car has gone, and that is not the view's mistake to crash on.
+   */
+  setReady(slotIndex: number, ready: boolean): void {
+    const p = this.parked[slotIndex];
+    if (p) p.ready = ready;
   }
 
   board(slotIndex: number): 'boarded' | 'full' {

@@ -1,17 +1,19 @@
 import { Node, Color, MeshRenderer } from 'cc';
 import { makeLitBox } from './placeholder';
 
-/** Grid pitch used to size the parking lot; the lot is `rows * LOT_STEP + 0.3` tall. */
-export const LOT_STEP = 1.12;
-
-/** Height of the lot slab for a grid of `rows`, so callers can place things clear of it. */
-export function lotHeight(rows: number): number {
-    return rows * LOT_STEP + 0.3;
+/**
+ * Size of the lot slab for a grid, from the same pitch the cars are laid out on. The
+ * caller chooses the pitch — a tall grid uses a smaller one so its lot still fits the
+ * camera — and must pass the same value here and to GridLayout, or the slab and the
+ * cars it is meant to sit under drift apart.
+ */
+export function lotHeight(rows: number, step: number): number {
+    return rows * step + 0.3;
 }
 
-/** Width of the lot slab for a grid of `cols`. */
-export function lotWidth(cols: number): number {
-    return cols * LOT_STEP + 0.3;
+/** Width of the lot slab for a grid of `cols` at pitch `step`. */
+export function lotWidth(cols: number, step: number): number {
+    return cols * step + 0.3;
 }
 
 /** Centreline of each lane of the ring road, in board space. */
@@ -48,8 +50,7 @@ export function setupBackground(root: Node): void {
  * between columns. Parented under `root` (the tilted boardRoot), placed
  * behind the cars/passengers (more negative z) so it never occludes them.
  */
-export function setupStage(root: Node, cols: number, rows: number, gridY: number): void {
-    const step = LOT_STEP;
+export function setupStage(root: Node, cols: number, rows: number, gridY: number, step: number): void {
     // Depth ordering note: cars stand ON the board plane (wheels at z = 0, body
     // extending out to +z) and their blob shadows sit at z ≈ -0.06. Any opaque slab
     // with a near face in front of that would bury the shadows. So the lot sits just

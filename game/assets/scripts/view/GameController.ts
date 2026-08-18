@@ -50,6 +50,17 @@ const BOARD_STAGGER = 0.07;
 const ROAD_Y = 0.3;
 const ROAD_H = 0.9;
 const RING_OFF = 0.62;
+
+/**
+ * How far down the camera actually shows the tray. The lot AND both of its horizontal
+ * ring lanes have to fit between the top lane and this line, so a taller grid takes a
+ * SMALLER cell rather than hanging off the bottom of the screen — which is exactly what
+ * a 6-row level did: its ring reached y = -7.96 against a view that stops near -5.7.
+ * The cell is capped at the authored 1.0, so a grid that already fits does not grow.
+ */
+const LOT_BOTTOM = -5.7;
+const CELL_MAX = 1;
+const CELL_GAP = 0.12;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_DOWN_TIME = 0.4;
@@ -234,8 +245,13 @@ export class GameController extends Component {
         // The lot hangs exactly one lane below the top road, so the road stays put and
         // the lot moves with the grid's size. A 4-row lot centres on -2.64, a 6-row one
         // on -3.76; both leave their top edge a lane-width under the stalls.
-        const lotH = lotHeight(level.grid.rows);
-        const lotW = lotWidth(level.grid.cols);
+        const cell = Math.min(
+            CELL_MAX,
+            (ROAD_Y - 2 * RING_OFF - LOT_BOTTOM - 0.3) / level.grid.rows - CELL_GAP,
+        );
+        const step = cell + CELL_GAP;
+        const lotH = lotHeight(level.grid.rows, step);
+        const lotW = lotWidth(level.grid.cols, step);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
             top: ROAD_Y,
@@ -249,7 +265,7 @@ export class GameController extends Component {
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
         setupBackground(this.boardRoot);
-        setupStage(this.boardRoot, level.grid.cols, level.grid.rows, GRID_Y);
+        setupStage(this.boardRoot, level.grid.cols, level.grid.rows, GRID_Y, step);
         setupRoads(this.boardRoot, this.ring, ROAD_H);
 
         const loopRoot = new Node('LoopRoot');
@@ -271,7 +287,8 @@ export class GameController extends Component {
         gridRoot.setPosition(0, GRID_Y, 0);
         this.boardRoot.addChild(gridRoot);
         this.gridRoot = gridRoot;
-        const layout = new GridLayout(level.grid.cols, level.grid.rows);
+        // Same pitch the lot was sized from, or the slab and its cars drift apart.
+        const layout = new GridLayout(level.grid.cols, level.grid.rows, cell, CELL_GAP);
         this.gridView = new GridView(gridRoot, this.core!.grid, layout);
         this.gridView.render();
     }
@@ -542,7 +559,6 @@ export class GameController extends Component {
         label.node.setWorldPosition(uiWorld);
     }
 
-    /** A thin bar under each parked car showing filled / capacity. */
     /**
      * Sync every parked car's seat readout with the core. Named for the fill bars it
      * used to drive: those are gone, and the outlined number over the car is now the
@@ -679,6 +695,11 @@ export class GameController extends Component {
 
         this.busy = true;
         this.arriving++;
+        // No passengers until it is actually in the stall. The core parked it on tap, so
+        // without this the loop boards — and can fill and depart — a car still out on the
+        // road, which stranded it in the stall showing Label's default text because its
+        // slot had been freed (or reassigned) by the time it arrived.
+        this.core!.parking.setReady(slotIndex, false);
         this.sfx?.play('drive');
         dustBurst(this.boardRoot!, start.clone());
         // Shrink to stall size over the first leg, while it is still out in the lot.
@@ -691,6 +712,7 @@ export class GameController extends Component {
             firstLegDone: () => { this.busy = false; },
             done: () => {
                 this.arriving--;
+                this.core!.parking.setReady(slotIndex, true);
                 this.sfx?.play('park');
                 const label = this.hud ? this.hud.newSeatLabel() : null;
                 const pc = this.core!.parking.parked[slotIndex];
