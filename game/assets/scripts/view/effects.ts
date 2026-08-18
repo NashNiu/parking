@@ -23,14 +23,6 @@ export function squash(body: Node): void {
         .start();
 }
 
-/** Move to target with a slight overshoot landing. */
-export function overshoot(node: Node, target: Vec3, dur: number, onDone?: () => void): void {
-    tween(node)
-        .to(dur, { position: target }, { easing: 'backOut' })
-        .call(() => onDone && onDone())
-        .start();
-}
-
 /**
  * Red emissive pulse (used when a car can't exit).
  * Fades bright -> dark: the tweened factor `k` starts at 1 and ends at 0

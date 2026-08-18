@@ -9,6 +9,19 @@ export function lotHeight(rows: number): number {
     return rows * LOT_STEP + 0.3;
 }
 
+/** Width of the lot slab for a grid of `cols`. */
+export function lotWidth(cols: number): number {
+    return cols * LOT_STEP + 0.3;
+}
+
+/** Centreline of each lane of the ring road, in board space. */
+export interface RingRoad {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+}
+
 /**
  * Warm sky backdrop + a few soft cloud slabs, parented under `root` (the
  * tilted boardRoot) so the whole scene reads as sitting in an outdoor stage
@@ -44,9 +57,12 @@ export function setupStage(root: Node, cols: number, rows: number, gridY: number
     // and cars read as sitting IN the lot. The platform sits further back as the
     // overall tray. Passengers still straddle the plane (z ∈ [-0.1, +0.1]).
 
-    // Rounded-ish platform tray behind everything.
-    const platform = makeLitBox('Platform', 12, 15, 0.35, new Color(247, 238, 222));
-    platform.setPosition(0, 0, -0.5);
+    // Rounded-ish platform tray behind everything. Tall enough to stay under the ring
+    // road's bottom lane on the deepest grid we ship: a 6-row lot hangs to y = -7.3 and
+    // its lane to -7.8, which the old 15-tall tray centred on the origin stopped short
+    // of, leaving the road floating over the backdrop.
+    const platform = makeLitBox('Platform', 12, 19, 0.35, new Color(247, 238, 222));
+    platform.setPosition(0, -1, -0.5);
     root.addChild(platform);
 
     // Parking-lot ground under the grid cars (near face ≈ -0.10, behind the shadows).
@@ -86,33 +102,51 @@ export function setupStage(root: Node, cols: number, rows: number, gridY: number
 }
 
 /**
- * The road a full car drives away along, between the parking stalls and the lot.
+ * The ring road around the lot. Cars drive out of the lot the way they point, join
+ * the lane on that side, follow it round to the lane above the lot, and turn up into
+ * a parking stall; a full car leaves along that same top lane, to the right.
  *
- * It exists because the departure route used to be a hard-coded y that happened to
- * clear the lot on a 4-row grid and cut straight through it on a 6-row one — the
- * departing car drove over the puzzle cars. The lot is `rows * LOT_STEP + 0.3` tall
- * and grows upward from its centre, so the only safe lane is one derived from the
- * lot's actual top edge, and drawing it makes that lane read as somewhere a car
- * belongs rather than as empty platform it happens to cross.
+ * It exists because both journeys used to be straight lines drawn between two points
+ * that ignored everything in between — an arriving car slid diagonally across the lot
+ * over whatever sat there, and a departing one drove along a hard-coded y that cut
+ * through the lot entirely on a 6-row grid. A drawn road makes those routes legible
+ * as well as clear.
  *
- * Spans the whole platform so it reads as passing through rather than stopping at
- * the lot's width. One slab plus a dashed centre line, both behind the cars (z with
- * the lot at z = -0.2, so where the two overlap the lot simply covers the road instead
- * of z-fighting with it).
+ * The top lane spans the whole platform, since departing cars carry on along it and
+ * off screen; the other three hug the lot. All of it sits behind the lot in z, so
+ * where they meet the lot covers the road rather than z-fighting with it, and blob
+ * shadows still land on top.
  */
-export function setupRoad(root: Node, y: number, height: number): void {
-    const road = makeLitBox('Road', 12, height, 0.1, new Color(150, 154, 168));
-    road.setPosition(0, y, -0.2);
-    root.addChild(road);
+export function setupRoads(root: Node, ring: RingRoad, width: number): void {
+    const grey = new Color(150, 154, 168);
+    const half = width / 2;
+    const add = (name: string, w: number, h: number, x: number, y: number) => {
+        const n = makeLitBox(name, w, h, 0.1, grey);
+        n.setPosition(x, y, -0.2);
+        root.addChild(n);
+    };
+    const midY = (ring.top + ring.bottom) / 2;
+    const spanY = ring.top - ring.bottom + width;
+    add('RoadTop', 12, width, 0, ring.top);
+    add('RoadBottom', ring.right - ring.left + width, width, (ring.left + ring.right) / 2, ring.bottom);
+    add('RoadLeft', width, spanY, ring.left, midY);
+    add('RoadRight', width, spanY, ring.right, midY);
 
+    // Dashed centre line on the top lane only. The corners would need the dashes to
+    // turn with them, and the side lanes read fine plain — they are short and always
+    // have the lot on one shoulder.
     const line = new Color(238, 240, 246);
-    const dash = 0.34, gap = 0.3;
-    const span = dash + gap;
+    const dash = 0.34, gap = 0.3, span = dash + gap;
     const n = Math.floor(12 / span);
     const start = -6 + (12 - (n - 1) * span) / 2;
     for (let i = 0; i < n; i++) {
-        const s = makeLitBox('roaddash', dash, 0.05, 0.06, line);
-        s.setPosition(start + i * span, y, -0.19);
-        root.addChild(s);
+        const x = start + i * span;
+        // Skip the stretch the side lanes cross, where a centre line would run into
+        // the corner instead of down the middle of anything.
+        if (x > ring.left - half && x < ring.left + half) continue;
+        if (x > ring.right - half && x < ring.right + half) continue;
+        const d = makeLitBox('roaddash', dash, 0.05, 0.06, line);
+        d.setPosition(x, ring.top, -0.19);
+        root.addChild(d);
     }
 }

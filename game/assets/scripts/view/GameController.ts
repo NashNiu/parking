@@ -9,8 +9,8 @@ import { ParkingView } from './parking-view';
 import { TrackView } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
-import { setupBackground, setupStage, setupRoad, lotHeight } from './scene-stage';
-import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
+import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
+import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { preloadCarModels } from './car-builder';
 import { preloadPassengerModel } from './passenger-builder';
 import { SfxManager } from './sfx';
@@ -25,16 +25,16 @@ const { ccclass, property } = _decorator;
 const BOARD_STAGGER = 0.07;
 
 /**
- * The road between the parking stalls and the lot, and the route a full car takes
- * along it: straight down out of the stall, then right and off screen.
+ * The ring road around the lot and the routes cars drive on it. Its top lane is fixed
+ * at ROAD_Y, just under the parking stalls (whose pads reach down to y = 0.71, and a
+ * car on the lane spans about 0.025..0.575), and the LOT hangs one lane-width below
+ * it — so a taller grid pushes the lot DOWN and the road never moves. A fixed lane
+ * with a fixed lot was the bug this replaces: it cleared a 4-row lot and ran straight
+ * through a 6-row one.
  *
- * ROAD_Y is the lane's centreline and ROAD_TOP the highest the lot may reach without
- * fouling it, which is what `buildBoard` pushes a tall grid down to clear. Both are
- * fixed while the LOT moves, because the road has to stay under the stalls (whose
- * pads reach down to y = 0.71) on every level: a car on the lane spans roughly
- * 0.025..0.575, leaving it clear of the pads above and of the lot below.
+ * RING_OFF is the gap from the lot's edge out to a lane centreline.
  *
- * Read as four beats — turn, pull out, turn, accelerate away — because a car that
+ * Departures read as four beats — turn, pull out, turn, accelerate away — because a car that
  * simply translates off screen reads as flying, not driving. The car HOLDS STILL for
  * each turn (hence the delays matching TURN_TIME) so the change of heading is visible,
  * pulls out of the stall slowly enough to see, and leaves on `quadIn` so it speeds up
@@ -49,11 +49,14 @@ const BOARD_STAGGER = 0.07;
  */
 const ROAD_Y = 0.3;
 const ROAD_H = 0.9;
-const ROAD_TOP = -0.08;
+const RING_OFF = 0.62;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_DOWN_TIME = 0.4;
 const EXIT_SPEED = 8;
+
+/** Speed a car drives from the lot to its stall, a touch brisker than a departure. */
+const DRIVE_SPEED = 9;
 
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
@@ -80,15 +83,6 @@ interface ParkedCar {
     shown: number;
 }
 
-function dirVec(d: Dir): Vec3 {
-    switch (d) {
-        case 'up': return new Vec3(0, 1, 0);
-        case 'down': return new Vec3(0, -1, 0);
-        case 'left': return new Vec3(-1, 0, 0);
-        case 'right': return new Vec3(1, 0, 0);
-    }
-}
-
 /**
  * M2.4: full playable demo loop. Loads/renders a level, handles tap-to-move,
  * drives the passenger loop each frame, shows a HUD + win/lose banner, and
@@ -110,6 +104,15 @@ export class GameController extends Component {
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
     private sfx: SfxManager | null = null;
+    /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
+    private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
+    /**
+     * Cars still driving to a stall. `busy` only locks taps for the first leg, so the
+     * player can keep tapping while a car finishes its lap of the ring road; this keeps
+     * the end-of-level banner from cutting an arrival short, which is what `busy` used
+     * to cover when a drive was one short hop.
+     */
+    private arriving = 0;
     private readonly BOARD_TILT = 52; // degrees, tilt the board back for a 2.5D look
 
     private busy = false;
@@ -228,12 +231,18 @@ export class GameController extends Component {
         const LOOP_Y = 3.8;
         const PARKING_Y = 1.2;
 
-        // The lot grows UPWARD from its centre as the grid gets taller — 4 rows put its
-        // top edge at y = -0.81, 6 rows at y = +0.31 — so a fixed lot centre leaves the
-        // departure road clear on one level and buried under the lot on the next. Drop
-        // the lot only as far as it takes to keep ROAD_TOP free; a grid short enough to
-        // fit already stays at the authored -3.2 and does not move at all.
-        const GRID_Y = Math.min(-3.2, ROAD_TOP - lotHeight(level.grid.rows) / 2);
+        // The lot hangs exactly one lane below the top road, so the road stays put and
+        // the lot moves with the grid's size. A 4-row lot centres on -2.64, a 6-row one
+        // on -3.76; both leave their top edge a lane-width under the stalls.
+        const lotH = lotHeight(level.grid.rows);
+        const lotW = lotWidth(level.grid.cols);
+        const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
+        this.ring = {
+            top: ROAD_Y,
+            bottom: GRID_Y - lotH / 2 - RING_OFF,
+            left: -lotW / 2 - RING_OFF,
+            right: lotW / 2 + RING_OFF,
+        };
 
         this.boardRoot = new Node('Board');
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
@@ -241,7 +250,7 @@ export class GameController extends Component {
         setupEnvironment(this.boardRoot);
         setupBackground(this.boardRoot);
         setupStage(this.boardRoot, level.grid.cols, level.grid.rows, GRID_Y);
-        setupRoad(this.boardRoot, ROAD_Y, ROAD_H);
+        setupRoads(this.boardRoot, this.ring, ROAD_H);
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
@@ -291,7 +300,7 @@ export class GameController extends Component {
         // deadlock left the game silently frozen with no banner. Wait for an
         // in-flight park animation to land first so the banner doesn't cut it off.
         if (this.core.getState() !== 'playing') {
-            if (!this.busy) this.onEnd(this.core.getState());
+            if (!this.busy && this.arriving === 0) this.onEnd(this.core.getState());
             return;
         }
         this.tickAcc += dt;
@@ -344,39 +353,118 @@ export class GameController extends Component {
      * same shape as the boarding arcs — the car's heading lives on its `body` child
      * (see car-builder), which is also what carries the roof arrow.
      */
-    private playDriveOut(node: Node): void {
+    /**
+     * Turn a car's body to `to` over `dur`, taking the short way round, and answer the
+     * angle it ends on so a caller chaining turns can carry the heading forward. The
+     * angle is tweened as a plain number and written through `setRotationFromEuler`
+     * (the same shape as the boarding arcs) rather than tweening the node's rotation.
+     */
+    private turnBody(body: Node | null, from: number, to: number, dur: number): number {
+        const end = shortestAngle(from, to);
+        if (body) {
+            tween({ a: from })
+                .to(dur, { a: end }, {
+                    onUpdate: (t?: { a: number }) => {
+                        // The tween targets a plain object, so it outlives the node on a
+                        // restart mid-drive - bail once the body is gone.
+                        if (!body.isValid) return;
+                        body.setRotationFromEuler(0, 0, t ? t.a : end);
+                    },
+                })
+                .start();
+        }
+        return end;
+    }
+
+    /**
+     * Drive a car through `waypoints` at a constant speed, stopping to turn onto each leg
+     * before driving it. Constant speed rather than a duration per leg: the legs of a lap
+     * round the ring road differ by a factor of ten, and a fixed duration would read as
+     * the car changing power at every corner.
+     *
+     * Turning in place at each corner is what makes the route read as driving rather than
+     * sliding. The headings are worked out here at build time, because the whole route is
+     * known up front - each `call` closes over the angles for its own corner.
+     *
+     * Legs shorter than a millimetre are dropped: a car leaving the lot already lined up
+     * with its stall would otherwise get a zero-length leg, and facing a zero-length
+     * direction snaps the body to a meaningless angle.
+     */
+    private driveRoute(
+        node: Node, waypoints: Vec3[], speed: number,
+        opts: { firstLegDone?: () => void; done?: () => void } = {},
+    ): void {
         const body = node.getChildByName('body');
-        const turn = (from: number, to: number, dur: number): number => {
-            const end = shortestAngle(from, to);
-            if (body) {
-                tween({ a: from })
-                    .to(dur, { a: end }, {
-                        onUpdate: (t?: { a: number }) => {
-                            // The tween targets a plain object, so it outlives the node
-                            // on a restart mid-drive — bail once the body is gone.
-                            if (!body.isValid) return;
-                            body.setRotationFromEuler(0, 0, t ? t.a : end);
-                        },
-                    })
-                    .start();
-            }
-            return end;
-        };
+        let heading = body ? body.eulerAngles.z : 0;
+        let prev = node.position.clone();
+        const seq = tween(node);
+        let legs = 0;
+        for (let i = 0; i < waypoints.length; i++) {
+            const wp = waypoints[i];
+            const dx = wp.x - prev.x, dy = wp.y - prev.y;
+            const dist = Math.hypot(dx, dy);
+            if (dist < 1e-3) continue;
+            const face = Math.atan2(dy, dx) * 180 / Math.PI;
+            const from = heading;
+            heading = shortestAngle(from, face);
+            const to = heading;
+            const target = wp.clone();
+            const last = i === waypoints.length - 1;
+            seq.call(() => this.turnBody(body, from, to, EXIT_TURN_TIME))
+                .delay(EXIT_TURN_TIME)
+                .to(dist / speed, { position: target }, { easing: last ? 'sineOut' : 'sineInOut' });
+            if (legs === 0 && opts.firstLegDone) seq.call(opts.firstLegDone);
+            prev = target;
+            legs++;
+        }
+        // A route with nothing to drive still owes its caller the completion callback,
+        // which is what hands the car over to the parked bookkeeping.
+        if (legs === 0 && opts.firstLegDone) seq.call(opts.firstLegDone);
+        if (opts.done) seq.call(opts.done);
+        seq.start();
+    }
 
+    /**
+     * Waypoints from a car's spot in the lot to a parking stall: out the way the car
+     * points until it meets the lane on that side, round the ring to the top lane, along
+     * that to the stall, then up into it.
+     *
+     * The target always sits on the top lane, since every stall is above it. So a car
+     * that left by a side lane needs one corner and one that left by the bottom needs
+     * two, taking whichever side it is already nearer.
+     */
+    private routeToSlot(from: Vec3, dir: Dir, slotX: number, parkY: number): Vec3[] {
+        const r = this.ring;
+        const z = from.z;
+        const wp: Vec3[] = [];
+        if (dir === 'up') {
+            wp.push(new Vec3(from.x, r.top, z));
+        } else if (dir === 'down') {
+            const side = from.x < 0 ? r.left : r.right;
+            wp.push(new Vec3(from.x, r.bottom, z));
+            wp.push(new Vec3(side, r.bottom, z));
+            wp.push(new Vec3(side, r.top, z));
+        } else {
+            const side = dir === 'left' ? r.left : r.right;
+            wp.push(new Vec3(side, from.y, z));
+            wp.push(new Vec3(side, r.top, z));
+        }
+        wp.push(new Vec3(slotX, r.top, z));
+        wp.push(new Vec3(slotX, parkY, z));
+        return wp;
+    }
+
+    /**
+     * Drive a full car out of its stall and away: down onto the top lane, then right
+     * along it and off screen. Same primitive as the arrival, so both journeys turn and
+     * accelerate the same way.
+     */
+    private playDriveOut(node: Node): void {
         const from = node.position.clone();
-        const corner = new Vec3(from.x, ROAD_Y, from.z);
-        const exit = new Vec3(EXIT_X, ROAD_Y, from.z);
-        const across = Math.abs(exit.x - corner.x) / EXIT_SPEED;
-
-        const heading = turn(body ? body.eulerAngles.z : 0, FACE_DOWN, EXIT_TURN_TIME);
-        tween(node)
-            .delay(EXIT_TURN_TIME)                                        // turn in place
-            .to(EXIT_DOWN_TIME, { position: corner }, { easing: 'sineInOut' })  // pull out
-            .call(() => turn(heading, FACE_RIGHT, EXIT_TURN_TIME))
-            .delay(EXIT_TURN_TIME)                                        // turn in place
-            .to(across, { position: exit }, { easing: 'quadIn' })         // accelerate off
-            .call(() => { if (node.isValid) node.destroy(); })
-            .start();
+        this.driveRoute(node, [
+            new Vec3(from.x, ROAD_Y, from.z),
+            new Vec3(EXIT_X, ROAD_Y, from.z),
+        ], EXIT_SPEED, { done: () => { if (node.isValid) node.destroy(); } });
     }
 
     /**
@@ -586,35 +674,39 @@ export class GameController extends Component {
         node.setParent(this.boardRoot!, true); // keep world position
 
         const start = node.position.clone();
-        const nudge = start.clone().add(dirVec(dir).multiplyScalar(0.8));
         const slot = this.parkingView!.getSlotPosition(slotIndex);
+        const route = this.routeToSlot(start, dir, slot.x, slot.y);
 
         this.busy = true;
+        this.arriving++;
         this.sfx?.play('drive');
         dustBurst(this.boardRoot!, start.clone());
-        tween(node)
-            .to(0.12, { position: nudge }, { easing: 'quadIn' })
-            .call(() => {
-                tween(node).to(0.28, { scale: new Vec3(0.55, 0.55, 0.55) }).start();
-                overshoot(node, slot, 0.28, () => {
-                    this.busy = false;
-                    this.sfx?.play('park');
-                    const label = this.hud ? this.hud.newSeatLabel() : null;
-                    const pc = this.core!.parking.parked[slotIndex];
-                    const capacity = pc ? pc.capacity : 0;
-                    this.parked.set(id, {
-                        node, slot: slotIndex, label, capacity,
-                        // Starts empty: a car is only ever parked with no passengers on it.
-                        shown: capacity,
-                    });
-                    if (label) this.positionLabelOverCar(label, node);
-                    // Fill the seat count / bar now instead of waiting for the next
-                    // loop tick: a tap that ends the game (deadlock) stops the ticks,
-                    // which would leave this car showing Label's default 'label' text.
-                    this.updateFillBars();
+        // Shrink to stall size over the first leg, while it is still out in the lot.
+        tween(node).to(0.28, { scale: new Vec3(0.55, 0.55, 0.55) }).start();
+        this.driveRoute(node, route, DRIVE_SPEED, {
+            // Release the tap lock once the car is out of the lot rather than when it
+            // parks: a lap of the ring road takes over a second, and locking taps for all
+            // of it makes the board feel dead. The core parked the car on tap already, so
+            // a second tap mid-drive is safe.
+            firstLegDone: () => { this.busy = false; },
+            done: () => {
+                this.arriving--;
+                this.sfx?.play('park');
+                const label = this.hud ? this.hud.newSeatLabel() : null;
+                const pc = this.core!.parking.parked[slotIndex];
+                const capacity = pc ? pc.capacity : 0;
+                this.parked.set(id, {
+                    node, slot: slotIndex, label, capacity,
+                    // Starts empty: a car is only ever parked with no passengers on it.
+                    shown: capacity,
                 });
-            })
-            .start();
+                if (label) this.positionLabelOverCar(label, node);
+                // Fill the seat count now instead of waiting for the next loop tick: a
+                // tap that ends the game (deadlock) stops the ticks, which would leave
+                // this car showing Label's default 'label' text.
+                this.updateFillBars();
+            },
+        });
     }
 
     private playShake(id: number): void {
