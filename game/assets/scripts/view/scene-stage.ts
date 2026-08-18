@@ -5,14 +5,18 @@ import { makeSlab, makeMerged, makeShadowSlab, boxPart, MeshPart } from './slabs
  * The scene's flat graphic layer: ground, grid, lot, roads. Every colour here is the
  * colour that reaches the screen — these panels are unlit (see `makeSlab`) — and every
  * panel is rounded, which is most of what separates this from a pile of boxes.
+ *
+ * They read light to dark in that order: ground, lot, road. The ground carries the whole
+ * palette's floor, so it cannot go much lighter than this — the passenger track is white,
+ * and against the first version's near-white ground it disappeared.
  */
-const GROUND = new Color(228, 234, 246);
-/** Grid line: white at ~55% over GROUND, resolved to an opaque colour. */
-const GRID_LINE = new Color(243, 246, 251);
-const LOT = new Color(198, 207, 230);
+const GROUND = new Color(205, 215, 236);
+/** Grid line: a lighter tint of GROUND, opaque. */
+const GRID_LINE = new Color(224, 232, 247);
+const LOT = new Color(190, 200, 226);
 const LOT_DASH = new Color(255, 255, 255);
-const ROAD = new Color(174, 184, 208);
-const ROAD_LINE = new Color(244, 247, 253);
+const ROAD = new Color(166, 177, 204);
+const ROAD_LINE = new Color(242, 246, 253);
 
 const GRID_PITCH = 0.66;
 const GRID_THICK = 0.03;

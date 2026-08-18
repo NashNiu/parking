@@ -20,14 +20,14 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 
 }
 
 /** The remaining-passenger pill, sized off its own type so it stays in step with the HUD. */
-const PILL_W = 340;
-const PILL_H = 150;
+const PILL_W = 238;
+const PILL_H = 105;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
 
 /** The seat-count chip that sits under a parked car's stall. */
-const CHIP_W = 130;
-const CHIP_H = 84;
+const CHIP_W = 88;
+const CHIP_H = 58;
 
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
@@ -90,16 +90,16 @@ export class HudView {
 
         // Three dots in a huddle is all the passenger icon that survives at this size —
         // a drawn figure would just be a smudge.
-        for (const [dx, dy, d] of [[-22, 10, 38], [22, 10, 38], [0, -20, 44]] as const) {
+        for (const [dx, dy, d] of [[-15, 7, 27], [15, 7, 27], [0, -14, 31]] as const) {
             const dot = dotSprite('paxdot', d, PILL_ICON);
             pill.addChild(dot);
-            dot.setPosition(-110 + dx, dy, 0);
+            dot.setPosition(-77 + dx, dy, 0);
         }
 
-        const caption = makeLabel(pill, 'PaxCaption', 38, 38, 55);
+        const caption = makeLabel(pill, 'PaxCaption', 27, 27, 38);
         caption.string = '剩余乘客';
         caption.color = PILL_CAPTION;
-        const count = makeLabel(pill, 'PaxCount', 88, -30, 55);
+        const count = makeLabel(pill, 'PaxCount', 62, -21, 38);
         count.color = PILL_INK;
         count.isBold = true;
         return count;
@@ -114,7 +114,7 @@ export class HudView {
     newSeatChip(color: Color): { chip: Node; label: Label } {
         const chip = roundedSprite('seatChip', CHIP_W, CHIP_H, color);
         this.canvas.addChild(chip);
-        const label = makeLabel(chip, 'seat', 56, 0);
+        const label = makeLabel(chip, 'seat', 38, 0);
         label.isBold = true;
         // A dark rim keeps white digits legible on a light car (yellow especially).
         label.enableOutline = true;

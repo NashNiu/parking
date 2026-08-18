@@ -1,7 +1,7 @@
 import { Node, Color, Vec3, Mesh, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
-import { litMaterial, flatMaterial } from './materials';
-import { makeSlab, mergeParts, MeshPart } from './slabs';
+import { litMaterial, flatMaterial, alphaMaterial } from './materials';
+import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPassenger, recolorPassenger } from './passenger-builder';
 import { GROUP_SIZE, PaxGroup } from '../core/index';
 
@@ -27,9 +27,15 @@ const LANE_STEP = 0.45;      // spacing between waiting clusters
  */
 const LANE_START = 0.52;
 
-/** The track surface, and how far behind the board plane it sits. */
+/**
+ * The track surface, how far behind the board plane it sits, and the soft shadow that
+ * lifts it off the ground. White on a light ground is a weak edge on its own; the shadow
+ * is what actually makes the ribbon and the two channels read as raised.
+ */
 const BAND = new Color(255, 255, 255);
 const BAND_Z = -0.09;
+const BAND_SHADOW = new Color(24, 34, 56, 34);
+const BAND_DROP = 0.07;
 
 /** Balls per passenger cluster and their layout offsets (small clump). */
 const BALL_OFFSETS: [number, number][] = [
@@ -332,9 +338,20 @@ export class TrackView {
             }
             parts.push({ positions: pos, normals: box.normals, uvs: box.uvs, indices: box.indices });
         }
+        const mesh = mergeParts(parts);
+
+        // Same mesh, offset down and behind, in translucent ink.
+        const shadow = new Node('track-shadow');
+        const smr = shadow.addComponent(MeshRenderer);
+        smr.mesh = mesh;
+        smr.material = alphaMaterial(BAND_SHADOW);
+        smr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+        shadow.setPosition(0, -BAND_DROP, BAND_Z - 0.06);
+        parent.addChild(shadow);
+
         const n = new Node('track-band');
         const mr = n.addComponent(MeshRenderer);
-        mr.mesh = mergeParts(parts);
+        mr.mesh = mesh;
         mr.material = flatMaterial(BAND);
         mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
         // Fully behind the board plane, so the figures stand in front of it rather than
@@ -376,8 +393,12 @@ export class TrackView {
             // Same white as the ring and as deep, so a channel reads as the track running
             // off to the side. It used to be a cream slab shallower than the rows standing
             // on it, which left the outer figures hanging over its edge.
+            const slabX = x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2;
+            const laneShadow = makeShadowSlab(`lane-shadow-${side}`, slabW, BAND_HALF * 2, 0.2, 34);
+            laneShadow.setPosition(slabX, this.cy - BAND_DROP, BAND_Z - 0.06);
+            parent.addChild(laneShadow);
             const slab = makeSlab(`lane-${side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
-            slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, BAND_Z);
+            slab.setPosition(slabX, this.cy, BAND_Z);
             parent.addChild(slab);
             for (let i = 0; i < LANE_VISIBLE; i++) {
                 const n = makeRow(`wait-${side}-${i}`);
