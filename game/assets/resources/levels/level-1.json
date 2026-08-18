@@ -6,38 +6,38 @@
     "cars": [
       {
         "id": 1,
-        "x": 7,
-        "y": 1,
-        "w": 1,
+        "x": 3,
+        "y": 4,
+        "w": 2,
         "h": 1,
-        "dir": "up",
+        "dir": "left",
         "color": "red",
-        "cap": "small"
+        "cap": "medium"
       },
       {
         "id": 2,
         "x": 0,
-        "y": 5,
-        "w": 2,
-        "h": 1,
-        "dir": "up",
-        "color": "blue",
-        "cap": "big"
-      },
-      {
-        "id": 3,
-        "x": 1,
-        "y": 4,
+        "y": 2,
         "w": 1,
         "h": 1,
-        "dir": "right",
-        "color": "red",
+        "dir": "left",
+        "color": "blue",
         "cap": "small"
       },
       {
+        "id": 3,
+        "x": 2,
+        "y": 0,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "medium"
+      },
+      {
         "id": 4,
-        "x": 7,
-        "y": 2,
+        "x": 3,
+        "y": 3,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -46,8 +46,8 @@
       },
       {
         "id": 5,
-        "x": 8,
-        "y": 2,
+        "x": 6,
+        "y": 3,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -56,8 +56,8 @@
       },
       {
         "id": 6,
-        "x": 1,
-        "y": 2,
+        "x": 7,
+        "y": 3,
         "w": 1,
         "h": 1,
         "dir": "up",
@@ -76,11 +76,11 @@
     "queue": [
       {
         "color": "red",
-        "count": 48
+        "count": 64
       },
       {
         "color": "blue",
-        "count": 64
+        "count": 48
       }
     ]
   },

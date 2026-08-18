@@ -6,17 +6,57 @@
     "cars": [
       {
         "id": 1,
-        "x": 2,
+        "x": 5,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 2,
+        "x": 0,
         "y": 4,
-        "w": 2,
+        "w": 1,
         "h": 1,
         "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 3,
+        "x": 7,
+        "y": 3,
+        "w": 2,
+        "h": 1,
+        "dir": "left",
         "color": "red",
         "cap": "big"
       },
       {
-        "id": 2,
+        "id": 4,
+        "x": 0,
+        "y": 5,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 5,
         "x": 2,
+        "y": 1,
+        "w": 2,
+        "h": 1,
+        "dir": "left",
+        "color": "red",
+        "cap": "big"
+      },
+      {
+        "id": 6,
+        "x": 0,
         "y": 0,
         "w": 1,
         "h": 1,
@@ -25,52 +65,12 @@
         "cap": "small"
       },
       {
-        "id": 3,
-        "x": 1,
-        "y": 2,
-        "w": 1,
-        "h": 2,
-        "dir": "left",
-        "color": "red",
-        "cap": "medium"
-      },
-      {
-        "id": 4,
-        "x": 5,
-        "y": 2,
-        "w": 1,
-        "h": 1,
-        "dir": "up",
-        "color": "blue",
-        "cap": "small"
-      },
-      {
-        "id": 5,
-        "x": 3,
-        "y": 5,
-        "w": 1,
-        "h": 1,
-        "dir": "left",
-        "color": "red",
-        "cap": "small"
-      },
-      {
-        "id": 6,
-        "x": 7,
-        "y": 3,
-        "w": 1,
-        "h": 2,
-        "dir": "down",
-        "color": "blue",
-        "cap": "big"
-      },
-      {
         "id": 7,
-        "x": 7,
+        "x": 4,
         "y": 1,
         "w": 1,
         "h": 1,
-        "dir": "left",
+        "dir": "down",
         "color": "red",
         "cap": "small"
       }
@@ -86,7 +86,7 @@
     "queue": [
       {
         "color": "red",
-        "count": 88
+        "count": 96
       },
       {
         "color": "blue",

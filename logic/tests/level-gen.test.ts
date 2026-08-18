@@ -89,3 +89,20 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     expect(pax).toBeLessThanOrEqual(640);
   }
 });
+
+test('a car longer than it is wide points that length at its exit', () => {
+  // The view lays a car's model along the LONGER axis of its footprint and cannot rotate
+  // it across (it would overflow the cell), so a 2x1 car told to exit upwards gets drawn
+  // pointing sideways — its roof arrow then contradicts where it actually goes. The
+  // generator must never author that contradiction: footprint follows direction.
+  for (const id of IDS) {
+    for (const car of generateLevel(id).grid.cars) {
+      if (car.w === car.h) continue; // square: the arrow is free to point anywhere
+      const vertical = car.dir === 'up' || car.dir === 'down';
+      const along = vertical ? car.h : car.w;
+      const across = vertical ? car.w : car.h;
+      expect(`${car.w}x${car.h} dir=${car.dir}: along=${along} across=${across}`)
+        .toBe(`${car.w}x${car.h} dir=${car.dir}: along=${Math.max(along, across)} across=${Math.min(along, across)}`);
+    }
+  }
+});

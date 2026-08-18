@@ -87,13 +87,19 @@ function pickCap(rng: () => number): Cap {
 }
 
 /**
- * Footprint for a capacity. A small car takes one cell; anything bigger takes two, either
- * way round. Longer than two would leave the models rattling around inside their
- * footprint — buildCar fits them uniformly, bounded by the SHORT axis.
+ * Footprint for a capacity and an exit direction. A small car takes one cell; anything
+ * bigger takes two, and the two run ALONG the way it leaves.
+ *
+ * That coupling is not cosmetic. The view lays a car's model down the longer axis of its
+ * footprint and cannot turn it across (it would overflow the cell), so a 2x1 car told to
+ * exit upwards gets drawn pointing sideways and its roof arrow then contradicts where it
+ * actually goes — a player reads the arrow, taps, and nothing happens. Longer than two
+ * cells is no good either: buildCar scales models uniformly, bounded by the SHORT axis, so
+ * a three-cell footprint just leaves the car rattling around inside it.
  */
-function pickFootprint(rng: () => number, cap: Cap): { w: number; h: number } {
+function pickFootprint(cap: Cap, dir: Dir): { w: number; h: number } {
     if (cap === 'small') return { w: 1, h: 1 };
-    return rng() < 0.5 ? { w: 1, h: 2 } : { w: 2, h: 1 };
+    return dir === 'up' || dir === 'down' ? { w: 1, h: 2 } : { w: 2, h: 1 };
 }
 
 /** Passenger queue implied by the cars: per colour, exactly the seats that colour offers. */
@@ -124,13 +130,14 @@ function scatter(rng: () => number, p: GenParams): CarSpec[] {
     const taken = new Set<string>();
     for (let i = 0; i < p.cars; i++) {
         const cap = pickCap(rng);
-        const { w, h } = pickFootprint(rng, cap);
+        // Direction first: the footprint follows it, so the drawn arrow can't lie.
+        const dir = pick(rng, DIRS);
+        const { w, h } = pickFootprint(cap, dir);
         for (let t = 0; t < PLACE_TRIES; t++) {
             const x = Math.floor(rng() * (GRID_COLS - w + 1));
             const y = Math.floor(rng() * (GRID_ROWS - h + 1));
             const car: CarSpec = {
-                id: cars.length + 1, x, y, w, h,
-                dir: pick(rng, DIRS),
+                id: cars.length + 1, x, y, w, h, dir,
                 color: PALETTE[i % p.colors],
                 cap,
             };

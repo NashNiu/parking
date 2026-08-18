@@ -6,78 +6,38 @@
     "cars": [
       {
         "id": 1,
-        "x": 6,
-        "y": 4,
-        "w": 1,
+        "x": 3,
+        "y": 0,
+        "w": 2,
         "h": 1,
-        "dir": "down",
+        "dir": "left",
         "color": "red",
-        "cap": "small"
+        "cap": "big"
       },
       {
         "id": 2,
-        "x": 6,
-        "y": 0,
+        "x": 5,
+        "y": 1,
         "w": 1,
-        "h": 2,
-        "dir": "right",
+        "h": 1,
+        "dir": "up",
         "color": "blue",
-        "cap": "big"
+        "cap": "small"
       },
       {
         "id": 3,
         "x": 6,
-        "y": 3,
+        "y": 5,
         "w": 1,
         "h": 1,
-        "dir": "up",
+        "dir": "down",
         "color": "green",
         "cap": "small"
       },
       {
         "id": 4,
         "x": 4,
-        "y": 0,
-        "w": 1,
-        "h": 1,
-        "dir": "right",
-        "color": "yellow",
-        "cap": "small"
-      },
-      {
-        "id": 5,
-        "x": 2,
-        "y": 4,
-        "w": 1,
-        "h": 1,
-        "dir": "down",
-        "color": "red",
-        "cap": "small"
-      },
-      {
-        "id": 6,
-        "x": 4,
-        "y": 4,
-        "w": 2,
-        "h": 1,
-        "dir": "left",
-        "color": "blue",
-        "cap": "big"
-      },
-      {
-        "id": 7,
-        "x": 7,
-        "y": 0,
-        "w": 1,
-        "h": 2,
-        "dir": "right",
-        "color": "green",
-        "cap": "big"
-      },
-      {
-        "id": 8,
-        "x": 7,
-        "y": 2,
+        "y": 3,
         "w": 1,
         "h": 2,
         "dir": "up",
@@ -85,9 +45,49 @@
         "cap": "big"
       },
       {
-        "id": 9,
-        "x": 3,
+        "id": 5,
+        "x": 6,
         "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 6,
+        "x": 0,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 7,
+        "x": 8,
+        "y": 5,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 8,
+        "x": 6,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "yellow",
+        "cap": "small"
+      },
+      {
+        "id": 9,
+        "x": 0,
+        "y": 5,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -96,38 +96,38 @@
       },
       {
         "id": 10,
-        "x": 1,
-        "y": 1,
-        "w": 1,
-        "h": 1,
-        "dir": "up",
-        "color": "blue",
-        "cap": "small"
-      },
-      {
-        "id": 11,
-        "x": 0,
-        "y": 4,
-        "w": 1,
-        "h": 1,
-        "dir": "down",
-        "color": "green",
-        "cap": "small"
-      },
-      {
-        "id": 12,
         "x": 7,
         "y": 4,
         "w": 1,
-        "h": 1,
+        "h": 2,
         "dir": "up",
+        "color": "blue",
+        "cap": "medium"
+      },
+      {
+        "id": 11,
+        "x": 7,
+        "y": 0,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 12,
+        "x": 1,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
         "color": "yellow",
         "cap": "small"
       },
       {
         "id": 13,
-        "x": 8,
-        "y": 3,
+        "x": 0,
+        "y": 2,
         "w": 1,
         "h": 1,
         "dir": "up",
@@ -136,11 +136,11 @@
       },
       {
         "id": 14,
-        "x": 4,
-        "y": 3,
-        "w": 2,
-        "h": 1,
-        "dir": "right",
+        "x": 2,
+        "y": 1,
+        "w": 1,
+        "h": 2,
+        "dir": "up",
         "color": "blue",
         "cap": "medium"
       }
@@ -156,15 +156,15 @@
     "queue": [
       {
         "color": "red",
-        "count": 64
+        "count": 80
       },
       {
         "color": "blue",
-        "count": 104
+        "count": 80
       },
       {
         "color": "green",
-        "count": 64
+        "count": 56
       },
       {
         "color": "yellow",
