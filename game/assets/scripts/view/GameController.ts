@@ -4,6 +4,7 @@ import {
 } from 'cc';
 import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
 import { GridLayout } from './grid-layout';
+import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
 import { TrackView } from './track-view';
@@ -26,7 +27,7 @@ const BOARD_STAGGER = 0.07;
 
 /**
  * The ring road around the lot and the routes cars drive on it. Its top lane is fixed
- * at ROAD_Y, just under the parking stalls (whose pads reach down to y = 0.71, and a
+ * at ROAD_Y, just under the parking stalls (whose pads reach down to y = 0.87, and a
  * car on the lane spans about 0.025..0.575), and the LOT hangs one lane-width below
  * it — so a taller grid pushes the lot DOWN and the road never moves. A fixed lane
  * with a fixed lot was the bug this replaces: it cleared a 4-row lot and ran straight
@@ -63,11 +64,20 @@ const CELL_MAX = 1;
 const CELL_GAP = 0.12;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
-const EXIT_DOWN_TIME = 0.4;
 const EXIT_SPEED = 8;
 
 /** Speed a car drives from the lot to its stall, a touch brisker than a departure. */
 const DRIVE_SPEED = 9;
+
+/**
+ * How much of its stall a parked car fills, across and along. A car is built to fit its
+ * GRID cell, which is a different size - and on a tall level a much smaller one - so it is
+ * refitted to the stall on arrival rather than scaled by a fixed factor, which is what left
+ * level 2's parked cars half the size of level 1's. Along the stall it may overhang a
+ * little: a long bus held strictly inside would be scaled down until it read as a toy.
+ */
+const STALL_FILL_W = 0.8;
+const STALL_FILL_H = 1.02;
 
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
@@ -82,11 +92,13 @@ function shortestAngle(from: number, to: number): number {
 interface ParkedCar {
     node: Node;
     slot: number;
+    /** Seat chip on the UI layer; the label is its child, so destroying it takes both. */
+    chip: Node | null;
     label: Label | null;
     /** Seats this car has. Captured on park, so reusing its slot can't confuse the display. */
     capacity: number;
     /**
-     * Seat count the label and bar currently SHOW, which lags the core on purpose. A
+     * Seat count the chip currently SHOWS, which lags the core on purpose. A
      * whole row boards in one tick, and jumping the number down by four while four
      * passengers are still in the air reads as the car emptying before anyone arrives.
      * `seatBoarded` walks this down one seat per landing flight instead.
@@ -232,7 +244,7 @@ export class GameController extends Component {
             this.boardRoot = null;
         }
         for (const [, e] of this.parked) {
-            if (e.label) e.label.node.destroy();
+            if (e.chip) e.chip.destroy();
         }
         this.parked.clear();
         this.loadLevel(name);
@@ -240,7 +252,10 @@ export class GameController extends Component {
 
     private buildBoard(level: LevelData): void {
         const LOOP_Y = 3.8;
-        const PARKING_Y = 1.2;
+        // The parking band sits between the ring road's top lane (which ends at y = 0.75)
+        // and the loop track's curb (which hangs down to y ~ 2.15); a stall 1.06 deep
+        // centred here fills that band with a little margin at each end.
+        const PARKING_Y = 1.4;
 
         // The lot hangs exactly one lane below the top road, so the road stays put and
         // the lot moves with the grid's size. A 4-row lot centres on -2.64, a 6-row one
@@ -327,7 +342,7 @@ export class GameController extends Component {
             const lp = this.core.loop;
             this.loopView?.update(lp.ring, lp.left, lp.right);
             this.hud?.setProgress(this.core.loop.remainingCount());
-            this.updateFillBars();
+            this.syncSeatCounts();
             if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedCount);
             if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
             if (this.core.getState() !== 'playing') {
@@ -346,7 +361,7 @@ export class GameController extends Component {
             const e = this.parked.get(id);
             if (!e) continue;
             this.parked.delete(id);
-            if (e.label) e.label.node.destroy();
+            if (e.chip) e.chip.destroy();
             // A departing car is exactly one that just filled up (the core boards +
             // removes a full car in the same tick), so the "full" highlight belongs
             // here: pulse the car green and burst stars as it drives off.
@@ -409,7 +424,12 @@ export class GameController extends Component {
      */
     private driveRoute(
         node: Node, waypoints: Vec3[], speed: number,
-        opts: { firstLegDone?: () => void; done?: () => void } = {},
+        opts: {
+            firstLegDone?: () => void;
+            /** Fires as the car starts its last turn, i.e. once, on the final approach. */
+            finalApproach?: () => void;
+            done?: () => void;
+        } = {},
     ): void {
         const body = node.getChildByName('body');
         let heading = body ? body.eulerAngles.z : 0;
@@ -427,6 +447,7 @@ export class GameController extends Component {
             const to = heading;
             const target = wp.clone();
             const last = i === waypoints.length - 1;
+            if (last && opts.finalApproach) seq.call(opts.finalApproach);
             seq.call(() => this.turnBody(body, from, to, EXIT_TURN_TIME))
                 .delay(EXIT_TURN_TIME)
                 .to(dist / speed, { position: target }, { easing: last ? 'sineOut' : 'sineInOut' });
@@ -492,7 +513,7 @@ export class GameController extends Component {
      *
      * All of them fly to the first matching car even in the rare case where the core
      * split the row across two cars of the same colour. Only the arcs would differ —
-     * the seat numbers come from `updateFillBars`, which reads the core.
+     * the seat numbers come from `syncSeatCounts`, which reads the core.
      */
     private playBoarding(color: string, count: number): void {
         let match: ParkedCar | null = null;
@@ -539,32 +560,52 @@ export class GameController extends Component {
         }
     }
 
-    /** Quick scale bump on a parked car's remaining-seats label. */
-    private bumpSeat(e: { label: Label | null }): void {
-        // The car may have departed while a boarding tween was still in flight,
-        // in which case its label component is destroyed and its `.node` is null.
-        const label = e.label;
-        if (!label || !label.isValid || !label.node || !label.node.isValid) return;
-        tween(label.node)
+    /** Quick scale bump on a parked car's remaining-seats chip. */
+    private bumpSeat(e: { chip: Node | null }): void {
+        // The car may have departed while a boarding tween was still in flight, in
+        // which case its chip is already destroyed.
+        const chip = e.chip;
+        if (!chip || !chip.isValid) return;
+        tween(chip)
             .to(0.08, { scale: new Vec3(1.4, 1.4, 1.4) })
             .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
             .start();
     }
 
-    /** Project a car's world position to the UI layer and place a label there. */
-    private positionLabelOverCar(label: Label, carNode: Node): void {
-        if (!this.cam || !this.uiCam) return;
-        const screen = this.cam.worldToScreen(carNode.worldPosition, new Vec3());
-        const uiWorld = this.uiCam.screenToWorld(screen, new Vec3());
-        label.node.setWorldPosition(uiWorld);
+    /**
+     * Hang a seat chip off the bottom edge of its stall: the anchor is a point on the
+     * board, projected through the game camera into the UI camera's space. Anchoring to
+     * the stall rather than to the car keeps every chip on one line - cars differ in
+     * length, so hanging them off the car would leave the row of chips ragged.
+     */
+    private positionChip(chip: Node, slotIndex: number): void {
+        if (!this.cam || !this.uiCam || !this.boardRoot || !this.parkingView || !this.hud) return;
+        const local = this.parkingView.getChipAnchor(slotIndex);
+        const world = Vec3.transformMat4(new Vec3(), local, this.boardRoot.worldMatrix);
+        const screen = this.cam.worldToScreen(world, new Vec3());
+        const ui = this.uiCam.screenToWorld(screen, new Vec3());
+        chip.setWorldPosition(ui.x, ui.y - this.hud.seatChipHalfHeight, ui.z);
     }
 
     /**
-     * Sync every parked car's seat readout with the core. Named for the fill bars it
-     * used to drive: those are gone, and the outlined number over the car is now the
-     * only readout of how full it is.
+     * Uniform scale that fits car `id`'s model into a parking stall. Read it BEFORE
+     * `detachCar`, which drops the entry holding the car's fitted size.
      */
-    private updateFillBars(): void {
+    private stallScale(id: number): number {
+        const size = this.gridView!.getCarSize(id);
+        if (!size || size.len <= 0 || size.wid <= 0) return 1;
+        const slot = ParkingView.slotSize;
+        return Math.min(
+            (slot.w * STALL_FILL_W) / size.wid,
+            (slot.h * STALL_FILL_H) / size.len,
+        );
+    }
+
+    /**
+     * Sync every parked car's seat chip with the core. The chip under the stall is the
+     * only readout of how full a car is (the fill bar this used to drive is long gone).
+     */
+    private syncSeatCounts(): void {
         for (const [id, e] of this.parked) {
             const pc = this.core!.parking.parked[e.slot];
             if (!pc || pc.carId !== id) continue;
@@ -685,6 +726,7 @@ export class GameController extends Component {
     }
 
     private playDriveToSlot(id: number, dir: Dir, slotIndex: number): void {
+        const parkScale = this.stallScale(id); // before detachCar drops the car's size
         const node = this.gridView!.detachCar(id);
         if (!node) return;
         node.setParent(this.boardRoot!, true); // keep world position
@@ -702,31 +744,40 @@ export class GameController extends Component {
         this.core!.parking.setReady(slotIndex, false);
         this.sfx?.play('drive');
         dustBurst(this.boardRoot!, start.clone());
-        // Shrink to stall size over the first leg, while it is still out in the lot.
-        tween(node).to(0.28, { scale: new Vec3(0.55, 0.55, 0.55) }).start();
         this.driveRoute(node, route, DRIVE_SPEED, {
             // Release the tap lock once the car is out of the lot rather than when it
             // parks: a lap of the ring road takes over a second, and locking taps for all
             // of it makes the board feel dead. The core parked the car on tap already, so
             // a second tap mid-drive is safe.
             firstLegDone: () => { this.busy = false; },
+            // Refit to the stall on the final approach - the turn plus the hop up off the
+            // lane, which is about as long as this tween. Doing it on the way OUT of the
+            // lot (as an earlier version did) changes the car's size right beside its
+            // siblings, which reads as a glitch rather than as parking.
+            finalApproach: () => {
+                tween(node)
+                    .to(0.28, { scale: new Vec3(parkScale, parkScale, parkScale) },
+                        { easing: 'sineOut' })
+                    .start();
+            },
             done: () => {
                 this.arriving--;
                 this.core!.parking.setReady(slotIndex, true);
                 this.sfx?.play('park');
-                const label = this.hud ? this.hud.newSeatLabel() : null;
                 const pc = this.core!.parking.parked[slotIndex];
                 const capacity = pc ? pc.capacity : 0;
+                const seat = this.hud && pc ? this.hud.newSeatChip(colorOf(pc.color)) : null;
                 this.parked.set(id, {
-                    node, slot: slotIndex, label, capacity,
+                    node, slot: slotIndex, chip: seat ? seat.chip : null,
+                    label: seat ? seat.label : null, capacity,
                     // Starts empty: a car is only ever parked with no passengers on it.
                     shown: capacity,
                 });
-                if (label) this.positionLabelOverCar(label, node);
+                if (seat) this.positionChip(seat.chip, slotIndex);
                 // Fill the seat count now instead of waiting for the next loop tick: a
                 // tap that ends the game (deadlock) stops the ticks, which would leave
-                // this car showing Label's default 'label' text.
-                this.updateFillBars();
+                // the chip showing Label's default 'label' text.
+                this.syncSeatCounts();
             },
         });
     }

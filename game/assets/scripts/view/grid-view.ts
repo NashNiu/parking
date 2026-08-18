@@ -11,6 +11,8 @@ interface CarEntry {
     body: Node;
     hw: number; // half width (world)
     hh: number; // half height (world)
+    len: number; // fitted body length (world)
+    wid: number; // fitted body width (world)
 }
 
 /**
@@ -30,13 +32,13 @@ export class GridView {
     render(): void {
         for (const [id, car] of this.grid.cars) {
             const size = this.layout.footprintSize(car.w, car.h);
-            const { root, body } = buildCar(
+            const { root, body, len, wid } = buildCar(
                 `car-${id}`, size.x, size.y, colorOf(car.color), car.dir as Dir, car.cap as Cap,
             );
             root.setPosition(this.layout.cellCenter(car.x, car.y, car.w, car.h));
             this.parent.addChild(root);
             this.carNodes.set(id, root);
-            this.entries.push({ id, node: root, body, hw: size.x / 2, hh: size.y / 2 });
+            this.entries.push({ id, node: root, body, hw: size.x / 2, hh: size.y / 2, len, wid });
         }
     }
 
@@ -58,6 +60,15 @@ export class GridView {
     /** Returns the animatable body node (chassis/cabin/wheels/windows/arrow) for a car, if tracked. */
     getCarBody(id: number): Node | undefined {
         return this.entries.find((e) => e.id === id)?.body;
+    }
+
+    /**
+     * The size the car's model was fitted to, so a caller moving it off the grid can refit
+     * it. Read it BEFORE `detachCar`, which drops the entry it comes from.
+     */
+    getCarSize(id: number): { len: number; wid: number } | null {
+        const e = this.entries.find((x) => x.id === id);
+        return e ? { len: e.len, wid: e.wid } : null;
     }
 
     /** Stop tracking a car and return its node WITHOUT destroying it (for park animation). */

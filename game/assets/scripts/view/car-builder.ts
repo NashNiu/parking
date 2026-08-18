@@ -184,16 +184,28 @@ function addShadow(body: Node, len: number, wid: number): void {
     body.addChild(shadow);
 }
 
+/** What `buildCar` hands back: the nodes to move and animate, and the size it settled on. */
+export interface BuiltCar {
+    /** Move this; kept unrotated so footprint picking stays valid. */
+    root: Node;
+    /** Animate this — squash/flash/drive operate on it. */
+    body: Node;
+    /** Fitted length along the body's own X, in board units. */
+    len: number;
+    /** Fitted width along the body's own Y. */
+    wid: number;
+}
+
 /**
- * Build a cartoon car sized to its footprint from the real 3D model. Returns
- * `root` (move this; kept unrotated so footprint picking stays valid) and `body`
- * (animate this — squash/flash/drive operate on it). The model is laid onto the
- * tilted board (roof facing the camera), lifted so its wheels rest on the board
- * plane, given a footprint-matched contact shadow, and recolored to `color`.
+ * Build a cartoon car sized to its footprint from the real 3D model. The model is laid
+ * onto the tilted board (roof facing the camera), lifted so its wheels rest on the board
+ * plane, given a footprint-matched contact shadow, and recolored to `color`. The fitted
+ * size comes back with it: a car that later leaves the grid for a parking stall has to be
+ * refitted to the stall, and only this scale knows how big it currently is.
  */
 export function buildCar(
     name: string, sizeX: number, sizeY: number, color: Color, dir: Dir, cap: Cap,
-): { root: Node; body: Node } {
+): BuiltCar {
     const root = new Node(name);
 
     // body: the animatable node. Carries the dir spin (about the board normal) and
@@ -205,7 +217,7 @@ export function buildCar(
     const prefab = prefabs[cap];
     if (!prefab) {
         fallbackBox(body, sizeX, sizeY, color);
-        return { root, body };
+        return { root, body, len: Math.max(sizeX, sizeY), wid: Math.min(sizeX, sizeY) };
     }
 
     const model = instantiate(prefab) as unknown as Node;
@@ -242,5 +254,5 @@ export function buildCar(
     addShadow(body, len, wid);
 
     body.setRotationFromEuler(0, 0, orientAngle(dir, sizeX, sizeY));
-    return { root, body };
+    return { root, body, len, wid };
 }
