@@ -13,8 +13,8 @@ import {
  */
 
 /** Corner radius of the rounded frame, in texture pixels; also its 9-slice inset. */
-const RADIUS = 14;
-const ROUND_SIZE = RADIUS * 2 + 2;
+const RADIUS = 15;
+const ROUND_SIZE = RADIUS * 2 + 2; // 32, keeping the texture a power of two
 const DOT_SIZE = 32;
 
 let roundFrame: SpriteFrame | null = null;
@@ -48,7 +48,13 @@ function frameFrom(data: Uint8Array, size: number): SpriteFrame {
     });
     const tex = new Texture2D();
     tex.image = image;
+    tex.setWrapMode(Texture2D.WrapMode.CLAMP_TO_EDGE, Texture2D.WrapMode.CLAMP_TO_EDGE);
     const frame = new SpriteFrame();
+    // Keep it out of the dynamic atlas. Packing copies a frame in with texSubImage2D from
+    // an image-like source (an <img>/canvas), and this texture's source is a raw byte
+    // array — the copy throws `Overload resolution failed` and takes the whole frame with
+    // it. Two extra draw calls is the price.
+    frame.packable = false;
     frame.texture = tex;
     frame.originalSize = new Size(size, size);
     frame.rect = new Rect(0, 0, size, size);
