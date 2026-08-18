@@ -1,6 +1,14 @@
 import { Node, Color, MeshRenderer } from 'cc';
 import { makeLitBox } from './placeholder';
 
+/** Grid pitch used to size the parking lot; the lot is `rows * LOT_STEP + 0.3` tall. */
+export const LOT_STEP = 1.12;
+
+/** Height of the lot slab for a grid of `rows`, so callers can place things clear of it. */
+export function lotHeight(rows: number): number {
+    return rows * LOT_STEP + 0.3;
+}
+
 /**
  * Warm sky backdrop + a few soft cloud slabs, parented under `root` (the
  * tilted boardRoot) so the whole scene reads as sitting in an outdoor stage
@@ -28,7 +36,7 @@ export function setupBackground(root: Node): void {
  * behind the cars/passengers (more negative z) so it never occludes them.
  */
 export function setupStage(root: Node, cols: number, rows: number, gridY: number): void {
-    const step = 1.12;
+    const step = LOT_STEP;
     // Depth ordering note: cars stand ON the board plane (wheels at z = 0, body
     // extending out to +z) and their blob shadows sit at z ≈ -0.06. Any opaque slab
     // with a near face in front of that would bury the shadows. So the lot sits just
@@ -75,4 +83,36 @@ export function setupStage(root: Node, cols: number, rows: number, gridY: number
     addDashes(bw, true, -bh / 2);  // bottom edge
     addDashes(bh, false, -bw / 2); // left edge
     addDashes(bh, false, bw / 2);  // right edge
+}
+
+/**
+ * The road a full car drives away along, between the parking stalls and the lot.
+ *
+ * It exists because the departure route used to be a hard-coded y that happened to
+ * clear the lot on a 4-row grid and cut straight through it on a 6-row one — the
+ * departing car drove over the puzzle cars. The lot is `rows * LOT_STEP + 0.3` tall
+ * and grows upward from its centre, so the only safe lane is one derived from the
+ * lot's actual top edge, and drawing it makes that lane read as somewhere a car
+ * belongs rather than as empty platform it happens to cross.
+ *
+ * Spans the whole platform so it reads as passing through rather than stopping at
+ * the lot's width. One slab plus a dashed centre line, both behind the cars (z with
+ * the lot at z = -0.2, so where the two overlap the lot simply covers the road instead
+ * of z-fighting with it).
+ */
+export function setupRoad(root: Node, y: number, height: number): void {
+    const road = makeLitBox('Road', 12, height, 0.1, new Color(150, 154, 168));
+    road.setPosition(0, y, -0.2);
+    root.addChild(road);
+
+    const line = new Color(238, 240, 246);
+    const dash = 0.34, gap = 0.3;
+    const span = dash + gap;
+    const n = Math.floor(12 / span);
+    const start = -6 + (12 - (n - 1) * span) / 2;
+    for (let i = 0; i < n; i++) {
+        const s = makeLitBox('roaddash', dash, 0.05, 0.06, line);
+        s.setPosition(start + i * span, y, -0.19);
+        root.addChild(s);
+    }
 }

@@ -9,7 +9,7 @@ import { ParkingView } from './parking-view';
 import { TrackView } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
-import { setupBackground, setupStage } from './scene-stage';
+import { setupBackground, setupStage, setupRoad, lotHeight } from './scene-stage';
 import { squash, flash, dustBurst, overshoot, resetParticleBudget, stars, confetti } from './effects';
 import { preloadCarModels } from './car-builder';
 import { preloadPassengerModel } from './passenger-builder';
@@ -25,8 +25,14 @@ const { ccclass, property } = _decorator;
 const BOARD_STAGGER = 0.07;
 
 /**
- * Route a full car takes out of its stall: straight down into the empty corridor
- * between the parking row (y = 1.2) and the lot (y = -3.2), then right and off screen.
+ * The road between the parking stalls and the lot, and the route a full car takes
+ * along it: straight down out of the stall, then right and off screen.
+ *
+ * ROAD_Y is the lane's centreline and ROAD_TOP the highest the lot may reach without
+ * fouling it, which is what `buildBoard` pushes a tall grid down to clear. Both are
+ * fixed while the LOT moves, because the road has to stay under the stalls (whose
+ * pads reach down to y = 0.71) on every level: a car on the lane spans roughly
+ * 0.025..0.575, leaving it clear of the pads above and of the lot below.
  *
  * Read as four beats — turn, pull out, turn, accelerate away — because a car that
  * simply translates off screen reads as flying, not driving. The car HOLDS STILL for
@@ -36,12 +42,14 @@ const BOARD_STAGGER = 0.07;
  * `quadOut`, which meant it hit top speed the instant it cleared the stall and then
  * decelerated — indistinguishable from the slide it replaced.
  *
- * Every stall shares the parking row's y, so the pull-out is always the same 1.3 units
+ * Every stall shares the parking row's y, so the pull-out is always the same distance
  * and a fixed duration is exactly consistent. The run across is 4 units from the
  * rightmost stall and 11 from the leftmost, so that leg goes at a fixed speed instead;
  * a fixed duration would read as two cars of very different power.
  */
-const EXIT_LANE_Y = -0.1;
+const ROAD_Y = 0.3;
+const ROAD_H = 0.9;
+const ROAD_TOP = -0.08;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_DOWN_TIME = 0.4;
@@ -219,7 +227,13 @@ export class GameController extends Component {
     private buildBoard(level: LevelData): void {
         const LOOP_Y = 3.8;
         const PARKING_Y = 1.2;
-        const GRID_Y = -3.2;
+
+        // The lot grows UPWARD from its centre as the grid gets taller — 4 rows put its
+        // top edge at y = -0.81, 6 rows at y = +0.31 — so a fixed lot centre leaves the
+        // departure road clear on one level and buried under the lot on the next. Drop
+        // the lot only as far as it takes to keep ROAD_TOP free; a grid short enough to
+        // fit already stays at the authored -3.2 and does not move at all.
+        const GRID_Y = Math.min(-3.2, ROAD_TOP - lotHeight(level.grid.rows) / 2);
 
         this.boardRoot = new Node('Board');
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
@@ -227,6 +241,7 @@ export class GameController extends Component {
         setupEnvironment(this.boardRoot);
         setupBackground(this.boardRoot);
         setupStage(this.boardRoot, level.grid.cols, level.grid.rows, GRID_Y);
+        setupRoad(this.boardRoot, ROAD_Y, ROAD_H);
 
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
@@ -349,8 +364,8 @@ export class GameController extends Component {
         };
 
         const from = node.position.clone();
-        const corner = new Vec3(from.x, EXIT_LANE_Y, from.z);
-        const exit = new Vec3(EXIT_X, EXIT_LANE_Y, from.z);
+        const corner = new Vec3(from.x, ROAD_Y, from.z);
+        const exit = new Vec3(EXIT_X, ROAD_Y, from.z);
         const across = Math.abs(exit.x - corner.x) / EXIT_SPEED;
 
         const heading = turn(body ? body.eulerAngles.z : 0, FACE_DOWN, EXIT_TURN_TIME);
