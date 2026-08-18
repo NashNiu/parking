@@ -1,0 +1,170 @@
+{
+  "id": 7,
+  "grid": {
+    "cols": 9,
+    "rows": 6,
+    "cars": [
+      {
+        "id": 1,
+        "x": 8,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 2,
+        "x": 6,
+        "y": 4,
+        "w": 2,
+        "h": 1,
+        "dir": "up",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 3,
+        "x": 3,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 4,
+        "x": 5,
+        "y": 5,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "yellow",
+        "cap": "small"
+      },
+      {
+        "id": 5,
+        "x": 5,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 6,
+        "x": 7,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 7,
+        "x": 4,
+        "y": 2,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 8,
+        "x": 3,
+        "y": 0,
+        "w": 1,
+        "h": 2,
+        "dir": "right",
+        "color": "yellow",
+        "cap": "big"
+      },
+      {
+        "id": 9,
+        "x": 8,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 10,
+        "x": 0,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 11,
+        "x": 6,
+        "y": 0,
+        "w": 2,
+        "h": 1,
+        "dir": "up",
+        "color": "green",
+        "cap": "big"
+      },
+      {
+        "id": 12,
+        "x": 1,
+        "y": 0,
+        "w": 2,
+        "h": 1,
+        "dir": "up",
+        "color": "yellow",
+        "cap": "medium"
+      },
+      {
+        "id": 13,
+        "x": 1,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      }
+    ]
+  },
+  "parking": {
+    "slots": 7,
+    "unlocked": 4
+  },
+  "loop": {
+    "capacity": 12,
+    "boardIndex": 6,
+    "queue": [
+      {
+        "color": "red",
+        "count": 64
+      },
+      {
+        "color": "blue",
+        "count": 64
+      },
+      {
+        "color": "green",
+        "count": 72
+      },
+      {
+        "color": "yellow",
+        "count": 72
+      }
+    ]
+  },
+  "powerups": {
+    "refresh": 3,
+    "hardClear": 1,
+    "magnet": 1
+  }
+}

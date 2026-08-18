@@ -1,0 +1,146 @@
+{
+  "id": 5,
+  "grid": {
+    "cols": 9,
+    "rows": 6,
+    "cars": [
+      {
+        "id": 1,
+        "x": 3,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 2,
+        "x": 6,
+        "y": 1,
+        "w": 1,
+        "h": 2,
+        "dir": "left",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 3,
+        "x": 6,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 4,
+        "x": 0,
+        "y": 1,
+        "w": 1,
+        "h": 2,
+        "dir": "up",
+        "color": "red",
+        "cap": "big"
+      },
+      {
+        "id": 5,
+        "x": 4,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 6,
+        "x": 0,
+        "y": 3,
+        "w": 2,
+        "h": 1,
+        "dir": "left",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 7,
+        "x": 4,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 8,
+        "x": 1,
+        "y": 5,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 9,
+        "x": 8,
+        "y": 1,
+        "w": 1,
+        "h": 2,
+        "dir": "right",
+        "color": "green",
+        "cap": "big"
+      },
+      {
+        "id": 10,
+        "x": 2,
+        "y": 5,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 11,
+        "x": 8,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "blue",
+        "cap": "small"
+      }
+    ]
+  },
+  "parking": {
+    "slots": 7,
+    "unlocked": 4
+  },
+  "loop": {
+    "capacity": 12,
+    "boardIndex": 6,
+    "queue": [
+      {
+        "color": "red",
+        "count": 80
+      },
+      {
+        "color": "blue",
+        "count": 80
+      },
+      {
+        "color": "green",
+        "count": 72
+      }
+    ]
+  },
+  "powerups": {
+    "refresh": 3,
+    "hardClear": 1,
+    "magnet": 1
+  }
+}

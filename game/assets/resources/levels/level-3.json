@@ -1,68 +1,88 @@
 {
-  "id": 1,
+  "id": 3,
   "grid": {
     "cols": 9,
     "rows": 6,
     "cars": [
       {
         "id": 1,
-        "x": 7,
-        "y": 1,
-        "w": 1,
+        "x": 3,
+        "y": 0,
+        "w": 2,
         "h": 1,
-        "dir": "up",
+        "dir": "left",
         "color": "red",
-        "cap": "small"
+        "cap": "big"
       },
       {
         "id": 2,
         "x": 0,
-        "y": 5,
-        "w": 2,
-        "h": 1,
+        "y": 3,
+        "w": 1,
+        "h": 2,
         "dir": "up",
         "color": "blue",
-        "cap": "big"
+        "cap": "medium"
       },
       {
         "id": 3,
-        "x": 1,
-        "y": 4,
+        "x": 3,
+        "y": 2,
         "w": 1,
         "h": 1,
-        "dir": "right",
+        "dir": "left",
         "color": "red",
         "cap": "small"
       },
       {
         "id": 4,
-        "x": 7,
+        "x": 1,
         "y": 2,
         "w": 1,
-        "h": 1,
+        "h": 2,
         "dir": "down",
         "color": "blue",
-        "cap": "small"
+        "cap": "big"
       },
       {
         "id": 5,
-        "x": 8,
-        "y": 2,
+        "x": 2,
+        "y": 4,
         "w": 1,
         "h": 1,
-        "dir": "down",
+        "dir": "up",
         "color": "red",
         "cap": "small"
       },
       {
         "id": 6,
-        "x": 1,
-        "y": 2,
+        "x": 3,
+        "y": 3,
         "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 7,
+        "x": 6,
+        "y": 4,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "red",
+        "cap": "medium"
+      },
+      {
+        "id": 8,
+        "x": 3,
+        "y": 1,
+        "w": 2,
         "h": 1,
         "dir": "up",
         "color": "blue",
-        "cap": "small"
+        "cap": "medium"
       }
     ]
   },
@@ -76,11 +96,11 @@
     "queue": [
       {
         "color": "red",
-        "count": 48
+        "count": 88
       },
       {
         "color": "blue",
-        "count": 64
+        "count": 96
       }
     ]
   },

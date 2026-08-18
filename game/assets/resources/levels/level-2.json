@@ -1,87 +1,77 @@
 {
   "id": 2,
   "grid": {
-    "cols": 5,
+    "cols": 9,
     "rows": 6,
     "cars": [
       {
         "id": 1,
         "x": 2,
-        "y": 1,
-        "w": 1,
+        "y": 4,
+        "w": 2,
         "h": 1,
         "dir": "up",
         "color": "red",
-        "cap": "small"
+        "cap": "big"
       },
       {
         "id": 2,
         "x": 2,
-        "y": 3,
+        "y": 0,
         "w": 1,
         "h": 1,
-        "dir": "down",
+        "dir": "left",
         "color": "blue",
         "cap": "small"
       },
       {
         "id": 3,
-        "x": 3,
-        "y": 2,
-        "w": 1,
-        "h": 1,
-        "dir": "down",
-        "color": "yellow",
-        "cap": "small"
-      },
-      {
-        "id": 4,
         "x": 1,
         "y": 2,
         "w": 1,
+        "h": 2,
+        "dir": "left",
+        "color": "red",
+        "cap": "medium"
+      },
+      {
+        "id": 4,
+        "x": 5,
+        "y": 2,
+        "w": 1,
         "h": 1,
-        "dir": "down",
-        "color": "green",
+        "dir": "up",
+        "color": "blue",
         "cap": "small"
       },
       {
         "id": 5,
         "x": 3,
-        "y": 0,
+        "y": 5,
         "w": 1,
         "h": 1,
-        "dir": "down",
-        "color": "green",
+        "dir": "left",
+        "color": "red",
         "cap": "small"
       },
       {
         "id": 6,
-        "x": 1,
-        "y": 0,
+        "x": 7,
+        "y": 3,
         "w": 1,
-        "h": 1,
+        "h": 2,
         "dir": "down",
-        "color": "green",
-        "cap": "small"
+        "color": "blue",
+        "cap": "big"
       },
       {
         "id": 7,
-        "x": 3,
-        "y": 4,
+        "x": 7,
+        "y": 1,
         "w": 1,
         "h": 1,
-        "dir": "down",
-        "color": "purple",
-        "cap": "small"
-      },
-      {
-        "id": 8,
-        "x": 1,
-        "y": 4,
-        "w": 1,
-        "h": 1,
-        "dir": "down",
-        "color": "purple",
+        "dir": "left",
+        "color": "red",
         "cap": "small"
       }
     ]
@@ -95,24 +85,12 @@
     "boardIndex": 6,
     "queue": [
       {
-        "color": "purple",
-        "count": 32
-      },
-      {
         "color": "red",
-        "count": 16
-      },
-      {
-        "color": "green",
-        "count": 48
-      },
-      {
-        "color": "yellow",
-        "count": 16
+        "count": 88
       },
       {
         "color": "blue",
-        "count": 16
+        "count": 64
       }
     ]
   },

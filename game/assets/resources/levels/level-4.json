@@ -1,43 +1,53 @@
 {
-  "id": 1,
+  "id": 4,
   "grid": {
     "cols": 9,
     "rows": 6,
     "cars": [
       {
         "id": 1,
-        "x": 7,
-        "y": 1,
-        "w": 1,
-        "h": 1,
-        "dir": "up",
-        "color": "red",
-        "cap": "small"
-      },
-      {
-        "id": 2,
         "x": 0,
-        "y": 5,
-        "w": 2,
-        "h": 1,
-        "dir": "up",
-        "color": "blue",
+        "y": 3,
+        "w": 1,
+        "h": 2,
+        "dir": "left",
+        "color": "red",
         "cap": "big"
       },
       {
-        "id": 3,
-        "x": 1,
-        "y": 4,
+        "id": 2,
+        "x": 4,
+        "y": 0,
         "w": 1,
         "h": 1,
-        "dir": "right",
-        "color": "red",
+        "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 3,
+        "x": 3,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "green",
         "cap": "small"
       },
       {
         "id": 4,
+        "x": 4,
+        "y": 5,
+        "w": 2,
+        "h": 1,
+        "dir": "up",
+        "color": "red",
+        "cap": "medium"
+      },
+      {
+        "id": 5,
         "x": 7,
-        "y": 2,
+        "y": 1,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -45,9 +55,19 @@
         "cap": "small"
       },
       {
-        "id": 5,
+        "id": 6,
+        "x": 5,
+        "y": 1,
+        "w": 2,
+        "h": 1,
+        "dir": "left",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 7,
         "x": 8,
-        "y": 2,
+        "y": 5,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -55,14 +75,24 @@
         "cap": "small"
       },
       {
-        "id": 6,
-        "x": 1,
+        "id": 8,
+        "x": 0,
         "y": 2,
         "w": 1,
         "h": 1,
-        "dir": "up",
+        "dir": "right",
         "color": "blue",
         "cap": "small"
+      },
+      {
+        "id": 9,
+        "x": 2,
+        "y": 1,
+        "w": 2,
+        "h": 1,
+        "dir": "up",
+        "color": "green",
+        "cap": "medium"
       }
     ]
   },
@@ -76,10 +106,14 @@
     "queue": [
       {
         "color": "red",
-        "count": 48
+        "count": 72
       },
       {
         "color": "blue",
+        "count": 48
+      },
+      {
+        "color": "green",
         "count": 64
       }
     ]

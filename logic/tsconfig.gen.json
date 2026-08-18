@@ -1,0 +1,17 @@
+{
+  // Build config for `npm run gen` only: compiles tools/gen-levels.ts plus the pure core
+  // it imports into ../.tmp/gen so plain node can run it. There is no ts-node here, and
+  // @types/node comes in with jest.
+  "compilerOptions": {
+    "outDir": "../.tmp/gen",
+    "rootDir": "..",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ES2019",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["../tools/gen-levels.ts", "../game/assets/scripts/core/**/*.ts"]
+}
