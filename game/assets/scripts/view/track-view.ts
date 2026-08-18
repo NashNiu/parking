@@ -1,7 +1,7 @@
-import { Node, Color, Vec3, Mesh, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
+import { Node, Color, Vec3, Mesh, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
-import { litMaterial } from './materials';
-import { makeLitBox } from './placeholder';
+import { litMaterial, flatMaterial } from './materials';
+import { makeSlab, mergeParts, MeshPart } from './slabs';
 import { buildPassenger, recolorPassenger } from './passenger-builder';
 import { GROUP_SIZE, PaxGroup } from '../core/index';
 
@@ -9,13 +9,27 @@ const W = 2.6;   // half width of the circuit centerline
 const H = 1.3;   // half height
 const R = 0.8;   // corner radius
 
-/** Half-offset of the two curb rails from the path centerline. */
-const CURB_OFFSET = 0.35;
+/**
+ * Half-width of the white track band the rows ride on. Narrower than a full row on
+ * purpose: the reference art lets its passenger clumps hang over both edges of the
+ * ribbon, and a band wide enough to contain a row of four (about 1.0 across) would hang
+ * down to y = 1.98 and clash with the parking bay panel, whose top edge is at 2.05.
+ */
+const BAND_HALF = 0.38;
 
 /** Waiting passengers drawn per channel; the rest of the queue is implied. */
 const LANE_VISIBLE = 3;
 const LANE_STEP = 0.45;      // spacing between waiting clusters
-const LANE_START = 0.55;    // gap between the track edge and the first waiting cluster
+/**
+ * Gap between the band's outer edge and the first waiting row. Chosen so the first row
+ * still sits at x = 3.5 now that the band replaces the old curb rails, which keeps the
+ * outermost row inside the visible half-width (see buildLanes).
+ */
+const LANE_START = 0.52;
+
+/** The track surface, and how far behind the board plane it sits. */
+const BAND = new Color(255, 255, 255);
+const BAND_Z = -0.09;
 
 /** Balls per passenger cluster and their layout offsets (small clump). */
 const BALL_OFFSETS: [number, number][] = [
@@ -125,23 +139,6 @@ function paintRow(figures: Node[], color: Color, count: number, shade: (c: Color
         figures[i].active = on;
         if (on) paintPassenger(figures[i], color, shade);
     }
-}
-
-/** Merge several primitive geometries into one mesh (one draw call). */
-function mergeParts(parts: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] }[]): Mesh {
-    const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
-    let base = 0;
-    for (const g of parts) {
-        const vc = g.positions.length / 3;
-        for (let i = 0; i < vc; i++) {
-            positions.push(g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]);
-            if (g.normals) normals.push(g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]);
-            if (g.uvs) uvs.push(g.uvs[i * 2], g.uvs[i * 2 + 1]);
-        }
-        for (const ii of (g.indices || [])) indices.push(ii + base);
-        base += vc;
-    }
-    return utils.createMesh({ positions, normals, uvs, indices });
 }
 
 interface Seg { len: number; at: (u: number, out: Vec3) => void }
@@ -286,7 +283,7 @@ export class TrackView {
         this.tick = tick;
         this.entries = entries;
         this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
-        this.buildCurbs(parent);
+        this.buildBand(parent);
         this.buildClusters(parent);
         this.buildLanes(parent);
     }
@@ -302,43 +299,48 @@ export class TrackView {
         this.phaseTween = null;
     }
 
-    // Two white rails (outer + inner edge), each a merged strip of small boxes laid
-    // along the rounded-rect path — replaces the ellipse's scaled tori, since a
-    // rounded rect isn't a torus, and lets the boarding/entry gaps be cut out by
-    // skipping the samples that fall inside them. One draw call per rail (2 total).
-    private buildCurbs(parent: Node): void {
+    /**
+     * One white band along the rounded-rect path: a merged strip of boxes, each laid
+     * across the direction of travel, with the samples inside a boarding or entry gap
+     * skipped so the band opens up there. One draw call for the whole track.
+     *
+     * It replaces two thin curb rails, which drew the EDGES of a track whose middle was
+     * whatever happened to be behind it — the reference art has a solid band the rows ride
+     * on, and so does this now. Unlit, so it is exactly white.
+     */
+    private buildBand(parent: Node): void {
         const SAMPLES = 96;
         const half = 0.5 / this.capacity; // half a slot wide gap
-        for (const [off, name] of [[CURB_OFFSET, 'curb-outer'], [-CURB_OFFSET, 'curb-inner']] as const) {
-            const parts: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] }[] = [];
-            const p = new Vec3(), q = new Vec3();
-            for (let i = 0; i < SAMPLES; i++) {
-                const t = i / SAMPLES;
-                // Skip the samples that fall inside a gap.
-                if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < half)) continue;
-                pathPoint(t, this.cy, p);
-                pathPoint(t + 1 / SAMPLES, this.cy, q);
-                const dx = q.x - p.x, dy = q.y - p.y;
-                const len = Math.hypot(dx, dy) || 1e-4;
-                const nx = -dy / len, ny = dx / len;      // outward normal in the board plane
-                const box = primitives.box({ width: len * 1.2, height: 0.12, length: 0.12 });
-                // rotate the box about +Z so its width follows the path direction
-                const ang = Math.atan2(dy, dx), ca = Math.cos(ang), sa = Math.sin(ang);
-                const cx = p.x + nx * off, cyy = p.y + ny * off;
-                const pos = box.positions.slice();
-                for (let v = 0; v < pos.length; v += 3) {
-                    const x = pos[v], y = pos[v + 1];
-                    pos[v] = cx + x * ca - y * sa;
-                    pos[v + 1] = cyy + x * sa + y * ca;
-                }
-                parts.push({ positions: pos, normals: box.normals, uvs: box.uvs, indices: box.indices });
+        const parts: MeshPart[] = [];
+        const p = new Vec3(), q = new Vec3();
+        for (let i = 0; i < SAMPLES; i++) {
+            const t = i / SAMPLES;
+            // Skip the samples that fall inside a gap.
+            if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < half)) continue;
+            pathPoint(t, this.cy, p);
+            pathPoint(t + 1 / SAMPLES, this.cy, q);
+            const dx = q.x - p.x, dy = q.y - p.y;
+            const len = Math.hypot(dx, dy) || 1e-4;
+            const box = primitives.box({ width: len * 1.2, height: BAND_HALF * 2, length: 0.06 });
+            // rotate the box about +Z so its width follows the path direction
+            const ang = Math.atan2(dy, dx), ca = Math.cos(ang), sa = Math.sin(ang);
+            const pos = box.positions.slice();
+            for (let v = 0; v < pos.length; v += 3) {
+                const x = pos[v], y = pos[v + 1];
+                pos[v] = p.x + x * ca - y * sa;
+                pos[v + 1] = p.y + x * sa + y * ca;
             }
-            const n = new Node(name);
-            const mr = n.addComponent(MeshRenderer);
-            mr.mesh = mergeParts(parts);
-            mr.material = litMaterial(Color.WHITE.clone());
-            parent.addChild(n);
+            parts.push({ positions: pos, normals: box.normals, uvs: box.uvs, indices: box.indices });
         }
+        const n = new Node('track-band');
+        const mr = n.addComponent(MeshRenderer);
+        mr.mesh = mergeParts(parts);
+        mr.material = flatMaterial(BAND);
+        mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+        // Fully behind the board plane, so the figures stand in front of it rather than
+        // half-buried in it.
+        n.setPosition(0, 0, BAND_Z);
+        parent.addChild(n);
     }
 
     private buildClusters(parent: Node): void {
@@ -358,7 +360,7 @@ export class TrackView {
     private buildLanes(parent: Node): void {
         for (const side of ['left', 'right'] as const) {
             const dir = side === 'left' ? -1 : 1;         // left lane runs out to -x
-            const x0 = dir * (W + CURB_OFFSET + LANE_START);
+            const x0 = dir * (W + BAND_HALF + LANE_START);
             // Lane floor: a light slab the waiting passengers stand on. Sized to the
             // clusters it carries (outermost cluster centre at x0 + dir*(LANE_VISIBLE-1)*LANE_STEP,
             // half-extent ~0.21) rather than a fixed margin. Because slabW and its centre
@@ -371,8 +373,11 @@ export class TrackView {
             // inside the slab's edge by construction (0.21 < 0.25). With the shipped
             // constants those work out to 4.65 and 4.61, against the 4.67 limit.
             const slabW = LANE_STEP * (LANE_VISIBLE - 1) + 0.5;
-            const slab = makeLitBox(`lane-${side}`, slabW, 0.55, 0.1, new Color(238, 236, 230));
-            slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, -0.06);
+            // Same white as the ring and as deep, so a channel reads as the track running
+            // off to the side. It used to be a cream slab shallower than the rows standing
+            // on it, which left the outer figures hanging over its edge.
+            const slab = makeSlab(`lane-${side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
+            slab.setPosition(x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2, this.cy, BAND_Z);
             parent.addChild(slab);
             for (let i = 0; i < LANE_VISIBLE; i++) {
                 const n = makeRow(`wait-${side}-${i}`);

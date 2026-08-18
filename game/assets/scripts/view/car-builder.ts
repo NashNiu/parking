@@ -2,7 +2,7 @@ import {
     Node, Color, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
     Vec3, Mat4, utils, primitives,
 } from 'cc';
-import { Dir } from './placeholder';
+import { Dir } from '../core/index';
 import { litMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 

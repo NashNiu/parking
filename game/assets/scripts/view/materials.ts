@@ -69,6 +69,39 @@ export function unlitMaterial(color: Color): Material {
     return mat;
 }
 
+const flatCache = new Map<string, Material>();
+const alphaCache = new Map<string, Material>();
+
+/**
+ * Unlit solid colour, CACHED and therefore SHARED — never mutate what this returns.
+ * `unlitMaterial` stays uncached for callers that recolour the instance they are handed;
+ * this one is for the scene's flat ground panels, where dozens of nodes ask for the same
+ * handful of colours.
+ */
+export function flatMaterial(color: Color): Material {
+    const k = key(color);
+    const hit = flatCache.get(k);
+    if (hit) return hit;
+    const mat = unlitMaterial(color);
+    flatCache.set(k, mat);
+    return mat;
+}
+
+/**
+ * Translucent unlit colour, cached and shared. Technique 1 of `builtin-unlit` is its
+ * transparent pass, which is the one that honours the alpha in `mainColor`.
+ */
+export function alphaMaterial(color: Color): Material {
+    const k = `${key(color)},${color.a}`;
+    const hit = alphaCache.get(k);
+    if (hit) return hit;
+    const mat = new Material();
+    mat.initialize({ effectName: 'builtin-unlit', technique: 1 });
+    mat.setProperty('mainColor', color);
+    alphaCache.set(k, mat);
+    return mat;
+}
+
 /** Recolor a lit node (its material is shared from cache, so give it a fresh instance first). */
 export function setLitColor(node: Node, color: Color): void {
     const mr = node.getComponent(MeshRenderer);

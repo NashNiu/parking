@@ -35,6 +35,13 @@ const PILL_CAPTION = new Color(126, 134, 156);
 const PILL_ICON = new Color(255, 150, 66);
 
 /**
+ * Ink for the level title and the win/lose banner. The board is a light scene, so white
+ * type — which is what this used — disappears into it; the banner keeps a white rim
+ * because it lands over cars and passengers of every colour.
+ */
+const TITLE_INK = new Color(43, 52, 80);
+
+/**
  * Minimal HUD built at runtime under the editor-created Canvas: a level label, a
  * remaining-passengers pill in the top-left corner, per-car seat chips, and a center
  * banner for win/lose.
@@ -49,9 +56,19 @@ export class HudView {
     constructor(canvas: Node) {
         this.canvas = canvas;
         const { w, h } = canvasSize(canvas);
-        this.levelLabel = makeLabel(canvas, 'LevelLabel', 44, h / 2 - 70);
-        this.progressLabel = this.buildPassengerPill(canvas, w, h);
-        this.bannerLabel = makeLabel(canvas, 'Banner', 64, 0);
+        const margin = w * PILL_MARGIN;
+        // Title centred on the same line as the passenger pill, which is what puts it
+        // where the reference art has it rather than jammed against the top edge.
+        this.levelLabel = makeLabel(canvas, 'LevelLabel', 68, h / 2 - margin - PILL_H / 2);
+        this.levelLabel.color = TITLE_INK;
+        this.levelLabel.isBold = true;
+        this.progressLabel = this.buildPassengerPill(canvas, w, h, margin);
+        this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
+        this.bannerLabel.color = TITLE_INK;
+        this.bannerLabel.isBold = true;
+        this.bannerLabel.enableOutline = true;
+        this.bannerLabel.outlineColor = new Color(255, 255, 255, 235);
+        this.bannerLabel.outlineWidth = 5;
         this.bannerLabel.node.active = false;
         for (let i = 0; i < 3; i++) {
             const label = makeLabel(canvas, `Star${i}`, 60, 100);
@@ -66,8 +83,7 @@ export class HudView {
      * holding a huddle of passenger dots, a small caption, and a big count. It replaces
      * a bare centred line of text, which read as debug output rather than a HUD.
      */
-    private buildPassengerPill(canvas: Node, w: number, h: number): Label {
-        const margin = w * PILL_MARGIN;
+    private buildPassengerPill(canvas: Node, w: number, h: number, margin: number): Label {
         const pill = roundedSprite('PaxPill', PILL_W, PILL_H, PILL_BG);
         canvas.addChild(pill);
         pill.setPosition(-w / 2 + margin + PILL_W / 2, h / 2 - margin - PILL_H / 2, 0);

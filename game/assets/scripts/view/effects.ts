@@ -120,7 +120,7 @@ export function confetti(parent: Node, at: Vec3): void {
 /** A small puff of dust that drifts up and fades (scales to zero) then self-destructs. */
 export function dustBurst(parent: Node, at: Vec3): void {
     for (let i = 0; i < 5; i++) {
-        const p = spawnParticle(parent, at, new Color(210, 200, 180), 0.12);
+        const p = spawnParticle(parent, at, new Color(150, 160, 182), 0.12);
         if (!p) break;
         const dx = (i - 2) * 0.12;
         tween(p)

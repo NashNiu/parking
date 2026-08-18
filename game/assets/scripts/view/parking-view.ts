@@ -1,6 +1,7 @@
 import { Node, Color, Vec3, MeshRenderer, utils, primitives } from 'cc';
-import { makeLitBox } from './placeholder';
-import { litMaterial } from './materials';
+import { flatMaterial } from './materials';
+import { makeSlab, makeShadowSlab } from './slabs';
+import { SHADOW_Z } from './scene-stage';
 
 /**
  * Stall footprint and pitch, in board units. A car parks nose-up, so the stall is deeper
@@ -22,28 +23,30 @@ const PITCH = 0.98;
 const PANEL_PAD_X = 0.22;
 const PANEL_PAD_Y = 0.12;
 
-/**
- * Depths. The pads sit BEHIND the board plane (near face at -0.08) so a parked car's
- * contact shadow, which lies at z = -0.06, lands on the pad instead of inside it. The bay
- * panel sits behind the pads again, and the whole stack stays in front of the platform
- * tray (near face -0.325) and clear of the ring road, which it never overlaps in y.
- */
-const PAD_Z = -0.14;
-const PANEL_Z = -0.22;
-const EDGE_Z = -0.09;
+/** Corner radii and the light rim around an open stall. */
+const PANEL_R = 0.29;
+const PAD_R = 0.15;
+const RIM = 0.045;
 
-const PANEL = new Color(226, 230, 244);
-const PAD = new Color(96, 104, 126);
-const PAD_LOCKED = new Color(66, 70, 84);
-const EDGE = new Color(152, 164, 192);
-const LOCK_BODY = new Color(38, 42, 54);
-const LOCK_SHACKLE = new Color(172, 178, 194);
+/** Depths; see the stack documented in scene-stage. */
+const PAD_Z = -0.11;
+const RIM_Z = -0.12;
+const PANEL_Z = -0.14;
+const LOCK_Z = 0.02;
+const DROP = 0.11;
+
+const PANEL = new Color(220, 227, 245);
+const PAD = new Color(76, 87, 115);
+const PAD_LOCKED = new Color(57, 66, 90);
+const PAD_RIM = new Color(147, 160, 192);
+const LOCK_BODY = new Color(32, 38, 54);
+const LOCK_SHACKLE = new Color(170, 178, 198);
 
 /**
- * Renders the parking stalls as a horizontal row on a light bay panel: the first
- * `unlocked` slots are open stalls (dark pad + light border), the rest are locked (darker
- * pad + lock body/shackle). Exposes slot positions so the controller can drive cars into
- * them, and the point under each stall where its seat chip hangs.
+ * Renders the parking stalls as a row on a light bay panel: the first `unlocked` slots
+ * are open stalls (dark pad inside a light rim), the rest are locked (darker pad + lock
+ * body/shackle). Exposes slot positions so the controller can drive cars into them, and
+ * the point under each stall where its seat chip hangs.
  */
 export class ParkingView {
     private positions: Vec3[] = [];
@@ -56,50 +59,52 @@ export class ParkingView {
 
     render(): void {
         const startX = -((this.slots - 1) * PITCH) / 2;
+        const panelW = (this.slots - 1) * PITCH + SLOT_W + 2 * PANEL_PAD_X;
+        const panelH = SLOT_H + 2 * PANEL_PAD_Y;
 
-        // The bay panel: a light band behind the whole row. It separates the stalls from
-        // the cream platform tray and gives the dark pads something to read against.
-        const panel = makeLitBox(
-            'ParkingPanel',
-            (this.slots - 1) * PITCH + SLOT_W + 2 * PANEL_PAD_X,
-            SLOT_H + 2 * PANEL_PAD_Y,
-            0.08, PANEL,
-        );
+        // The bay panel: a light band behind the whole row, with a drop shadow onto the
+        // road below. It separates the stalls from the ground and gives the dark pads
+        // something to read against.
+        const shadow = makeShadowSlab('ParkingShadow', panelW, panelH, PANEL_R);
+        shadow.setPosition(0, this.y - DROP, SHADOW_Z);
+        this.parent.addChild(shadow);
+
+        const panel = makeSlab('ParkingPanel', panelW, panelH, 0.06, PANEL, PANEL_R);
         panel.setPosition(0, this.y, PANEL_Z);
         this.parent.addChild(panel);
 
         for (let i = 0; i < this.slots; i++) {
             const locked = i >= this.unlocked;
             const pos = new Vec3(startX + i * PITCH, this.y, 0);
-            const pad = makeLitBox(
-                `slot-${i}`, SLOT_W, SLOT_H, 0.12, locked ? PAD_LOCKED : PAD,
-            );
-            pad.setPosition(pos.x, pos.y, PAD_Z);
-            this.parent.addChild(pad);
 
             if (locked) {
-                // Lock body + shackle over the pad.
-                const body = makeLitBox('lockbody', 0.34, 0.28, 0.16, LOCK_BODY);
-                body.setPosition(pos.x, pos.y - 0.02, 0.08);
+                const pad = makeSlab(`slot-${i}`, SLOT_W, SLOT_H, 0.06, PAD_LOCKED, PAD_R);
+                pad.setPosition(pos.x, pos.y, PAD_Z);
+                this.parent.addChild(pad);
+
+                const body = makeSlab('lockbody', 0.34, 0.28, 0.1, LOCK_BODY, 0.07);
+                body.setPosition(pos.x, pos.y - 0.02, LOCK_Z);
                 this.parent.addChild(body);
                 const sh = new Node('shackle');
                 const smr = sh.addComponent(MeshRenderer);
                 smr.mesh = utils.createMesh(primitives.torus(0.12, 0.03, { radialSegments: 12, tubularSegments: 8 }));
-                smr.material = litMaterial(LOCK_SHACKLE);
-                sh.setPosition(pos.x, pos.y + 0.2, 0.08);
+                smr.material = flatMaterial(LOCK_SHACKLE);
+                sh.setPosition(pos.x, pos.y + 0.2, LOCK_Z);
                 sh.setRotationFromEuler(90, 0, 0);
                 this.parent.addChild(sh);
             } else {
-                // Four thin border strips to read as a painted stall.
-                const t = 0.05;
-                for (const [dx, dy, w, h] of [
-                    [0, SLOT_H / 2, SLOT_W, t], [0, -SLOT_H / 2, SLOT_W, t],
-                    [-SLOT_W / 2, 0, t, SLOT_H], [SLOT_W / 2, 0, t, SLOT_H],
-                ] as const) {
-                    const s = makeLitBox('edge', w, h, 0.1, EDGE);
-                    s.setPosition(pos.x + dx, pos.y + dy, EDGE_Z);
-                    this.parent.addChild(s);
-                }
+                // An open stall is two nested slabs: the light rim shows as a border
+                // because the dark pad on top of it is inset by RIM on every side. Two
+                // draw calls instead of the four edge strips this replaces.
+                const rim = makeSlab(`slot-rim-${i}`, SLOT_W, SLOT_H, 0.06, PAD_RIM, PAD_R);
+                rim.setPosition(pos.x, pos.y, RIM_Z);
+                this.parent.addChild(rim);
+
+                const pad = makeSlab(
+                    `slot-${i}`, SLOT_W - 2 * RIM, SLOT_H - 2 * RIM, 0.06, PAD, PAD_R - RIM,
+                );
+                pad.setPosition(pos.x, pos.y, PAD_Z);
+                this.parent.addChild(pad);
             }
             this.positions.push(pos);
         }

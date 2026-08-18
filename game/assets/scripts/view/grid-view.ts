@@ -1,8 +1,7 @@
 import { Node, Vec3 } from 'cc';
-import { GridSystem } from '../core/index';
+import { Dir, GridSystem } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
-import { Dir } from './placeholder';
 import { buildCar, Cap } from './car-builder';
 
 interface CarEntry {
