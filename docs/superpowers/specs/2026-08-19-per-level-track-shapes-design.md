@@ -155,7 +155,7 @@ export interface Feed { side: 'far' | 'near'; lookahead: number }
 | `core/track-shapes.ts`(新) | 五个轮廓的段序列,含通用 `roundedPoly(verts, r)`、`ellipse(a, b, N)`、`circle(r)`。纯数学,不 import `cc` |
 | `core/track-path.ts`(新) | `TrackPath`:`perimeter`、`pointAt(t)`、`normalAt(t)`、`rowSpacing(capacity)`、`entryIndices(capacity)`。实例状态,没有模块级缓存 |
 | `core/loop-system.ts` | `feeds` 从数据来;`left`/`right` 改名 `far`/`near`;单通道时候车全进那一条 |
-| `core/level-data.ts` | `validateLevel` 新增 7 条规则 |
+| `core/level-data.ts` | 新增 `validateTrack`(7 条规则);`validateLevel` 一行不改 |
 | `core/level-gen.ts` | 曲线表 + 形状按格数与前瞻上限挑 |
 | `view/track-view.ts` | 只管画:接 `TrackPath`,缺口切在**入口格自己的 t** 上,通道位置 = 入口点 + 外法线,每侧前瞻长度独立 |
 | `view/GameController.ts` | 透传字段,别的不动 |
@@ -181,7 +181,11 @@ entryFar  = (board + q) % capacity   // 管道 capacity - q 拍
 - 装填时把剩余批次按顺序分给各通道(双通道 = 今天的对半分;单通道 = 全给它)。
 - `reachableColors()` 按**排空顺序**遍历 feeds —— 死局判定完全靠它,单通道下必须与今天的语义一致。这是这一版风险最高的一处改动。
 
-## 校验规则(`validateLevel` 新增)
+## 校验规则(新函数 `validateTrack`)
+
+规则住在一个**新函数**里,不是加进 `validateLevel` —— 写实现计划时读代码才发现:`validateLevel` 是 `isSolvable` 的判据(`solvability.ts:35`,失败即判不可解),而 `logic/tests` 里的合成关卡故意用 capacity **2 / 4 / 5 / 6**(`game-core` 的死局用例靠 capacity 2 让两个入口重合在 index 0),这些夹具**从不需要被画出来**。把可绘制性塞进 `validateLevel`,等于用一个与它们无关的理由宣布它们不可解,连带打红 5 个测试文件。
+
+`validateTrack` 的调用点:生成器测试、`tools/gen-levels.ts`(不合规就让离线构建失败)、`GameController` 里一句 warn(永不阻断游戏)。
 
 1. `track` 是五个已知形状之一(缺失 = `rect`)。
 2. `capacity` 是 4 的倍数(8/12/16/20),且在该形状的可用格数内(行距 ∈ [0.70, 1.90])。
@@ -210,14 +214,14 @@ entryFar  = (board + q) % capacity   // 管道 capacity - q 拍
 core 侧全部进 jest;视图仍然靠预览验收(无测试基架)。
 
 1. 每个形状:闭合、左右对称(镜像误差 < 1e-9)、周长与上表一致、`pointAt(0.5)` 是最低点且 x = 0。
-2. 每个形状 × 每个合法格数:行距 ∈ [0.70, 1.90];非法组合(圆形 12 格、六边形 18 格)被 `validateLevel` 拒绝。
+2. 每个形状 × 每个合法格数:行距 ∈ [0.70, 1.90];非法组合(圆形 12 格、六边形 18 格)被 `validateTrack` 拒绝。
 3. 两个入口点的外法线 `|ny| ≤ 0.35`,逐形状逐格数。
 4. 最小曲率半径 ≥ 0.6。
 5. 椭圆折线与解析椭圆的偏差 < 0.001。
-6. `validateLevel` 拒绝:未知形状、非 4 倍数格数(14/18)、圆形 12 格、`boardIndex` 不等于半圈、3 条通道、同侧两条、`lookahead` 为 0、`lookahead` 超上限。
+6. `validateTrack` 拒绝:未知形状、非 4 倍数格数(14/18)、圆形 12 格、`boardIndex` 不等于半圈、3 条通道、同侧两条、`lookahead` 为 0、`lookahead` 超上限;同一个关卡 `validateLevel` 仍然放行(拆函数的回归网)。
 7. `LoopSystem` 单通道:候车全进那一条,另一侧无入口;`reachableColors` 在等价输入下与双通道版一致。
 8. 管道拍数用 `step()` 实测(不是复述算式):近端 = `capacity/4`,远端 = `capacity × 3/4`。
-9. 10 关全部 `validateLevel` 通过 + `isSolvable`,且视野序列与曲线表逐关对上。
+9. 10 关全部 `validateLevel` + `validateTrack` 通过 + `isSolvable`,且视野序列与曲线表逐关对上。
 10. 无 `track` / `feeds` 字段的关卡回退到 `rect` + 远近双通道 + 前瞻 3,行为与 M6 一致(M6 的死局用例保持绿)。
 
 ## 里程碑
@@ -227,7 +231,7 @@ core 侧全部进 jest;视图仍然靠预览验收(无测试基架)。
 | M7.A | 压 draw call(乘客 5 → 2),先量后改 |
 | M7.B | `core/track-shapes.ts` + `core/track-path.ts`,纯数学 TDD |
 | M7.C | `LoopSystem` feeds 泛化 + `far`/`near` 改名 + 死局回归 |
-| M7.D | `validateLevel` 规则 + 生成器曲线 + 重新生成 10 关 |
+| M7.D | `validateTrack` 规则 + 生成器曲线 + 重新生成 10 关 |
 | M7.E | 视图接入:形状、缺口(绝对弧长)、通道从路径推、每侧前瞻 |
 | M7.F | 预览验收:五种形状逐个过一遍 |
 
