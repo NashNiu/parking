@@ -2,7 +2,7 @@ import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
     input, Input, EventTouch, EventMouse, geometry, tween, Mat4, assetManager, EffectAsset,
 } from 'cc';
-import { GameCore, validateLevel, LevelData, Dir } from '../core/index';
+import { GameCore, validateLevel, LevelData, Dir, firstBlocker } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
@@ -93,6 +93,30 @@ const STALL_FILL_H = 1.02;
 const CAMERA_Y = 0;
 const CAMERA_DIST = 15;
 
+/**
+ * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
+ * reverses. A car that only shuddered in place said "no" without saying WHY — this points
+ * at the obstacle, which is the one piece of information the player is missing.
+ *
+ * BUMP is how far past contact it presses. Cars are drawn at 90% of their footprint, so a
+ * sliver of overlap in cell terms still reads as bodies touching rather than clipping.
+ * The forward leg is capped: with a three-cell run-up, honest speed would make a refused
+ * tap feel like a slow round trip.
+ */
+const NUDGE_SPEED = 5.5;
+const NUDGE_MIN = 0.12;
+const NUDGE_MAX = 0.35;
+const BUMP = 0.06;
+const JOLT = 0.07;
+
+/** Board-space direction a car exits toward. Grid row 0 is at the TOP, hence up = +Y. */
+const DIR_VEC: Record<Dir, Vec3> = {
+    up: new Vec3(0, 1, 0),
+    down: new Vec3(0, -1, 0),
+    left: new Vec3(-1, 0, 0),
+    right: new Vec3(1, 0, 0),
+};
+
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
 const FACE_RIGHT = 0;
@@ -143,6 +167,8 @@ export class GameController extends Component {
     private sfx: SfxManager | null = null;
     /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
     private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
+    /** Grid pitch in board units, so a blocked nudge can turn cells into distance. */
+    private gridStep = 1;
     /**
      * Cars still driving to a stall. `busy` only locks taps for the first leg, so the
      * player can keep tapping while a car finishes its lap of the ring road; this keeps
@@ -287,6 +313,7 @@ export class GameController extends Component {
             (2 * LOT_HALF_W - 0.3) / level.grid.cols - CELL_GAP,
         );
         const step = cell + CELL_GAP;
+        this.gridStep = step;
         const lotH = lotHeight(level.grid.rows, step);
         const lotW = Math.max(lotWidth(level.grid.cols, step), 2 * LOT_HALF_W);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
@@ -813,18 +840,75 @@ export class GameController extends Component {
         });
     }
 
+    /**
+     * Two quick hops across `axis` and back, which is the visible half of a collision. The
+     * three offsets sum to zero, so the node lands exactly where it started.
+     */
+    private jolt(node: Node, axis: Vec3): void {
+        const out = new Vec3(axis.x * JOLT, axis.y * JOLT, 0);
+        const back = new Vec3(-out.x * 2, -out.y * 2, 0);
+        tween(node)
+            .by(0.045, { position: out })
+            .by(0.06, { position: back })
+            .by(0.045, { position: out })
+            .start();
+    }
+
+    /**
+     * A refused tap. The car drives at whatever is in its way, both cars jolt on contact,
+     * and it reverses into its slot.
+     *
+     * With no blocker the refusal is a full parking row instead, and there is nothing to
+     * drive at — that keeps the old shudder in place.
+     */
     private playShake(id: number): void {
         const node = this.gridView!.getCarNode(id);
         const body = this.gridView!.getCarBody(id);
         if (!node) return;
-        if (body) flash(body);
-        vibrate('medium');
+
+        const car = this.core!.grid.cars.get(id);
+        const grid = this.core!.grid;
+        const block = car
+            ? firstBlocker(car, Array.from(grid.cars.values()), grid.cols, grid.rows)
+            : null;
+
         this.busy = true;
+        const hit = new Color(255, 96, 96);
+
+        if (!block || !car) {
+            if (body) flash(body, hit);
+            vibrate('medium');
+            this.jolt(node, new Vec3(1, 0, 0));
+            this.scheduleOnce(() => { this.busy = false; }, 0.2);
+            return;
+        }
+
+        const dir = DIR_VEC[car.dir];
+        const dist = block.gap * this.gridStep + BUMP;
+        const time = Math.min(NUDGE_MAX, Math.max(NUDGE_MIN, dist / NUDGE_SPEED));
+        const start = node.position.clone();
+        const target = new Vec3(start.x + dir.x * dist, start.y + dir.y * dist, start.z);
+        // Jolt across the direction of travel: a head-on bump shoves cars sideways.
+        const across = new Vec3(-dir.y, dir.x, 0);
+        const other = this.gridView!.getCarNode(block.carId);
+        const otherBody = this.gridView!.getCarBody(block.carId);
+
+        // The mover's own jolt is inlined into its chain rather than calling jolt(): a
+        // second tween on the same node would fight the drive-and-reverse tween.
+        const out = new Vec3(across.x * JOLT, across.y * JOLT, 0);
+        const back = new Vec3(-out.x * 2, -out.y * 2, 0);
         tween(node)
-            .by(0.05, { position: new Vec3(0.12, 0, 0) })
-            .by(0.05, { position: new Vec3(-0.24, 0, 0) })
-            .by(0.05, { position: new Vec3(0.24, 0, 0) })
-            .by(0.05, { position: new Vec3(-0.12, 0, 0) })
+            .to(time, { position: target }, { easing: 'quadIn' })
+            .call(() => {
+                vibrate('medium');
+                if (body) { squash(body); flash(body, hit); }
+                if (otherBody) { squash(otherBody); flash(otherBody, hit); }
+                if (other) this.jolt(other, across);
+            })
+            .by(0.045, { position: out })
+            .by(0.06, { position: back })
+            .by(0.045, { position: out })
+            .to(time * 0.9, { position: start }, { easing: 'sineOut' })
             .call(() => { this.busy = false; })
             .start();
     }
