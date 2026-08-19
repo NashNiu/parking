@@ -53,14 +53,21 @@ const ROAD_H = 0.9;
 const RING_OFF = 0.62;
 
 /**
- * How far down the camera actually shows the tray. The lot AND both of its horizontal
- * ring lanes have to fit between the top lane and this line, so a taller grid takes a
- * SMALLER cell rather than hanging off the bottom of the screen — which is exactly what
- * a 6-row level did: its ring reached y = -7.96 against a view that stops near -5.7.
- * The cell is capped at the authored 1.0, so a grid that already fits does not grow.
+ * The box the lot and its ring road have to live in, straight off the camera frame
+ * (±4.90 across, ±6.21 down — see CAMERA_DIST). RING_LOW is the lowest a lane centreline
+ * can sit with its outer edge still on screen, and LOT_HALF_W is what is left across once
+ * a lane and its offset are taken off each side. A taller grid therefore takes a SMALLER
+ * cell rather than hanging off the bottom, which is what a 6-row level used to do: its
+ * ring reached y = -7.96.
+ *
+ * The lot slab is then drawn LOT_HALF_W wide whatever the grid needs, so it reaches the
+ * edge of the view on both sides and the cars sit centred on it. The cell can't grow to
+ * match: 6 rows in a 4.5-unit-tall budget is what fixes it, and only a taller view (a real
+ * phone, rather than this squat preview window) changes that.
  */
-const LOT_BOTTOM = -5.7;
-const CELL_MAX = 1;
+const RING_LOW = -5.76;
+const LOT_HALF_W = 3.83;
+const CELL_MAX = 1.4;
 const CELL_GAP = 0.12;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
@@ -78,6 +85,13 @@ const DRIVE_SPEED = 9;
  */
 const STALL_FILL_W = 0.8;
 const STALL_FILL_H = 1.02;
+
+/**
+ * Where the camera sits, in board units. CAMERA_Y is the midpoint of everything drawn
+ * (circuit top to bottom ring lane) so the margins come out even.
+ */
+const CAMERA_Y = 0;
+const CAMERA_DIST = 15;
 
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
@@ -136,7 +150,13 @@ export class GameController extends Component {
      * to cover when a drive was one short hop.
      */
     private arriving = 0;
-    private readonly BOARD_TILT = 52; // degrees, tilt the board back for a 2.5D look
+    /**
+     * Degrees the board leans back. Zero means the camera looks straight down the board's
+     * normal — a flat, straight-on view, which is what the art is designed for. It was 52
+     * for a 2.5D three-quarter look; the trade is that at zero the cars only ever show
+     * their roofs, since the models stand along the board's +Z toward the camera.
+     */
+    private readonly BOARD_TILT = 0;
 
     private busy = false;
     private ended = false;
@@ -257,16 +277,18 @@ export class GameController extends Component {
         // centred here fills that band with a little margin at each end.
         const PARKING_Y = 1.4;
 
-        // The lot hangs exactly one lane below the top road, so the road stays put and
-        // the lot moves with the grid's size. A 4-row lot centres on -2.64, a 6-row one
-        // on -3.76; both leave their top edge a lane-width under the stalls.
+        // The lot hangs exactly one lane below the top road, so the road stays put and the
+        // lot moves with the grid's size. The cell takes whichever budget is tighter — the
+        // rows against the height left under the stalls, or the columns against the width —
+        // and the slab is then widened to the full frame.
         const cell = Math.min(
             CELL_MAX,
-            (ROAD_Y - 2 * RING_OFF - LOT_BOTTOM - 0.3) / level.grid.rows - CELL_GAP,
+            (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / level.grid.rows - CELL_GAP,
+            (2 * LOT_HALF_W - 0.3) / level.grid.cols - CELL_GAP,
         );
         const step = cell + CELL_GAP;
         const lotH = lotHeight(level.grid.rows, step);
-        const lotW = lotWidth(level.grid.cols, step);
+        const lotW = Math.max(lotWidth(level.grid.cols, step), 2 * LOT_HALF_W);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
             top: ROAD_Y,
@@ -280,7 +302,7 @@ export class GameController extends Component {
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
         setupBackground(this.boardRoot);
-        setupStage(this.boardRoot, level.grid.cols, level.grid.rows, GRID_Y, step);
+        setupStage(this.boardRoot, lotW, lotH, GRID_Y);
         setupRoads(this.boardRoot, this.ring, ROAD_H);
 
         const loopRoot = new Node('LoopRoot');
@@ -315,12 +337,21 @@ export class GameController extends Component {
             return;
         }
         this.cam = camNode.getComponent(Camera);
-        // Elevated, looking down at the board center for a 2.5D three-quarter view.
-        camNode.setPosition(new Vec3(0, 5, 12));
-        camNode.lookAt(new Vec3(0, -0.3, 0));
+        // Straight on, down the board's normal. At a 45-degree VERTICAL fov the visible
+        // half-height is 0.414 * d, so 15 shows 6.21 above and below the board centre,
+        // which takes the circuit's top edge (5.48) and the bottom ring lane (-6.15) and
+        // still leaves 0.7 at the top for the HUD. Across, it shows 4.90 — the outermost
+        // waiting rows sit at 4.65.
+        //
+        // (The tilted 2.5D framing this replaces was pos (0, 5, 12), lookAt (0, -0.3, 0),
+        // and needs BOARD_TILT back at 52 to make sense.)
+        camNode.setPosition(new Vec3(0, CAMERA_Y, CAMERA_DIST));
+        camNode.lookAt(new Vec3(0, CAMERA_Y, 0));
         if (this.cam) {
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
-            this.cam.clearColor = new Color(255, 224, 186, 255);
+            // Matches the ground panel, so any sliver outside it doesn't flash a
+            // different colour.
+            this.cam.clearColor = new Color(205, 215, 236, 255);
         }
     }
 

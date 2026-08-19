@@ -51,10 +51,8 @@ const ROAD_Z = -0.28;
 export const SHADOW_Z = -0.18;
 
 /**
- * Size of the lot slab for a grid, from the same pitch the cars are laid out on. The
- * caller chooses the pitch — a tall grid uses a smaller one so its lot still fits the
- * camera — and must pass the same value here and to GridLayout, or the slab and the
- * cars it is meant to sit under drift apart.
+ * Size the lot needs to cover a grid laid out at pitch `step`, plus a small apron. The
+ * caller may draw it larger (it does, to fill the view) but never smaller.
  */
 export function lotHeight(rows: number, step: number): number {
     return rows * step + 0.3;
@@ -98,13 +96,15 @@ export function setupBackground(root: Node): void {
 }
 
 /**
- * The parking lot: a rounded panel under the grid cars with a white dashed border, and a
- * soft drop shadow. No lane lines — cars face varying directions, so column lanes don't
- * fit the gameplay (the reference art uses a plain lot plus a dashed border too).
+ * The parking lot: a rounded panel `bw` x `bh` centred on `gridY`, with a white dashed
+ * border and a soft drop shadow. No lane lines — cars face varying directions, so column
+ * lanes don't fit the gameplay (the reference art uses a plain lot plus a dashed border).
+ *
+ * The size arrives from the caller rather than being re-derived from the grid: the lot is
+ * widened past what the columns need so it reaches the edge of the view, and only the
+ * caller knows how wide that is.
  */
-export function setupStage(root: Node, cols: number, rows: number, gridY: number, step: number): void {
-    const bw = lotWidth(cols, step), bh = lotHeight(rows, step);
-
+export function setupStage(root: Node, bw: number, bh: number, gridY: number): void {
     const shadow = makeShadowSlab('LotShadow', bw, bh, LOT_R);
     shadow.setPosition(0, gridY - DROP, SHADOW_Z);
     root.addChild(shadow);
