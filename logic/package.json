@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "test": "jest",
-    "gen": "tsc -p tsconfig.gen.json && node ../.tmp/gen/tools/gen-levels.js"
+    "gen": "tsc -p tsconfig.gen.json && node ../.tmp/gen/tools/gen-levels.js",
+    "typecheck:view": "tsc -p tsconfig.view.json"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",

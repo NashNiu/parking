@@ -1,0 +1,27 @@
+{
+  /* Type gate for the VIEW layer (game/assets/scripts), which the editor compiles but
+     never type-checks in CI. `logic/tsconfig.json` covers core only, through the tests.
+
+     `skipLibCheck` is required, not cosmetic: the engine ships a cc.d.ts that does not
+     type-check under this TypeScript version on its own (missing TypedArray, one-arg
+     Map<T>, GPUCanvasContext). We check OUR code against it, not it against itself.
+
+     Depends on game/temp/declarations/cc.d.ts, which the editor generates and
+     game/.gitignore excludes -- so open the project in Cocos Creator once before
+     running this. */
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "esnext",
+    "moduleResolution": "node",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "experimentalDecorators": true,
+    "baseUrl": "..",
+    "paths": {
+      "cc": ["game/temp/declarations/cc.d.ts"],
+      "cc/env": ["game/temp/declarations/cc.env.d.ts"]
+    }
+  },
+  "include": ["../game/assets/scripts/**/*.ts"]
+}
