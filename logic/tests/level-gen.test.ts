@@ -141,7 +141,11 @@ test('the planning window narrows as the levels go on', () => {
   });
   expect(tail).toEqual([8, 7, 7, 6, 6, 5, 11, 4, 4, 3]);
   for (let i = 1; i < tail.length; i++) {
-    if (i + 1 === 7 || i === 7 - 1) continue;   // skip into and out of the breather
+    // Level 7 is index 6; skip the comparison INTO it (i === 6) and the one OUT of it
+    // (i === 7). Both disjuncts used to read `i === 6`, so the "out of" skip never
+    // actually fired -- harmless here since tail[7] <= tail[6] (4 <= 11) holds anyway,
+    // and the toEqual above already pins the whole sequence.
+    if (i === 6 || i === 7) continue;
     expect(tail[i]).toBeLessThanOrEqual(tail[i - 1]);
   }
 });
@@ -193,12 +197,11 @@ test('every generated level draws a legal track', () => {
   }
 });
 
-test('the ring can hold at least one row of every colour a level uses', () => {
-  // A ring shorter than the colour count can have a colour entirely absent from it,
-  // which turns an ordinary level into a coin flip.
-  for (const id of IDS) {
-    const level = generateLevel(id);
-    const colors = new Set(level.grid.cars.map((c) => c.color));
-    expect(level.loop.capacity).toBeGreaterThanOrEqual(colors.size);
-  }
-});
+// A test used to sit here asserting `level.loop.capacity >= colors.size` ("the ring can
+// hold at least one row of every colour a level uses" -- a ring shorter than the colour
+// count can have a colour entirely absent from it, which turns an ordinary level into a
+// coin flip). Removed: CAPACITY_OPTIONS never goes below 8 and levelParams never asks
+// for more than 5 colours (PALETTE itself only has 6), so that comparison could not fail
+// for ANY output this generator can produce -- it was tautological, not a regression
+// test, and no realistic bug in `scatter`/`queueFor` could push it far enough to matter.
+// The intent above is still true; it just is not exercisable under today's constants.

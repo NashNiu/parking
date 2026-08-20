@@ -15,7 +15,11 @@ import { capacityOptions, entryIndex } from './track-path';
 export const GRID_COLS = 9;
 export const GRID_ROWS = 6;
 
-/** Fixed across levels: the view draws seven stalls and a twelve-row circuit. */
+/**
+ * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
+ * itself is the opposite of fixed now -- its shape, ring length and feeder channels are
+ * a per-level property (see `trackParams`), which is the whole point of this milestone.
+ */
 const SLOTS = 7;
 const UNLOCKED = 4;
 

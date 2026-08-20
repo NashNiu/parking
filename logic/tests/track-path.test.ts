@@ -24,6 +24,10 @@ test('the normal is a unit vector everywhere', () => {
 
 test('the normal points AWAY from the track centre', () => {
   // A channel is placed along this vector, so a sign error would bury it inside the ring.
+  // `dot(point, normal) > 0` is only a valid outward test because all five shapes are
+  // star-shaped about the origin (verified by inspection when this test was written); a
+  // future concave shape could have a point/normal pair with a negative dot product and
+  // still be facing outward, which would make THIS TEST wrong rather than the shape.
   for (const shape of TRACK_SHAPES) {
     const p = new TrackPath(shape);
     for (let i = 0; i < 200; i++) {

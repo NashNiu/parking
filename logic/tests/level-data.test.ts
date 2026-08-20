@@ -58,7 +58,7 @@ test('validateLevel still says nothing about geometry', () => {
   // The split is the point: `isSolvable` runs validateLevel, and the synthetic levels in
   // the game-core / solvability / coverage tests use rings of 2, 4, 5 and 6 slots on
   // purpose -- game-core's deadlock cases need capacity 2 so both entrances collapse onto
-  // index 0. They test boarding and deadlock and are never drawn, so geometry must not
+  // index 1. They test boarding and deadlock and are never drawn, so geometry must not
   // start calling them unsolvable.
   const tiny = trackLevel({ capacity: 4, boardIndex: 2, track: undefined, feeds: undefined });
   expect(validateLevel(tiny)).toEqual([]);
@@ -128,8 +128,14 @@ test('the circle takes a longer lookahead than the quadrilateral', () => {
 });
 
 test('every complaint names what is wrong', () => {
+  // The old version of this test only checked `e.length > 10`, which a message as vague
+  // as "bad track!!!!!!!!!!!!" would satisfy. Each complaint must actually name the field
+  // and the offending value, not just be long.
   const level = trackLevel({ capacity: 14, boardIndex: 6, track: 'circle' });
   const errors = validateTrack(level);
-  expect(errors.length).toBeGreaterThan(0);
-  for (const e of errors) expect(e.length).toBeGreaterThan(10);
+  expect(errors).toHaveLength(3);
+  expect(errors[0]).toBe('capacity 14 is not a multiple of 4');
+  expect(errors[1]).toContain('capacity 14 does not fit circle');
+  expect(errors[1]).toContain('row spacing');
+  expect(errors[2]).toBe('boardIndex 6 must be half the capacity (7)');
 });

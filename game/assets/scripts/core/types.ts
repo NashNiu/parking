@@ -1,5 +1,16 @@
-import { FeedSide } from './track-path';
 import { TrackShape } from './track-shapes';
+
+/**
+ * Which end of the ring a feeder channel joins, named by PIPELINE LENGTH rather than by
+ * screen side. The ring steps one index per tick in one direction, so the two sides are
+ * not interchangeable: a row entering at `near` reaches the boarding gap in capacity/4
+ * ticks, one entering at `far` takes three times that. That difference is the difficulty
+ * knob this milestone turns, and `left`/`right` hid it. The view draws no left/right
+ * mapping at all: both position and heading come from the entry cell's own path point
+ * and outward normal (see `entryIndex` in track-path.ts and `TrackView.buildLanes`),
+ * which is what makes a tilted shape's channels tilt correctly with no special-casing.
+ */
+export type FeedSide = 'far' | 'near';
 
 export type Dir = 'up' | 'down' | 'left' | 'right';
 export type Cap = 'small' | 'medium' | 'big';
@@ -43,6 +54,10 @@ export interface PaxGroup {
  * One feeder channel. `lookahead` is how many waiting batches the view draws, which is
  * how far ahead the player can read the incoming colours — a difficulty knob, not a
  * cosmetic length. The queue behind it is longer; the rest is implied off screen.
+ *
+ * Authored order does not matter: `LoopSystem` re-sorts a level's `feeds` into drain
+ * order (far before near) before it looks at them, and `validateTrack` rejects two
+ * feeds on the same side, so there is never a pair for order to matter between anyway.
  */
 export interface Feed { side: FeedSide; lookahead: number }
 

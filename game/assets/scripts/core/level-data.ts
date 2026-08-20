@@ -37,7 +37,7 @@ export function validateLevel(level: LevelData): string[] {
  * `validateLevel` answers "is this level's data self-consistent", and `isSolvable` treats
  * a failure there as unsolvable. The synthetic levels in the core tests run rings of 2, 4,
  * 5 and 6 slots -- game-core's deadlock cases need capacity 2 so both entrances collapse
- * onto index 0 -- and none of them is ever rendered. Drawability belongs to authored and
+ * onto index 1 -- and none of them is ever rendered. Drawability belongs to authored and
  * generated levels, so it is checked where those are made: the generator's tests, the
  * offline tool (which fails the build), and one warning in GameController.
  *
@@ -69,6 +69,9 @@ export function validateTrack(level: LevelData): string[] {
   if (loop.boardIndex !== loop.capacity / 2) {
     errors.push(`boardIndex ${loop.boardIndex} must be half the capacity (${loop.capacity / 2})`);
   }
+  // Unreachable with today's five shapes -- every minRadius (0.6 for the three rounded
+  // polygons, 0.65 for the oval, 1.3 for the circle) already clears the floor. Guards a
+  // future shape whose fillet or curvature was picked without checking this bound.
   if (path.minRadius < MIN_CURVE_RADIUS) {
     errors.push(`${shape} curves tighter (${path.minRadius}) than a row of four can take`);
   }
@@ -88,6 +91,9 @@ export function validateTrack(level: LevelData): string[] {
       );
     }
     // Only meaningful once the capacity itself is legal; a bad capacity already reported.
+    // Unreachable with today's five shapes at any of their legal capacities (all their
+    // entry normals sit well inside ENTRY_NORMAL_MAX -- see track-path.test.ts); guards
+    // a future shape or capacity whose entry lands on a steeper stretch of the outline.
     if (loop.capacity > 0 && loop.capacity % 4 === 0) {
       const t = entryIndex(loop.capacity, loop.capacity / 2, feed.side) / loop.capacity;
       const ny = Math.abs(path.normalAt(t).y);

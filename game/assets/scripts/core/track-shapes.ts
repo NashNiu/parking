@@ -140,7 +140,7 @@ export interface ShapeDef {
     /**
      * Smallest radius of curvature anywhere on the outline. A row of four figures stands
      * ACROSS the path (0.78 wide), so a tight arc squeezes the inner ones together;
-     * validateLevel rejects anything under 0.6. Declared rather than measured because
+     * validateTrack rejects anything under 0.6. Declared rather than measured because
      * the ellipse is a polyline, whose segments each claim infinite radius.
      */
     minRadius: number;

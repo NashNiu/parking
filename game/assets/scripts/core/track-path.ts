@@ -1,34 +1,28 @@
 import { buildShape, Pt, Seg, TrackShape } from './track-shapes';
-
-/**
- * Which end of the ring a feeder channel joins, named by PIPELINE LENGTH rather than by
- * screen side. The ring steps one index per tick in one direction, so the two sides are
- * not interchangeable: a row entering at `near` reaches the boarding gap in capacity/4
- * ticks, one entering at `far` takes three times that. That difference is the difficulty
- * knob this milestone turns, and `left`/`right` hid it. The view maps far to -x and near
- * to +x, in one place.
- */
-export type FeedSide = 'far' | 'near';
+import { FeedSide } from './types';
 
 /**
  * Lane geometry, in board units. These were view constants; they live here because
- * validateLevel has to check a level's lookahead against them, and one copy of a number
+ * validateTrack has to check a level's lookahead against them, and one copy of a number
  * beats two. `edgeLimit` is the visible half-width at the track's depth.
+ *
+ * Frozen: a caller that reached in and changed one of these would silently move a bound
+ * `validateTrack` and the view both rely on staying fixed.
  */
-export const LANE = {
+export const LANE = Object.freeze({
     bandHalf: 0.38,
     start: 0.52,
     step: 0.45,
     margin: 0.25,
     edgeLimit: 4.67,
-};
+});
 
 /**
  * Legal ring lengths. Multiples of four, because the entry cells are board +- capacity/4
  * and anything else makes that division round -- which lands the entry off the quarter
  * point, on a curved or slanted stretch whose normal is nowhere near horizontal.
  */
-export const CAPACITY_OPTIONS = [8, 12, 16, 20];
+export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
 
 /**
  * Row spacing bounds, in board units. Below the floor the boarding gap (GAP_ARC) stops
@@ -72,7 +66,13 @@ export class TrackPath {
         this.perimeter = def.segs.reduce((a, s) => a + s.len, 0);
     }
 
-    /** Point at arc-length fraction t (wrapped into [0,1)), written into `out`. */
+    /**
+     * Point at arc-length fraction t (wrapped into [0,1)), written into `out` (and
+     * returned) rather than a fresh object. A caller that holds the returned reference
+     * across a SECOND call with the same `out` gets that first point overwritten in
+     * place — pass separate scratch objects (as `normalAt` does with `_a`/`_b`) if two
+     * live results are needed at once.
+     */
     pointAt(t: number, out: Pt = { x: 0, y: 0 }): Pt {
         let s = (((t % 1) + 1) % 1) * this.perimeter;
         for (const seg of this.segs) {
@@ -91,6 +91,11 @@ export class TrackPath {
      * analytically per segment: the segments only answer positions, and a 1/2000-lap
      * difference reads as smooth straight through the corners. For a clockwise walk the
      * outward normal of a tangent (dx, dy) is (-dy, dx).
+     *
+     * Like `pointAt`, writes into (and returns) `out` rather than a fresh object, so
+     * reusing one buffer for both a point and a normal clobbers whichever was written
+     * first — this method's own `_a`/`_b` scratch pair is what lets it call `pointAt`
+     * twice internally without that problem.
      */
     normalAt(t: number, out: Pt = { x: 0, y: 0 }): Pt {
         const d = 1 / 4000;
@@ -110,7 +115,7 @@ export class TrackPath {
 }
 
 /**
- * Ring index where `side`'s channel joins. Math.round is defensive only: validateLevel
+ * Ring index where `side`'s channel joins. Math.round is defensive only: validateTrack
  * requires capacity to be a multiple of four, so the division is exact for every level
  * that ships, and a fractional index would index the ring array with a float.
  */

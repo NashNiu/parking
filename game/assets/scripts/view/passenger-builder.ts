@@ -10,12 +10,14 @@ import { instancedLitMaterial, readMainColor } from './materials';
  * `paint` (clothes — recolored per passenger), plus `trim`, `skin`, `eye` and
  * `shoe`, which keep their authored colors.
  *
- * Unlike a car, a passenger is drawn MANY times at once (12 ring slots + 6 waiting
- * slots + fliers), so the raw prefab is never instantiated into the scene: its 19
- * separate meshes would cost 19 draw calls each, ~340 for a full track. Instead the
- * prefab is instantiated exactly once at preload, its geometry baked into ONE merged
- * mesh per material role (see `bake`), and every passenger node reuses those five
- * shared meshes — 5 draw calls apiece.
+ * Unlike a car, a passenger is drawn MANY times at once (up to 20 ring slots + up to
+ * 6 waiting slots across both channels + fliers, per-level now rather than fixed), so
+ * the raw prefab is never instantiated into the scene: its 19 separate meshes would
+ * cost 19 draw calls each, over 500 for a full 20-row track. Instead the prefab is
+ * instantiated exactly once at preload, its geometry baked into ONE merged mesh per
+ * material role (see `bake`), and every passenger node reuses those five shared
+ * meshes. `instancedLitMaterial` (materials.ts) then collapses those five draw calls
+ * further, down to about one per (mesh, colour) pair for the whole crowd.
  */
 const MODEL_PATH = 'models/passenger';
 

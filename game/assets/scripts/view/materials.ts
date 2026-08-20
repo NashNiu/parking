@@ -102,7 +102,13 @@ export function alphaMaterial(color: Color): Material {
     return mat;
 }
 
-/** Recolor a lit node (its material is shared from cache, so give it a fresh instance first). */
+/**
+ * Recolor a lit node by swapping in the instanced, colour-keyed material for `color`
+ * (see `instancedLitMaterial`). That material is cached and SHARED across every caller
+ * asking for the same colour, same as `litMaterial` -- there is no "fresh instance" to
+ * give it; recoloring means pointing the renderer at a different shared material, never
+ * mutating the one it already has.
+ */
 export function setLitColor(node: Node, color: Color): void {
     const mr = node.getComponent(MeshRenderer);
     if (!mr) return;
@@ -136,7 +142,16 @@ const instancedCache = new Map<string, Material>();
  *
  * Same zero-pass guard as `tryStandard`: in some pipeline setups builtin-standard
  * builds no passes when created at runtime, and a pass-less material crashes the
- * renderer later. Falls back to the plain lit material, which is correct but slower.
+ * renderer later. Falls back to the plain lit material, which is correct but slower --
+ * and warns once per colour, so a silent instancing failure shows up as a console line
+ * instead of only as a frame-rate mystery.
+ *
+ * The fallback path stores `litMaterial(color)`'s own object under this cache's key too,
+ * so that one Material ends up reachable from both caches for this colour. That is safe
+ * (not a bug) only because both caches are keyed by the exact colour a caller asked for
+ * and nothing in this module mutates a fetched material's colour in place -- recoloring
+ * always means looking up a (possibly different) cached material and reassigning it, per
+ * `setLitColor` above. If that ever stops being true, this sharing stops being safe too.
  */
 export function instancedLitMaterial(color: Color): Material {
     const k = key(color);
@@ -155,6 +170,9 @@ export function instancedLitMaterial(color: Color): Material {
         } catch {
             mat = null;
         }
+    }
+    if (!mat) {
+        console.warn(`[materials] instancing unavailable for ${k}, falling back to non-instanced (5x draw calls for this colour)`);
     }
     const result = mat ?? litMaterial(color);
     instancedCache.set(k, result);

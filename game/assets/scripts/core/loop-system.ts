@@ -1,5 +1,5 @@
-import { DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup, QueueGroup } from './types';
-import { entryIndex, FeedSide } from './track-path';
+import { DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup } from './types';
+import { entryIndex } from './track-path';
 
 /**
  * Deterministic PRNG (mulberry32). The shuffle must be reproducible: a level has to
