@@ -35,19 +35,18 @@ export const TRACK_SHAPES: TrackShape[] = ['rect', 'hex', 'trap', 'oval', 'circl
  */
 export const TRACK_BOX = { halfW: 2.6, halfH: 1.3 };
 
-/** Corner radii, chosen so the quadrilateral still reads as a quadrilateral next to the oval. */
-const RECT_R = 0.40;
-const HEX_R = 0.35;
-const TRAP_R = 0.30;
+/**
+ * Corner radius, the same for all three polygons: 0.60 is the SMALLEST value that clears
+ * MIN_CURVE_RADIUS (0.6), and a fillet is what sets a rounded polygon's tightest curve.
+ * Smaller reads as a crisper quadrilateral next to the oval, and was the first choice —
+ * but a row of four figures stands 0.78 ACROSS the path, so on a 0.40 corner the innermost
+ * figure lands within 0.01 of the arc's own centre and the row visibly folds.
+ */
+const RECT_R = 0.60;
+const HEX_R = 0.60;
+const TRAP_R = 0.60;
 /** Straight pieces the ellipse is cut into; see `ellipsePoly`. */
 const OVAL_SEGMENTS = 120;
-/**
- * The row-of-four floor that ShapeDef.minRadius promises (validateLevel rejects anything
- * under it). It is declared separately from RECT_R/HEX_R/TRAP_R above on purpose: those
- * fillets were sized for how the outline reads next to the oval, and are each tighter
- * than a row of four actually needs to turn through smoothly.
- */
-const POLY_MIN_RADIUS = 0.6;
 
 function clamp(v: number, lo: number, hi: number): number {
     return Math.min(hi, Math.max(lo, v));
@@ -156,7 +155,7 @@ export function buildShape(shape: TrackShape): ShapeDef {
                     { x: -halfW, y: halfH }, { x: halfW, y: halfH },
                     { x: halfW, y: -halfH }, { x: -halfW, y: -halfH },
                 ], RECT_R),
-                minRadius: POLY_MIN_RADIUS,
+                minRadius: RECT_R,
             };
         case 'hex':
             return {
@@ -164,7 +163,7 @@ export function buildShape(shape: TrackShape): ShapeDef {
                     { x: -1.7, y: halfH }, { x: 1.7, y: halfH }, { x: halfW, y: 0 },
                     { x: 1.7, y: -halfH }, { x: -1.7, y: -halfH }, { x: -halfW, y: 0 },
                 ], HEX_R),
-                minRadius: POLY_MIN_RADIUS,
+                minRadius: HEX_R,
             };
         case 'trap':
             // Up-down asymmetric on purpose, which is why its quarter point lands on a
@@ -175,7 +174,7 @@ export function buildShape(shape: TrackShape): ShapeDef {
                     { x: -1.9, y: halfH }, { x: 1.9, y: halfH },
                     { x: halfW, y: -halfH }, { x: -halfW, y: -halfH },
                 ], TRAP_R),
-                minRadius: POLY_MIN_RADIUS,
+                minRadius: TRAP_R,
             };
         case 'oval':
             // b^2/a, at the two ends, is the tightest this curve ever gets.
