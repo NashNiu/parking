@@ -1,3 +1,5 @@
+export * from './track-shapes';
+export * from './track-path';
 export * from './types';
 export * from './level-data';
 export * from './move-solver';
