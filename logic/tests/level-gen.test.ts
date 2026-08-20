@@ -110,6 +110,7 @@ test('a car longer than it is wide points that length at its exit', () => {
 import { trackParams, planningWindow } from '../../game/assets/scripts/core/level-gen';
 import { capacityOptions, maxLookahead } from '../../game/assets/scripts/core/track-path';
 import { validateTrack } from '../../game/assets/scripts/core/level-data';
+import { TRACK_SHAPES } from '../../game/assets/scripts/core/track-shapes';
 
 test('the curve assigns every level a track its geometry can draw', () => {
   for (const id of IDS) {
@@ -171,6 +172,17 @@ test('the curve keeps producing legal tracks past the authored table', () => {
     expect(capacityOptions(p.track)).toContain(p.capacity);
     expect(validateLevel(generateLevel(id))).toEqual([]);
     expect(validateTrack(generateLevel(id))).toEqual([]);
+  }
+});
+
+test('a degenerate level id still yields a drawable track', () => {
+  // Not reachable from generateLevel today, but trackParams is exported and its contract is
+  // "any level number": a fractional or non-positive id used to come back with no track.
+  for (const id of [0, -1, -7, 1.5, 10.5]) {
+    const p = trackParams(id);
+    expect(TRACK_SHAPES).toContain(p.track);
+    expect(capacityOptions(p.track)).toContain(p.capacity);
+    expect(p.feeds.length).toBeGreaterThan(0);
   }
 });
 

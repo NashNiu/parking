@@ -47,8 +47,8 @@ for (let id = 1; id <= count; id++) {
 
     const trackErrors = validateTrack(level);
     if (trackErrors.length > 0) {
-        console.error(`level ${level.id}: undrawable track`);
-        for (const e of trackErrors) console.error(`  ${e}`);
+        console.error(`[gen] level ${level.id}: undrawable track`);
+        for (const e of trackErrors) console.error(`[gen]   ${e}`);
         failed++;
         continue;
     }

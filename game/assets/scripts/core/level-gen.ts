@@ -118,10 +118,15 @@ export function planningWindow(p: TrackParams): number[] {
  * levels stay legal and stay visually varied without inventing a curve nobody tuned.
  */
 export function trackParams(id: number): TrackParams {
-    if (id >= 1 && id <= TRACK_CURVE.length) return TRACK_CURVE[id - 1];
+    // Normalise first: the id reaches here from callers that only promise "a level number",
+    // and both a fractional id (fractional array index -> undefined) and a non-positive one
+    // (JS % keeps the sign, so fits[-1] is undefined) would otherwise hand back a row with
+    // no track at all -- which buildShape, having no default branch, cannot draw.
+    const n = Math.max(1, Math.floor(id));
+    if (n <= TRACK_CURVE.length) return TRACK_CURVE[n - 1];
     const tail = TRACK_CURVE[TRACK_CURVE.length - 1];
     const fits = TRACK_SHAPES.filter((s) => capacityOptions(s).includes(tail.capacity));
-    return { ...tail, track: fits[(id - 1) % fits.length] };
+    return { ...tail, track: fits[(n - 1) % fits.length] };
 }
 
 /** mulberry32: a small deterministic PRNG, so a level id always yields the same level. */
