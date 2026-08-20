@@ -2,7 +2,10 @@ import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
     input, Input, EventTouch, EventMouse, geometry, tween, Mat4, assetManager, EffectAsset,
 } from 'cc';
-import { GameCore, validateLevel, LevelData, Dir, firstBlocker } from '../core/index';
+import {
+    GameCore, validateLevel, LevelData, Dir, firstBlocker,
+    DEFAULT_FEEDS, DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
+} from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
@@ -335,10 +338,21 @@ export class GameController extends Component {
         const loopRoot = new Node('LoopRoot');
         this.boardRoot.addChild(loopRoot);
         const loop = this.core!.loop;
-        this.loopView = new TrackView(loopRoot, level.loop.capacity, LOOP_Y, this.TICK, {
-            board: loop.boardIndex, left: loop.entryLeft, right: loop.entryRight,
-        });
-        this.loopView.update(loop.ring, loop.left, loop.right);
+        // validateTrack is the drawability gate; the offline tool already fails the build
+        // on it, so anything reaching here is either hand-edited or from an older file.
+        for (const problem of validateTrack(level)) console.warn(`[track] ${problem}`);
+        // buildShape's switch is exhaustive with no default, so an unrecognised shape would
+        // crash rather than draw. The warn loop above has already said which field is wrong.
+        const shape = TRACK_SHAPES.includes(level.loop.track as TrackShape)
+            ? (level.loop.track as TrackShape) : DEFAULT_TRACK;
+        this.loopView = new TrackView(
+            loopRoot,
+            new TrackPath(shape),
+            level.loop.capacity, loop.boardIndex,
+            level.loop.feeds ?? DEFAULT_FEEDS,
+            LOOP_Y, this.TICK,
+        );
+        this.loopView.update(loop.ring, loop.channels);
 
         const parkingRoot = new Node('ParkingRoot');
         this.boardRoot.addChild(parkingRoot);
@@ -398,7 +412,7 @@ export class GameController extends Component {
             this.tickAcc -= this.TICK;
             const res = this.core.stepLoop();
             const lp = this.core.loop;
-            this.loopView?.update(lp.ring, lp.left, lp.right);
+            this.loopView?.update(lp.ring, lp.channels);
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.syncSeatCounts();
             if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedCount);
