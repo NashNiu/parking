@@ -4,7 +4,7 @@ import {
 } from 'cc';
 import {
     GameCore, validateLevel, LevelData, Dir, firstBlocker,
-    DEFAULT_FEEDS, DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
+    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
@@ -343,13 +343,19 @@ export class GameController extends Component {
         for (const problem of validateTrack(level)) console.warn(`[track] ${problem}`);
         // buildShape's switch is exhaustive with no default, so an unrecognised shape would
         // crash rather than draw. The warn loop above has already said which field is wrong.
-        const shape = TRACK_SHAPES.includes(level.loop.track as TrackShape)
-            ? (level.loop.track as TrackShape) : DEFAULT_TRACK;
+        const rawTrack = level.loop.track as TrackShape;
+        const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
         this.loopView = new TrackView(
             loopRoot,
             new TrackPath(shape),
+            // capacity and boardIndex are the same values on `level.loop` and on `loop`
+            // (LoopSystem copies both at construction) -- read off whichever is already
+            // in hand on each side of the comma.
             level.loop.capacity, loop.boardIndex,
-            level.loop.feeds ?? DEFAULT_FEEDS,
+            // The view gets core's already-normalised channel list, not the level's raw
+            // `feeds`, so the two layers can't disagree about how many channels there
+            // are or where each one joins (see Channel in core/loop-system.ts).
+            loop.channels,
             LOOP_Y, this.TICK,
         );
         this.loopView.update(loop.ring, loop.channels);

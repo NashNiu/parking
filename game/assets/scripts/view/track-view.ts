@@ -3,7 +3,7 @@ import { colorOf } from './colors';
 import { litMaterial, flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPassenger, recolorPassenger } from './passenger-builder';
-import { Channel, Feed, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath, entryIndex } from '../core/index';
+import { Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath } from '../core/index';
 
 /**
  * Half-width of the white band the rows ride on. Comes from core because validateTrack
@@ -161,7 +161,14 @@ export class TrackView {
     private readonly path: TrackPath;
     private readonly capacity: number;
     private readonly boardIndex: number;
-    private readonly feeds: Feed[];
+    /**
+     * The level's feeder channels, already normalised by `LoopSystem` -- side, drain
+     * order, entry cell and lookahead all resolved there. This is the only copy of that
+     * information the view keeps; it does not recompute entries from a raw `Feed[]`, so
+     * there is exactly one answer to "how many channels does this level have, and where
+     * does each one join" and it comes from core.
+     */
+    private readonly channels: Channel[];
     /** loopRoot; needed to turn board-local path points into world positions. */
     private readonly root: Node;
     private readonly cy: number;
@@ -191,18 +198,18 @@ export class TrackView {
 
     constructor(
         parent: Node, path: TrackPath, capacity: number, boardIndex: number,
-        feeds: Feed[], y: number, tick: number,
+        channels: Channel[], y: number, tick: number,
     ) {
         this.path = path;
         this.capacity = capacity;
         this.boardIndex = boardIndex;
-        this.feeds = feeds;
+        this.channels = channels;
         this.root = parent;
         this.cy = y;
         this.tick = tick;
         this.gapTs = [
             boardIndex / capacity,
-            ...feeds.map((f) => entryIndex(capacity, boardIndex, f.side) / capacity),
+            ...channels.map((c) => c.entry / capacity),
         ];
         this.buildBand(parent);
         this.buildClusters(parent);
@@ -314,13 +321,14 @@ export class TrackView {
      * channel leaves at 15 degrees and everything here follows that automatically.
      *
      * The outward reach is bounded: `dockX + BAND_HALF + LANE_START +
-     * (lookahead - 1) * LANE_STEP + 0.25` must stay inside the visible half-width
-     * (LANE.edgeLimit, 4.67). validateTrack enforces exactly that, against the same
-     * constants, so a level that gets here already fits.
+     * (lookahead - 1) * LANE_STEP + LANE.margin` must stay inside the visible
+     * half-width (LANE.edgeLimit, 4.67). validateTrack enforces exactly that, against
+     * the same constants (LANE.margin included, not a restated literal), so a level
+     * that gets here already fits.
      */
     private buildLanes(parent: Node): void {
-        for (const feed of this.feeds) {
-            const t = entryIndex(this.capacity, this.boardIndex, feed.side) / this.capacity;
+        for (const channel of this.channels) {
+            const t = channel.entry / this.capacity;
             const dock = this.point(t);
             const out = this.normal(t);
             // Across the lane: the rows stand perpendicular to the way the lane runs.
@@ -330,40 +338,40 @@ export class TrackView {
                 dock.y + out.y * (BAND_HALF + LANE_START),
                 0,
             );
-            const span = LANE_STEP * (feed.lookahead - 1);
-            const slabW = span + 0.5;
+            const span = LANE_STEP * (channel.lookahead - 1);
+            const slabW = span + LANE.margin * 2;
             // Floor centred on the slots it carries, and turned to follow the lane so a
             // tilted channel's slab tilts with it rather than sticking out square.
             const mid = new Vec3(first.x + out.x * span / 2, first.y + out.y * span / 2, 0);
             const angle = Math.atan2(out.y, out.x) * 180 / Math.PI;
 
-            const shadow = makeShadowSlab(`lane-shadow-${feed.side}`, slabW, BAND_HALF * 2, 0.2, 34);
+            const shadow = makeShadowSlab(`lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, 0.2, 34);
             shadow.setPosition(mid.x, mid.y - BAND_DROP, BAND_Z - 0.06);
             shadow.setRotationFromEuler(0, 0, angle);
             parent.addChild(shadow);
 
             // Same white as the ring and as deep, so a channel reads as the track running
             // off to the side.
-            const slab = makeSlab(`lane-${feed.side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
+            const slab = makeSlab(`lane-${channel.side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
             slab.setPosition(mid.x, mid.y, BAND_Z);
             slab.setRotationFromEuler(0, 0, angle);
             parent.addChild(slab);
 
-            this.laneClusters[feed.side] = [];
-            this.laneFigures[feed.side] = [];
-            this.laneHome[feed.side] = [];
-            for (let i = 0; i < feed.lookahead; i++) {
-                const n = makeRow(`wait-${feed.side}-${i}`);
+            this.laneClusters[channel.side] = [];
+            this.laneFigures[channel.side] = [];
+            this.laneHome[channel.side] = [];
+            for (let i = 0; i < channel.lookahead; i++) {
+                const n = makeRow(`wait-${channel.side}-${i}`);
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
                 layoutRow(figures, across.x, across.y);
-                this.laneFigures[feed.side].push(figures);
+                this.laneFigures[channel.side].push(figures);
                 n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
                 n.active = false;
                 parent.addChild(n);
-                this.laneClusters[feed.side].push(n);
-                this.laneHome[feed.side].push(n.position.clone());
+                this.laneClusters[channel.side].push(n);
+                this.laneHome[channel.side].push(n.position.clone());
             }
         }
     }
@@ -402,7 +410,7 @@ export class TrackView {
     /**
      * Draw the head of each channel. The inactive channels (every one but the channel
      * still holding rows) are dimmed, so "this one feeds next" is readable without a
-     * tutorial. Only the head `feed.lookahead` are drawn; the rest are implied.
+     * tutorial. Only the head `channel.lookahead` are drawn; the rest are implied.
      */
     private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
         // The live channel is the first one still holding rows: drain order, not screen
@@ -432,7 +440,7 @@ export class TrackView {
         this.animateLaneShift(dropped ?? live ?? channels[0], channels);
         if (dropped) {
             const group = ring[dropped.entry];
-            if (group) this.playEntry(dropped.side, group);
+            if (group) this.playEntry(dropped, group);
         }
     }
 
@@ -448,7 +456,7 @@ export class TrackView {
         for (const c of channels) this.lastLen[c.side] = c.queue.length;
         if (prev < 0 || active.queue.length >= prev) return;
         // Slide along the lane's own direction, so a tilted channel slides along itself.
-        const t = entryIndex(this.capacity, this.boardIndex, active.side) / this.capacity;
+        const t = active.entry / this.capacity;
         const out = this.normal(t);
         const nodes = this.laneClusters[active.side];
         for (let i = 0; i < nodes.length; i++) {
@@ -517,8 +525,8 @@ export class TrackView {
      * the same moment will the real slot render at the same position where the flier
      * lands; unequal durations cause a visible backwards jump at hand-off.
      */
-    private playEntry(side: FeedSide, group: PaxGroup): void {
-        const index = entryIndex(this.capacity, this.boardIndex, side);
+    private playEntry(channel: Channel, group: PaxGroup): void {
+        const { side, entry: index } = channel;
         const slot = this.clusters[index];
         const from = this.laneHome[side][0];
         if (!slot || !slot.isValid || !from) return;
