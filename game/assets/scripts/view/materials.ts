@@ -106,7 +106,7 @@ export function alphaMaterial(color: Color): Material {
 export function setLitColor(node: Node, color: Color): void {
     const mr = node.getComponent(MeshRenderer);
     if (!mr) return;
-    mr.material = litMaterial(color);
+    mr.material = instancedLitMaterial(color);
 }
 
 /**
@@ -124,4 +124,39 @@ export function setEmissive(node: Node, color: Color): void {
         if (!mat || mat.effectName !== 'builtin-standard') continue;
         mat.setProperty('emissive', color);
     }
+}
+
+const instancedCache = new Map<string, Material>();
+
+/**
+ * Lit material with GPU instancing on. Every model sharing a mesh AND this exact
+ * material collapses into one instanced draw call, which is what makes a 26-row track
+ * affordable: the passenger figures are 100+ copies of five baked meshes, so the whole
+ * crowd costs about one draw call per (mesh, colour) pair instead of five per figure.
+ *
+ * Same zero-pass guard as `tryStandard`: in some pipeline setups builtin-standard
+ * builds no passes when created at runtime, and a pass-less material crashes the
+ * renderer later. Falls back to the plain lit material, which is correct but slower.
+ */
+export function instancedLitMaterial(color: Color): Material {
+    const k = key(color);
+    const hit = instancedCache.get(k);
+    if (hit) return hit;
+    let mat: Material | null = null;
+    const eff = EffectAsset.get('builtin-standard');
+    if (eff) {
+        const m = new Material();
+        try {
+            m.initialize({ effectAsset: eff, defines: { USE_INSTANCING: true } });
+            if (m.passes && m.passes.length > 0) {
+                m.setProperty('mainColor', color);
+                mat = m;
+            }
+        } catch {
+            mat = null;
+        }
+    }
+    const result = mat ?? litMaterial(color);
+    instancedCache.set(k, result);
+    return result;
 }

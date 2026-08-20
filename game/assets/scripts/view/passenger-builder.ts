@@ -2,7 +2,7 @@ import {
     Node, Color, Mesh, MeshRenderer, Material, Prefab, resources, assetManager,
     instantiate, Vec3, Mat4, gfx, utils,
 } from 'cc';
-import { litMaterial, readMainColor } from './materials';
+import { instancedLitMaterial, readMainColor } from './materials';
 
 /**
  * Real 3D passenger art (the same cartoon GLB pipeline the cars use). The model
@@ -277,7 +277,7 @@ export function buildPassenger(name: string, color: Color, height: number): Node
         const n = new Node(roleNodeName(role));
         const mr = n.addComponent(MeshRenderer);
         mr.mesh = mesh;
-        mr.material = litMaterial(role === 'paint' ? color : (model.colors[role] ?? Color.WHITE));
+        mr.material = instancedLitMaterial(role === 'paint' ? color : (model.colors[role] ?? Color.WHITE));
         fit.addChild(n);
     }
     return root;
@@ -295,6 +295,6 @@ export function recolorPassenger(root: Node, color: Color, shade: (c: Color) => 
     for (const mr of root.getComponentsInChildren(MeshRenderer)) {
         const role = mr.node.name.replace('role-', '') as Role;
         const base = role === 'paint' ? color : (model.colors[role] ?? Color.WHITE);
-        mr.material = litMaterial(shade(base));
+        mr.material = instancedLitMaterial(shade(base));
     }
 }
