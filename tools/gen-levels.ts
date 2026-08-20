@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generateLevel, levelParams } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
-import { validateLevel } from '../game/assets/scripts/core/level-data';
+import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
 const count = Number(process.argv[2] || 10);
@@ -41,6 +41,14 @@ for (let id = 1; id <= count; id++) {
 
     if (errors.length > 0) {
         console.error(`[gen] level ${id} is invalid: ${errors.join('; ')}`);
+        failed++;
+        continue;
+    }
+
+    const trackErrors = validateTrack(level);
+    if (trackErrors.length > 0) {
+        console.error(`level ${level.id}: undrawable track`);
+        for (const e of trackErrors) console.error(`  ${e}`);
         failed++;
         continue;
     }

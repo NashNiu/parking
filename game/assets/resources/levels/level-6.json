@@ -133,6 +133,17 @@
   "loop": {
     "capacity": 12,
     "boardIndex": 6,
+    "track": "hex",
+    "feeds": [
+      {
+        "side": "far",
+        "lookahead": 2
+      },
+      {
+        "side": "near",
+        "lookahead": 2
+      }
+    ],
     "queue": [
       {
         "color": "red",

@@ -106,3 +106,87 @@ test('a car longer than it is wide points that length at its exit', () => {
     }
   }
 });
+
+import { trackParams, planningWindow } from '../../game/assets/scripts/core/level-gen';
+import { capacityOptions, maxLookahead } from '../../game/assets/scripts/core/track-path';
+import { validateTrack } from '../../game/assets/scripts/core/level-data';
+
+test('the curve assigns every level a track its geometry can draw', () => {
+  for (const id of IDS) {
+    const p = trackParams(id);
+    expect(capacityOptions(p.track)).toContain(p.capacity);
+    for (const f of p.feeds) expect(f.lookahead).toBeLessThanOrEqual(maxLookahead(p.track));
+  }
+});
+
+test('the generated levels carry their curve entry', () => {
+  for (const id of IDS) {
+    const level = generateLevel(id);
+    const p = trackParams(id);
+    expect(level.loop.track).toBe(p.track);
+    expect(level.loop.capacity).toBe(p.capacity);
+    expect(level.loop.boardIndex).toBe(p.capacity / 2);
+    expect(level.loop.feeds).toEqual(p.feeds);
+  }
+});
+
+test('the planning window narrows as the levels go on', () => {
+  // Planning window = drawn waiting batches + ticks from the entry to the boarding gap.
+  // It is the one number the three knobs collapse into, so the curve is checked on it.
+  // Level 7 is a deliberate dip -- a single far channel, a breather -- so it is exempt.
+  const tail = IDS.map((id) => {
+    const w = planningWindow(trackParams(id));
+    return w[w.length - 1];
+  });
+  expect(tail).toEqual([8, 7, 7, 6, 6, 5, 11, 4, 4, 3]);
+  for (let i = 1; i < tail.length; i++) {
+    if (i + 1 === 7 || i === 7 - 1) continue;   // skip into and out of the breather
+    expect(tail[i]).toBeLessThanOrEqual(tail[i - 1]);
+  }
+});
+
+test('a twin-channel level starts wider than it ends', () => {
+  for (const id of IDS) {
+    const p = trackParams(id);
+    const w = planningWindow(p);
+    if (p.feeds.length === 2) expect(w[0]).toBeGreaterThan(w[w.length - 1]);
+    else expect(w.length).toBe(1);
+  }
+});
+
+test('all five shapes appear across the ten levels', () => {
+  const used = new Set(IDS.map((id) => trackParams(id).track));
+  expect(used.size).toBe(5);
+});
+
+test('at least one level runs on a single channel, each side', () => {
+  const single = IDS.map((id) => trackParams(id)).filter((p) => p.feeds.length === 1);
+  expect(single.length).toBeGreaterThanOrEqual(2);
+  expect(new Set(single.map((p) => p.feeds[0].side)).size).toBe(2);
+});
+
+test('the curve keeps producing legal tracks past the authored table', () => {
+  for (let id = 11; id <= 25; id++) {
+    const p = trackParams(id);
+    expect(capacityOptions(p.track)).toContain(p.capacity);
+    expect(validateLevel(generateLevel(id))).toEqual([]);
+    expect(validateTrack(generateLevel(id))).toEqual([]);
+  }
+});
+
+test('every generated level draws a legal track', () => {
+  // validateTrack is the drawability gate, and the generator is its main customer.
+  for (const id of IDS) {
+    expect(validateTrack(generateLevel(id))).toEqual([]);
+  }
+});
+
+test('the ring can hold at least one row of every colour a level uses', () => {
+  // A ring shorter than the colour count can have a colour entirely absent from it,
+  // which turns an ordinary level into a coin flip.
+  for (const id of IDS) {
+    const level = generateLevel(id);
+    const colors = new Set(level.grid.cars.map((c) => c.color));
+    expect(level.loop.capacity).toBeGreaterThanOrEqual(colors.size);
+  }
+});

@@ -143,6 +143,13 @@
   "loop": {
     "capacity": 12,
     "boardIndex": 6,
+    "track": "trap",
+    "feeds": [
+      {
+        "side": "far",
+        "lookahead": 2
+      }
+    ],
     "queue": [
       {
         "color": "red",

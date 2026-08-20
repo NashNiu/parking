@@ -161,8 +161,15 @@
     "unlocked": 4
   },
   "loop": {
-    "capacity": 12,
-    "boardIndex": 6,
+    "capacity": 8,
+    "boardIndex": 4,
+    "track": "circle",
+    "feeds": [
+      {
+        "side": "near",
+        "lookahead": 2
+      }
+    ],
     "queue": [
       {
         "color": "red",

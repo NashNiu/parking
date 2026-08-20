@@ -1,6 +1,8 @@
-import { CAP_SIZE, Cap, CarSpec, Dir, LevelData, QueueGroup } from './types';
+import { CAP_SIZE, Cap, CarSpec, Dir, Feed, LevelData, QueueGroup } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
 import { footprint } from './move-solver';
+import { TRACK_SHAPES, TrackShape } from './track-shapes';
+import { capacityOptions, entryIndex } from './track-path';
 
 /**
  * The one grid shape every level uses. Nine columns at the pitch six rows allow is what
@@ -16,8 +18,6 @@ export const GRID_ROWS = 6;
 /** Fixed across levels: the view draws seven stalls and a twelve-row circuit. */
 const SLOTS = 7;
 const UNLOCKED = 4;
-const LOOP_CAPACITY = 12;
-const BOARD_INDEX = 6;
 
 /** Colour keys, matching the view's palette (see view/colors.ts). */
 const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
@@ -59,6 +59,69 @@ export function levelParams(id: number): GenParams {
         blockedRatio: Math.min(0.55, 0.1 + (id - 1) * 0.05),
         minRounds: Math.min(5, 2 + Math.floor((id - 1) / 3)),
     };
+}
+
+/** The track knobs for one level: shape, ring length, and its feeder channels. */
+export interface TrackParams {
+    track: TrackShape;
+    capacity: number;
+    feeds: Feed[];
+}
+
+const TWIN: Feed[] = [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }];
+
+/**
+ * The track curve, one row per level.
+ *
+ * The three knobs collapse into one number — the PLANNING WINDOW, in ticks: how long a
+ * player has between first seeing a batch of colours and that batch reaching the boarding
+ * gap. It is the drawn waiting batches plus the ticks from the channel's entry to the
+ * gap, and `planningWindow` computes it. Twin-channel levels have two values: the far
+ * channel drains first, so they open wide and tighten when the near one takes over.
+ *
+ * Level 7 dips on purpose — a single far channel, constant and roomy. It is a breather,
+ * and the first level where the player sees a track fed from one side only.
+ *
+ * Shapes are not free choices: a shape's perimeter decides which ring lengths it can
+ * carry at a legible row spacing (see capacityOptions), so the circle — half the
+ * quadrilateral's perimeter, because it is bounded by the vertical budget — only ever
+ * appears at 8 slots.
+ */
+const TRACK_CURVE: TrackParams[] = [
+    { track: 'rect',   capacity: 20, feeds: TWIN },
+    { track: 'hex',    capacity: 16, feeds: TWIN },
+    { track: 'trap',   capacity: 16, feeds: TWIN },
+    { track: 'oval',   capacity: 16, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
+    { track: 'rect',   capacity: 16, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
+    { track: 'hex',    capacity: 12, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
+    { track: 'trap',   capacity: 12, feeds: [{ side: 'far', lookahead: 2 }] },
+    { track: 'rect',   capacity: 12, feeds: [{ side: 'far', lookahead: 1 }, { side: 'near', lookahead: 1 }] },
+    { track: 'circle', capacity: 8,  feeds: [{ side: 'near', lookahead: 2 }] },
+    { track: 'oval',   capacity: 8,  feeds: [{ side: 'near', lookahead: 1 }] },
+];
+
+/**
+ * Ticks of warning each channel gives, in drain order. The ring steps one index per
+ * tick, so a row entering at index e reaches the gap in (board - e) mod capacity ticks.
+ */
+export function planningWindow(p: TrackParams): number[] {
+    const board = p.capacity / 2;
+    return p.feeds.map((f) => {
+        const entry = entryIndex(p.capacity, board, f.side);
+        return f.lookahead + ((board - entry + p.capacity) % p.capacity);
+    });
+}
+
+/**
+ * Track knobs for `id`. Past the authored table the difficulty holds at the last row's
+ * and only the shape rotates, among those that can carry that ring length — endless
+ * levels stay legal and stay visually varied without inventing a curve nobody tuned.
+ */
+export function trackParams(id: number): TrackParams {
+    if (id >= 1 && id <= TRACK_CURVE.length) return TRACK_CURVE[id - 1];
+    const tail = TRACK_CURVE[TRACK_CURVE.length - 1];
+    const fits = TRACK_SHAPES.filter((s) => capacityOptions(s).includes(tail.capacity));
+    return { ...tail, track: fits[(id - 1) % fits.length] };
 }
 
 /** mulberry32: a small deterministic PRNG, so a level id always yields the same level. */
@@ -115,11 +178,18 @@ function queueFor(cars: CarSpec[]): QueueGroup[] {
 }
 
 function assemble(id: number, cars: CarSpec[]): LevelData {
+    const track = trackParams(id);
     return {
         id,
         grid: { cols: GRID_COLS, rows: GRID_ROWS, cars },
         parking: { slots: SLOTS, unlocked: UNLOCKED },
-        loop: { capacity: LOOP_CAPACITY, boardIndex: BOARD_INDEX, queue: queueFor(cars) },
+        loop: {
+            capacity: track.capacity,
+            boardIndex: track.capacity / 2,
+            track: track.track,
+            feeds: track.feeds,
+            queue: queueFor(cars),
+        },
         powerups: { refresh: 3, hardClear: 1, magnet: 1 },
     };
 }
