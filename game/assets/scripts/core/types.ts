@@ -51,8 +51,8 @@ export const DEFAULT_TRACK: TrackShape = 'rect';
 
 /** What a level without a `feeds` field gets: M6's two channels, three batches each. */
 export const DEFAULT_FEEDS: Feed[] = [
-    { side: 'far', lookahead: 3 },
-    { side: 'near', lookahead: 3 },
+  { side: 'far', lookahead: 3 },
+  { side: 'near', lookahead: 3 },
 ];
 
 export interface LevelData {

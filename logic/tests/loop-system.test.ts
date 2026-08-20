@@ -222,10 +222,30 @@ test('reachable colors read the channels in drain order', () => {
   expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
 });
 
+test('reachable colors read the far channel before the near one', () => {
+  // Same setup as above but with only ONE hole, so only the HEAD of (far ++ near)
+  // can get in. With one row per channel and the two rows different colours, that
+  // head is unambiguous -- unlike the drain-order test above, where two holes let
+  // both rows in regardless of which channel is read first, so reversing the
+  // channel order there would not be caught. Reversing it here would swap which
+  // colour shows up.
+  const loop = new LoopSystem(4, 0, [g('a', 16)]);
+  loop.ring[1] = null;
+  loop.channels[0].queue = [g('b', 1)];
+  loop.channels[1].queue = [g('c', 1)];
+  const reachable = loop.reachableColors();
+  expect(reachable.has('b')).toBe(true);
+  expect(reachable.has('c')).toBe(false);
+});
+
 test('reachable colors of a single channel match the same rows in a twin channel', () => {
   // The deadlock check rests entirely on this set, so the single-channel case must not
-  // quietly become more (or less) optimistic than the case M6 shipped.
-  const rows = [g('a', 16), g('b', 8)];
+  // quietly become more (or less) optimistic than the case M6 shipped. The two waiting
+  // rows are given different colours (b and c) rather than one shared colour, so an
+  // order mismatch between the single channel's queue and the twin channels'
+  // concatenation would show up as a different Set, not get masked by both sides
+  // reading the same colour either way.
+  const rows = [g('a', 16), g('b', 4), g('c', 4)];
   const twin = new LoopSystem(4, 0, rows.slice());
   const single = new LoopSystem(4, 0, rows.slice(), [{ side: 'far', lookahead: 3 }]);
   twin.ring[1] = null;
@@ -239,5 +259,19 @@ test('a sealed ring admits nothing, whatever the channel layout', () => {
     const waiting = loop.channels.reduce((n, c) => n + c.queue.length, 0);
     loop.step();
     expect(loop.channels.reduce((n, c) => n + c.queue.length, 0)).toBe(waiting);
+  }
+});
+
+test('feeds with no recognised side fall back to the default channels, not zero', () => {
+  // An empty array, or a hand-edited level JSON with a typo'd side string, must not
+  // produce zero channels: with nowhere to put the rows the ring didn't fit, they
+  // would be silently uncountable -- remainingCount() would drop them and isDrained()
+  // would report a win the player never earned.
+  const noSides: Feed[] = [];
+  const badSide = [{ side: 'sideways', lookahead: 1 }] as unknown as Feed[];
+  for (const feeds of [noSides, badSide]) {
+    const loop = new LoopSystem(8, 0, [g('a', 64)], feeds);
+    expect(loop.channels.map((c) => c.side)).toEqual(['far', 'near']);
+    expect(loop.remainingCount()).toBe(64);
   }
 });

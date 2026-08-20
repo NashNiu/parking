@@ -48,10 +48,10 @@ function toGroups(queue: QueueGroup[]): PaxGroup[] {
  * the deadlock check) reasons about.
  */
 export interface Channel {
-    side: FeedSide;
-    lookahead: number;
-    entry: number;
-    queue: PaxGroup[];
+  side: FeedSide;
+  lookahead: number;
+  entry: number;
+  queue: PaxGroup[];
 }
 
 /** Far drains before near, so that is the order channels are held in. */
@@ -66,11 +66,11 @@ export class LoopSystem {
   channels: Channel[];
 
   constructor(
-      capacity: number,
-      boardIndex: number,
-      queue: QueueGroup[],
-      feeds: Feed[] = DEFAULT_FEEDS,
-      shuffleSeed?: number,
+    capacity: number,
+    boardIndex: number,
+    queue: QueueGroup[],
+    feeds: Feed[] = DEFAULT_FEEDS,
+    shuffleSeed?: number,
   ) {
     this.capacity = capacity;
     this.boardIndex = boardIndex;
@@ -87,14 +87,23 @@ export class LoopSystem {
     // With two channels this is the even split M6 shipped; with one, everything goes
     // to it. The split never reorders anything — a seed, when given, is what changes
     // the order (via the shuffle above).
-    const ordered = DRAIN_ORDER.filter((side) => feeds.some((f) => f.side === side))
-        .map((side) => feeds.find((f) => f.side === side) as Feed);
+    let ordered = DRAIN_ORDER.filter((side) => feeds.some((f) => f.side === side))
+      .map((side) => feeds.find((f) => f.side === side) as Feed);
+    // A `feeds` with no recognised side (empty, or a hand-edited level JSON with a
+    // typo'd side string) must not fall through to zero channels: with `ordered`
+    // empty, `per` below would be Infinity and every waiting row would be silently
+    // unreachable forever — `step()` never admits one, `remainingCount()` never
+    // counts it, and `isDrained()` reports a win the player never earned. Falling
+    // back to the two channels a level gets when it omits `feeds` entirely keeps a
+    // misauthored level playable; flagging the mistake is the level validator's job,
+    // not the constructor's.
+    if (ordered.length === 0) ordered = DEFAULT_FEEDS;
     const per = Math.ceil(all.length / ordered.length);
     this.channels = ordered.map((feed, i) => ({
-        side: feed.side,
-        lookahead: feed.lookahead,
-        entry: entryIndex(capacity, boardIndex, feed.side),
-        queue: all.slice(i * per, (i + 1) * per),
+      side: feed.side,
+      lookahead: feed.lookahead,
+      entry: entryIndex(capacity, boardIndex, feed.side),
+      queue: all.slice(i * per, (i + 1) * per),
     }));
   }
 
