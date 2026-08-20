@@ -74,8 +74,8 @@ test('deadlock is detected when the ring is jammed with an unboardable color', (
   // Each cell is a row of passengers, so build distinct objects — a shared literal
   // would have every row decrement together once one of them boards.
   game.loop.ring = [{ color: 'green', count: 4 }, { color: 'green', count: 4 }];
-  game.loop.left = reds(8);
-  game.loop.right = reds(8);
+  game.loop.channels[0].queue = reds(8);
+  game.loop.channels[1].queue = reds(8);
   expect(game.tapCar(1).ok).toBe(true); // red car takes the only slot
   expect(game.getState()).toBe('deadlock');
 });
@@ -99,8 +99,8 @@ test('a color still reachable through an emptied ring cell is not a deadlock', (
   // Same shape, set by hand: a red row is on the track, so the parked red car can
   // still fill and free its slot.
   game.loop.ring = [{ color: 'green', count: 4 }, { color: 'red', count: 4 }];
-  game.loop.left = reds(8);
-  game.loop.right = reds(7);
+  game.loop.channels[0].queue = reds(8);
+  game.loop.channels[1].queue = reds(7);
   expect(game.tapCar(1).ok).toBe(true);
   expect(game.getState()).toBe('playing');
 });

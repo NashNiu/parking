@@ -1,5 +1,5 @@
 import { LoopSystem } from '../../game/assets/scripts/core/loop-system';
-import { PaxGroup } from '../../game/assets/scripts/core/types';
+import { DEFAULT_FEEDS, Feed, PaxGroup } from '../../game/assets/scripts/core/types';
 
 /** Terse group literal, so the expectations below stay readable. */
 function g(color: string, count: number): PaxGroup {
@@ -9,7 +9,7 @@ function g(color: string, count: number): PaxGroup {
 /** People per colour across the whole system, for the shuffle invariants. */
 function counts(loop: LoopSystem): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const grp of [...loop.ring, ...loop.left, ...loop.right]) {
+  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
     if (grp) out[grp.color] = (out[grp.color] || 0) + grp.count;
   }
   return out;
@@ -35,8 +35,8 @@ test('ring takes the head groups and the remainder splits in half', () => {
   // 24 reds -> 6 groups; the ring takes 4, leaving one group per channel.
   const loop = new LoopSystem(4, 2, [{ color: 'red', count: 24 }]);
   expect(loop.ring).toEqual([g('red', 4), g('red', 4), g('red', 4), g('red', 4)]);
-  expect(loop.left).toEqual([g('red', 4)]);
-  expect(loop.right).toEqual([g('red', 4)]);
+  expect(loop.channels[0].queue).toEqual([g('red', 4)]);
+  expect(loop.channels[1].queue).toEqual([g('red', 4)]);
   expect(loop.remainingCount()).toBe(24);
 });
 
@@ -70,26 +70,26 @@ test('step rotates the groups forward by one', () => {
   expect(loop.ring).toEqual([g('d', 1), g('a', 1), g('b', 1), g('c', 1)]);
 });
 
-test('an emptied cell refills from the left channel when it reaches the entrance', () => {
+test('an emptied cell refills from the far channel when it reaches the entrance', () => {
   const loop = new LoopSystem(2, 1, [{ color: 'x', count: 12 }]);
-  // ring=[{x,4},{x,4}], left=[{x,4}], right=[]. capacity 2 => both entrances are index 0.
+  // ring=[{x,4},{x,4}], far=[{x,4}], near=[]. capacity 2 => both entrances are index 0.
   for (let i = 0; i < 4; i++) loop.boardPassenger();
   expect(loop.ring).toEqual([g('x', 4), null]);
   loop.step(); // rotate -> [null, {x,4}]; the hole is now at the entrance
   expect(loop.ring).toEqual([g('x', 4), g('x', 4)]);
-  expect(loop.left).toEqual([]);
+  expect(loop.channels[0].queue).toEqual([]);
 });
 
 test('isDrained true only when both channels are empty and the ring is cleared', () => {
   const loop = new LoopSystem(2, 1, [{ color: 'x', count: 2 }]);
   expect(loop.isDrained()).toBe(false);
   loop.ring = [null, null];
-  loop.left = [];
-  loop.right = [];
+  loop.channels[0].queue = [];
+  loop.channels[1].queue = [];
   expect(loop.isDrained()).toBe(true);
 });
 
-// capacity 8 / boardIndex 0 => quarter = 2, entryLeft = 2, entryRight = 6.
+// capacity 8 / boardIndex 0 => quarter = 2, entry far = 2, entry near = 6.
 function twoLane(): LoopSystem {
   // 32 a + 16 b -> 8 groups of a (fills the ring) and 4 groups of b (2 per channel).
   return new LoopSystem(8, 0, [{ color: 'a', count: 32 }, { color: 'b', count: 16 }]);
@@ -97,28 +97,28 @@ function twoLane(): LoopSystem {
 
 test('entrances sit a quarter lap either side of the boarding index', () => {
   const loop = twoLane();
-  expect(loop.entryLeft).toBe(2);
-  expect(loop.entryRight).toBe(6);
-  expect(loop.left).toEqual([g('b', 4), g('b', 4)]);
-  expect(loop.right).toEqual([g('b', 4), g('b', 4)]);
+  expect(loop.channels[0].entry).toBe(2);
+  expect(loop.channels[1].entry).toBe(6);
+  expect(loop.channels[0].queue).toEqual([g('b', 4), g('b', 4)]);
+  expect(loop.channels[1].queue).toEqual([g('b', 4), g('b', 4)]);
 });
 
-test('the right entrance stays shut while the left channel still has passengers', () => {
+test('the near entrance stays shut while the far channel still has passengers', () => {
   const loop = twoLane();
-  loop.ring[5] = null;           // after the rotate this hole lands on entryRight
+  loop.ring[5] = null;           // after the rotate this hole lands on the near entry
   loop.step();
   expect(loop.ring[6]).toBeNull();
-  expect(loop.right).toEqual([g('b', 4), g('b', 4)]); // untouched
-  expect(loop.left).toEqual([g('b', 4), g('b', 4)]);  // the hole never passed the left entrance
+  expect(loop.channels[1].queue).toEqual([g('b', 4), g('b', 4)]); // untouched
+  expect(loop.channels[0].queue).toEqual([g('b', 4), g('b', 4)]); // the hole never passed the far entrance
 });
 
-test('the right channel starts feeding once the left one is empty', () => {
+test('the near channel starts feeding once the far one is empty', () => {
   const loop = twoLane();
-  loop.left = [];
+  loop.channels[0].queue = [];
   loop.ring[5] = null;
   loop.step();
   expect(loop.ring[6]).toEqual(g('b', 4));
-  expect(loop.right).toEqual([g('b', 4)]);
+  expect(loop.channels[1].queue).toEqual([g('b', 4)]);
 });
 
 test('a hole that is not at an entrance is not refilled', () => {
@@ -126,18 +126,18 @@ test('a hole that is not at an entrance is not refilled', () => {
   loop.ring[0] = null;           // after the rotate this hole lands on index 1, no entrance
   loop.step();
   expect(loop.ring[1]).toBeNull();
-  expect(loop.left).toEqual([g('b', 4), g('b', 4)]);
+  expect(loop.channels[0].queue).toEqual([g('b', 4), g('b', 4)]);
 });
 
-test('reachable colors span the left-to-right channel boundary', () => {
+test('reachable colors span the far-to-near channel boundary', () => {
   const loop = new LoopSystem(4, 0, [
     { color: 'a', count: 16 }, { color: 'b', count: 1 }, { color: 'c', count: 1 },
   ]);
-  // ring = 4 groups of a, left = [{b,1}], right = [{c,1}]
+  // ring = 4 groups of a, far = [{b,1}], near = [{c,1}]
   expect(loop.reachableColors()).toEqual(new Set(['a'])); // full ring: nothing new can enter
   loop.ring[0] = null;
   loop.ring[1] = null;
-  // two holes -> the next two groups of (left ++ right) can get in
+  // two holes -> the next two groups of (far ++ near) can get in
   expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
 });
 
@@ -147,7 +147,7 @@ test('without a seed the queue keeps its authored order', () => {
 });
 
 test('a seed mixes the colors without changing how many of each there are', () => {
-  const loop = new LoopSystem(12, 6, [{ color: 'a', count: 48 }, { color: 'b', count: 48 }], 7);
+  const loop = new LoopSystem(12, 6, [{ color: 'a', count: 48 }, { color: 'b', count: 48 }], DEFAULT_FEEDS, 7);
   expect(counts(loop)).toEqual({ a: 48, b: 48 });
   const onTrack = new Set(loop.ring.filter((x) => x !== null).map((x) => x!.color));
   expect(onTrack.size).toBe(2); // both colors on the track
@@ -158,8 +158,8 @@ test('shuffling keeps every group single-coloured', () => {
   // colours would break the whole point of drawing a group as one row.
   const loop = new LoopSystem(12, 6, [
     { color: 'a', count: 30 }, { color: 'b', count: 30 }, { color: 'c', count: 30 },
-  ], 3);
-  for (const grp of [...loop.ring, ...loop.left, ...loop.right]) {
+  ], DEFAULT_FEEDS, 3);
+  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
     if (!grp) continue;
     expect(grp.count).toBeGreaterThan(0);
     expect(grp.count).toBeLessThanOrEqual(4);
@@ -168,6 +168,76 @@ test('shuffling keeps every group single-coloured', () => {
 });
 
 test('the same seed always shuffles the same way', () => {
-  const build = () => new LoopSystem(12, 6, [{ color: 'a', count: 48 }, { color: 'b', count: 48 }], 7);
+  const build = () => new LoopSystem(12, 6, [{ color: 'a', count: 48 }, { color: 'b', count: 48 }], DEFAULT_FEEDS, 7);
   expect(build().ring).toEqual(build().ring);
+});
+
+test('the default feeds reproduce two channels split down the middle', () => {
+  const loop = new LoopSystem(8, 0, [g('a', 32), g('b', 32)]);
+  expect(loop.channels.map((c) => c.side)).toEqual(['far', 'near']);
+  expect(loop.channels[0].queue.length).toBe(4);
+  expect(loop.channels[1].queue.length).toBe(4);
+});
+
+test('channels are ordered by drain order, far first', () => {
+  // The far channel is three quarters of a lap from the gap, so draining it first is
+  // what gives a twin-channel level its built-in escalation: a wide planning window
+  // early, a narrow one once the near channel takes over.
+  const loop = new LoopSystem(8, 0, [g('a', 64)]);
+  expect(loop.channels[0].side).toBe('far');
+  expect(loop.channels[0].entry).toBe(2);
+  expect(loop.channels[1].entry).toBe(6);
+});
+
+test('a single-channel level puts every waiting row in that one channel', () => {
+  const feeds: Feed[] = [{ side: 'near', lookahead: 2 }];
+  const loop = new LoopSystem(8, 0, [g('a', 64)], feeds);
+  expect(loop.channels.length).toBe(1);
+  expect(loop.channels[0].side).toBe('near');
+  expect(loop.channels[0].queue.length).toBe(8);   // 16 rows total, 8 on the ring
+});
+
+test('a single-channel level only ever admits rows at its own entry', () => {
+  const feeds: Feed[] = [{ side: 'near', lookahead: 2 }];
+  const loop = new LoopSystem(8, 0, [g('a', 64)], feeds);
+  const entry = loop.channels[0].entry;
+  const before = loop.channels[0].queue.length;
+  // Open a hole anywhere BUT the entry, and step: nothing may enter.
+  loop.ring[(entry + 3) % 8] = null;
+  loop.step();
+  expect(loop.channels[0].queue.length).toBe(before);
+  // Open a hole that lands ON the entry after the rotate, and one row enters.
+  loop.ring[(entry - 1 + 8) % 8] = null;
+  loop.step();
+  expect(loop.channels[0].queue.length).toBe(before - 1);
+});
+
+test('reachable colors read the channels in drain order', () => {
+  const loop = new LoopSystem(4, 0, [g('a', 16)]);
+  loop.ring[1] = null;
+  loop.ring[2] = null;
+  loop.channels[0].queue = [g('b', 1)];
+  loop.channels[1].queue = [g('c', 1)];
+  // Two holes -> the next two rows of (far ++ near) can still get in.
+  expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
+});
+
+test('reachable colors of a single channel match the same rows in a twin channel', () => {
+  // The deadlock check rests entirely on this set, so the single-channel case must not
+  // quietly become more (or less) optimistic than the case M6 shipped.
+  const rows = [g('a', 16), g('b', 8)];
+  const twin = new LoopSystem(4, 0, rows.slice());
+  const single = new LoopSystem(4, 0, rows.slice(), [{ side: 'far', lookahead: 3 }]);
+  twin.ring[1] = null;
+  single.ring[1] = null;
+  expect(single.reachableColors()).toEqual(twin.reachableColors());
+});
+
+test('a sealed ring admits nothing, whatever the channel layout', () => {
+  for (const feeds of [DEFAULT_FEEDS, [{ side: 'near', lookahead: 1 }] as Feed[]]) {
+    const loop = new LoopSystem(4, 0, [g('a', 64)], feeds);
+    const waiting = loop.channels.reduce((n, c) => n + c.queue.length, 0);
+    loop.step();
+    expect(loop.channels.reduce((n, c) => n + c.queue.length, 0)).toBe(waiting);
+  }
 });

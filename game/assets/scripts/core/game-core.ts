@@ -1,4 +1,4 @@
-import { LevelData } from './types';
+import { DEFAULT_FEEDS, LevelData } from './types';
 import { GridSystem } from './grid-system';
 import { ParkingSystem } from './parking-system';
 import { LoopSystem } from './loop-system';
@@ -25,6 +25,7 @@ export class GameCore {
       level.loop.capacity,
       level.loop.boardIndex,
       level.loop.queue,
+      level.loop.feeds ?? DEFAULT_FEEDS,
       // Seeded by level id: mixed colours, but the same mix on every replay. `?? 0`
       // guards against a level JSON missing `id` (validateLevel doesn't check it) --
       // a level must never silently fall back to the unshuffled authored order.
