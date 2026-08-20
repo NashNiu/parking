@@ -14,17 +14,6 @@ const LANE_STEP = LANE.step;
 const LANE_START = LANE.start;
 
 /**
- * Half width of the old rounded-rect circuit centreline. Channels are still placed the
- * OLD way this task — axis-aligned, offset out from this fixed x — while core already
- * builds five different shapes; the next task rebuilds buildLanes around each feed's own
- * geometry and this constant goes away then.
- */
-const W = 2.6;
-
-/** Waiting passengers drawn per channel; the rest of the queue is implied. */
-const LANE_VISIBLE = 3;
-
-/**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
  * lifts it off the ground. White on a light ground is a weak edge on its own; the shadow
  * is what actually makes the ribbon and the two channels read as raised.
@@ -184,11 +173,9 @@ export class TrackView {
     /** The GROUP_SIZE figures inside each ring row; `count` of them are shown. */
     private rowFigures: Node[][] = [];
 
-    /** Head-of-channel waiting rows drawn beside the track, one array per side. */
+    /** Head-of-channel waiting rows drawn beside the track, per feed side. */
     private laneClusters: Record<FeedSide, Node[]> = { far: [], near: [] };
-    /** The figures inside each waiting row, same shape as `laneClusters`. */
     private laneFigures: Record<FeedSide, Node[][]> = { far: [], near: [] };
-    /** Resting position of every waiting slot, captured in buildLanes. */
     private laneHome: Record<FeedSide, Vec3[]> = { far: [], near: [] };
     private lastLen: Record<FeedSide, number> = { far: -1, near: -1 };
 
@@ -229,6 +216,7 @@ export class TrackView {
         return out;
     }
 
+    /** Board-local outward normal at t: the core path's normal, unit length, in the x/y plane. */
     private normal(t: number, out: Vec3 = new Vec3()): Vec3 {
         const n = this.path.normalAt(t, this._nt);
         out.set(n.x, n.y, 0);
@@ -317,46 +305,65 @@ export class TrackView {
         }
     }
 
-    /** Builds each feeder-channel's lane: a floor slab and the head waiting slots. */
+    /**
+     * The feeder channels: a floor slab and the head waiting slots, per feed.
+     *
+     * Position and heading both come from the ENTRY CELL's own path point and outward
+     * normal, not from the shape's widest point — the two only coincide on a shape that
+     * is symmetric top to bottom. The trapezoid's entry sits on a slanted edge, so its
+     * channel leaves at 15 degrees and everything here follows that automatically.
+     *
+     * The outward reach is bounded: `dockX + BAND_HALF + LANE_START +
+     * (lookahead - 1) * LANE_STEP + 0.25` must stay inside the visible half-width
+     * (LANE.edgeLimit, 4.67). validateTrack enforces exactly that, against the same
+     * constants, so a level that gets here already fits.
+     */
     private buildLanes(parent: Node): void {
         for (const feed of this.feeds) {
-            const side = feed.side;
-            const dir = side === 'far' ? -1 : 1;          // far runs out to -x, near to +x
-            const x0 = dir * (W + BAND_HALF + LANE_START);
-            // Lane floor: a light slab the waiting passengers stand on. Sized to the
-            // clusters it carries (outermost cluster centre at x0 + dir*(LANE_VISIBLE-1)*LANE_STEP,
-            // half-extent ~0.21) rather than a fixed margin. Because slabW and its centre
-            // offset both scale with (LANE_VISIBLE-1)*LANE_STEP, the halves cancel and the
-            // slab's outer edge reduces to:
-            //   |x0| + (LANE_VISIBLE - 1) * LANE_STEP + 0.25
-            // which must stay within the ~4.67-unit visible half-width at the track's depth
-            // whenever these constants change. That one bound covers the passengers too:
-            // the outermost cluster's tip sits at |x0| + (LANE_VISIBLE-1)*LANE_STEP + 0.21,
-            // inside the slab's edge by construction (0.21 < 0.25). With the shipped
-            // constants those work out to 4.65 and 4.61, against the 4.67 limit.
-            const slabW = LANE_STEP * (LANE_VISIBLE - 1) + 0.5;
+            const t = entryIndex(this.capacity, this.boardIndex, feed.side) / this.capacity;
+            const dock = this.point(t);
+            const out = this.normal(t);
+            // Across the lane: the rows stand perpendicular to the way the lane runs.
+            const across = new Vec3(-out.y, out.x, 0);
+            const first = new Vec3(
+                dock.x + out.x * (BAND_HALF + LANE_START),
+                dock.y + out.y * (BAND_HALF + LANE_START),
+                0,
+            );
+            const span = LANE_STEP * (feed.lookahead - 1);
+            const slabW = span + 0.5;
+            // Floor centred on the slots it carries, and turned to follow the lane so a
+            // tilted channel's slab tilts with it rather than sticking out square.
+            const mid = new Vec3(first.x + out.x * span / 2, first.y + out.y * span / 2, 0);
+            const angle = Math.atan2(out.y, out.x) * 180 / Math.PI;
+
+            const shadow = makeShadowSlab(`lane-shadow-${feed.side}`, slabW, BAND_HALF * 2, 0.2, 34);
+            shadow.setPosition(mid.x, mid.y - BAND_DROP, BAND_Z - 0.06);
+            shadow.setRotationFromEuler(0, 0, angle);
+            parent.addChild(shadow);
+
             // Same white as the ring and as deep, so a channel reads as the track running
-            // off to the side. It used to be a cream slab shallower than the rows standing
-            // on it, which left the outer figures hanging over its edge.
-            const slabX = x0 + dir * (LANE_STEP * (LANE_VISIBLE - 1)) / 2;
-            const laneShadow = makeShadowSlab(`lane-shadow-${side}`, slabW, BAND_HALF * 2, 0.2, 34);
-            laneShadow.setPosition(slabX, this.cy - BAND_DROP, BAND_Z - 0.06);
-            parent.addChild(laneShadow);
-            const slab = makeSlab(`lane-${side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
-            slab.setPosition(slabX, this.cy, BAND_Z);
+            // off to the side.
+            const slab = makeSlab(`lane-${feed.side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
+            slab.setPosition(mid.x, mid.y, BAND_Z);
+            slab.setRotationFromEuler(0, 0, angle);
             parent.addChild(slab);
-            for (let i = 0; i < LANE_VISIBLE; i++) {
-                const n = makeRow(`wait-${side}-${i}`);
-                // A lane feeds inward along x, so its rows run across that: along y.
-                // Fixed, unlike the ring's rows, because a lane never turns.
+
+            this.laneClusters[feed.side] = [];
+            this.laneFigures[feed.side] = [];
+            this.laneHome[feed.side] = [];
+            for (let i = 0; i < feed.lookahead; i++) {
+                const n = makeRow(`wait-${feed.side}-${i}`);
                 const figures = n.children.slice();
-                layoutRow(figures, 0, 1);
-                this.laneFigures[side].push(figures);
-                n.setPosition(x0 + dir * i * LANE_STEP, this.cy, 0);
+                // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
+                // out once, across the lane's own direction.
+                layoutRow(figures, across.x, across.y);
+                this.laneFigures[feed.side].push(figures);
+                n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
                 n.active = false;
                 parent.addChild(n);
-                this.laneClusters[side].push(n);
-                this.laneHome[side].push(n.position.clone());
+                this.laneClusters[feed.side].push(n);
+                this.laneHome[feed.side].push(n.position.clone());
             }
         }
     }
@@ -395,7 +402,7 @@ export class TrackView {
     /**
      * Draw the head of each channel. The inactive channels (every one but the channel
      * still holding rows) are dimmed, so "this one feeds next" is readable without a
-     * tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
+     * tutorial. Only the head `feed.lookahead` are drawn; the rest are implied.
      */
     private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
         // The live channel is the first one still holding rows: drain order, not screen
@@ -437,18 +444,19 @@ export class TrackView {
      * position, which may be mid-tween from the previous tick.
      */
     private animateLaneShift(active: Channel, channels: Channel[]): void {
-        const len = active.queue.length;
         const prev = this.lastLen[active.side];
         for (const c of channels) this.lastLen[c.side] = c.queue.length;
         if (prev < 0 || active.queue.length >= prev) return;
-        const dir = active.side === 'far' ? -1 : 1;
+        // Slide along the lane's own direction, so a tilted channel slides along itself.
+        const t = entryIndex(this.capacity, this.boardIndex, active.side) / this.capacity;
+        const out = this.normal(t);
         const nodes = this.laneClusters[active.side];
         for (let i = 0; i < nodes.length; i++) {
             const n = nodes[i];
             if (!n.isValid || !n.active) continue;
             const home = this.laneHome[active.side][i];
             Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
-            n.setPosition(home.x + dir * LANE_STEP, home.y, home.z);
+            n.setPosition(home.x + out.x * LANE_STEP, home.y + out.y * LANE_STEP, home.z);
             tween(n).to(this.tick, { position: home.clone() }).start();
         }
     }
