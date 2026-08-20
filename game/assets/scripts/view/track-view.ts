@@ -3,29 +3,26 @@ import { colorOf } from './colors';
 import { litMaterial, flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPassenger, recolorPassenger } from './passenger-builder';
-import { GROUP_SIZE, PaxGroup } from '../core/index';
-
-const W = 2.6;   // half width of the circuit centerline
-const H = 1.3;   // half height
-const R = 0.8;   // corner radius
+import { Channel, Feed, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath, entryIndex } from '../core/index';
 
 /**
- * Half-width of the white track band the rows ride on. Narrower than a full row on
- * purpose: the reference art lets its passenger clumps hang over both edges of the
- * ribbon, and a band wide enough to contain a row of four (about 1.0 across) would hang
- * down to y = 1.98 and clash with the parking bay panel, whose top edge is at 2.05.
+ * Half-width of the white band the rows ride on. Comes from core because validateTrack
+ * measures a level's channels against the same number (see LANE in core/track-path.ts).
  */
-const BAND_HALF = 0.38;
+const BAND_HALF = LANE.bandHalf;
+const LANE_STEP = LANE.step;
+const LANE_START = LANE.start;
+
+/**
+ * Half width of the old rounded-rect circuit centreline. Channels are still placed the
+ * OLD way this task — axis-aligned, offset out from this fixed x — while core already
+ * builds five different shapes; the next task rebuilds buildLanes around each feed's own
+ * geometry and this constant goes away then.
+ */
+const W = 2.6;
 
 /** Waiting passengers drawn per channel; the rest of the queue is implied. */
 const LANE_VISIBLE = 3;
-const LANE_STEP = 0.45;      // spacing between waiting clusters
-/**
- * Gap between the band's outer edge and the first waiting row. Chosen so the first row
- * still sits at x = 3.5 now that the band replaces the old curb rails, which keeps the
- * outermost row inside the visible half-width (see buildLanes).
- */
-const LANE_START = 0.52;
 
 /**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
@@ -147,60 +144,11 @@ function paintRow(figures: Node[], color: Color, count: number, shade: (c: Color
     }
 }
 
-interface Seg { len: number; at: (u: number, out: Vec3) => void }
-
-/**
- * The circuit as nine arc-length segments walked CLOCKWISE from the top centre,
- * so t=0 is top centre, t=0.25 the right midpoint, t=0.5 the bottom centre (the
- * boarding gap) and t=0.75 the left midpoint. The top straight is split in two so
- * the walk can start at its middle; by symmetry the quarter marks then land
- * exactly on the side midpoints.
- */
-function buildSegments(cy: number): Seg[] {
-    const sx = W - R, sy = H - R;
-    const line = (x0: number, y0: number, x1: number, y1: number): Seg => ({
-        len: Math.hypot(x1 - x0, y1 - y0),
-        at: (u, out) => out.set(x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, 0),
-    });
-    // a0 is the start angle; the sweep is -90 degrees (clockwise).
-    const corner = (cx: number, ccy: number, a0: number): Seg => ({
-        len: (Math.PI / 2) * R,
-        at: (u, out) => {
-            const a = a0 - (Math.PI / 2) * u;
-            out.set(cx + R * Math.cos(a), ccy + R * Math.sin(a), 0);
-        },
-    });
-    const HP = Math.PI / 2;
-    return [
-        line(0, cy + H, sx, cy + H),
-        corner(sx, cy + sy, HP),
-        line(W, cy + sy, W, cy - sy),
-        corner(sx, cy - sy, 0),
-        line(sx, cy - H, -sx, cy - H),
-        corner(-sx, cy - sy, -HP),
-        line(-W, cy - sy, -W, cy + sy),
-        corner(-sx, cy + sy, Math.PI),
-        line(-sx, cy + H, 0, cy + H),
-    ];
-}
-
-let SEGS: Seg[] | null = null;
-let SEG_CY = NaN;
-let PERIMETER = 0;
-
-/** Scratch output for `repositionAll`'s per-cluster, per-frame `pathPoint` calls
+/** Scratch output for `repositionAll`'s per-cluster, per-frame `point` calls
  *  (12 clusters * ~60fps), so that hot path doesn't allocate a `Vec3` per call. */
 const REPOSITION_SCRATCH = new Vec3();
 /** Scratch for the per-row path normal, same hot path as REPOSITION_SCRATCH. */
 const NORMAL_SCRATCH = new Vec3();
-
-function segments(cy: number): Seg[] {
-    if (SEGS && SEG_CY === cy) return SEGS;
-    SEGS = buildSegments(cy);
-    SEG_CY = cy;
-    PERIMETER = SEGS.reduce((a, s) => a + s.len, 0);
-    return SEGS;
-}
 
 /** Desaturated/darkened tint for the channel that is not feeding yet. */
 function dim(c: Color): Color {
@@ -212,53 +160,24 @@ function dim(c: Color): Color {
     );
 }
 
-/** Point at arc-length fraction t in [0,1) along the circuit. */
-function pathPoint(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
-    const segs = segments(cy);
-    let s = ((t % 1) + 1) % 1 * PERIMETER;
-    for (const seg of segs) {
-        if (s <= seg.len) { seg.at(seg.len > 0 ? s / seg.len : 0, out); return out; }
-        s -= seg.len;
-    }
-    segs[segs.length - 1].at(1, out);
-    return out;
-}
-
-// Scratch for the finite-difference normal (two path samples per call).
-const _nA = new Vec3();
-const _nB = new Vec3();
-
 /**
- * Unit normal to the path at t, in the board plane — the direction a row of passengers
- * runs, since a row stands ACROSS the track rather than along it. Taken as a finite
- * difference of the path rather than analytically per segment: the segments only answer
- * positions, and a 1/2000-lap difference reads as smooth straight through the corners.
- */
-function pathNormal(t: number, cy: number, out: Vec3 = new Vec3()): Vec3 {
-    const d = 1 / 2000;
-    pathPoint(t + d, cy, _nA);
-    pathPoint(t - d, cy, _nB);
-    const dx = _nA.x - _nB.x, dy = _nA.y - _nB.y;
-    const len = Math.hypot(dx, dy) || 1;
-    out.set(-dy / len, dx / len, 0);
-    return out;
-}
-
-/**
- * Renders the passenger loop as a closed race-track: a white-curbed rounded rectangle
- * that rows of same-coloured passengers flow around smoothly, with a boarding gap at
- * the bottom centre (nearest the parking area below) fed by two waiting lanes, one on
- * either side of the gap. One ring cell carries one row of up to GROUP_SIZE figures,
- * laid out across the direction of travel.
+ * Renders the passenger loop as whatever closed track `core` hands it: rows of
+ * same-coloured passengers flow around a `TrackPath`'s shape, board through a gap at
+ * `boardIndex` and are fed in from one or two waiting channels beside that gap. One ring
+ * cell carries one row of up to GROUP_SIZE figures, laid out across the direction of
+ * travel. The path itself, and where its gap and entries fall, all come from the
+ * constructor — this file draws them, it does not decide them.
  */
 export class TrackView {
+    private readonly path: TrackPath;
     private readonly capacity: number;
+    private readonly boardIndex: number;
+    private readonly feeds: Feed[];
     /** loopRoot; needed to turn board-local path points into world positions. */
     private readonly root: Node;
     private readonly cy: number;
     private readonly tick: number;
-    private readonly entries: { board: number; left: number; right: number };
-    /** Path parameters where the curb opens up; filled before buildCurbs runs. */
+    /** Path parameters where the band opens up: the boarding gap and each entry. */
     private gapTs: number[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
     private clusters: Node[] = [];
@@ -266,32 +185,54 @@ export class TrackView {
     private rowFigures: Node[][] = [];
 
     /** Head-of-channel waiting rows drawn beside the track, one array per side. */
-    private laneClusters: { left: Node[]; right: Node[] } = { left: [], right: [] };
+    private laneClusters: Record<FeedSide, Node[]> = { far: [], near: [] };
     /** The figures inside each waiting row, same shape as `laneClusters`. */
-    private laneFigures: { left: Node[][]; right: Node[][] } = { left: [], right: [] };
+    private laneFigures: Record<FeedSide, Node[][]> = { far: [], near: [] };
     /** Resting position of every waiting slot, captured in buildLanes. */
-    private laneHome: { left: Vec3[]; right: Vec3[] } = { left: [], right: [] };
-    private lastLen = { left: -1, right: -1 };
+    private laneHome: Record<FeedSide, Vec3[]> = { far: [], near: [] };
+    private lastLen: Record<FeedSide, number> = { far: -1, near: -1 };
 
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
     /** The in-flight entry flier for each side, if any (see `playEntry`). */
-    private pendingFlier: { left: Node | null; right: Node | null } = { left: null, right: null };
+    private pendingFlier: Record<FeedSide, Node | null> = { far: null, near: null };
+
+    /** Scratch for `point`/`normal`'s core-side sample; core's `Pt`, not a `Vec3`. */
+    private readonly _pt = { x: 0, y: 0 };
+    private readonly _nt = { x: 0, y: 0 };
 
     constructor(
-        parent: Node, capacity: number, y: number, tick: number,
-        entries: { board: number; left: number; right: number },
+        parent: Node, path: TrackPath, capacity: number, boardIndex: number,
+        feeds: Feed[], y: number, tick: number,
     ) {
+        this.path = path;
         this.capacity = capacity;
+        this.boardIndex = boardIndex;
+        this.feeds = feeds;
         this.root = parent;
         this.cy = y;
         this.tick = tick;
-        this.entries = entries;
-        this.gapTs = [entries.board / capacity, entries.left / capacity, entries.right / capacity];
+        this.gapTs = [
+            boardIndex / capacity,
+            ...feeds.map((f) => entryIndex(capacity, boardIndex, f.side) / capacity),
+        ];
         this.buildBand(parent);
         this.buildClusters(parent);
         this.buildLanes(parent);
+    }
+
+    /** Board-local point at t: the core path, lifted to the track's y. */
+    private point(t: number, out: Vec3 = new Vec3()): Vec3 {
+        const p = this.path.pointAt(t, this._pt);
+        out.set(p.x, this.cy + p.y, 0);
+        return out;
+    }
+
+    private normal(t: number, out: Vec3 = new Vec3()): Vec3 {
+        const n = this.path.normalAt(t, this._nt);
+        out.set(n.x, n.y, 0);
+        return out;
     }
 
     /**
@@ -316,15 +257,18 @@ export class TrackView {
      */
     private buildBand(parent: Node): void {
         const SAMPLES = 96;
-        const half = 0.5 / this.capacity; // half a slot wide gap
+        // The gap is an absolute arc length, not half a slot: as a fraction of the lap it
+        // shrank with the ring, and at 20 slots the doorway was 0.37 long and stopped
+        // reading as a doorway at all.
+        const halfLap = GAP_ARC / 2 / this.path.perimeter;
         const parts: MeshPart[] = [];
         const p = new Vec3(), q = new Vec3();
         for (let i = 0; i < SAMPLES; i++) {
             const t = i / SAMPLES;
             // Skip the samples that fall inside a gap.
-            if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < half)) continue;
-            pathPoint(t, this.cy, p);
-            pathPoint(t + 1 / SAMPLES, this.cy, q);
+            if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < halfLap)) continue;
+            this.point(t, p);
+            this.point(t + 1 / SAMPLES, q);
             const dx = q.x - p.x, dy = q.y - p.y;
             const len = Math.hypot(dx, dy) || 1e-4;
             const box = primitives.box({ width: len * 1.2, height: BAND_HALF * 2, length: 0.06 });
@@ -365,7 +309,7 @@ export class TrackView {
             const cluster = makeRow(`pax-row-${i}`);
             this.rowFigures.push(cluster.children.slice());
             const t = i / this.capacity;
-            const p = pathPoint(t, this.cy);
+            const p = this.point(t);
             cluster.setPosition(p.x, p.y, 0);
             cluster.active = false;
             parent.addChild(cluster);
@@ -373,10 +317,11 @@ export class TrackView {
         }
     }
 
-    /** Builds the two feeder-channel lanes: a floor slab and the head waiting slots. */
+    /** Builds each feeder-channel's lane: a floor slab and the head waiting slots. */
     private buildLanes(parent: Node): void {
-        for (const side of ['left', 'right'] as const) {
-            const dir = side === 'left' ? -1 : 1;         // left lane runs out to -x
+        for (const feed of this.feeds) {
+            const side = feed.side;
+            const dir = side === 'far' ? -1 : 1;          // far runs out to -x, near to +x
             const x0 = dir * (W + BAND_HALF + LANE_START);
             // Lane floor: a light slab the waiting passengers stand on. Sized to the
             // clusters it carries (outermost cluster centre at x0 + dir*(LANE_VISIBLE-1)*LANE_STEP,
@@ -417,7 +362,7 @@ export class TrackView {
     }
 
     /** Reflects ring contents (color/visibility) and advances the flow phase one step. */
-    update(ring: (PaxGroup | null)[], left: PaxGroup[], right: PaxGroup[]): void {
+    update(ring: (PaxGroup | null)[], channels: Channel[]): void {
         for (let i = 0; i < this.clusters.length; i++) {
             const group = ring[i];
             const cluster = this.clusters[i];
@@ -444,43 +389,43 @@ export class TrackView {
             })
             .start();
 
-        this.updateLanes(ring, left, right);
+        this.updateLanes(ring, channels);
     }
 
     /**
-     * Draw the head of each channel. The inactive channel (the right one while the
-     * left still has passengers) is dimmed, so "left goes first" is readable without
-     * a tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
+     * Draw the head of each channel. The inactive channels (every one but the channel
+     * still holding rows) are dimmed, so "this one feeds next" is readable without a
+     * tutorial. Only the head `LANE_VISIBLE` are drawn; the rest are implied.
      */
-    private updateLanes(ring: (PaxGroup | null)[], left: PaxGroup[], right: PaxGroup[]): void {
-        const leftActive = left.length > 0;
-        for (const [side, queue] of [['left', left], ['right', right]] as const) {
-            const active = side === 'left' ? leftActive : !leftActive;
-            const nodes = this.laneClusters[side];
+    private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
+        // The live channel is the first one still holding rows: drain order, not screen
+        // order. The rest are dimmed, so "this one feeds next" reads without a tutorial.
+        const live = channels.find((c) => c.queue.length > 0);
+        for (const channel of channels) {
+            const active = channel === live;
+            const nodes = this.laneClusters[channel.side];
             for (let i = 0; i < nodes.length; i++) {
-                const group = queue[i];
+                const group = channel.queue[i];
                 const n = nodes[i];
                 if (!group) { n.active = false; continue; }
                 n.active = true;
-                paintRow(this.laneFigures[side][i], colorOf(group.color), group.count,
+                paintRow(this.laneFigures[channel.side][i], colorOf(group.color), group.count,
                     active ? NO_SHADE : dim);
             }
         }
-        // Which channel actually lost its head this tick? NOT necessarily the one that is
-        // active now: the tick that drains the left channel flips `leftActive` to false,
-        // so keying off the active side would miss that entrant — and its lane slide —
-        // exactly once per level, at the hand-over. Compare both sides instead.
-        const dropped: 'left' | 'right' | null =
-            this.lastLen.left >= 0 && left.length < this.lastLen.left ? 'left'
-            : this.lastLen.right >= 0 && right.length < this.lastLen.right ? 'right'
-            : null;
-        // Always call animateLaneShift: it is what keeps `lastLen` up to date, and it
-        // early-returns on its own when nothing moved.
-        this.animateLaneShift(dropped ?? (leftActive ? 'left' : 'right'), left, right);
+        // Which channel actually lost its head this tick? NOT necessarily the live one:
+        // the tick that empties a channel flips `live` to the next, so keying off the
+        // live side would miss that entrant — and its lane slide — exactly once per
+        // level, at the hand-over. Compare each channel against its own last length.
+        let dropped: Channel | null = null;
+        for (const channel of channels) {
+            const prev = this.lastLen[channel.side];
+            if (prev >= 0 && channel.queue.length < prev) { dropped = channel; break; }
+        }
+        this.animateLaneShift(dropped ?? live ?? channels[0], channels);
         if (dropped) {
-            const index = dropped === 'left' ? this.entries.left : this.entries.right;
-            const group = ring[index];
-            if (group) this.playEntry(dropped, group);
+            const group = ring[dropped.entry];
+            if (group) this.playEntry(dropped.side, group);
         }
     }
 
@@ -491,18 +436,17 @@ export class TrackView {
      * state involved. Homes come from `laneHome`, never from the node's current
      * position, which may be mid-tween from the previous tick.
      */
-    private animateLaneShift(active: 'left' | 'right', left: PaxGroup[], right: PaxGroup[]): void {
-        const len = active === 'left' ? left.length : right.length;
-        const prev = this.lastLen[active];
-        this.lastLen.left = left.length;
-        this.lastLen.right = right.length;
-        if (prev < 0 || len >= prev) return;   // nothing left the lane this tick
-        const dir = active === 'left' ? -1 : 1;
-        const nodes = this.laneClusters[active];
+    private animateLaneShift(active: Channel, channels: Channel[]): void {
+        const len = active.queue.length;
+        const prev = this.lastLen[active.side];
+        for (const c of channels) this.lastLen[c.side] = c.queue.length;
+        if (prev < 0 || active.queue.length >= prev) return;
+        const dir = active.side === 'far' ? -1 : 1;
+        const nodes = this.laneClusters[active.side];
         for (let i = 0; i < nodes.length; i++) {
             const n = nodes[i];
             if (!n.isValid || !n.active) continue;
-            const home = this.laneHome[active][i];
+            const home = this.laneHome[active.side][i];
             Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
             n.setPosition(home.x + dir * LANE_STEP, home.y, home.z);
             tween(n).to(this.tick, { position: home.clone() }).start();
@@ -516,13 +460,13 @@ export class TrackView {
             // Guard against a tween tick landing after the board was destroyed on restart.
             if (!cluster || !cluster.isValid) continue;
             const t = (i / this.capacity + phase) % 1;
-            const p = pathPoint(t, this.cy, REPOSITION_SCRATCH);
+            const p = this.point(t, REPOSITION_SCRATCH);
             cluster.setPosition(p.x, p.y, 0);
             // The row runs across the track, so its spread turns with the path. Rows
             // that are hidden this tick are skipped — nothing to lay out, and it keeps
             // the per-frame cost at the rows actually on screen.
             if (!cluster.active) continue;
-            const n = pathNormal(t, this.cy, NORMAL_SCRATCH);
+            const n = this.normal(t, NORMAL_SCRATCH);
             layoutRow(this.rowFigures[i], n.x, n.y);
         }
     }
@@ -546,9 +490,9 @@ export class TrackView {
      * the wrong passenger lifting off.
      */
     boardingFigureWorldPos(i: number, count: number): Vec3 {
-        const t = this.entries.board / this.capacity;
-        const local = pathPoint(t, this.cy, new Vec3());
-        const n = pathNormal(t, this.cy);
+        const t = this.boardIndex / this.capacity;
+        const local = this.point(t, new Vec3());
+        const n = this.normal(t);
         const off = (i - (count - 1) / 2) * ROW_STEP;
         local.set(local.x + off * n.x, local.y + off * n.y, 0);
         const out = new Vec3();
@@ -565,8 +509,8 @@ export class TrackView {
      * the same moment will the real slot render at the same position where the flier
      * lands; unequal durations cause a visible backwards jump at hand-off.
      */
-    private playEntry(side: 'left' | 'right', group: PaxGroup): void {
-        const index = side === 'left' ? this.entries.left : this.entries.right;
+    private playEntry(side: FeedSide, group: PaxGroup): void {
+        const index = entryIndex(this.capacity, this.boardIndex, side);
         const slot = this.clusters[index];
         const from = this.laneHome[side][0];
         if (!slot || !slot.isValid || !from) return;
@@ -589,14 +533,14 @@ export class TrackView {
         const flier = makeRow('pax-enter');
         const figures = flier.children.slice();
         const entryT = index / this.capacity;
-        const n = pathNormal(entryT, this.cy);
+        const n = this.normal(entryT);
         layoutRow(figures, n.x, n.y);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
         this.root.addChild(flier);
         this.pendingFlier[side] = flier;
         tween(flier)
-            .to(this.tick, { position: pathPoint(index / this.capacity, this.cy) })
+            .to(this.tick, { position: this.point(index / this.capacity) })
             .call(() => {
                 // Only re-activate the slot if this flier is still the pending one
                 // for this side -- if not, a newer playEntry already stopped and
