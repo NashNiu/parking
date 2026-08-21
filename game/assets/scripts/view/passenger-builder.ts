@@ -13,7 +13,9 @@ import { instancedLitMaterial, readMainColor } from './materials';
  * Unlike a car, a passenger is drawn MANY times at once (up to 20 ring slots + up to
  * 6 waiting slots across both channels + fliers, per-level now rather than fixed), so
  * the raw prefab is never instantiated into the scene: its 19 separate meshes would
- * cost 19 draw calls each, over 500 for a full 20-row track. Instead the prefab is
+ * cost 19 draw calls each, and every slot holds a whole GROUP_SIZE (4) row, not one
+ * figure -- so a full 20-slot ring alone is 20 * 4 * 19 = 1,520 draw calls for
+ * passengers, before the waiting channels add anything. Instead the prefab is
  * instantiated exactly once at preload, its geometry baked into ONE merged mesh per
  * material role (see `bake`), and every passenger node reuses those five shared
  * meshes. `instancedLitMaterial` (materials.ts) then collapses those five draw calls

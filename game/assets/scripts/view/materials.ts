@@ -149,9 +149,13 @@ const instancedCache = new Map<string, Material>();
  * The fallback path stores `litMaterial(color)`'s own object under this cache's key too,
  * so that one Material ends up reachable from both caches for this colour. That is safe
  * (not a bug) only because both caches are keyed by the exact colour a caller asked for
- * and nothing in this module mutates a fetched material's colour in place -- recoloring
- * always means looking up a (possibly different) cached material and reassigning it, per
- * `setLitColor` above. If that ever stops being true, this sharing stops being safe too.
+ * and nothing in this module mutates a fetched material's `mainColor` in place --
+ * recoloring always means looking up a (possibly different) cached material and
+ * reassigning it, per `setLitColor` above. (`setEmissive` DOES mutate a shared material's
+ * `emissive` in place, and in the fallback case it is reachable through this function --
+ * but that is a different property, already true of `litMaterial`'s own cache, and at
+ * most cosmetic.) If `mainColor` ever stops being immutable here, this sharing stops
+ * being safe too.
  */
 export function instancedLitMaterial(color: Color): Material {
     const k = key(color);

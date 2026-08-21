@@ -614,9 +614,11 @@ export class GameController extends Component {
         const count = slots.length;
         for (let i = 0; i < count; i++) {
             // A slot with no view entry means the view already lost track of that car
-            // (shouldn't happen) — skip that one figure rather than abandon the row.
+            // (shouldn't happen) — skip that one figure rather than abandon the row, but
+            // warn, since a silently dropped figure is otherwise the only symptom of a
+            // view/core desync.
             const e = bySlot.get(slots[i]);
-            if (!e) continue;
+            if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${slots[i]}`); continue; }
             const end = e.node.worldPosition.clone();
             // Leave from where this figure actually stood in the row, not the row centre.
             const start = this.loopView.boardingFigureWorldPos(i, count);

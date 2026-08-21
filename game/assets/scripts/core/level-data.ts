@@ -43,8 +43,10 @@ export function validateLevel(level: LevelData): string[] {
  *
  * These rules read like formalities and are not: the first draft of the difficulty curve
  * had hex-at-18 and oval-at-14 in it, whose entry cells land on curved edges with outward
- * normals tilted 30 degrees -- channels shoved diagonally off screen. Rule 6 caught both
- * before anything was drawn.
+ * normals tilted 30 degrees -- channels shoved diagonally off screen. What actually catches
+ * both, though, is the capacity-multiple-of-4 rule (18 and 14 are not multiples of 4) --
+ * the entry-normal rule is gated on `capacity % 4 === 0` and never runs for either case.
+ * It exists for a future shape whose quarter point lands somewhere steeper.
  */
 export function validateTrack(level: LevelData): string[] {
   const errors: string[] = [];

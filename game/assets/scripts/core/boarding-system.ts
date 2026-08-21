@@ -3,7 +3,8 @@ import { ParkingSystem } from './parking-system';
 
 export interface BoardResult {
   boardedColor: string | null;
-  /** How many of the row got on this tick — the view flies exactly this many figures. */
+  /** How many of the row got on this tick. Always equals `boardedSlots.length` -- the
+   * view flies figures by iterating `boardedSlots`, not by reading this count directly. */
   boardedCount: number;
   departedCarIds: number[];
   /**
