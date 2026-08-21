@@ -381,16 +381,23 @@ export class TrackView {
                 // and rotating the parent would swing those out of the board plane) and
                 // about Y only (about Z would tip them over, per makeRow's docstring).
                 //
-                // Measured on a running level (logged rotation + actual world-space
-                // facing of a figure, compared against a ring figure known to face the
-                // camera correctly): the model's visual front is the node's +Z, and the
-                // yaw convention is the standard +Z = (sin(yaw), 0, cos(yaw)). So facing
-                // inward means the yaw's sign is opposite to `out.x`'s. The magnitude is
-                // FACE_TURN (45), not a full 90, because 90 puts the figure in pure
-                // profile — its face isn't visible, and the two channels' profiles are
-                // nearly indistinguishable at this zoom. If this ever needs to change,
-                // measure it again on screen rather than re-deriving the sign on paper;
-                // three paper derivations before this one were each wrong.
+                // Base orientation is camera-facing: with `fit`'s rotation fixed
+                // (passenger-builder.ts), a figure with no yaw of its own — like every
+                // ring figure — faces +Z, out of the board toward the camera. This yaw
+                // turns a figure away from that base, toward the track, following the
+                // standard convention +Z = (sin(yaw), 0, cos(yaw)); facing inward means
+                // the yaw's sign is opposite to `out.x`'s, which is what the expression
+                // below does. The magnitude is FACE_TURN (45), not a full 90, because 90
+                // puts the figure in pure profile — its face isn't visible, and the two
+                // channels' profiles are nearly indistinguishable at this zoom.
+                //
+                // This sign was previously justified by comparing a lane figure against
+                // a ring figure "known" to face the camera — but the ring figure did NOT
+                // face the camera at the time (see passenger-builder.ts); every ring
+                // passenger was in profile for the whole project. That the sign below
+                // still came out right was luck, not a validated derivation. If this
+                // ever needs to change, measure it again on screen — do not re-derive it
+                // on paper; multiple paper derivations before this one were wrong.
                 const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 this.laneFigures[channel.side].push(figures);

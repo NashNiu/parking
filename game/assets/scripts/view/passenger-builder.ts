@@ -271,10 +271,17 @@ export function buildPassenger(name: string, color: Color, height: number): Node
     const fit = new Node('fit');
     const s = height / model.size.y;
     fit.setScale(s, s, s);
-    // The figure is authored facing -Z, so it showed the camera its back. Turn it
-    // about the board's up axis (+Y) to face +Z, which is out of the board toward
-    // the camera. No lay-down rotation: unlike the cars it stands on the board.
-    fit.setRotationFromEuler(0, 180, 0);
+    // The model is authored facing +X, not -Z as an earlier comment here claimed —
+    // that comment was wrong, and the -90 below (not the 180 it used to say) is the
+    // fix. With the wrong 180, R_y(180) sends +X to -X, so every ring passenger (whose
+    // root carries no extra yaw) faced screen left in profile for the whole project;
+    // the human caught it by looking at the running game, not by reading this comment.
+    // R_y(-90) instead sends +X to +Z, out of the board toward the camera, so a figure
+    // with an identity root rotation faces the player. No lay-down rotation: unlike the
+    // cars it stands on the board. If this ever needs to change again, verify the
+    // authored-front axis by observing the running game — do not re-derive it from the
+    // art or trust a comment's claim about it.
+    fit.setRotationFromEuler(0, -90, 0);
     root.addChild(fit);
 
     for (const { role, mesh } of model.meshes) {
