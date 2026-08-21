@@ -16,7 +16,6 @@ import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { preloadCarModels } from './car-builder';
-import { preloadPassengerModel } from './passenger-builder';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
 
@@ -227,11 +226,10 @@ export class GameController extends Component {
         // Preload builtin-standard so lit materials get real lighting; it lives in
         // the `internal` bundle but isn't preloaded unless something already uses it.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
-        // Then preload the car and passenger GLB models (buildCar/buildPassenger are
-        // synchronous and need the prefabs resident) before loading the level.
-        this.preloadLitEffect(() => preloadCarModels(
-            () => preloadPassengerModel(() => this.loadLevel(this.levelName)),
-        ));
+        // Then preload the car GLB models (buildCar is synchronous and needs the
+        // prefab resident) before loading the level. Passengers are procedural
+        // (pax-figure.ts) and need no preload of their own.
+        this.preloadLitEffect(() => preloadCarModels(() => this.loadLevel(this.levelName)));
     }
 
     /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */

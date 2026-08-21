@@ -1,8 +1,8 @@
-import { Node, Color, Vec3, Mesh, MeshRenderer, primitives, tween, Tween } from 'cc';
+import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
-import { litMaterial, flatMaterial, alphaMaterial } from './materials';
+import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
-import { buildPassenger, recolorPassenger } from './passenger-builder';
+import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
 import { Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath } from '../core/index';
 
 /**
@@ -33,42 +33,26 @@ const BAND_Z = -0.09;
 const BAND_SHADOW = new Color(24, 34, 56, 34);
 const BAND_DROP = 0.07;
 
-/** Balls per passenger cluster and their layout offsets (small clump). */
-const BALL_OFFSETS: [number, number][] = [
-    [0, 0.06],
-    [-0.09, -0.05],
-    [0.09, -0.05],
-    [0, -0.13],
-];
-const BALL_RADIUS = 0.12;
-
 /**
- * One merged mesh for a whole passenger cluster (all four balls baked in at their
- * offsets), built once and shared by every cluster node. Collapses 4 draw calls per
- * cluster to 1 — the balls never move relative to each other, so merging is safe.
- */
-let CLUSTER_MESH: Mesh | null = null;
-function clusterMesh(): Mesh {
-    if (CLUSTER_MESH) return CLUSTER_MESH;
-    const parts = BALL_OFFSETS.map(([ox, oy]) => {
-        const g = primitives.sphere(BALL_RADIUS, { segments: 8 });
-        const positions = g.positions.slice();
-        for (let v = 0; v < positions.length; v += 3) {
-            positions[v] += ox;
-            positions[v + 1] += oy;
-        }
-        return { positions, normals: g.normals, uvs: g.uvs, indices: g.indices };
-    });
-    CLUSTER_MESH = mergeParts(parts);
-    return CLUSTER_MESH;
-}
-
-/**
- * Height of a passenger figure on the board. Calibrated against LANE_STEP (0.45):
- * the model is roughly 0.45 as wide as it is tall, so this keeps waiting passengers
- * clear of each other while reading larger than the ball clump it replaced.
+ * Height of a passenger figure on the board. Calibrated against LANE_STEP (0.45): the
+ * figure (arms included) is roughly as wide as it is tall, so this keeps waiting
+ * passengers in adjacent lane slots clear of each other. Feeds back into which ring
+ * lengths are legal (see validateTrack), so this does not change independently of
+ * the track's geometry budget.
  */
 const PAX_HEIGHT = 0.55;
+
+/**
+ * Ring-figure arm swing, driven by the ring's own phase (`repositionAll`) rather than
+ * a separate accumulator, so it advances with the ring's motion and stops when the
+ * ring stops. `phaseHolder.p` sweeps a narrow range every tick (from -1/capacity up to
+ * 0, see `update()`), so SWING_PHASE_SCALE blows that back up into a useful sweep of
+ * the sine argument. SWING_STAGGER offsets each figure by its own mixed row/seat
+ * index so a whole ring doesn't swing in lockstep like a marching toy.
+ */
+const SWING_AMPLITUDE_DEG = 22;
+const SWING_PHASE_SCALE = 40;
+const SWING_STAGGER = 0.7;
 
 /** Identity shade — the active/undimmed case for `paintPassenger`. */
 const NO_SHADE = (c: Color): Color => c;
@@ -94,30 +78,16 @@ function layoutRow(figures: Node[], dx: number, dy: number): void {
 }
 
 /**
- * One passenger node: the real 3D figure when the model loaded, else the original
- * four-ball clump. Both forms answer the same contract — a root node whose own
- * transform is free for the caller to set and tween — so every position, tween and
- * `active` toggle in this file is identical either way.
+ * One passenger node: the procedural figure (see pax-figure.ts). It cannot fail to
+ * build — no asset load, no async — so there is no fallback path any more.
  */
 function makePassenger(name: string, color: Color): Node {
-    const model = buildPassenger(name, color, PAX_HEIGHT);
-    if (model) return model;
-    const n = new Node(name);
-    const mr = n.addComponent(MeshRenderer);
-    mr.mesh = clusterMesh();
-    mr.material = litMaterial(color);
-    return n;
+    return buildPaxFigure(name, color, PAX_HEIGHT);
 }
 
-/**
- * Recolor a node from `makePassenger`, whichever form it took. The ball clump wears
- * its color on its own renderer; the model carries it on the `paint` role only, and
- * keeps skin/eyes/shoes as authored.
- */
+/** Recolor a node from `makePassenger`. A straight pass-through to pax-figure.ts. */
 function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): void {
-    const own = node.getComponent(MeshRenderer);
-    if (own) { own.material = litMaterial(shade(color)); return; }
-    recolorPassenger(node, color, shade);
+    recolorPaxFigure(node, color, shade);
 }
 
 /**
@@ -381,23 +351,26 @@ export class TrackView {
                 // and rotating the parent would swing those out of the board plane) and
                 // about Y only (about Z would tip them over, per makeRow's docstring).
                 //
-                // Base orientation is camera-facing: with `fit`'s rotation fixed
-                // (passenger-builder.ts), a figure with no yaw of its own — like every
-                // ring figure — faces +Z, out of the board toward the camera. This yaw
-                // turns a figure away from that base, toward the track, following the
-                // standard convention +Z = (sin(yaw), 0, cos(yaw)); facing inward means
-                // the yaw's sign is opposite to `out.x`'s, which is what the expression
-                // below does. The magnitude is FACE_TURN (45), not a full 90, because 90
-                // puts the figure in pure profile — its face isn't visible, and the two
-                // channels' profiles are nearly indistinguishable at this zoom.
+                // Base orientation is camera-facing: a figure with no yaw of its own —
+                // like every ring figure — faces +Z, out of the board toward the
+                // camera (pax-figure.ts derives this from the geometry it places, not
+                // from an authored convention). This yaw turns a figure away from that
+                // base, toward the track, following the standard convention
+                // +Z = (sin(yaw), 0, cos(yaw)); facing inward means the yaw's sign is
+                // opposite to `out.x`'s, which is what the expression below does. The
+                // magnitude is FACE_TURN (45), not a full 90, because 90 puts the
+                // figure in pure profile — with no face on the new figure either, that
+                // still means the shoulders/arms, and the two channels' silhouettes
+                // are nearly indistinguishable at this zoom.
                 //
                 // This sign was previously justified by comparing a lane figure against
-                // a ring figure "known" to face the camera — but the ring figure did NOT
-                // face the camera at the time (see passenger-builder.ts); every ring
-                // passenger was in profile for the whole project. That the sign below
-                // still came out right was luck, not a validated derivation. If this
-                // ever needs to change, measure it again on screen — do not re-derive it
-                // on paper; multiple paper derivations before this one were wrong.
+                // a ring figure "known" to face the camera — but under the old GLB
+                // model that ring figure did NOT face the camera; every ring passenger
+                // was in profile for the whole project (see git history on this file
+                // predating pax-figure.ts). That the sign below still came out right
+                // was luck, not a validated derivation. If this ever needs to change,
+                // measure it again on screen — do not re-derive it on paper; multiple
+                // paper derivations before this one were wrong.
                 const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 this.laneFigures[channel.side].push(figures);
@@ -517,7 +490,18 @@ export class TrackView {
             // the per-frame cost at the rows actually on screen.
             if (!cluster.active) continue;
             const n = this.normal(t, NORMAL_SCRATCH);
-            layoutRow(this.rowFigures[i], n.x, n.y);
+            const figures = this.rowFigures[i];
+            layoutRow(figures, n.x, n.y);
+            // The ring is moving and the channels are not — that contrast is what
+            // tells a player which one is which — so only ring figures swing, driven
+            // by the same phase that already moves them, and only the ones actually
+            // shown this tick (paintRow toggles `active` per seat).
+            for (let j = 0; j < figures.length; j++) {
+                if (!figures[j].active) continue;
+                const mixed = i * GROUP_SIZE + j;
+                const swing = Math.sin(phase * SWING_PHASE_SCALE + mixed * SWING_STAGGER) * SWING_AMPLITUDE_DEG;
+                setArmSwing(figures[j], swing);
+            }
         }
     }
 
