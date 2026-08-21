@@ -108,7 +108,7 @@ test('a car longer than it is wide points that length at its exit', () => {
 });
 
 import { trackParams, planningWindow } from '../../game/assets/scripts/core/level-gen';
-import { capacityOptions, maxLookahead } from '../../game/assets/scripts/core/track-path';
+import { capacityOptions, maxLookahead, CAPACITY_OPTIONS } from '../../game/assets/scripts/core/track-path';
 import { validateTrack } from '../../game/assets/scripts/core/level-data';
 import { TRACK_SHAPES } from '../../game/assets/scripts/core/track-shapes';
 
@@ -197,11 +197,15 @@ test('every generated level draws a legal track', () => {
   }
 });
 
-// A test used to sit here asserting `level.loop.capacity >= colors.size` ("the ring can
-// hold at least one row of every colour a level uses" -- a ring shorter than the colour
-// count can have a colour entirely absent from it, which turns an ordinary level into a
-// coin flip). Removed: CAPACITY_OPTIONS never goes below 8 and levelParams never asks
-// for more than 5 colours (PALETTE itself only has 6), so that comparison could not fail
-// for ANY output this generator can produce -- it was tautological, not a regression
-// test, and no realistic bug in `scatter`/`queueFor` could push it far enough to matter.
-// The intent above is still true; it just is not exercisable under today's constants.
+test('the shortest legal ring can hold a row of every colour the curve can ask for', () => {
+  // Asserted over the CONSTANTS, not over generated output. The version of this that compared
+  // a generated level's capacity against its own colour count could not fail: the floor of
+  // CAPACITY_OPTIONS (8) already sits above the highest colour count levelParams can reach (5).
+  // The relation between those two numbers is the part an edit can break -- a new, shorter
+  // capacity option, or a raised colour cap -- so that is what this pins.
+  const shortestRing = Math.min(...CAPACITY_OPTIONS);
+  let mostColors = 0;
+  for (let id = 1; id <= 200; id++) mostColors = Math.max(mostColors, levelParams(id).colors);
+  expect(mostColors).toBeGreaterThan(0);          // never pass vacuously
+  expect(shortestRing).toBeGreaterThanOrEqual(mostColors);
+});

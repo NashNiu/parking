@@ -32,6 +32,7 @@ test('a row larger than the seats left boards what fits and keeps the rest', () 
   const res = boarding.tick();
   expect(res.boardedColor).toBe('red');
   expect(res.boardedCount).toBe(2);
+  expect(res.boardedSlots).toEqual([0, 0]); // both boarded passengers went into slot 0
   expect(res.departedCarIds).toContain(1); // it filled up and left
   expect(loop.ring[3]).toEqual({ color: 'red', count: 2 }); // rotated one cell on
   expect(loop.remainingCount()).toBe(14);
