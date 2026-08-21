@@ -6,6 +6,13 @@ export interface BoardResult {
   /** How many of the row got on this tick — the view flies exactly this many figures. */
   boardedCount: number;
   departedCarIds: number[];
+  /**
+   * The parking slot each boarded passenger went into, in boarding order (so its length
+   * equals `boardedCount`). The view needs this because a car that fills on this tick is
+   * already gone from `parking.parked` by the time the view runs -- and because a row can
+   * legitimately split across two cars of the same colour.
+   */
+  boardedSlots: number[];
 }
 
 export class BoardingSystem {
@@ -17,6 +24,7 @@ export class BoardingSystem {
   tick(): BoardResult {
     const color = this.loop.passengerAtBoard();
     let boardedCount = 0;
+    const boardedSlots: number[] = [];
     if (color) {
       // Drain the whole row this tick, as far as the matching cars can take it: the
       // row is at the gap for one tick only, and holding it there for four ticks would
@@ -26,12 +34,13 @@ export class BoardingSystem {
         const slot = this.parking.findMatchingSlot(color);
         if (slot === -1) break;
         this.parking.board(slot);
+        boardedSlots.push(slot);
         this.loop.boardPassenger();
         boardedCount++;
       }
     }
     const departedCarIds = this.parking.removeFull();
     this.loop.step();
-    return { boardedColor: boardedCount > 0 ? color : null, boardedCount, departedCarIds };
+    return { boardedColor: boardedCount > 0 ? color : null, boardedCount, departedCarIds, boardedSlots };
   }
 }

@@ -421,7 +421,7 @@ export class GameController extends Component {
             this.loopView?.update(lp.ring, lp.channels);
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.syncSeatCounts();
-            if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedCount);
+            if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedSlots);
             if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
@@ -586,31 +586,38 @@ export class GameController extends Component {
     /**
      * Fly the passengers that just boarded from the gap to their matching parked car,
      * one arc each, staggered so a row of four reads as four people getting on rather
-     * than one thing moving. `count` comes from the core: a row can be partly boarded
-     * when the car runs out of seats mid-row.
-     *
-     * All of them fly to the first matching car even in the rare case where the core
-     * split the row across two cars of the same colour. Only the arcs would differ —
-     * the seat numbers come from `syncSeatCounts`, which reads the core.
+     * than one thing moving. `slots` comes from the core (`BoardResult.boardedSlots`):
+     * one parking slot per boarded passenger, in boarding order. A row can be partly
+     * boarded when a car runs out of seats mid-row, and can legitimately split across
+     * two cars of the same colour, so each figure flies to the car it actually boarded
+     * rather than all of them flying to one shared match — and a car that fills (and
+     * departs) on this very tick is still resolvable, because we read it from the
+     * view's own `this.parked`, which core's departure this tick has not touched yet.
      */
-    private playBoarding(color: string, count: number): void {
-        let match: ParkedCar | null = null;
-        for (const [, e] of this.parked) {
-            if (this.core!.parking.parked[e.slot]?.color === color) { match = e; break; }
-        }
-        if (!match) return;
-        const e = match;
+    private playBoarding(color: string, slots: number[]): void {
+        // Slot -> the view's own parked entry. Built once per call: `this.parked` is
+        // keyed by car id, not slot, and several figures can resolve to the same car.
+        const bySlot = new Map<number, ParkedCar>();
+        for (const [, e] of this.parked) bySlot.set(e.slot, e);
 
         this.sfx?.play('board');
         // Without a track to fly from, nothing will land to walk the count down, so
         // apply the whole row at once rather than leaving the number stale.
         if (!this.loopView || !this.boardRoot) {
-            for (let i = 0; i < count; i++) this.seatBoarded(e);
+            for (const slot of slots) {
+                const e = bySlot.get(slot);
+                if (e) this.seatBoarded(e);
+            }
             return;
         }
 
-        const end = e.node.worldPosition.clone();
+        const count = slots.length;
         for (let i = 0; i < count; i++) {
+            // A slot with no view entry means the view already lost track of that car
+            // (shouldn't happen) — skip that one figure rather than abandon the row.
+            const e = bySlot.get(slots[i]);
+            if (!e) continue;
+            const end = e.node.worldPosition.clone();
             // Leave from where this figure actually stood in the row, not the row centre.
             const start = this.loopView.boardingFigureWorldPos(i, count);
             const p = this.loopView.spawnPassenger(color);

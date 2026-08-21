@@ -63,6 +63,35 @@ test('no matching car means no boarding, loop still advances', () => {
   expect(loop.remainingCount()).toBe(before); // nobody boarded
 });
 
+test('a car that fills and departs in the same tick still names its slot in boardedSlots', () => {
+  // The row that fills a car is the row that makes it depart -- boardedSlots has to
+  // report the slot BEFORE removeFull() clears it, or the view has nothing to fly to.
+  const loop = new LoopSystem(4, 2, [{ color: 'red', count: 16 }]);
+  const parking = new ParkingSystem(4, 1);
+  parking.park(car({ id: 7, color: 'red', cap: 'small' }));
+  parking.parked[0]!.filled = 15;        // one seat left, this row fills and departs it
+
+  const boarding = new BoardingSystem(loop, parking);
+  const res = boarding.tick();
+
+  expect(res.boardedSlots).toEqual([0]);
+  expect(res.departedCarIds).toContain(7);
+  expect(parking.parked[0]).toBeNull();  // pins the ordering: slot reported, THEN cleared
+});
+
+test('a row split across two cars of the same colour reports both slots, in boarding order', () => {
+  const loop = new LoopSystem(4, 2, [{ color: 'red', count: 16 }]);
+  const parking = new ParkingSystem(4, 2);
+  parking.park(car({ id: 1, color: 'red', cap: 'small' }));
+  parking.park(car({ id: 2, color: 'red', cap: 'small' }));
+  parking.parked[0]!.filled = 15;        // one seat left here, the rest go next door
+
+  const boarding = new BoardingSystem(loop, parking);
+  const res = boarding.tick();
+
+  expect(res.boardedSlots).toEqual([0, 1, 1, 1]);
+});
+
 test('a car that fills up departs and its id is reported', () => {
   // small car cap 16, exactly 16 red passengers
   const loop = new LoopSystem(4, 2, [{ color: 'red', count: 16 }]);
