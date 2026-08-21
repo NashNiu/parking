@@ -28,6 +28,20 @@ const { ccclass, property } = _decorator;
  */
 const BOARD_STAGGER = 0.07;
 
+/** How long one boarding figure's flight arc takes — shared with `playBoarding`'s tween. */
+const BOARD_FLIGHT_TIME = 0.4;
+
+/**
+ * How long a row of `count` boarding flights takes from the first figure leaving to the
+ * last one landing: the last flight starts after `count - 1` staggers and then takes
+ * `BOARD_FLIGHT_TIME` itself. Shared by `playBoarding` (which starts the flights) and the
+ * tick loop (which must not tear a car down before its own boarding flights land), so the
+ * two can't drift apart.
+ */
+function boardingDuration(count: number): number {
+    return (count - 1) * BOARD_STAGGER + BOARD_FLIGHT_TIME;
+}
+
 /**
  * The ring road around the lot and the routes cars drive on it. Its top lane is fixed
  * at ROAD_Y, just under the parking stalls (whose pads reach down to y = 0.87, and a
@@ -422,7 +436,21 @@ export class GameController extends Component {
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.syncSeatCounts();
             if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedSlots);
-            if (res.departedCarIds.length > 0) this.onDeparted(res.departedCarIds);
+            if (res.departedCarIds.length > 0) {
+                if (res.boardedColor) {
+                    // This tick both boarded and departed: the departing car is exactly
+                    // the one that just filled, so its passengers are still mid-flight
+                    // (see playBoarding). Tearing it down now would destroy the seat
+                    // chip they are about to land on and drive the car out from under
+                    // them. Wait for the flights this tick actually started to land.
+                    const ids = res.departedCarIds;
+                    this.scheduleOnce(() => this.onDeparted(ids), boardingDuration(res.boardedSlots.length));
+                } else {
+                    // No boarding this tick (e.g. a zero-capacity car parked already
+                    // full), so there is no flight to wait for — depart at once.
+                    this.onDeparted(res.departedCarIds);
+                }
+            }
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
                 break;
@@ -440,6 +468,11 @@ export class GameController extends Component {
             if (!e) continue;
             this.parked.delete(id);
             if (e.chip) e.chip.destroy();
+            // The departure this fires for can be deferred past a boarding flight (see
+            // the tick loop), and by the time it runs the human may have tapped through
+            // the win banner and switchTo rebuilt the board — which destroys this car's
+            // node out from under the deferred call. Bail rather than touch it.
+            if (!e.node.isValid) continue;
             // A departing car is exactly one that just filled up (the core boards +
             // removes a full car in the same tick), so the "full" highlight belongs
             // here: pulse the car green and burst stars as it drives off.
@@ -629,7 +662,7 @@ export class GameController extends Component {
             );
             tween({ t: 0 })
                 .delay(i * BOARD_STAGGER)
-                .to(0.4, { t: 1 }, {
+                .to(BOARD_FLIGHT_TIME, { t: 1 }, {
                     onUpdate: (target?: { t: number }) => {
                         // The tween targets a plain object, so a restart mid-flight won't
                         // stop it — bail if the passenger node was already destroyed.
