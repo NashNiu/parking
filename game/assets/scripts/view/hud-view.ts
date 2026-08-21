@@ -136,9 +136,23 @@ export class HudView {
         this.progressLabel.string = `${remaining}`;
     }
 
+    /**
+     * Moves the banner and the stars to the end of the canvas's child list, so they
+     * render on top of every seat chip. `newSeatChip` appends chips at runtime as cars
+     * park, which makes each one a later — and therefore higher-rendering — sibling of
+     * the banner and stars, which are constructed early. Raising both at show time (once
+     * the game is over, no further chip can appear) undoes that ordering.
+     */
+    private raiseBannerToFront(): void {
+        const lastIndex = this.canvas.children.length - 1;
+        this.bannerLabel.node.setSiblingIndex(lastIndex);
+        for (const label of this.starLabels) label.node.setSiblingIndex(lastIndex);
+    }
+
     showBanner(text: string): void {
         this.bannerLabel.string = text;
         this.bannerLabel.node.active = true;
+        this.raiseBannerToFront();
     }
 
     /**
@@ -149,6 +163,7 @@ export class HudView {
     showWin(starCount: number, hasNext: boolean = false): void {
         this.bannerLabel.string = hasNext ? '过关!\n点击进入下一关' : '全部通关!\n点击重玩';
         this.bannerLabel.node.active = true;
+        this.raiseBannerToFront();
         this.starLabels.forEach((label, i) => {
             const filled = i < starCount;
             label.string = filled ? '★' : '☆'; // ★ / ☆
@@ -167,6 +182,7 @@ export class HudView {
     showLose(): void {
         this.bannerLabel.string = '游戏失败\n点击重试';
         this.bannerLabel.node.active = true;
+        this.raiseBannerToFront();
         for (const label of this.starLabels) label.node.active = false;
     }
 
