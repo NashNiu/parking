@@ -366,6 +366,12 @@ export class TrackView {
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
                 layoutRow(figures, across.x, across.y);
+                // Face the track, not the camera: yaw is per figure (not on the row node,
+                // whose children carry the across-the-lane offsets `layoutRow` just set,
+                // and rotating the parent would swing those out of the board plane) and
+                // about Y only (about Z would tip them over, per makeRow's docstring).
+                const yaw = out.x > 0 ? -90 : 90;
+                for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 this.laneFigures[channel.side].push(figures);
                 n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
                 n.active = false;
