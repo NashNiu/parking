@@ -265,9 +265,9 @@ export function buildPassenger(name: string, color: Color, height: number): Node
     if (!model) return null;
 
     const root = new Node(name);
-    // The model stands along +Y and faces +Z, which is exactly the board's own frame
-    // (+Y up the board, +Z out toward the camera), so no rotation is needed — unlike
-    // the cars, which are laid flat with Rx(90) because they're seen from above.
+    // The model stands along +Y, which is already the board's own up axis, so it needs
+    // no lay-down rotation — unlike the cars, which get Rx(90) because they're seen
+    // from above. Its FACING is a different matter and is turned below.
     const fit = new Node('fit');
     const s = height / model.size.y;
     fit.setScale(s, s, s);
