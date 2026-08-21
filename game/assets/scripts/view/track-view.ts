@@ -370,7 +370,15 @@ export class TrackView {
                 // whose children carry the across-the-lane offsets `layoutRow` just set,
                 // and rotating the parent would swing those out of the board plane) and
                 // about Y only (about Z would tip them over, per makeRow's docstring).
-                const yaw = out.x > 0 ? -90 : 90;
+                //
+                // After `buildPassenger`'s inner 180° turn the figure faces +Z; this yaw
+                // about the board's Y then turns that facing in the board plane. Which
+                // sign points the figure at the track (rather than away from it) is not
+                // derived here — it was checked by looking at the running game. If you
+                // need to change this, check it on screen again rather than trust a
+                // paper re-derivation; the previous sign looked equally reasonable on
+                // paper and had the figures facing away from the track.
+                const yaw = out.x > 0 ? 90 : -90;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 this.laneFigures[channel.side].push(figures);
                 n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
