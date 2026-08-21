@@ -10,6 +10,8 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-19-per-level-track-shapes-design.md](../specs/2026-08-19-per-level-track-shapes-design.md)
 
+> **已执行完毕,部分数字已被实现推翻。** 本文是执行前的快照,故意不回改 —— 它记录的是当时的意图。两处已知错误:梯形通道的净空(这里和 spec 早期版本都算错了方向,实测法线朝**上**、净空 1.37,不是朝下 0.67),以及"规则 6 抓住了 hex-18 / oval-14"(规则 6 以 `capacity % 4 === 0` 为前置,对这两例结构上无法触发,实际是规则 2)。**以 spec 为准**,它已按实测值更正。
+
 ## Global Constraints
 
 - 所有形状共用同一个外框:半宽 **2.6**、半高 **1.3**。不动相机、不动 HUD、不动停车场。
