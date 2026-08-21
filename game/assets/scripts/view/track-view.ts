@@ -149,24 +149,6 @@ const REPOSITION_SCRATCH = new Vec3();
 /** Scratch for the per-row path normal, same hot path as REPOSITION_SCRATCH. */
 const NORMAL_SCRATCH = new Vec3();
 
-/**
- * TEMPORARY diagnostic for the channel-facing question (see
- * .superpowers/sdd/2026-08-19-per-level-track-shapes/preview-fix-3.md, item 2). Three
- * guessed signs for the lane yaw have all looked wrong on screen, so this logs the
- * measured rotation and world-space facing of a figure instead of a fourth guess.
- * `[facing]`-prefixed, one line, meant to be read out of the editor console and pasted
- * back verbatim. Remove this function and its call sites once the correct yaw is known.
- */
-function logFacing(label: string, figure: Node): void {
-    const e = figure.eulerAngles;
-    const fwd = figure.forward; // Cocos's world -Z axis for this node.
-    console.log(
-        `[facing] ${label} euler=(${e.x.toFixed(2)}, ${e.y.toFixed(2)}, ${e.z.toFixed(2)}) ` +
-        `forward(-Z)=(${fwd.x.toFixed(3)}, ${fwd.y.toFixed(3)}, ${fwd.z.toFixed(3)}) ` +
-        `+Z=(${(-fwd.x).toFixed(3)}, ${(-fwd.y).toFixed(3)}, ${(-fwd.z).toFixed(3)})`,
-    );
-}
-
 /** Desaturated/darkened tint for the channel that is not feeding yet. */
 function dim(c: Color): Color {
     return new Color(
@@ -337,9 +319,6 @@ export class TrackView {
             cluster.active = false;
             parent.addChild(cluster);
             this.clusters.push(cluster);
-            // TEMPORARY diagnostic (see logFacing) — the reference line: ring figures are
-            // known to face the camera correctly, so this is what "front" looks like.
-            if (i === 0) logFacing('ref=ring row=0 figure=0', this.rowFigures[0][0]);
         }
     }
 
@@ -414,13 +393,6 @@ export class TrackView {
                 // three paper derivations before this one were each wrong.
                 const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
-                // TEMPORARY diagnostic (see logFacing) — once per channel, not per row.
-                if (i === 0) {
-                    logFacing(
-                        `channel side=${channel.side} out=(${out.x.toFixed(3)}, ${out.y.toFixed(3)}) yaw=${yaw}`,
-                        figures[0],
-                    );
-                }
                 this.laneFigures[channel.side].push(figures);
                 n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
                 n.active = false;
