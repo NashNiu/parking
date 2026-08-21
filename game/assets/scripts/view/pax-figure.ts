@@ -2,12 +2,15 @@ import { Node, Color, Mesh, MeshRenderer, primitives, utils } from 'cc';
 import { instancedLitMaterial } from './materials';
 
 /**
- * Procedural passenger figure: a rounded head sitting on a rounder, chunkier body, and
+ * Procedural passenger figure: a large round head sitting on a small tapered body, and
  * two thin arms that can swing independently -- head, body and arms all in the one
  * passenger colour (revision 2: the human rejected revision 1's beige skin tone and
  * narrow chess-pawn silhouette, and asked for a single-colour, rounder blob instead,
  * pointing at a reference where a crowd of uniformly coloured figures reads instantly
- * as belonging to one car). Before that, this replaced the old baked-GLB pipeline
+ * as belonging to one car. Revision 3 kept the one colour but shifted the proportions
+ * the other way -- big head, small body -- because the even head-and-body stack read
+ * as one featureless lump when seen edge-on; see HEAD_RADIUS). Before that, this
+ * replaced the old baked-GLB pipeline
  * (passenger-builder.ts, deleted) after the human rejected the loaded 3D humanoid
  * model as visual mush at this game's zoom, packed four to a row on a sheared feeder
  * channel, and asked for exactly this instead: a round head, a simple body, two arms,
@@ -40,31 +43,38 @@ import { instancedLitMaterial } from './materials';
 
 /**
  * Head radius, as a fraction of height. Written as absolute/0.55 so it lands on
- * exactly 0.08 at PAX_HEIGHT (0.55, track-view.ts): smaller than the body's own
- * radius below, so the head sits ON the body instead of overhanging it (revision 2 --
- * the previous 0.10 head was wider than the 0.15/0.12 body and read as top-heavy).
+ * exactly 0.11 at PAX_HEIGHT (0.55, track-view.ts): a 0.22 head, wider than the body
+ * below it and the widest single part of the whole figure.
+ *
+ * Revision 3 raised it from 0.08. The human accepted revision 2's one-colour figure
+ * head-on but reported that side-on it read as "just a head": a 0.16 head on a 0.39
+ * body, both the same colour and near enough the same width, merges into one
+ * featureless lump at this zoom, and a figure seen down a feeder channel is exactly
+ * that view. A big head over a narrow body puts a visible step at the shoulders, and
+ * that step is what makes the silhouette read as a figure from any angle -- so the
+ * head grew and the body shrank to pay for it (BODY_HEIGHT is the remainder).
  */
-const HEAD_RADIUS = 0.08 / 0.55;
+const HEAD_RADIUS = 0.11 / 0.55;
 
 /**
  * Body height, as a fraction of height: whatever is left once the head is accounted
  * for, so the figure's feet land exactly on the ground with no gap underneath, and
  * the head-plus-body stack always sums to exactly `height` regardless of how
- * HEAD_RADIUS is tuned. At PAX_HEIGHT (0.08 head radius) this comes out to
- * 0.55 - 2*0.08 = 0.39.
+ * HEAD_RADIUS is tuned. At PAX_HEIGHT (0.11 head radius) this comes out to
+ * 0.55 - 2*0.11 = 0.33.
  */
 const BODY_HEIGHT = 1 - 2 * HEAD_RADIUS;
 
 /**
- * Body taper, written as absolute/0.55 so they land on exactly 0.095 (shoulder level)
- * and 0.105 (base) at PAX_HEIGHT -- narrower at the shoulders than at the base, so it
- * reads as a rounded torso rather than a plain cylinder, and its 0.21 diameter at the
- * base is bigger than the head's 0.16, making the body -- not the head -- the widest
- * single part of the figure (the thing revision 2 asked for: "rounder" comes from
- * this body/head ratio, not from scaling the whole figure up).
+ * Body taper, written as absolute/0.55 so they land on exactly 0.085 (shoulder level)
+ * and 0.095 (base) at PAX_HEIGHT -- narrower at the shoulders than at the base, so it
+ * reads as a rounded torso rather than a plain cylinder. Both diameters (0.17 and 0.19)
+ * are now narrower than the head's 0.22 (revision 3 shrank them from 0.19/0.21): the
+ * body tucks UNDER the head rather than matching its width, which is what keeps the two
+ * from merging into one blob when the figure is seen edge-on down a feeder channel.
  */
-const BODY_RADIUS_TOP = 0.095 / 0.55;
-const BODY_RADIUS_BOTTOM = 0.105 / 0.55;
+const BODY_RADIUS_TOP = 0.085 / 0.55;
+const BODY_RADIUS_BOTTOM = 0.095 / 0.55;
 
 /**
  * Thin arm capsule: radius and shoulder-to-hand length, as fractions of height.
@@ -81,29 +91,31 @@ const ARM_LENGTH = 0.40;
  * the body's own top radius there by half the arm radius -- the opposite of revision
  * 1, which pushed it OUT by the same half-radius. With one colour now, an arm whose
  * near half is buried inside the body reads fine; only its far half needs to clear
- * the surface to show as a bump. At PAX_HEIGHT: 0.095 - 0.03/2 = 0.08.
+ * the surface to show as a bump. At PAX_HEIGHT: 0.085 - 0.03/2 = 0.07.
  */
 const SHOULDER_Y = BODY_HEIGHT * 0.88;
 const SHOULDER_X = BODY_RADIUS_TOP - ARM_RADIUS * 0.5;
 
 /**
- * Widest horizontal extent of the whole figure, absolute at PAX_HEIGHT, INCLUDING an
- * arm at full swing: 2 * (SHOULDER_X + ARM_RADIUS) = 2 * (0.08 + 0.03) = 0.22.
+ * Widest horizontal extent of the whole figure, absolute at PAX_HEIGHT: the larger of
+ * the head's diameter (2 * 0.11 = 0.22) and an arm's outermost reach INCLUDING full
+ * swing (2 * (SHOULDER_X + ARM_RADIUS) = 2 * (0.07 + 0.03) = 0.20). Since revision 3
+ * the head is the wider of the two, so this comes out at 0.22 -- unchanged from
+ * revision 2, where the arms happened to be the widest part instead.
  *
  * That arm term does not grow with the swing angle: `setArmSwing` rotates each arm
  * about the figure's local X axis only (`setRotationFromEuler(degrees, 0, 0)`), and
  * rotation about the X axis leaves every point's x-coordinate unchanged (it mixes y
  * and z only) -- the same fact the module's FACING comment relies on, applied to the
  * other axis. So the arm capsule's x-extent is ARM_RADIUS at any swing angle, not
- * just at rest, and the figure's widest point is this arm-plus-shoulder reach, not
- * the body: 0.22 > the body's own 0.21 diameter at its base (BODY_RADIUS_BOTTOM).
+ * just at rest, and no swing amplitude can push this figure into its neighbour.
  *
  * 0.22 is at or below the hard budget of 0.24 that ROW_STEP (0.26, track-view.ts)
  * leaves for four side-by-side figures on a ring row -- 0.02 of clearance to spare.
  * This constant is not read by any other code; it exists so this number is computed
  * from the constants above rather than restated by hand somewhere it could drift.
  */
-const WIDEST_EXTENT_AT_PAX_HEIGHT = 2 * (SHOULDER_X + ARM_RADIUS) * 0.55;
+const WIDEST_EXTENT_AT_PAX_HEIGHT = Math.max(2 * HEAD_RADIUS, 2 * (SHOULDER_X + ARM_RADIUS)) * 0.55;
 
 // Mesh segment counts. Low, on purpose: these parts are a handful of pixels across at
 // this game's zoom, and every figure in the crowd shares the one cached mesh per
