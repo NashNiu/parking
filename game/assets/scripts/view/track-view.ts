@@ -14,6 +14,16 @@ const LANE_STEP = LANE.step;
 const LANE_START = LANE.start;
 
 /**
+ * How far a waiting figure turns, in degrees, from facing straight along the lane
+ * toward facing the track. Measured against the running game (see `buildLanes`):
+ * the geometrically "full" turn is 90, but at 90 the figure is in pure profile, its
+ * face isn't visible, and the two channels' profiles are nearly indistinguishable at
+ * this zoom. 45 keeps the face visible while the body still reads as angled toward
+ * the track.
+ */
+const FACE_TURN = 45;
+
+/**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
  * lifts it off the ground. White on a light ground is a weak edge on its own; the shadow
  * is what actually makes the ribbon and the two channels read as raised.
@@ -392,14 +402,17 @@ export class TrackView {
                 // and rotating the parent would swing those out of the board plane) and
                 // about Y only (about Z would tip them over, per makeRow's docstring).
                 //
-                // After `buildPassenger`'s inner 180° turn the figure faces +Z; this yaw
-                // about the board's Y then turns that facing in the board plane. Which
-                // sign points the figure at the track (rather than away from it) is not
-                // derived here — it was checked by looking at the running game. If you
-                // need to change this, check it on screen again rather than trust a
-                // paper re-derivation; the previous sign looked equally reasonable on
-                // paper and had the figures facing away from the track.
-                const yaw = out.x > 0 ? 90 : -90;
+                // Measured on a running level (logged rotation + actual world-space
+                // facing of a figure, compared against a ring figure known to face the
+                // camera correctly): the model's visual front is the node's +Z, and the
+                // yaw convention is the standard +Z = (sin(yaw), 0, cos(yaw)). So facing
+                // inward means the yaw's sign is opposite to `out.x`'s. The magnitude is
+                // FACE_TURN (45), not a full 90, because 90 puts the figure in pure
+                // profile — its face isn't visible, and the two channels' profiles are
+                // nearly indistinguishable at this zoom. If this ever needs to change,
+                // measure it again on screen rather than re-deriving the sign on paper;
+                // three paper derivations before this one were each wrong.
+                const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 // TEMPORARY diagnostic (see logFacing) — once per channel, not per row.
                 if (i === 0) {
