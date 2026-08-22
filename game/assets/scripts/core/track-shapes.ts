@@ -47,15 +47,22 @@ export const TRACK_SHAPES: TrackShape[] = ['rect', 'hex', 'trap', 'oval', 'circl
 export const TRACK_BOX = { halfW: 2.15, halfH: 1.20 };
 
 /**
- * Corner radius, the same for all three polygons: 0.60 is the SMALLEST value that clears
- * MIN_CURVE_RADIUS (0.6), and a fillet is what sets a rounded polygon's tightest curve.
- * Smaller reads as a crisper quadrilateral next to the oval, and was the first choice —
- * but a row of four figures stands 0.78 ACROSS the path, so on a 0.40 corner the innermost
- * figure lands within 0.01 of the arc's own centre and the row visibly folds.
+ * Corner radius, the same for all three polygons. A fillet is what sets a rounded
+ * polygon's tightest curve, and the tightest curve is what caps how densely the ring can
+ * be packed: a block of figures stands BLOCK_SPAN across the path, so on a corner of
+ * radius r the inside of that block travels only (r - span/2)/r as far as its centre, and
+ * the figures there close up by that factor. 0.60 -- the old value, and the smallest that
+ * clears MIN_CURVE_RADIUS -- forced the cells so far apart that the track read as mostly
+ * bare; 0.90 buys back a third of the pitch. Much above 1.0 and the trapezoid's short edge
+ * runs out of room for the two fillets that meet on it.
+ *
+ * `minFigureGap` in track-path.ts is what measures the consequence, and `capacityOptions`
+ * rejects any ring length whose figures would overlap -- so a change here shows up as a
+ * change in which ring lengths each shape may carry.
  */
-const RECT_R = 0.60;
-const HEX_R = 0.60;
-const TRAP_R = 0.60;
+const RECT_R = 0.90;
+const HEX_R = 0.90;
+const TRAP_R = 0.90;
 
 /**
  * Where the hexagon's flat top ends and where the trapezoid's short edge does, each as a

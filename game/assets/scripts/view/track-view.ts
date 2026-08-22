@@ -3,7 +3,9 @@ import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
-import { Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath } from '../core/index';
+import {
+    BLOCK, blockOffset, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath,
+} from '../core/index';
 
 /**
  * Half-width of the white band the rows ride on. Comes from core because validateTrack
@@ -58,56 +60,43 @@ const SWING_STAGGER = 0.7;
 const NO_SHADE = (c: Color): Color => c;
 
 /**
- * One ring cell's block of figures: ACROSS_COUNT of them side by side across the
- * direction of travel, in RANKS ranks one behind the other along it.
- *
- * ACROSS_COUNT is 4 because the band is 0.76 wide and a figure is 0.22, and the ranks
- * follow from GROUP_SIZE. A single rank (GROUP_SIZE 4, as this shipped at first) left the
- * track two-thirds bare: the block was 0.22 long in a cell 0.5-0.7 long.
- *
- * ROW_STEP is the across step, deliberately tighter than a figure is wide -- the board is
- * tilted, so across-the-path on a horizontal stretch is mostly INTO the screen, and the
- * overlap is what makes four figures read as a crowd in depth rather than a picket fence.
- * RANK_STEP is the along-path step, and it is what the ring's spacing floor is derived
- * from: one rank step plus a figure's width is the block's own length (0.42), which has to
- * fit inside ROW_SPACING_MIN (0.50) and inside a channel's LANE_STEP (0.45).
+ * Ranks in one cell's block. The block's shape -- how many abreast, how far apart, and the
+ * half-step brickwork shift -- is core's `BLOCK`, because `minFigureGap` has to be able to
+ * check it before a ring length is declared legal. Rank order is back to front: the LOWEST
+ * indices are the rearmost rank, and `paintRow` shows the first `count` figures of a partly
+ * boarded block, so a block empties from its leading edge -- the passengers nearest the
+ * doorway are the ones already gone.
  */
-const ACROSS_COUNT = 4;
-const RANKS = Math.max(1, Math.round(GROUP_SIZE / ACROSS_COUNT));
-const ROW_STEP = 0.26;
-const RANK_STEP = 0.20;
+const RANKS = Math.max(1, Math.round(GROUP_SIZE / BLOCK.across));
 
 /**
- * Where figure `i` of a block sits, in cell-local units: `across` along the path normal,
- * `along` in the direction of travel. Written into `out` rather than returned fresh --
- * `layoutRow` runs this for every visible figure every frame.
- *
- * Rank order is back to front: the LOWEST indices are the rearmost rank. `paintRow` shows
- * the first `count` figures of a partly boarded block, so this is what makes a block empty
- * from its leading edge -- the passengers nearest the doorway are the ones already gone.
+ * Along-lane step between the ranks of a WAITING block, as opposed to a ring cell's, whose
+ * ranks are spread over the cell's own arc length. A lane slot is LANE.step (0.45) long and
+ * has to hold the whole block, so the ranks get what is left once a figure's own width is
+ * taken off -- any looser and the head of the queue would grow into the batch behind it.
+ * The lane is straight, so nothing here is squeezed by curvature the way a corner squeezes
+ * the ring.
  */
-const BLOCK_OFFSET = { across: 0, along: 0 };
-function blockOffset(i: number): { across: number; along: number } {
-    BLOCK_OFFSET.across = ((i % ACROSS_COUNT) - (ACROSS_COUNT - 1) / 2) * ROW_STEP;
-    BLOCK_OFFSET.along = (Math.floor(i / ACROSS_COUNT) - (RANKS - 1) / 2) * RANK_STEP;
-    return BLOCK_OFFSET;
-}
+const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
+
+/** Scratch for `layoutRow`'s per-figure offset, so a per-frame call allocates nothing. */
+const OFFSET_SCRATCH = { across: 0, along: 0 };
 
 /**
- * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy).
- * The along-path direction is (dy, -dx): for the ring that is the way the rows travel (the
- * outward normal of a clockwise walk is the tangent turned a quarter left), and for a
- * channel, whose across is the lane turned a quarter, it is the outward direction -- so
- * the rearmost rank of a waiting block is the one further from the track, which is what a
- * queue looks like.
+ * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy) and
+ * the along-path step between its ranks. The along-path direction is (dy, -dx): for the
+ * ring that is the way the cells travel (the outward normal of a clockwise walk is the
+ * tangent turned a quarter left), and for a channel, whose across is the lane turned a
+ * quarter, it is the outward direction -- so the rearmost rank of a waiting block is the
+ * one further from the track, which is what a queue looks like.
  *
  * Called every frame for ring cells, because their across direction is the path normal and
  * turns as they travel; once at build time for the lanes, whose direction is fixed.
  */
-function layoutRow(figures: Node[], dx: number, dy: number): void {
+function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
     const ax = dy, ay = -dx;
     for (let i = 0; i < figures.length; i++) {
-        const o = blockOffset(i);
+        const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
         figures[i].setPosition(o.across * dx + o.along * ax, o.across * dy + o.along * ay, 0);
     }
 }
@@ -188,6 +177,13 @@ export class TrackView {
     private readonly root: Node;
     private readonly cy: number;
     private readonly tick: number;
+    /**
+     * Along-path step between the ranks of one ring cell: the cell's own arc length shared
+     * out among them, so the ranks of neighbouring cells form one evenly pitched run of
+     * figures down the track rather than clumps with bare band between them. Core derives
+     * every shape's legal ring lengths from exactly this (see `minFigureGap`).
+     */
+    private readonly rankStep: number;
     /** Path parameters where the band opens up: the boarding gap and each entry. */
     private gapTs: number[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
@@ -222,6 +218,7 @@ export class TrackView {
         this.root = parent;
         this.cy = y;
         this.tick = tick;
+        this.rankStep = path.rowSpacing(capacity) / RANKS;
         this.gapTs = [
             boardIndex / capacity,
             ...channels.map((c) => c.entry / capacity),
@@ -380,7 +377,7 @@ export class TrackView {
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
-                layoutRow(figures, across.x, across.y);
+                layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
                 // Face the track, not the camera: yaw is per figure (not on the row node,
                 // whose children carry the across-the-lane offsets `layoutRow` just set,
                 // and rotating the parent would swing those out of the board plane) and
@@ -526,7 +523,7 @@ export class TrackView {
             if (!cluster.active) continue;
             const n = this.normal(t, NORMAL_SCRATCH);
             const figures = this.rowFigures[i];
-            layoutRow(figures, n.x, n.y);
+            layoutRow(figures, n.x, n.y, this.rankStep);
             // The ring is moving and the channels are not — that contrast is what
             // tells a player which one is which — so only ring figures swing, driven
             // by the same phase that already moves them, and only the ones actually
@@ -564,7 +561,7 @@ export class TrackView {
         const n = this.normal(t);
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
         // was standing on rather than a point on the centreline.
-        const o = blockOffset(i % GROUP_SIZE);
+        const o = blockOffset(i % GROUP_SIZE, RANKS, this.rankStep, OFFSET_SCRATCH);
         local.set(
             local.x + o.across * n.x + o.along * n.y,
             local.y + o.across * n.y - o.along * n.x,
@@ -609,7 +606,7 @@ export class TrackView {
         const figures = flier.children.slice();
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
-        layoutRow(figures, n.x, n.y);
+        layoutRow(figures, n.x, n.y, this.rankStep);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
         this.root.addChild(flier);

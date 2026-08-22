@@ -1,5 +1,5 @@
 import { buildShape, Pt, Seg, TrackShape } from './track-shapes';
-import { FeedSide } from './types';
+import { FeedSide, GROUP_SIZE } from './types';
 
 /**
  * Lane geometry, in board units. These were view constants; they live here because
@@ -22,30 +22,53 @@ export const LANE = Object.freeze({
  * and anything else makes that division round -- which lands the entry off the quarter
  * point, on a curved or slanted stretch whose normal is nowhere near horizontal.
  *
- * The range shifted up (from 8-20) when a ring cell went from holding a 4-wide row to an
- * 8-figure block: the block is longer along the path, so the loose end of the old range
- * left visible bare track between cells. See ROW_SPACING_MIN/MAX, which is what actually
- * decides which of these any given shape may use.
+ * Which of them a given shape may actually use is decided by `capacityOptions`, from the
+ * shape's own perimeter and corners -- not from this list.
  */
-export const CAPACITY_OPTIONS = [12, 16, 20, 24] as const;
+export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
 
 /**
- * Cell spacing bounds, in board units -- the arc length one ring cell gets. A cell holds a
- * block of GROUP_SIZE figures, four across the path and two deep along it, which measures
- * about 0.42 along (one 0.20 rank step plus a 0.22-wide figure). So:
+ * How the GROUP_SIZE figures of one ring cell stand: `across` of them side by side across
+ * the path, the rest in ranks behind them, and every other rank shifted sideways by half a
+ * step so the ranks interlock like brickwork instead of lining up in columns.
  *
- * - the CEILING keeps the track looking occupied: at 0.72 a block leaves a 0.30 seam
- *   before the next one, which reads as the join between two colours rather than as bare
- *   track. It used to be 1.90, which is where the sparse look came from;
- * - the FLOOR keeps blocks from growing into each other, and keeps the boarding doorway
- *   (GAP_ARC, 0.45) from swallowing a whole neighbouring cell -- the test in
- *   track-path.test.ts pins that second ordering.
+ * The shape of this block is what decides how dense the ring can be, and it took a
+ * measurement to get right (see `minFigureGap`, and the test that pins it). Four abreast
+ * in two ranks -- the obvious layout, and the one that shipped and clipped -- stands 1.00
+ * across the path, which is wider than the band; on a corner the inside of a block that
+ * wide travels barely a fifth as far as its centre, so the figures there piled into each
+ * other however far apart the cells were spaced. Two abreast in four interlocking ranks
+ * stands 0.82 across, keeps its inside within reach of the corners, and packs the track
+ * about 70% solid where the wide block managed 40%.
  *
- * These two are what turn a shape's perimeter into its legal ring lengths, so moving them
- * moves `capacityOptions` and, with it, which rows the difficulty curve may author.
+ * `figure` is how wide one figure is (its head, the widest part -- see pax-figure.ts), and
+ * `clearance` is how close two of them may come before they read as one clipped blob
+ * rather than as a crowd. The view reads all of this: one source of truth for a layout
+ * that core has to be able to check.
+ */
+export const BLOCK = Object.freeze({
+    across: 2,
+    acrossStep: 0.40,
+    figure: 0.22,
+    clearance: 0.18,
+});
+
+/** Across-the-path extent of a whole block, including the half-step brickwork shift. */
+export const BLOCK_SPAN = BLOCK.acrossStep * (BLOCK.across - 1 + 0.5) + BLOCK.figure;
+
+/**
+ * Cell spacing bounds, in board units -- the arc length one ring cell gets. A cell's block
+ * fills its cell (the ranks are spaced spacing/ranks apart), so these are bounds on how
+ * the ring reads rather than on whether the figures fit; `minFigureGap` is what answers
+ * that, and it is the stricter rule at the tight end.
+ *
+ * - the CEILING keeps the track looking occupied. It used to be 1.90, which is where the
+ *   sparse look came from;
+ * - the FLOOR keeps the boarding doorway (GAP_ARC, 0.45) from swallowing a whole
+ *   neighbouring cell -- the test in track-path.test.ts pins that ordering.
  */
 export const ROW_SPACING_MIN = 0.50;
-export const ROW_SPACING_MAX = 0.72;
+export const ROW_SPACING_MAX = 0.80;
 
 /**
  * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot,
@@ -55,7 +78,12 @@ export const ROW_SPACING_MAX = 0.72;
  */
 export const GAP_ARC = 0.45;
 
-/** A row of four stands 0.78 across the path; a tighter arc than this crushes its inside. */
+/**
+ * A block stands BLOCK_SPAN (0.82) across the path, so on an arc tighter than this its
+ * inner half would reach past the arc's own centre and turn inside out. It is a floor on
+ * the shapes themselves; `minFigureGap` is the rule that actually decides what a corner
+ * can carry, and it bites long before this does.
+ */
 export const MIN_CURVE_RADIUS = 0.6;
 
 /** How far off horizontal an entry's outward normal may sit (about 20 degrees). */
@@ -154,11 +182,87 @@ export function maxLookahead(shape: TrackShape): number {
     return 1 + Math.floor(room / LANE.step);
 }
 
-/** Ring lengths this shape's perimeter can carry at a legible row spacing. */
+/**
+ * Where figure `i` of a ring cell's block stands, relative to the cell's own point on the
+ * path: `across` along the outward normal, `along` in the direction of travel. `rankStep`
+ * is the cell's spacing divided by its number of ranks, so the ranks of neighbouring cells
+ * form one evenly pitched run down the track.
+ *
+ * Written into `out` rather than returned fresh: the view calls this for every visible
+ * figure every frame.
+ */
+export function blockOffset(
+    i: number, ranks: number, rankStep: number, out = { across: 0, along: 0 },
+): { across: number; along: number } {
+    const rank = Math.floor(i / BLOCK.across);
+    // Brickwork: every other rank shifts half a step sideways, so a figure never sits
+    // directly behind another. On a corner, where the ranks close up, that half step is
+    // what keeps the pair apart.
+    const shift = rank % 2 === 1 ? BLOCK.acrossStep / 2 : 0;
+    out.across = ((i % BLOCK.across) - (BLOCK.across - 1) / 2) * BLOCK.acrossStep + shift;
+    out.along = (rank - (ranks - 1) / 2) * rankStep;
+    return out;
+}
+
+/**
+ * The closest two figures come to each other anywhere on a full ring of `capacity` cells.
+ *
+ * This is the rule that decides how densely a shape may be packed. Cells are evenly spaced
+ * by ARC LENGTH, but on a corner the inside of the track is shorter than the centreline,
+ * so figures on the inside of a bend close up -- by a factor of (r - span/2)/r, which at
+ * the tightest corner of a rounded quadrilateral is a big number. It is not something to
+ * reason about in the abstract: the layout that shipped before this measured 0.005 board
+ * units between two figures at the bottom-left corner of level 1, i.e. they were drawn on
+ * top of each other, and no bound on cell spacing had noticed.
+ *
+ * Only neighbouring cells are compared. Two cells further apart than that cannot be the
+ * closest pair -- their blocks would have to pass through the block between them.
+ */
+export function minFigureGap(shape: TrackShape, capacity: number, groupSize: number): number {
+    const path = new TrackPath(shape);
+    const ranks = Math.max(1, Math.round(groupSize / BLOCK.across));
+    const rankStep = path.rowSpacing(capacity) / ranks;
+    const cells: { x: number; y: number }[][] = [];
+    const pt = { x: 0, y: 0 }, nm = { x: 0, y: 0 }, off = { across: 0, along: 0 };
+    for (let i = 0; i < capacity; i++) {
+        const t = i / capacity;
+        path.pointAt(t, pt);
+        path.normalAt(t, nm);
+        const block: { x: number; y: number }[] = [];
+        for (let j = 0; j < groupSize; j++) {
+            blockOffset(j, ranks, rankStep, off);
+            block.push({
+                x: pt.x + off.across * nm.x + off.along * nm.y,
+                y: pt.y + off.across * nm.y - off.along * nm.x,
+            });
+        }
+        cells.push(block);
+    }
+    let min = Infinity;
+    for (let i = 0; i < capacity; i++) {
+        const here = cells[i], next = cells[(i + 1) % capacity];
+        for (let a = 0; a < here.length; a++) {
+            for (let b = a + 1; b < here.length; b++) {
+                min = Math.min(min, Math.hypot(here[a].x - here[b].x, here[a].y - here[b].y));
+            }
+            for (let b = 0; b < next.length; b++) {
+                min = Math.min(min, Math.hypot(here[a].x - next[b].x, here[a].y - next[b].y));
+            }
+        }
+    }
+    return min;
+}
+
+/**
+ * Ring lengths this shape can carry: short enough that the track reads as occupied, long
+ * enough that the doorway does not swallow a cell, and -- the rule that actually binds at
+ * the dense end -- long enough that no two figures overlap on the tightest corner.
+ */
 export function capacityOptions(shape: TrackShape): number[] {
     const path = new TrackPath(shape);
     return CAPACITY_OPTIONS.filter((c) => {
         const spacing = path.rowSpacing(c);
-        return spacing >= ROW_SPACING_MIN && spacing <= ROW_SPACING_MAX;
+        if (spacing < ROW_SPACING_MIN || spacing > ROW_SPACING_MAX) return false;
+        return minFigureGap(shape, c, GROUP_SIZE) >= BLOCK.clearance;
     });
 }

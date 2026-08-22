@@ -1,9 +1,10 @@
 import {
   TrackPath, entryIndex, maxLookahead, capacityOptions,
   LANE, ROW_SPACING_MIN, ROW_SPACING_MAX, CAPACITY_OPTIONS, ENTRY_NORMAL_MAX,
-  MIN_CURVE_RADIUS, GAP_ARC,
+  MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, minFigureGap,
 } from '../../game/assets/scripts/core/track-path';
 import { TRACK_SHAPES, TrackShape } from '../../game/assets/scripts/core/track-shapes';
+import { GROUP_SIZE } from '../../game/assets/scripts/core/types';
 
 test('the outward normal at a straight side points straight out', () => {
   const p = new TrackPath('rect');
@@ -64,14 +65,15 @@ test('the near entry is a quarter lap from the gap and the far one three quarter
 });
 
 test('each shape allows only the capacities whose row spacing reads', () => {
-  // One or two lengths each: the spacing band is narrow on purpose (a cell has to look
-  // occupied), so a shape's perimeter almost picks its ring length for it. The circle,
-  // at 60% of the quadrilaterals' perimeter, is the only one that can go as low as 12.
+  // Exactly one length each. Two rules squeeze it that far: the spacing ceiling, which
+  // keeps the figures from spreading out, and `minFigureGap`, which keeps them from
+  // overlapping on the tightest corner. The circle's perimeter is 60% of the
+  // quadrilaterals', so it lands one step lower.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [20, 24],
-    hex: [16, 20],
-    trap: [16, 20],
-    oval: [16, 20],
+    rect: [16],
+    hex: [16],
+    trap: [16],
+    oval: [16],
     circle: [12],
   };
   for (const shape of TRACK_SHAPES) {
@@ -79,16 +81,56 @@ test('each shape allows only the capacities whose row spacing reads', () => {
   }
 });
 
-test('every allowed capacity really is inside the spacing bounds, and every rejected one is not', () => {
+test('a capacity is allowed exactly when it clears both rules', () => {
   for (const shape of TRACK_SHAPES) {
     const p = new TrackPath(shape);
     const allowed = capacityOptions(shape);
     for (const c of CAPACITY_OPTIONS) {
       const spacing = p.rowSpacing(c);
-      const inside = spacing >= ROW_SPACING_MIN && spacing <= ROW_SPACING_MAX;
-      expect(allowed.includes(c)).toBe(inside);
+      const reads = spacing >= ROW_SPACING_MIN && spacing <= ROW_SPACING_MAX;
+      const fits = minFigureGap(shape, c, GROUP_SIZE) >= BLOCK.clearance;
+      expect(allowed.includes(c)).toBe(reads && fits);
     }
   }
+});
+
+test('no two figures overlap anywhere on any legal ring', () => {
+  // The rule that was missing. Cells are spaced evenly by ARC LENGTH, but on a corner the
+  // inside of the track is shorter than the centreline, so the figures on the inside of a
+  // bend close up. Before this rule existed, level 1's ring (a rounded rectangle at 24
+  // cells) drew two figures 0.005 apart at its bottom-left corner -- on top of each other.
+  for (const shape of TRACK_SHAPES) {
+    for (const capacity of capacityOptions(shape)) {
+      expect(minFigureGap(shape, capacity, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
+    }
+  }
+});
+
+test('a ring one step too long is rejected for overlap, not for spacing', () => {
+  // The two rules have to be separable, or the overlap rule could be quietly deleted and
+  // the spacing bound would seem to cover for it. A 20-cell rounded rectangle spaces its
+  // cells 0.59 apart -- comfortably inside the bounds -- and still overlaps on the corners.
+  const spacing = new TrackPath('rect').rowSpacing(20);
+  expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
+  expect(spacing).toBeLessThanOrEqual(ROW_SPACING_MAX);
+  expect(minFigureGap('rect', 20, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
+  expect(capacityOptions('rect')).not.toContain(20);
+});
+
+test('the brickwork shift is what makes the corners survivable', () => {
+  // Each rank sits half a step sideways from the one in front, so a figure never stands
+  // directly behind another. Without it the along-path gap alone would have to carry the
+  // clearance, and on a corner it does not: rank 1 of a cell and rank 0 of the next end up
+  // much closer than a figure is wide.
+  const gap = (i: number, j: number): number => {
+    const a = blockOffset(i, 4, 0.185, { across: 0, along: 0 });
+    const across = a.across, along = a.along;
+    const b = blockOffset(j, 4, 0.185, { across: 0, along: 0 });
+    return Math.hypot(across - b.across, along - b.along);
+  };
+  // Figures 0 and 2 are in consecutive ranks, so only the shift keeps them apart.
+  expect(gap(0, 2)).toBeGreaterThan(BLOCK.acrossStep / 2);
+  expect(gap(0, 2)).toBeGreaterThan(0.185);
 });
 
 test('the boarding gap never swallows a neighbouring row', () => {
@@ -130,12 +172,15 @@ test('every shape docks its channels close to horizontal', () => {
 });
 
 test('a non-multiple-of-four capacity is exactly what the normal rule catches', () => {
-  // This is not hypothetical: hex-at-18 and oval-at-14 were in the first draft curve,
-  // and their entry cells land on curved edges with normals tilted about 30 degrees.
-  const hex = new TrackPath('hex');
-  expect(Math.abs(hex.normalAt(entryIndex(18, 9, 'near') / 18).y)).toBeGreaterThan(ENTRY_NORMAL_MAX);
+  // This is not hypothetical: oval-at-14 was in the first draft curve, and its entry cell
+  // lands on a curved stretch with the normal tilted 28 degrees -- a channel shoved
+  // diagonally off screen. Hex-at-18 was the other case, and it no longer trips the rule:
+  // the corner radius went from 0.60 to 0.90 to let the ring pack tighter, and a rounder
+  // hexagon has a flatter quarter point. One live case is enough to show the rule bites.
   const oval = new TrackPath('oval');
   expect(Math.abs(oval.normalAt(entryIndex(14, 7, 'near') / 14).y)).toBeGreaterThan(ENTRY_NORMAL_MAX);
+  const hex = new TrackPath('hex');
+  expect(Math.abs(hex.normalAt(entryIndex(18, 9, 'near') / 18).y)).toBeGreaterThan(0.3);
 });
 
 test('every shape clears the curvature floor', () => {

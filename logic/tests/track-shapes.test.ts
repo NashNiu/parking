@@ -4,7 +4,7 @@ import {
 
 /** Measured from the shapes themselves; a change here is a change to the artwork. */
 const PERIMETER: Record<TrackShape, number> = {
-  rect: 12.3699, hex: 10.8814, trap: 11.2122, oval: 10.7358, circle: 7.5398,
+  rect: 11.8549, hex: 10.6865, trap: 10.6284, oval: 10.7358, circle: 7.5398,
 };
 
 /** Walk a segment list by arc length, the way TrackPath will. */
@@ -72,8 +72,8 @@ test('the boarding gap sits at the bottom centre', () => {
 test('the quarter point is where each shape docks its channel', () => {
   const DOCK: Record<TrackShape, [number, number]> = {
     rect: [2.1500, 0.0000],
-    hex: [2.0440, 0.0000],
-    trap: [1.8939, -0.1380],
+    hex: [1.9910, 0.0000],
+    trap: [1.8766, -0.0664],
     oval: [2.1500, 0.0000],
     circle: [1.2000, 0.0000],
   };

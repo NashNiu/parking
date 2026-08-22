@@ -381,7 +381,7 @@
       },
       {
         "side": "near",
-        "lookahead": 2
+        "lookahead": 1
       }
     ],
     "queue": [

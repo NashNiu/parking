@@ -39,8 +39,8 @@ function trackLevel(over: Partial<LevelData['loop']> = {}): LevelData {
     grid: { cols: 4, rows: 4, cars: [{ id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' }] },
     parking: { slots: 7, unlocked: 4 },
     loop: {
-      capacity: 20,
-      boardIndex: 10,
+      capacity: 16,
+      boardIndex: 8,
       track: 'rect',
       feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }],
       queue: [{ color: 'red', count: 16 }],
