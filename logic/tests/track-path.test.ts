@@ -64,12 +64,15 @@ test('the near entry is a quarter lap from the gap and the far one three quarter
 });
 
 test('each shape allows only the capacities whose row spacing reads', () => {
+  // One or two lengths each: the spacing band is narrow on purpose (a cell has to look
+  // occupied), so a shape's perimeter almost picks its ring length for it. The circle,
+  // at 60% of the quadrilaterals' perimeter, is the only one that can go as low as 12.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [8, 12, 16, 20],
-    hex: [8, 12, 16],
-    trap: [8, 12, 16],
-    oval: [8, 12, 16],
-    circle: [8, 12],
+    rect: [20, 24],
+    hex: [16, 20],
+    trap: [16, 20],
+    oval: [16, 20],
+    circle: [12],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);

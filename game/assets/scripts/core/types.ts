@@ -38,11 +38,23 @@ export interface QueueGroup {
 }
 
 /**
- * Passengers occupy the loop in same-colour groups rather than one per cell: a ring
- * cell holds a group, and the view draws it as a row of up to `GROUP_SIZE` figures.
- * `capacity` therefore counts ROWS, so a capacity-12 track carries up to 48 people.
+ * Passengers occupy the loop in same-colour groups rather than one per cell: a ring cell
+ * holds a group, and the view draws it as a BLOCK of up to `GROUP_SIZE` figures -- four
+ * across the path, two deep along it. `capacity` therefore counts blocks, so a
+ * capacity-20 track carries up to 160 people.
+ *
+ * 8 rather than the 4 it started at, because a ring of 4-wide single rows read as mostly
+ * empty track: a row is about 0.22 long against a slot pitch of 0.5-0.7, so two thirds of
+ * the ribbon was bare. Two ranks per cell close that up.
+ *
+ * It must DIVIDE every car capacity (CAP_SIZE: 16, 24, 32), or `toGroups` would chop a
+ * colour's passengers into a full block plus a ragged remainder, and the ring would show
+ * half-empty cells that no boarding produced. 8 divides all three; 12 would not.
+ *
+ * It is also the ceiling on how many passengers board in one tick, so doubling it halves
+ * how long a level's passengers take to clear.
  */
-export const GROUP_SIZE = 4;
+export const GROUP_SIZE = 8;
 
 /** One row of same-coloured passengers. `count` falls as they board, 1..GROUP_SIZE. */
 export interface PaxGroup {

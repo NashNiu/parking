@@ -21,29 +21,39 @@ export const LANE = Object.freeze({
  * Legal ring lengths. Multiples of four, because the entry cells are board +- capacity/4
  * and anything else makes that division round -- which lands the entry off the quarter
  * point, on a curved or slanted stretch whose normal is nowhere near horizontal.
+ *
+ * The range shifted up (from 8-20) when a ring cell went from holding a 4-wide row to an
+ * 8-figure block: the block is longer along the path, so the loose end of the old range
+ * left visible bare track between cells. See ROW_SPACING_MIN/MAX, which is what actually
+ * decides which of these any given shape may use.
  */
-export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
+export const CAPACITY_OPTIONS = [12, 16, 20, 24] as const;
 
 /**
- * Row spacing bounds, in board units. Above the ceiling the ring looks empty. The floor
- * is set by GAP_ARC (0.55) rather than by the figures, which are only about 0.22 deep
- * along the path: a spacing at or below the doorway's own length would let the boarding
- * gap swallow the rows either side of it, so the floor has to sit above GAP_ARC with a
- * little to spare (the test in track-path.test.ts pins that ordering).
+ * Cell spacing bounds, in board units -- the arc length one ring cell gets. A cell holds a
+ * block of GROUP_SIZE figures, four across the path and two deep along it, which measures
+ * about 0.42 along (one 0.20 rank step plus a 0.22-wide figure). So:
  *
- * 0.58, down from 0.70 with the ring itself (see TRACK_BOX): the tightest length the
- * difficulty curve actually asks for is rect at 20 slots, which used to space its rows
- * 0.73 apart and now spaces them 0.62.
+ * - the CEILING keeps the track looking occupied: at 0.72 a block leaves a 0.30 seam
+ *   before the next one, which reads as the join between two colours rather than as bare
+ *   track. It used to be 1.90, which is where the sparse look came from;
+ * - the FLOOR keeps blocks from growing into each other, and keeps the boarding doorway
+ *   (GAP_ARC, 0.45) from swallowing a whole neighbouring cell -- the test in
+ *   track-path.test.ts pins that second ordering.
+ *
+ * These two are what turn a shape's perimeter into its legal ring lengths, so moving them
+ * moves `capacityOptions` and, with it, which rows the difficulty curve may author.
  */
-export const ROW_SPACING_MIN = 0.58;
-export const ROW_SPACING_MAX = 1.90;
+export const ROW_SPACING_MIN = 0.50;
+export const ROW_SPACING_MAX = 0.72;
 
 /**
  * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot,
  * which shrank with the ring: at 20 slots the doorway was 0.37 long and stopped reading
- * as a doorway. Must stay under ROW_SPACING_MIN so a gap never eats its neighbours.
+ * as a doorway. Must stay under ROW_SPACING_MIN so a gap never eats its neighbours -- and
+ * that is what pulled it from 0.55 to 0.45 when the spacing floor came down to 0.50.
  */
-export const GAP_ARC = 0.55;
+export const GAP_ARC = 0.45;
 
 /** A row of four stands 0.78 across the path; a tighter arc than this crushes its inside. */
 export const MIN_CURVE_RADIUS = 0.6;

@@ -22,10 +22,15 @@ import { vibrate } from './haptics';
 const { ccclass, property } = _decorator;
 
 /**
- * Delay between the boarding flights of one row. Small enough that a row of four is
- * clearly one event, large enough that four people read as four rather than one blob.
+ * Delay between the boarding flights of one block. Small enough that the block is clearly
+ * one event, large enough that eight people read as eight rather than one blob.
+ *
+ * 0.04 rather than the 0.07 it was at four-to-a-block: the whole flight takes
+ * boardingDuration(), and the departure of the car that just filled waits for it (see the
+ * tick loop). At 0.07 a block of eight would hold the car in its stall for 0.89s — nearly
+ * three ticks, long enough for the core to hand that same stall to another car.
  */
-const BOARD_STAGGER = 0.07;
+const BOARD_STAGGER = 0.04;
 
 /** How long one boarding figure's flight arc takes — shared with `playBoarding`'s tween. */
 const BOARD_FLIGHT_TIME = 0.4;
@@ -652,7 +657,7 @@ export class GameController extends Component {
             if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${slots[i]}`); continue; }
             const end = e.node.worldPosition.clone();
             // Leave from where this figure actually stood in the row, not the row centre.
-            const start = this.loopView.boardingFigureWorldPos(i, count);
+            const start = this.loopView.boardingFigureWorldPos(i);
             const p = this.loopView.spawnPassenger(color);
             p.setWorldPosition(start);
             const ctrl = new Vec3(

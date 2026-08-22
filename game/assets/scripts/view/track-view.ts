@@ -58,22 +58,57 @@ const SWING_STAGGER = 0.7;
 const NO_SHADE = (c: Color): Color => c;
 
 /**
- * Spacing between the figures of one row. A row holds GROUP_SIZE passengers laid out
- * ACROSS its direction of travel, so this is measured along the path normal (or along
- * the board's y for the lanes, which feed inward along x).
+ * One ring cell's block of figures: ACROSS_COUNT of them side by side across the
+ * direction of travel, in RANKS ranks one behind the other along it.
+ *
+ * ACROSS_COUNT is 4 because the band is 0.76 wide and a figure is 0.22, and the ranks
+ * follow from GROUP_SIZE. A single rank (GROUP_SIZE 4, as this shipped at first) left the
+ * track two-thirds bare: the block was 0.22 long in a cell 0.5-0.7 long.
+ *
+ * ROW_STEP is the across step, deliberately tighter than a figure is wide -- the board is
+ * tilted, so across-the-path on a horizontal stretch is mostly INTO the screen, and the
+ * overlap is what makes four figures read as a crowd in depth rather than a picket fence.
+ * RANK_STEP is the along-path step, and it is what the ring's spacing floor is derived
+ * from: one rank step plus a figure's width is the block's own length (0.42), which has to
+ * fit inside ROW_SPACING_MIN (0.50) and inside a channel's LANE_STEP (0.45).
  */
+const ACROSS_COUNT = 4;
+const RANKS = Math.max(1, Math.round(GROUP_SIZE / ACROSS_COUNT));
 const ROW_STEP = 0.26;
+const RANK_STEP = 0.20;
 
 /**
- * Lay a row's figures along the unit direction (dx, dy), centred on the row's origin.
- * Called every frame for ring rows, because the direction is the path normal and turns
- * as the row travels; once at build time for the lanes, whose feed direction is fixed.
+ * Where figure `i` of a block sits, in cell-local units: `across` along the path normal,
+ * `along` in the direction of travel. Written into `out` rather than returned fresh --
+ * `layoutRow` runs this for every visible figure every frame.
+ *
+ * Rank order is back to front: the LOWEST indices are the rearmost rank. `paintRow` shows
+ * the first `count` figures of a partly boarded block, so this is what makes a block empty
+ * from its leading edge -- the passengers nearest the doorway are the ones already gone.
+ */
+const BLOCK_OFFSET = { across: 0, along: 0 };
+function blockOffset(i: number): { across: number; along: number } {
+    BLOCK_OFFSET.across = ((i % ACROSS_COUNT) - (ACROSS_COUNT - 1) / 2) * ROW_STEP;
+    BLOCK_OFFSET.along = (Math.floor(i / ACROSS_COUNT) - (RANKS - 1) / 2) * RANK_STEP;
+    return BLOCK_OFFSET;
+}
+
+/**
+ * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy).
+ * The along-path direction is (dy, -dx): for the ring that is the way the rows travel (the
+ * outward normal of a clockwise walk is the tangent turned a quarter left), and for a
+ * channel, whose across is the lane turned a quarter, it is the outward direction -- so
+ * the rearmost rank of a waiting block is the one further from the track, which is what a
+ * queue looks like.
+ *
+ * Called every frame for ring cells, because their across direction is the path normal and
+ * turns as they travel; once at build time for the lanes, whose direction is fixed.
  */
 function layoutRow(figures: Node[], dx: number, dy: number): void {
-    const mid = (figures.length - 1) / 2;
+    const ax = dy, ay = -dx;
     for (let i = 0; i < figures.length; i++) {
-        const off = (i - mid) * ROW_STEP;
-        figures[i].setPosition(off * dx, off * dy, 0);
+        const o = blockOffset(i);
+        figures[i].setPosition(o.across * dx + o.along * ax, o.across * dy + o.along * ay, 0);
     }
 }
 
@@ -518,17 +553,23 @@ export class TrackView {
     }
 
     /**
-     * Where the `i`th of `count` figures stands within the row at the boarding gap, in
-     * world space. The boarding flight has to start from the figure that actually left,
-     * not from the row's centre — with four abreast, a flight from the middle reads as
-     * the wrong passenger lifting off.
+     * Where figure `i` of the block at the boarding gap stands, in world space. A boarding
+     * flight has to start from a spot a figure actually occupied, not from the cell's
+     * centre — with four abreast in two ranks, a flight from the middle reads as the wrong
+     * passenger lifting off.
      */
-    boardingFigureWorldPos(i: number, count: number): Vec3 {
+    boardingFigureWorldPos(i: number): Vec3 {
         const t = this.boardIndex / this.capacity;
         const local = this.point(t, new Vec3());
         const n = this.normal(t);
-        const off = (i - (count - 1) / 2) * ROW_STEP;
-        local.set(local.x + off * n.x, local.y + off * n.y, 0);
+        // Same block layout the drawn figures use, so a flight leaves the spot one of them
+        // was standing on rather than a point on the centreline.
+        const o = blockOffset(i % GROUP_SIZE);
+        local.set(
+            local.x + o.across * n.x + o.along * n.y,
+            local.y + o.across * n.y - o.along * n.x,
+            0,
+        );
         const out = new Vec3();
         Vec3.transformMat4(out, local, this.root.worldMatrix);
         return out;
