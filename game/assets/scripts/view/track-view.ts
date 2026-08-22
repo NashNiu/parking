@@ -143,15 +143,15 @@ const REPOSITION_SCRATCH = new Vec3();
 /** Scratch for the per-row path normal, same hot path as REPOSITION_SCRATCH. */
 const NORMAL_SCRATCH = new Vec3();
 
-/** Desaturated/darkened tint for the channel that is not feeding yet. */
-function dim(c: Color): Color {
-    return new Color(
-        Math.round(c.r * 0.35 + 120 * 0.65),
-        Math.round(c.g * 0.35 + 120 * 0.65),
-        Math.round(c.b * 0.35 + 120 * 0.65),
-        255,
-    );
-}
+/**
+ * Floor colour for a channel that is not feeding yet: the same white as the live one, gone
+ * grey. The waiting channel used to be shown by washing out its PASSENGERS instead, and
+ * that was the wrong thing to grey out -- a passenger's colour is the one piece of
+ * information the player is reading off the channel (which car will these fit?), and a
+ * dimmed red is a colour that no car anywhere has. The floor carries the signal now, so
+ * "which channel feeds next" is still readable and the colours stay honest.
+ */
+const BAND_IDLE = new Color(211, 217, 231);
 
 /**
  * Renders the passenger loop as whatever closed track `core` hands it: rows of
@@ -195,6 +195,8 @@ export class TrackView {
     private laneClusters: Record<FeedSide, Node[]> = { far: [], near: [] };
     private laneFigures: Record<FeedSide, Node[][]> = { far: [], near: [] };
     private laneHome: Record<FeedSide, Vec3[]> = { far: [], near: [] };
+    /** Each channel's floor, kept so `paintLaneFloor` can grey the one that is waiting. */
+    private laneSlabs: Record<FeedSide, Node | null> = { far: null, near: null };
     private lastLen: Record<FeedSide, number> = { far: -1, near: -1 };
 
     private phaseHolder = { p: 0 };
@@ -368,6 +370,7 @@ export class TrackView {
             slab.setPosition(mid.x, mid.y, BAND_Z);
             slab.setRotationFromEuler(0, 0, angle);
             parent.addChild(slab);
+            this.laneSlabs[channel.side] = slab;
 
             this.laneClusters[channel.side] = [];
             this.laneFigures[channel.side] = [];
@@ -447,16 +450,18 @@ export class TrackView {
     }
 
     /**
-     * Draw the head of each channel. The inactive channels (every one but the channel
-     * still holding rows) are dimmed, so "this one feeds next" is readable without a
-     * tutorial. Only the head `channel.lookahead` are drawn; the rest are implied.
+     * Draw the head of each channel. The channel that is not feeding yet has a GREY FLOOR
+     * (see BAND_IDLE), so "this one feeds next" is readable without a tutorial while every
+     * waiting passenger still shows its true colour. Only the head `channel.lookahead` are
+     * drawn; the rest are implied.
      */
     private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
         // The live channel is the first one still holding rows: drain order, not screen
-        // order. The rest are dimmed, so "this one feeds next" reads without a tutorial.
+        // order.
         const live = channels.find((c) => c.queue.length > 0);
         for (const channel of channels) {
             const active = channel === live;
+            this.paintLaneFloor(channel.side, active);
             const nodes = this.laneClusters[channel.side];
             for (let i = 0; i < nodes.length; i++) {
                 const group = channel.queue[i];
@@ -464,7 +469,7 @@ export class TrackView {
                 if (!group) { n.active = false; continue; }
                 n.active = true;
                 paintRow(this.laneFigures[channel.side][i], colorOf(group.color), group.count,
-                    active ? NO_SHADE : dim);
+                    NO_SHADE);
             }
         }
         // Which channel actually lost its head this tick? NOT necessarily the live one:
@@ -481,6 +486,19 @@ export class TrackView {
             const group = ring[dropped.entry];
             if (group) this.playEntry(dropped, group);
         }
+    }
+
+    /**
+     * White floor for the channel that is feeding, grey for the one that is waiting. Reads
+     * the material back off the node rather than tracking the last colour: `flatMaterial`
+     * hands out one shared material per colour, so this is two objects being swapped, not a
+     * material built per call.
+     */
+    private paintLaneFloor(side: FeedSide, active: boolean): void {
+        const slab = this.laneSlabs[side];
+        if (!slab || !slab.isValid) return;
+        const mr = slab.getComponent(MeshRenderer);
+        if (mr) mr.material = flatMaterial(active ? BAND : BAND_IDLE);
     }
 
     /**
