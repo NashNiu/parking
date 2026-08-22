@@ -1,10 +1,43 @@
 import {
   TrackPath, entryIndex, maxLookahead, capacityOptions,
-  LANE, ROW_SPACING_MIN, ROW_SPACING_MAX, CAPACITY_OPTIONS, ENTRY_NORMAL_MAX,
-  MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, minFigureGap,
+  LANE, ROW_SPACING_MIN, SEAM_MIN, SEAM_MAX, CAPACITY_OPTIONS, ENTRY_NORMAL_MAX,
+  MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, blockRanks, blockLength, minFigureGap,
 } from '../../game/assets/scripts/core/track-path';
 import { TRACK_SHAPES, TrackShape } from '../../game/assets/scripts/core/track-shapes';
 import { GROUP_SIZE } from '../../game/assets/scripts/core/types';
+
+/**
+ * The closest pair of figures on a full ring, split by whether the two come from the SAME
+ * cell or from neighbouring ones. `minFigureGap` returns the smaller of the two; keeping
+ * them apart is what lets a test say which KIND of pair is the closest.
+ */
+function figurePairs(shape: TrackShape, capacity: number): { intra: number; cross: number } {
+  const path = new TrackPath(shape);
+  const ranks = blockRanks(GROUP_SIZE);
+  const cells = Array.from({ length: capacity }, (_, i) => {
+    const t = i / capacity;
+    const pt = path.pointAt(t, { x: 0, y: 0 });
+    const nm = path.normalAt(t, { x: 0, y: 0 });
+    return Array.from({ length: GROUP_SIZE }, (_, j) => {
+      const o = blockOffset(j, ranks, BLOCK.rankStep, { across: 0, along: 0 });
+      return {
+        x: pt.x + o.across * nm.x + o.along * nm.y,
+        y: pt.y + o.across * nm.y - o.along * nm.x,
+      };
+    });
+  });
+  const d = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
+    Math.hypot(a.x - b.x, a.y - b.y);
+  let intra = Infinity, cross = Infinity;
+  for (let i = 0; i < capacity; i++) {
+    const here = cells[i], next = cells[(i + 1) % capacity];
+    for (let a = 0; a < here.length; a++) {
+      for (let b = a + 1; b < here.length; b++) intra = Math.min(intra, d(here[a], here[b]));
+      for (let b = 0; b < next.length; b++) cross = Math.min(cross, d(here[a], next[b]));
+    }
+  }
+  return { intra, cross };
+}
 
 test('the outward normal at a straight side points straight out', () => {
   const p = new TrackPath('rect');
@@ -64,32 +97,63 @@ test('the near entry is a quarter lap from the gap and the far one three quarter
   }
 });
 
-test('each shape allows only the capacities whose row spacing reads', () => {
-  // Exactly one length each. Two rules squeeze it that far: the spacing ceiling, which
-  // keeps the figures from spreading out, and `minFigureGap`, which keeps them from
-  // overlapping on the tightest corner. The circle's perimeter is 60% of the
+test('each shape allows only the capacities whose seam reads', () => {
+  // Exactly one length each: a block is a fixed 0.67 long, and the seam band leaves each
+  // perimeter one place to put its cells. The circle's perimeter is 60% of the
   // quadrilaterals', so it lands one step lower.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [16],
-    hex: [16],
-    trap: [16],
-    oval: [16],
-    circle: [12],
+    rect: [12],
+    hex: [12],
+    trap: [12],
+    oval: [12],
+    circle: [8],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
   }
 });
 
-test('a capacity is allowed exactly when it clears both rules', () => {
+test('a capacity is allowed exactly when it clears every rule', () => {
   for (const shape of TRACK_SHAPES) {
     const p = new TrackPath(shape);
     const allowed = capacityOptions(shape);
     for (const c of CAPACITY_OPTIONS) {
       const spacing = p.rowSpacing(c);
-      const reads = spacing >= ROW_SPACING_MIN && spacing <= ROW_SPACING_MAX;
+      const seam = spacing - blockLength(GROUP_SIZE);
+      const roomForDoorway = spacing >= ROW_SPACING_MIN;
+      const reads = seam >= SEAM_MIN && seam <= SEAM_MAX;
       const fits = minFigureGap(shape, c, GROUP_SIZE) >= BLOCK.clearance;
-      expect(allowed.includes(c)).toBe(reads && fits);
+      expect(allowed.includes(c)).toBe(roomForDoorway && reads && fits);
+    }
+  }
+});
+
+test('a block is the same length on every ring it can stand on', () => {
+  // The bug this rules out: the version before this spaced a cell's ranks at
+  // spacing/ranks, so a block stretched to fill whatever cell it was given and the seam
+  // between two groups came out identically zero at every capacity -- one unbroken belt of
+  // figures, with no way to see where a group ended. A block's length has to be a property
+  // of the block, so that what a longer cell buys is seam.
+  const len = blockLength(GROUP_SIZE);
+  expect(len).toBeCloseTo(BLOCK.rankStep * (blockRanks(GROUP_SIZE) - 1) + BLOCK.figure, 10);
+  for (const shape of TRACK_SHAPES) {
+    for (const c of capacityOptions(shape)) {
+      expect(new TrackPath(shape).rowSpacing(c) - len).toBeGreaterThanOrEqual(SEAM_MIN);
+    }
+  }
+});
+
+test('two groups stand further apart than the members of one group', () => {
+  // What "you can see where one row ends" means as a measurement, and the check that the
+  // centreline seam survives the corners: an arc-length seam compresses on the inside of a
+  // bend, so a seam that reads on the straights can still close up on a corner. Every
+  // legal ring has to keep its closest CROSS-CELL pair further apart than its closest pair
+  // inside one cell -- otherwise the eye groups the figures by proximity and puts the
+  // group boundary somewhere the game does not.
+  for (const shape of TRACK_SHAPES) {
+    for (const capacity of capacityOptions(shape)) {
+      const { intra, cross } = figurePairs(shape, capacity);
+      expect(cross).toBeGreaterThan(intra);
     }
   }
 });
@@ -106,15 +170,26 @@ test('no two figures overlap anywhere on any legal ring', () => {
   }
 });
 
-test('a ring one step too long is rejected for overlap, not for spacing', () => {
-  // The two rules have to be separable, or the overlap rule could be quietly deleted and
-  // the spacing bound would seem to cover for it. A 20-cell rounded rectangle spaces its
-  // cells 0.59 apart -- comfortably inside the bounds -- and still overlaps on the corners.
-  const spacing = new TrackPath('rect').rowSpacing(20);
+test('a ring one step too long is rejected for seam, not for overlap', () => {
+  // The seam rule has to be separable from the overlap rule, or it could be quietly
+  // deleted and `minFigureGap` would seem to cover for it. A 16-cell rounded rectangle is
+  // the ring that shipped and could not be read: it clears the doorway floor AND it keeps
+  // every figure a clean 0.25 from its neighbours -- and it still leaves only 0.07 of bare
+  // band between one group of eight and the next, which is no boundary at all.
+  const spacing = new TrackPath('rect').rowSpacing(16);
   expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
-  expect(spacing).toBeLessThanOrEqual(ROW_SPACING_MAX);
-  expect(minFigureGap('rect', 20, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
-  expect(capacityOptions('rect')).not.toContain(20);
+  expect(minFigureGap('rect', 16, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
+  expect(spacing - blockLength(GROUP_SIZE)).toBeLessThan(SEAM_MIN);
+  expect(capacityOptions('rect')).not.toContain(16);
+});
+
+test('a ring short enough to look empty is rejected too', () => {
+  // The other end of the band, which is what the old spacing ceiling was for. Eight cells
+  // on a rounded rectangle leaves 0.81 of bare track between groups -- more than a group
+  // is long.
+  const seam = new TrackPath('rect').rowSpacing(8) - blockLength(GROUP_SIZE);
+  expect(seam).toBeGreaterThan(SEAM_MAX);
+  expect(capacityOptions('rect')).not.toContain(8);
 });
 
 test('the brickwork shift is what makes the corners survivable', () => {
@@ -122,15 +197,16 @@ test('the brickwork shift is what makes the corners survivable', () => {
   // directly behind another. Without it the along-path gap alone would have to carry the
   // clearance, and on a corner it does not: rank 1 of a cell and rank 0 of the next end up
   // much closer than a figure is wide.
+  const ranks = blockRanks(GROUP_SIZE);
   const gap = (i: number, j: number): number => {
-    const a = blockOffset(i, 4, 0.185, { across: 0, along: 0 });
+    const a = blockOffset(i, ranks, BLOCK.rankStep, { across: 0, along: 0 });
     const across = a.across, along = a.along;
-    const b = blockOffset(j, 4, 0.185, { across: 0, along: 0 });
+    const b = blockOffset(j, ranks, BLOCK.rankStep, { across: 0, along: 0 });
     return Math.hypot(across - b.across, along - b.along);
   };
   // Figures 0 and 2 are in consecutive ranks, so only the shift keeps them apart.
   expect(gap(0, 2)).toBeGreaterThan(BLOCK.acrossStep / 2);
-  expect(gap(0, 2)).toBeGreaterThan(0.185);
+  expect(gap(0, 2)).toBeGreaterThan(BLOCK.rankStep);
 });
 
 test('the boarding gap never swallows a neighbouring row', () => {

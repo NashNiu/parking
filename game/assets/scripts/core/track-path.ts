@@ -38,8 +38,11 @@ export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
  * across the path, which is wider than the band; on a corner the inside of a block that
  * wide travels barely a fifth as far as its centre, so the figures there piled into each
  * other however far apart the cells were spaced. Two abreast in four interlocking ranks
- * stands 0.82 across, keeps its inside within reach of the corners, and packs the track
- * about 70% solid where the wide block managed 40%.
+ * stands 0.82 across and keeps its inside within reach of the corners.
+ *
+ * `rankStep` is the along-path pitch of the ranks, and it is FIXED rather than shared out
+ * over the cell: a block is 0.67 long on every ring, and what the cell has left over is
+ * the seam (see SEAM_MIN) that separates one group from the next.
  *
  * `figure` is how wide one figure is (its head, the widest part -- see pax-figure.ts), and
  * `clearance` is how close two of them may come before they read as one clipped blob
@@ -49,6 +52,7 @@ export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
 export const BLOCK = Object.freeze({
     across: 2,
     acrossStep: 0.40,
+    rankStep: 0.15,
     figure: 0.22,
     clearance: 0.18,
 });
@@ -56,19 +60,43 @@ export const BLOCK = Object.freeze({
 /** Across-the-path extent of a whole block, including the half-step brickwork shift. */
 export const BLOCK_SPAN = BLOCK.acrossStep * (BLOCK.across - 1 + 0.5) + BLOCK.figure;
 
+/** Ranks in a block of `groupSize`, `BLOCK.across` of them abreast. */
+export function blockRanks(groupSize: number): number {
+    return Math.max(1, Math.round(groupSize / BLOCK.across));
+}
+
+/** Along-the-path extent of a whole block: the ranks, plus the width of a figure. */
+export function blockLength(groupSize: number): number {
+    return BLOCK.rankStep * (blockRanks(groupSize) - 1) + BLOCK.figure;
+}
+
 /**
- * Cell spacing bounds, in board units -- the arc length one ring cell gets. A cell's block
- * fills its cell (the ranks are spaced spacing/ranks apart), so these are bounds on how
- * the ring reads rather than on whether the figures fit; `minFigureGap` is what answers
- * that, and it is the stricter rule at the tight end.
- *
- * - the CEILING keeps the track looking occupied. It used to be 1.90, which is where the
- *   sparse look came from;
- * - the FLOOR keeps the boarding doorway (GAP_ARC, 0.45) from swallowing a whole
- *   neighbouring cell -- the test in track-path.test.ts pins that ordering.
+ * Floor on a ring cell's arc length: it keeps the boarding doorway (GAP_ARC, 0.45) from
+ * swallowing a whole neighbouring cell. The test in track-path.test.ts pins that ordering.
+ * There is no matching ceiling -- how the ring READS is the seam's job, below.
  */
 export const ROW_SPACING_MIN = 0.50;
-export const ROW_SPACING_MAX = 0.80;
+
+/**
+ * The bare band between one cell's block and the next, in board units: a cell's arc length
+ * minus the block that stands in it.
+ *
+ * This is what makes the ring legible, and getting it wrong is what made the ring
+ * unreadable in the version before this. That version spaced a cell's RANKS at
+ * spacing/ranks, so a block filled its cell exactly and the seam was identically zero at
+ * every capacity -- 96 figures in one unbroken belt, with no way to see where one group
+ * ended and the next began. A group is the unit the player acts on (it is what boards, all
+ * at once, when its colour matches the car at the gap), so a group the eye cannot pick out
+ * is a game the player cannot read.
+ *
+ * - the FLOOR is about one figure wide, so the break reads as a break even between two
+ *   cells that happen to hold the same colour;
+ * - the CEILING is what stops the ring looking empty, and it replaces the old bound on
+ *   spacing: `ROW_SPACING_MAX` said the same thing far less directly, since what shows as
+ *   emptiness is bare track between blocks, not the pitch of the cells.
+ */
+export const SEAM_MIN = 0.20;
+export const SEAM_MAX = 0.45;
 
 /**
  * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot,
@@ -185,8 +213,9 @@ export function maxLookahead(shape: TrackShape): number {
 /**
  * Where figure `i` of a ring cell's block stands, relative to the cell's own point on the
  * path: `across` along the outward normal, `along` in the direction of travel. `rankStep`
- * is the cell's spacing divided by its number of ranks, so the ranks of neighbouring cells
- * form one evenly pitched run down the track.
+ * is fixed (BLOCK.rankStep), NOT derived from the cell's spacing: a block is the same
+ * length whatever ring it stands on, and the arc left over is the seam that separates it
+ * from its neighbour.
  *
  * Written into `out` rather than returned fresh: the view calls this for every visible
  * figure every frame.
@@ -220,8 +249,8 @@ export function blockOffset(
  */
 export function minFigureGap(shape: TrackShape, capacity: number, groupSize: number): number {
     const path = new TrackPath(shape);
-    const ranks = Math.max(1, Math.round(groupSize / BLOCK.across));
-    const rankStep = path.rowSpacing(capacity) / ranks;
+    const ranks = blockRanks(groupSize);
+    const rankStep = BLOCK.rankStep;
     const cells: { x: number; y: number }[][] = [];
     const pt = { x: 0, y: 0 }, nm = { x: 0, y: 0 }, off = { across: 0, along: 0 };
     for (let i = 0; i < capacity; i++) {
@@ -254,15 +283,24 @@ export function minFigureGap(shape: TrackShape, capacity: number, groupSize: num
 }
 
 /**
- * Ring lengths this shape can carry: short enough that the track reads as occupied, long
- * enough that the doorway does not swallow a cell, and -- the rule that actually binds at
- * the dense end -- long enough that no two figures overlap on the tightest corner.
+ * Ring lengths this shape can carry: long enough that the doorway does not swallow a cell,
+ * leaving a seam inside the band that reads as a break but not as bare track, and -- the
+ * backstop -- keeping every pair of figures apart on the tightest corner.
+ *
+ * The seam rule does most of the work, and it subsumes what the overlap rule used to
+ * catch: once a block is shorter than its cell, the closest pair anywhere on the ring is
+ * two figures INSIDE one block, at a distance the corners cannot squeeze. `minFigureGap`
+ * stays because it is measured rather than argued -- a shape with a corner tighter than
+ * today's would break that reasoning, and this is what would catch it.
  */
 export function capacityOptions(shape: TrackShape): number[] {
     const path = new TrackPath(shape);
+    const block = blockLength(GROUP_SIZE);
     return CAPACITY_OPTIONS.filter((c) => {
         const spacing = path.rowSpacing(c);
-        if (spacing < ROW_SPACING_MIN || spacing > ROW_SPACING_MAX) return false;
+        if (spacing < ROW_SPACING_MIN) return false;
+        const seam = spacing - block;
+        if (seam < SEAM_MIN || seam > SEAM_MAX) return false;
         return minFigureGap(shape, c, GROUP_SIZE) >= BLOCK.clearance;
     });
 }

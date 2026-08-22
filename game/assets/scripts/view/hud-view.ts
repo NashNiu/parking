@@ -19,24 +19,25 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 
     return label;
 }
 
-/**
- * The remaining-passenger pill, sized off its own type so it stays in step with the HUD.
- * Trimmed from 238x105: it and the centred title pill share the top line on a 720-wide
- * canvas, and at the old width the two plates met in the middle.
- */
+/** The remaining-passenger pill, sized off its own type so it stays in step with the HUD. */
 const PILL_W = 210;
 const PILL_H = 88;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
 
 /**
- * The level-title pill. It sits on the same line as the passenger pill, centred, and it
- * exists because the title used to be bare type there: the ring's own passengers stand up
- * into that line, and dark type over a crowd of red and blue figures was unreadable
- * whichever ink it used. A plate under it is also what the reference art does.
+ * The level-title pill: the passenger pill's mirror image in the OPPOSITE top corner, same
+ * height, same margin, narrower only because its text is shorter.
+ *
+ * The corner is the point. This started as bare centred type, which the ring's own
+ * passengers stood up into and made unreadable; a plate fixed the type and moved the problem
+ * -- the plate then covered the passengers instead. Centre-top belongs to the track, which
+ * is as wide as the board and reaches within a plate's height of the top edge. The two
+ * corners above the track's rounded ends are the only places up here that are reliably
+ * empty, and the counter already had one of them.
  */
-const TITLE_PILL_W = 224;
-const TITLE_PILL_H = 74;
+const TITLE_PILL_W = 190;
+const TITLE_PILL_H = PILL_H;
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -74,7 +75,7 @@ export class HudView {
         // which is what puts them where the reference art has them rather than jammed
         // against the top edge.
         const line = h / 2 - margin - PILL_H / 2;
-        this.levelLabel = this.buildTitlePill(canvas, line);
+        this.levelLabel = this.buildTitlePill(canvas, w / 2 - margin - TITLE_PILL_W / 2, line);
         this.progressLabel = this.buildPassengerPill(canvas, w, h, margin);
         this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
         this.bannerLabel.color = TITLE_INK;
@@ -92,15 +93,15 @@ export class HudView {
     }
 
     /**
-     * The level title on its own rounded plate, centred on `line`. Shorter than the
-     * passenger pill on purpose: the two sit on the same line, and a title plate as tall as
-     * the counter would read as the more important of the two.
+     * The level title on its own rounded plate, in the top-RIGHT corner (see TITLE_PILL_W
+     * for why it is not centred). 42px, not the counter's 52: at three digits a bolder
+     * setting would run past the plate's edge.
      */
-    private buildTitlePill(canvas: Node, line: number): Label {
+    private buildTitlePill(canvas: Node, x: number, line: number): Label {
         const pill = roundedSprite('TitlePill', TITLE_PILL_W, TITLE_PILL_H, PILL_BG);
         canvas.addChild(pill);
-        pill.setPosition(0, line, 0);
-        const label = makeLabel(pill, 'LevelLabel', 46, 0);
+        pill.setPosition(x, line, 0);
+        const label = makeLabel(pill, 'LevelLabel', 42, 0);
         label.color = TITLE_INK;
         label.isBold = true;
         return label;
@@ -157,8 +158,8 @@ export class HudView {
     }
 
     setLevel(id: number): void {
-        // No spaces around the number: the title has a plate to fit inside now, and at
-        // three digits the spaced form ran past its edge.
+        // No spaces around the number: the title has a plate to fit inside, and at three
+        // digits the spaced form runs past its edge.
         this.levelLabel.string = `第${id}关`;
     }
 

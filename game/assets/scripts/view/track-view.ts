@@ -4,7 +4,8 @@ import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
 import {
-    BLOCK, blockOffset, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath,
+    BLOCK, blockOffset, blockRanks, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup,
+    TrackPath,
 } from '../core/index';
 
 /**
@@ -67,15 +68,15 @@ const NO_SHADE = (c: Color): Color => c;
  * boarded block, so a block empties from its leading edge -- the passengers nearest the
  * doorway are the ones already gone.
  */
-const RANKS = Math.max(1, Math.round(GROUP_SIZE / BLOCK.across));
+const RANKS = blockRanks(GROUP_SIZE);
 
 /**
- * Along-lane step between the ranks of a WAITING block, as opposed to a ring cell's, whose
- * ranks are spread over the cell's own arc length. A lane slot is LANE.step (0.45) long and
- * has to hold the whole block, so the ranks get what is left once a figure's own width is
- * taken off -- any looser and the head of the queue would grow into the batch behind it.
- * The lane is straight, so nothing here is squeezed by curvature the way a corner squeezes
- * the ring.
+ * Along-lane step between the ranks of a WAITING block. A ring cell uses BLOCK.rankStep
+ * outright; a lane slot cannot, because a slot is LANE.step (0.45) long and a block at that
+ * pitch is 0.67 -- the head of the queue would grow into the batch behind it. So the lane
+ * squeezes instead: the ranks get whatever is left of the slot once a figure's own width is
+ * taken off. The waiting blocks are therefore tighter along the lane than the ring's, and
+ * the seam between two of them is the one thing the channels do not get.
  */
 const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
 
@@ -177,13 +178,6 @@ export class TrackView {
     private readonly root: Node;
     private readonly cy: number;
     private readonly tick: number;
-    /**
-     * Along-path step between the ranks of one ring cell: the cell's own arc length shared
-     * out among them, so the ranks of neighbouring cells form one evenly pitched run of
-     * figures down the track rather than clumps with bare band between them. Core derives
-     * every shape's legal ring lengths from exactly this (see `minFigureGap`).
-     */
-    private readonly rankStep: number;
     /** Path parameters where the band opens up: the boarding gap and each entry. */
     private gapTs: number[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
@@ -220,7 +214,6 @@ export class TrackView {
         this.root = parent;
         this.cy = y;
         this.tick = tick;
-        this.rankStep = path.rowSpacing(capacity) / RANKS;
         this.gapTs = [
             boardIndex / capacity,
             ...channels.map((c) => c.entry / capacity),
@@ -541,7 +534,7 @@ export class TrackView {
             if (!cluster.active) continue;
             const n = this.normal(t, NORMAL_SCRATCH);
             const figures = this.rowFigures[i];
-            layoutRow(figures, n.x, n.y, this.rankStep);
+            layoutRow(figures, n.x, n.y, BLOCK.rankStep);
             // The ring is moving and the channels are not — that contrast is what
             // tells a player which one is which — so only ring figures swing, driven
             // by the same phase that already moves them, and only the ones actually
@@ -579,7 +572,7 @@ export class TrackView {
         const n = this.normal(t);
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
         // was standing on rather than a point on the centreline.
-        const o = blockOffset(i % GROUP_SIZE, RANKS, this.rankStep, OFFSET_SCRATCH);
+        const o = blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
         local.set(
             local.x + o.across * n.x + o.along * n.y,
             local.y + o.across * n.y - o.along * n.x,
@@ -624,7 +617,7 @@ export class TrackView {
         const figures = flier.children.slice();
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
-        layoutRow(figures, n.x, n.y, this.rankStep);
+        layoutRow(figures, n.x, n.y, BLOCK.rankStep);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
         this.root.addChild(flier);
