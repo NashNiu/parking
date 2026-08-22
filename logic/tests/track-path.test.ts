@@ -69,7 +69,7 @@ test('each shape allows only the capacities whose row spacing reads', () => {
     hex: [8, 12, 16],
     trap: [8, 12, 16],
     oval: [8, 12, 16],
-    circle: [8],
+    circle: [8, 12],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
@@ -95,7 +95,7 @@ test('the boarding gap never swallows a neighbouring row', () => {
 
 test('lookahead tops out where the channel would leave the visible width', () => {
   const EXPECTED: Record<TrackShape, number> = {
-    rect: 3, hex: 3, trap: 3, oval: 3, circle: 5,
+    rect: 4, hex: 4, trap: 4, oval: 4, circle: 6,
   };
   for (const shape of TRACK_SHAPES) {
     expect(maxLookahead(shape)).toBe(EXPECTED[shape]);

@@ -87,9 +87,9 @@ const TWIN: Feed[] = [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 
  * and the first level where the player sees a track fed from one side only.
  *
  * Shapes are not free choices: a shape's perimeter decides which ring lengths it can
- * carry at a legible row spacing (see capacityOptions), so the circle — half the
- * quadrilateral's perimeter, because it is bounded by the vertical budget — only ever
- * appears at 8 slots.
+ * carry at a legible row spacing (see capacityOptions), so the circle — 60% of the
+ * quadrilateral's perimeter, because it is bounded by the vertical budget — is the only
+ * one that cannot reach 16, and appears here at 8.
  */
 const TRACK_CURVE: TrackParams[] = [
     { track: 'rect',   capacity: 20, feeds: TWIN },

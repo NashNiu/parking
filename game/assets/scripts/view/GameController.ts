@@ -314,7 +314,7 @@ export class GameController extends Component {
     private buildBoard(level: LevelData): void {
         const LOOP_Y = 3.8;
         // The parking band sits between the ring road's top lane (which ends at y = 0.75)
-        // and the loop track's curb (which hangs down to y ~ 2.15); a stall 1.06 deep
+        // and the loop track's curb (whose shadow hangs down to y ~ 2.15); a stall 1.06 deep
         // centred here fills that band with a little margin at each end.
         const PARKING_Y = 1.4;
 

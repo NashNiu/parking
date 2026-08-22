@@ -72,7 +72,7 @@ export function validateTrack(level: LevelData): string[] {
     errors.push(`boardIndex ${loop.boardIndex} must be half the capacity (${loop.capacity / 2})`);
   }
   // Unreachable with today's five shapes -- every minRadius (0.6 for the three rounded
-  // polygons, 0.65 for the oval, 1.3 for the circle) already clears the floor. Guards a
+  // polygons, 0.67 for the oval, 1.2 for the circle) already clears the floor. Guards a
   // future shape whose fillet or curvature was picked without checking this bound.
   if (path.minRadius < MIN_CURVE_RADIUS) {
     errors.push(`${shape} curves tighter (${path.minRadius}) than a row of four can take`);

@@ -25,10 +25,17 @@ export const LANE = Object.freeze({
 export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
 
 /**
- * Row spacing bounds, in board units. Below the floor the boarding gap (GAP_ARC) stops
- * reading as a hole between two rows; above the ceiling the ring looks empty.
+ * Row spacing bounds, in board units. Above the ceiling the ring looks empty. The floor
+ * is set by GAP_ARC (0.55) rather than by the figures, which are only about 0.22 deep
+ * along the path: a spacing at or below the doorway's own length would let the boarding
+ * gap swallow the rows either side of it, so the floor has to sit above GAP_ARC with a
+ * little to spare (the test in track-path.test.ts pins that ordering).
+ *
+ * 0.58, down from 0.70 with the ring itself (see TRACK_BOX): the tightest length the
+ * difficulty curve actually asks for is rect at 20 slots, which used to space its rows
+ * 0.73 apart and now spaces them 0.62.
  */
-export const ROW_SPACING_MIN = 0.70;
+export const ROW_SPACING_MIN = 0.58;
 export const ROW_SPACING_MAX = 1.90;
 
 /**
