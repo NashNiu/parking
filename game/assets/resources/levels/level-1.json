@@ -6,18 +6,18 @@
     "cars": [
       {
         "id": 1,
-        "x": 3,
-        "y": 4,
-        "w": 2,
+        "x": 4,
+        "y": 2,
+        "w": 1,
         "h": 1,
-        "dir": "left",
+        "dir": "right",
         "color": "red",
-        "cap": "medium"
+        "cap": "small"
       },
       {
         "id": 2,
-        "x": 0,
-        "y": 2,
+        "x": 8,
+        "y": 3,
         "w": 1,
         "h": 1,
         "dir": "left",
@@ -27,17 +27,17 @@
       {
         "id": 3,
         "x": 2,
-        "y": 0,
-        "w": 2,
+        "y": 4,
+        "w": 1,
         "h": 1,
-        "dir": "right",
+        "dir": "left",
         "color": "red",
-        "cap": "medium"
+        "cap": "small"
       },
       {
         "id": 4,
-        "x": 3,
-        "y": 3,
+        "x": 0,
+        "y": 5,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -46,8 +46,8 @@
       },
       {
         "id": 5,
-        "x": 6,
-        "y": 3,
+        "x": 0,
+        "y": 4,
         "w": 1,
         "h": 1,
         "dir": "down",
@@ -56,11 +56,191 @@
       },
       {
         "id": 6,
-        "x": 7,
+        "x": 1,
+        "y": 2,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "medium"
+      },
+      {
+        "id": 7,
+        "x": 0,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 8,
+        "x": 1,
         "y": 3,
         "w": 1,
         "h": 1,
+        "dir": "left",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 9,
+        "x": 6,
+        "y": 2,
+        "w": 1,
+        "h": 1,
         "dir": "up",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 10,
+        "x": 8,
+        "y": 5,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 11,
+        "x": 6,
+        "y": 0,
+        "w": 1,
+        "h": 2,
+        "dir": "up",
+        "color": "red",
+        "cap": "big"
+      },
+      {
+        "id": 12,
+        "x": 6,
+        "y": 3,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 13,
+        "x": 5,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 14,
+        "x": 4,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 15,
+        "x": 7,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 16,
+        "x": 2,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 17,
+        "x": 2,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 18,
+        "x": 5,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 19,
+        "x": 1,
+        "y": 4,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "red",
+        "cap": "medium"
+      },
+      {
+        "id": 20,
+        "x": 1,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 21,
+        "x": 5,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 22,
+        "x": 8,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 23,
+        "x": 3,
+        "y": 4,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "red",
+        "cap": "big"
+      },
+      {
+        "id": 24,
+        "x": 3,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
         "color": "blue",
         "cap": "small"
       }
@@ -87,11 +267,11 @@
     "queue": [
       {
         "color": "red",
-        "count": 64
+        "count": 232
       },
       {
         "color": "blue",
-        "count": 48
+        "count": 216
       }
     ]
   },

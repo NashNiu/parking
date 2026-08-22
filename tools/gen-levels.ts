@@ -15,7 +15,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
@@ -60,7 +60,7 @@ for (let id = 1; id <= count; id++) {
     );
 
     const target = Math.round(want.blockedRatio * want.cars);
-    const onTarget = Math.abs(got.blocked - target) <= 1 && got.rounds >= want.minRounds;
+    const onTarget = Math.abs(got.blocked - target) <= BLOCKED_TOLERANCE && got.rounds >= want.minRounds;
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`

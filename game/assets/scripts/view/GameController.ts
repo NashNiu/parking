@@ -708,12 +708,20 @@ export class GameController extends Component {
     /**
      * Uniform scale that fits car `id`'s model into a parking stall. Read it BEFORE
      * `detachCar`, which drops the entry holding the car's fitted size.
+     *
+     * Never larger than 1: a stall (0.78 x 1.06) is deeper than a grid cell, so fitting a
+     * SMALL car to it worked out at 1.9 -- the car nearly doubled as it drove up, which
+     * reads as the wrong car arriving rather than as parking. This makes the refit a
+     * shrink-only affair: a car that already fits keeps exactly the size it had in the
+     * lot, and only the ones too big for the stall (a bus, whose two-cell footprint is
+     * longer than the stall is deep) come down to fit.
      */
     private stallScale(id: number): number {
         const size = this.gridView!.getCarSize(id);
         if (!size || size.len <= 0 || size.wid <= 0) return 1;
         const slot = ParkingView.slotSize;
         return Math.min(
+            1,
             (slot.w * STALL_FILL_W) / size.wid,
             (slot.h * STALL_FILL_H) / size.len,
         );

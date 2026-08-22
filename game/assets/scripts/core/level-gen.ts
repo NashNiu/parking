@@ -7,8 +7,9 @@ import { capacityOptions, entryIndex } from './track-path';
 /**
  * The one grid shape every level uses. Nine columns at the pitch six rows allow is what
  * fills the lot the camera frames, so the cell size — and with it the size a car is drawn
- * at — is the same on every level instead of shrinking as levels get taller. Difficulty
- * comes from how many cars, how many colours and how tangled they are.
+ * at — is the same on every level instead of shrinking as levels get taller. The car COUNT
+ * is fixed too (see CARS_PER_LEVEL), so difficulty comes from how many colours there are
+ * and how tangled the cars they are on, not from how many.
  *
  * If the camera framing changes, these change with it: see LOT_HALF_W in GameController.
  */
@@ -42,7 +43,7 @@ const ATTEMPTS = 200;
 
 /** What the curve asks of a level. Every field is non-decreasing in the level id. */
 export interface GenParams {
-    /** Cars to place. Capped because a car is 16-32 passengers and they board 4 a tick. */
+    /** Cars to place. Flat across levels; see CARS_PER_LEVEL. */
     cars: number;
     colors: number;
     /** Share of cars that should start with their exit blocked — the puzzle itself. */
@@ -52,15 +53,48 @@ export interface GenParams {
 }
 
 /**
- * The difficulty curve. Passenger count is the real ceiling on car count: 16 cars average
- * about 350 passengers, which at 4 boarding a tick is over a minute of play, so the car
- * count stops there and later levels get harder by tangling rather than by growing.
+ * Cars per level, the same on EVERY level: the lot is meant to read as a full car park,
+ * and a count that ramped with the level id left the early ones looking like an empty one
+ * (level 1 used to place 6 cars in 54 cells -- 8 cells occupied, 15% of the grid). At 24
+ * cars, averaging 1.45 cells each, about 35 of the 54 cells are taken.
+ *
+ * 24 rather than more, and this is the binding constraint, not passengers: the generator
+ * finds a layout by scattering cars at random and keeping the ones that are SOLVABLE, and
+ * solvability falls off a cliff with density. Measured over the 200 attempts each level
+ * gets, at 20 cars 5-21 attempts come out solvable, at 24 cars 2-9, and at 28 cars two of
+ * the ten level seeds have NO solvable attempt at all -- which lands them in `repair`, and
+ * repair empties the lot to make it clearable (it produced a 7-car level 6). Going denser
+ * than this needs a generator that builds solvable layouts by construction rather than one
+ * that samples and rejects.
+ *
+ * Passengers are the other ceiling and are not currently the tighter one: 24 cars run
+ * 440-570 passengers, against a budget of 640 (about 54 seconds of boarding at 4 a tick),
+ * which the generator's tests hold it to.
+ */
+const CARS_PER_LEVEL = 24;
+
+/**
+ * How far off the blocked-car target a level may land and still count as on target.
+ *
+ * Wider than the 1 it used to be, because a full lot takes this knob away: at 24 cars
+ * 11-20 of them start blocked no matter what, so the level-to-level bands overlap and
+ * `blockedRatio` can only pick the more or less tangled of the few solvable candidates it
+ * gets, not set the number. Kept as one constant so the generator and the offline tool's
+ * "on target" column cannot disagree about what on target means.
+ */
+export const BLOCKED_TOLERANCE = 3;
+
+/**
+ * The difficulty curve. Car count is flat (see CARS_PER_LEVEL), so a later level is harder
+ * by being more tangled and more colourful, never by being bigger. blockedRatio starts at
+ * 0.5 because that is roughly where a solvable 24-car scatter already sits -- asking for
+ * the old 0.1 would have made every level a nearest miss.
  */
 export function levelParams(id: number): GenParams {
     return {
-        cars: Math.min(16, 5 + Math.round(id * 1.1)),
+        cars: CARS_PER_LEVEL,
         colors: Math.min(5, 2 + Math.floor((id - 1) / 3)),
-        blockedRatio: Math.min(0.55, 0.1 + (id - 1) * 0.05),
+        blockedRatio: Math.min(0.75, 0.5 + (id - 1) * 0.025),
         minRounds: Math.min(5, 2 + Math.floor((id - 1) / 3)),
     };
 }
@@ -262,7 +296,7 @@ export function generateLevel(id: number): LevelData {
         const level = assemble(id, cars);
         if (!isSolvable(level)) continue;
         const d = estimateDifficulty(level);
-        if (Math.abs(d.blocked - wantBlocked) <= 1 && d.rounds >= p.minRounds) {
+        if (Math.abs(d.blocked - wantBlocked) <= BLOCKED_TOLERANCE && d.rounds >= p.minRounds) {
             return level;
         }
         // Keep the nearest miss: distance in blocked cars, then in rounds.

@@ -72,11 +72,27 @@ test('the curve never asks a later level for less than an earlier one', () => {
   }
 });
 
-test('a later level is measurably harder than the first', () => {
+test('every level fills the lot, and fills it equally', () => {
+  // The lot is meant to read as a full car park on level 1 as much as on level 10, so the
+  // car count is flat and the occupied share of the grid has a floor. Before this it ramped
+  // with the level id and level 1 took 8 of the 54 cells -- 15%, an empty car park.
+  const counts = new Set(IDS.map((id) => levelParams(id).cars));
+  expect(counts.size).toBe(1);
+  for (const id of IDS) {
+    const cells = generateLevel(id).grid.cars.reduce((n, c) => n + c.w * c.h, 0);
+    expect(cells / (GRID_COLS * GRID_ROWS)).toBeGreaterThan(0.5);
+  }
+});
+
+test('a later level is measurably harder than the first, at the same size', () => {
+  // Car count is flat now (CARS_PER_LEVEL): the lot is full on every level, so a later
+  // level cannot be harder by being bigger, and this test asserts exactly that -- the same
+  // number of cars, more colours, and a higher score out of rounds and blocked cars.
   const first = estimateDifficulty(generateLevel(1));
   const last = estimateDifficulty(generateLevel(10));
+  expect(last.cars).toBe(first.cars);
+  expect(last.colors).toBeGreaterThan(first.colors);
   expect(last.score).toBeGreaterThan(first.score);
-  expect(last.cars).toBeGreaterThan(first.cars);
 });
 
 test('a level is short enough to finish: passengers stay within the budget', () => {
@@ -85,7 +101,8 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
     const seats = level.grid.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0);
     expect(pax).toBe(seats);
-    // 4 board per tick at 0.5s: 640 passengers is about 80 seconds of boarding.
+    // 4 board per tick at 0.34s (GameController's TICK): 640 passengers is about 54
+    // seconds of boarding, and a full 24-car lot runs 440-570 of them.
     expect(pax).toBeLessThanOrEqual(640);
   }
 });
