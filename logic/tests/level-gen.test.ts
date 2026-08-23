@@ -72,11 +72,31 @@ test('the curve never asks a later level for less than an earlier one', () => {
   }
 });
 
-test('a later level is measurably harder than the first', () => {
+test('every level fills the lot, and fills it equally', () => {
+  // The lot is meant to read as a full car park on level 1 as much as on level 10, so the
+  // car count is flat and the occupied share of the grid has a floor. Before this it ramped
+  // with the level id and level 1 took 8 of the 54 cells -- 15%, an empty car park.
+  const counts = new Set(IDS.map((id) => levelParams(id).cars));
+  expect(counts.size).toBe(1);
+  for (const id of IDS) {
+    const level = generateLevel(id);
+    // Every car asked for is actually placed: the floor below is a share of the GRID, so a
+    // pack that quietly came up short would still pass it on a lucky mix of long cars.
+    expect(level.grid.cars.length).toBe(levelParams(id).cars);
+    const cells = level.grid.cars.reduce((n, c) => n + c.w * c.h, 0);
+    expect(cells / (GRID_COLS * GRID_ROWS)).toBeGreaterThan(0.8);
+  }
+});
+
+test('a later level is measurably harder than the first, at the same size', () => {
+  // Car count is flat now (CARS_PER_LEVEL): the lot is full on every level, so a later
+  // level cannot be harder by being bigger, and this test asserts exactly that -- the same
+  // number of cars, more colours, and a higher score out of rounds and blocked cars.
   const first = estimateDifficulty(generateLevel(1));
   const last = estimateDifficulty(generateLevel(10));
+  expect(last.cars).toBe(first.cars);
+  expect(last.colors).toBeGreaterThan(first.colors);
   expect(last.score).toBeGreaterThan(first.score);
-  expect(last.cars).toBeGreaterThan(first.cars);
 });
 
 test('a level is short enough to finish: passengers stay within the budget', () => {
@@ -85,8 +105,11 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
     const seats = level.grid.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0);
     expect(pax).toBe(seats);
-    // 4 board per tick at 0.5s: 640 passengers is about 80 seconds of boarding.
-    expect(pax).toBeLessThanOrEqual(640);
+    // GROUP_SIZE (8) board per tick at 0.34s (GameController's TICK): 900 passengers is
+    // about 38 seconds of boarding, and a full 36-car lot runs 670-770 of them. The budget
+    // doubled with GROUP_SIZE, which is what a tick's boarding is capped at -- it is a
+    // budget on TIME, and the passengers now leave twice as fast.
+    expect(pax).toBeLessThanOrEqual(900);
   }
 });
 
@@ -139,11 +162,11 @@ test('the planning window narrows as the levels go on', () => {
     const w = planningWindow(trackParams(id));
     return w[w.length - 1];
   });
-  expect(tail).toEqual([8, 7, 7, 6, 6, 5, 11, 4, 4, 3]);
+  expect(tail).toEqual([8, 8, 7, 7, 7, 6, 17, 6, 5, 4]);
   for (let i = 1; i < tail.length; i++) {
     // Level 7 is index 6; skip the comparison INTO it (i === 6) and the one OUT of it
     // (i === 7). Both disjuncts used to read `i === 6`, so the "out of" skip never
-    // actually fired -- harmless here since tail[7] <= tail[6] (4 <= 11) holds anyway,
+    // actually fired -- harmless here since tail[7] <= tail[6] (6 <= 17) holds anyway,
     // and the toEqual above already pins the whole sequence.
     if (i === 6 || i === 7) continue;
     expect(tail[i]).toBeLessThanOrEqual(tail[i - 1]);

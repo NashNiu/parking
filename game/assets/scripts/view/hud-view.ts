@@ -20,10 +20,24 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 
 }
 
 /** The remaining-passenger pill, sized off its own type so it stays in step with the HUD. */
-const PILL_W = 238;
-const PILL_H = 105;
+const PILL_W = 210;
+const PILL_H = 88;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
+
+/**
+ * The level-title pill: the passenger pill's mirror image in the OPPOSITE top corner, same
+ * height, same margin, narrower only because its text is shorter.
+ *
+ * The corner is the point. This started as bare centred type, which the ring's own
+ * passengers stood up into and made unreadable; a plate fixed the type and moved the problem
+ * -- the plate then covered the passengers instead. Centre-top belongs to the track, which
+ * is as wide as the board and reaches within a plate's height of the top edge. The two
+ * corners above the track's rounded ends are the only places up here that are reliably
+ * empty, and the counter already had one of them.
+ */
+const TITLE_PILL_W = 190;
+const TITLE_PILL_H = PILL_H;
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -57,11 +71,11 @@ export class HudView {
         this.canvas = canvas;
         const { w, h } = canvasSize(canvas);
         const margin = w * PILL_MARGIN;
-        // Title centred on the same line as the passenger pill, which is what puts it
-        // where the reference art has it rather than jammed against the top edge.
-        this.levelLabel = makeLabel(canvas, 'LevelLabel', 68, h / 2 - margin - PILL_H / 2);
-        this.levelLabel.color = TITLE_INK;
-        this.levelLabel.isBold = true;
+        // Both readouts share one line, at the pill's own half-height below the top margin,
+        // which is what puts them where the reference art has them rather than jammed
+        // against the top edge.
+        const line = h / 2 - margin - PILL_H / 2;
+        this.levelLabel = this.buildTitlePill(canvas, w / 2 - margin - TITLE_PILL_W / 2, line);
         this.progressLabel = this.buildPassengerPill(canvas, w, h, margin);
         this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
         this.bannerLabel.color = TITLE_INK;
@@ -79,6 +93,21 @@ export class HudView {
     }
 
     /**
+     * The level title on its own rounded plate, in the top-RIGHT corner (see TITLE_PILL_W
+     * for why it is not centred). 42px, not the counter's 52: at three digits a bolder
+     * setting would run past the plate's edge.
+     */
+    private buildTitlePill(canvas: Node, x: number, line: number): Label {
+        const pill = roundedSprite('TitlePill', TITLE_PILL_W, TITLE_PILL_H, PILL_BG);
+        canvas.addChild(pill);
+        pill.setPosition(x, line, 0);
+        const label = makeLabel(pill, 'LevelLabel', 42, 0);
+        label.color = TITLE_INK;
+        label.isBold = true;
+        return label;
+    }
+
+    /**
      * The remaining-passenger readout: a white rounded pill in the top-left corner
      * holding a huddle of passenger dots, a small caption, and a big count. It replaces
      * a bare centred line of text, which read as debug output rather than a HUD.
@@ -90,16 +119,16 @@ export class HudView {
 
         // Three dots in a huddle is all the passenger icon that survives at this size —
         // a drawn figure would just be a smudge.
-        for (const [dx, dy, d] of [[-15, 7, 27], [15, 7, 27], [0, -14, 31]] as const) {
+        for (const [dx, dy, d] of [[-13, 6, 24], [13, 6, 24], [0, -12, 27]] as const) {
             const dot = dotSprite('paxdot', d, PILL_ICON);
             pill.addChild(dot);
-            dot.setPosition(-77 + dx, dy, 0);
+            dot.setPosition(-68 + dx, dy, 0);
         }
 
-        const caption = makeLabel(pill, 'PaxCaption', 27, 27, 38);
+        const caption = makeLabel(pill, 'PaxCaption', 24, 23, 34);
         caption.string = '剩余乘客';
         caption.color = PILL_CAPTION;
-        const count = makeLabel(pill, 'PaxCount', 62, -21, 38);
+        const count = makeLabel(pill, 'PaxCount', 52, -18, 34);
         count.color = PILL_INK;
         count.isBold = true;
         return count;
@@ -129,7 +158,9 @@ export class HudView {
     }
 
     setLevel(id: number): void {
-        this.levelLabel.string = `第 ${id} 关`;
+        // No spaces around the number: the title has a plate to fit inside, and at three
+        // digits the spaced form runs past its edge.
+        this.levelLabel.string = `第${id}关`;
     }
 
     setProgress(remaining: number): void {

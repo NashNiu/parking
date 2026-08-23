@@ -3,7 +3,10 @@ import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
-import { Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup, TrackPath } from '../core/index';
+import {
+    BLOCK, blockOffset, blockRanks, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup,
+    TrackPath,
+} from '../core/index';
 
 /**
  * Half-width of the white band the rows ride on. Comes from core because validateTrack
@@ -58,22 +61,45 @@ const SWING_STAGGER = 0.7;
 const NO_SHADE = (c: Color): Color => c;
 
 /**
- * Spacing between the figures of one row. A row holds GROUP_SIZE passengers laid out
- * ACROSS its direction of travel, so this is measured along the path normal (or along
- * the board's y for the lanes, which feed inward along x).
+ * Ranks in one cell's block -- ONE, at GROUP_SIZE 4: a group is a single row of four across
+ * the track. The block's shape (how many abreast, how far apart) is core's `BLOCK`, because
+ * `minFigureGap` has to be able to check it before a ring length is declared legal.
+ *
+ * The rank machinery below is kept for a deeper block, which GROUP_SIZE can ask for. Rank
+ * order is back to front: the LOWEST indices are the rearmost rank, and `paintRow` shows the
+ * first `count` figures of a partly boarded block, so a block empties from its leading edge
+ * -- the passengers nearest the doorway are the ones already gone.
  */
-const ROW_STEP = 0.26;
+const RANKS = blockRanks(GROUP_SIZE);
 
 /**
- * Lay a row's figures along the unit direction (dx, dy), centred on the row's origin.
- * Called every frame for ring rows, because the direction is the path normal and turns
- * as the row travels; once at build time for the lanes, whose feed direction is fixed.
+ * Along-lane step between the ranks of a WAITING block, for the same reason a ring cell has
+ * its own: a lane slot is LANE.step (0.45) long and has to hold a whole block plus a gap
+ * before the batch behind it, which a block at the ring's own rank pitch would not leave.
+ * Inert while a block is a single row -- a row is 0.22 deep in a 0.45 slot, so the channels
+ * get their gap for nothing.
  */
-function layoutRow(figures: Node[], dx: number, dy: number): void {
-    const mid = (figures.length - 1) / 2;
+const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
+
+/** Scratch for `layoutRow`'s per-figure offset, so a per-frame call allocates nothing. */
+const OFFSET_SCRATCH = { across: 0, along: 0 };
+
+/**
+ * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy) and
+ * the along-path step between its ranks. The along-path direction is (dy, -dx): for the
+ * ring that is the way the cells travel (the outward normal of a clockwise walk is the
+ * tangent turned a quarter left), and for a channel, whose across is the lane turned a
+ * quarter, it is the outward direction -- so the rearmost rank of a waiting block is the
+ * one further from the track, which is what a queue looks like.
+ *
+ * Called every frame for ring cells, because their across direction is the path normal and
+ * turns as they travel; once at build time for the lanes, whose direction is fixed.
+ */
+function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
+    const ax = dy, ay = -dx;
     for (let i = 0; i < figures.length; i++) {
-        const off = (i - mid) * ROW_STEP;
-        figures[i].setPosition(off * dx, off * dy, 0);
+        const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
+        figures[i].setPosition(o.across * dx + o.along * ax, o.across * dy + o.along * ay, 0);
     }
 }
 
@@ -119,15 +145,15 @@ const REPOSITION_SCRATCH = new Vec3();
 /** Scratch for the per-row path normal, same hot path as REPOSITION_SCRATCH. */
 const NORMAL_SCRATCH = new Vec3();
 
-/** Desaturated/darkened tint for the channel that is not feeding yet. */
-function dim(c: Color): Color {
-    return new Color(
-        Math.round(c.r * 0.35 + 120 * 0.65),
-        Math.round(c.g * 0.35 + 120 * 0.65),
-        Math.round(c.b * 0.35 + 120 * 0.65),
-        255,
-    );
-}
+/**
+ * Floor colour for a channel that is not feeding yet: the same white as the live one, gone
+ * grey. The waiting channel used to be shown by washing out its PASSENGERS instead, and
+ * that was the wrong thing to grey out -- a passenger's colour is the one piece of
+ * information the player is reading off the channel (which car will these fit?), and a
+ * dimmed red is a colour that no car anywhere has. The floor carries the signal now, so
+ * "which channel feeds next" is still readable and the colours stay honest.
+ */
+const BAND_IDLE = new Color(211, 217, 231);
 
 /**
  * Renders the passenger loop as whatever closed track `core` hands it: rows of
@@ -164,6 +190,8 @@ export class TrackView {
     private laneClusters: Record<FeedSide, Node[]> = { far: [], near: [] };
     private laneFigures: Record<FeedSide, Node[][]> = { far: [], near: [] };
     private laneHome: Record<FeedSide, Vec3[]> = { far: [], near: [] };
+    /** Each channel's floor, kept so `paintLaneFloor` can grey the one that is waiting. */
+    private laneSlabs: Record<FeedSide, Node | null> = { far: null, near: null };
     private lastLen: Record<FeedSide, number> = { far: -1, near: -1 };
 
     private phaseHolder = { p: 0 };
@@ -336,6 +364,7 @@ export class TrackView {
             slab.setPosition(mid.x, mid.y, BAND_Z);
             slab.setRotationFromEuler(0, 0, angle);
             parent.addChild(slab);
+            this.laneSlabs[channel.side] = slab;
 
             this.laneClusters[channel.side] = [];
             this.laneFigures[channel.side] = [];
@@ -345,7 +374,7 @@ export class TrackView {
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
-                layoutRow(figures, across.x, across.y);
+                layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
                 // Face the track, not the camera: yaw is per figure (not on the row node,
                 // whose children carry the across-the-lane offsets `layoutRow` just set,
                 // and rotating the parent would swing those out of the board plane) and
@@ -415,16 +444,18 @@ export class TrackView {
     }
 
     /**
-     * Draw the head of each channel. The inactive channels (every one but the channel
-     * still holding rows) are dimmed, so "this one feeds next" is readable without a
-     * tutorial. Only the head `channel.lookahead` are drawn; the rest are implied.
+     * Draw the head of each channel. The channel that is not feeding yet has a GREY FLOOR
+     * (see BAND_IDLE), so "this one feeds next" is readable without a tutorial while every
+     * waiting passenger still shows its true colour. Only the head `channel.lookahead` are
+     * drawn; the rest are implied.
      */
     private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
         // The live channel is the first one still holding rows: drain order, not screen
-        // order. The rest are dimmed, so "this one feeds next" reads without a tutorial.
+        // order.
         const live = channels.find((c) => c.queue.length > 0);
         for (const channel of channels) {
             const active = channel === live;
+            this.paintLaneFloor(channel.side, active);
             const nodes = this.laneClusters[channel.side];
             for (let i = 0; i < nodes.length; i++) {
                 const group = channel.queue[i];
@@ -432,7 +463,7 @@ export class TrackView {
                 if (!group) { n.active = false; continue; }
                 n.active = true;
                 paintRow(this.laneFigures[channel.side][i], colorOf(group.color), group.count,
-                    active ? NO_SHADE : dim);
+                    NO_SHADE);
             }
         }
         // Which channel actually lost its head this tick? NOT necessarily the live one:
@@ -449,6 +480,19 @@ export class TrackView {
             const group = ring[dropped.entry];
             if (group) this.playEntry(dropped, group);
         }
+    }
+
+    /**
+     * White floor for the channel that is feeding, grey for the one that is waiting. Reads
+     * the material back off the node rather than tracking the last colour: `flatMaterial`
+     * hands out one shared material per colour, so this is two objects being swapped, not a
+     * material built per call.
+     */
+    private paintLaneFloor(side: FeedSide, active: boolean): void {
+        const slab = this.laneSlabs[side];
+        if (!slab || !slab.isValid) return;
+        const mr = slab.getComponent(MeshRenderer);
+        if (mr) mr.material = flatMaterial(active ? BAND : BAND_IDLE);
     }
 
     /**
@@ -491,7 +535,7 @@ export class TrackView {
             if (!cluster.active) continue;
             const n = this.normal(t, NORMAL_SCRATCH);
             const figures = this.rowFigures[i];
-            layoutRow(figures, n.x, n.y);
+            layoutRow(figures, n.x, n.y, BLOCK.rankStep);
             // The ring is moving and the channels are not — that contrast is what
             // tells a player which one is which — so only ring figures swing, driven
             // by the same phase that already moves them, and only the ones actually
@@ -518,17 +562,23 @@ export class TrackView {
     }
 
     /**
-     * Where the `i`th of `count` figures stands within the row at the boarding gap, in
-     * world space. The boarding flight has to start from the figure that actually left,
-     * not from the row's centre — with four abreast, a flight from the middle reads as
-     * the wrong passenger lifting off.
+     * Where figure `i` of the block at the boarding gap stands, in world space. A boarding
+     * flight has to start from a spot a figure actually occupied, not from the cell's
+     * centre — with four abreast in two ranks, a flight from the middle reads as the wrong
+     * passenger lifting off.
      */
-    boardingFigureWorldPos(i: number, count: number): Vec3 {
+    boardingFigureWorldPos(i: number): Vec3 {
         const t = this.boardIndex / this.capacity;
         const local = this.point(t, new Vec3());
         const n = this.normal(t);
-        const off = (i - (count - 1) / 2) * ROW_STEP;
-        local.set(local.x + off * n.x, local.y + off * n.y, 0);
+        // Same block layout the drawn figures use, so a flight leaves the spot one of them
+        // was standing on rather than a point on the centreline.
+        const o = blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
+        local.set(
+            local.x + o.across * n.x + o.along * n.y,
+            local.y + o.across * n.y - o.along * n.x,
+            0,
+        );
         const out = new Vec3();
         Vec3.transformMat4(out, local, this.root.worldMatrix);
         return out;
@@ -568,7 +618,7 @@ export class TrackView {
         const figures = flier.children.slice();
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
-        layoutRow(figures, n.x, n.y);
+        layoutRow(figures, n.x, n.y, BLOCK.rankStep);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
         this.root.addChild(flier);

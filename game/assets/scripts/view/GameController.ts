@@ -22,10 +22,15 @@ import { vibrate } from './haptics';
 const { ccclass, property } = _decorator;
 
 /**
- * Delay between the boarding flights of one row. Small enough that a row of four is
- * clearly one event, large enough that four people read as four rather than one blob.
+ * Delay between the boarding flights of one block. Small enough that the block is clearly
+ * one event, large enough that eight people read as eight rather than one blob.
+ *
+ * 0.04 rather than the 0.07 it was at four-to-a-block: the whole flight takes
+ * boardingDuration(), and the departure of the car that just filled waits for it (see the
+ * tick loop). At 0.07 a block of eight would hold the car in its stall for 0.89s — nearly
+ * three ticks, long enough for the core to hand that same stall to another car.
  */
-const BOARD_STAGGER = 0.07;
+const BOARD_STAGGER = 0.04;
 
 /** How long one boarding figure's flight arc takes — shared with `playBoarding`'s tween. */
 const BOARD_FLIGHT_TIME = 0.4;
@@ -314,7 +319,7 @@ export class GameController extends Component {
     private buildBoard(level: LevelData): void {
         const LOOP_Y = 3.8;
         // The parking band sits between the ring road's top lane (which ends at y = 0.75)
-        // and the loop track's curb (which hangs down to y ~ 2.15); a stall 1.06 deep
+        // and the loop track's curb (whose shadow hangs down to y ~ 2.15); a stall 1.06 deep
         // centred here fills that band with a little margin at each end.
         const PARKING_Y = 1.4;
 
@@ -652,7 +657,7 @@ export class GameController extends Component {
             if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${slots[i]}`); continue; }
             const end = e.node.worldPosition.clone();
             // Leave from where this figure actually stood in the row, not the row centre.
-            const start = this.loopView.boardingFigureWorldPos(i, count);
+            const start = this.loopView.boardingFigureWorldPos(i);
             const p = this.loopView.spawnPassenger(color);
             p.setWorldPosition(start);
             const ctrl = new Vec3(
@@ -708,12 +713,20 @@ export class GameController extends Component {
     /**
      * Uniform scale that fits car `id`'s model into a parking stall. Read it BEFORE
      * `detachCar`, which drops the entry holding the car's fitted size.
+     *
+     * Never larger than 1: a stall (0.78 x 1.06) is deeper than a grid cell, so fitting a
+     * SMALL car to it worked out at 1.9 -- the car nearly doubled as it drove up, which
+     * reads as the wrong car arriving rather than as parking. This makes the refit a
+     * shrink-only affair: a car that already fits keeps exactly the size it had in the
+     * lot, and only the ones too big for the stall (a bus, whose two-cell footprint is
+     * longer than the stall is deep) come down to fit.
      */
     private stallScale(id: number): number {
         const size = this.gridView!.getCarSize(id);
         if (!size || size.len <= 0 || size.wid <= 0) return 1;
         const slot = ParkingView.slotSize;
         return Math.min(
+            1,
             (slot.w * STALL_FILL_W) / size.wid,
             (slot.h * STALL_FILL_H) / size.len,
         );

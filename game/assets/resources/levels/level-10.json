@@ -6,58 +6,58 @@
     "cars": [
       {
         "id": 1,
-        "x": 6,
-        "y": 2,
+        "x": 8,
+        "y": 1,
         "w": 1,
-        "h": 2,
-        "dir": "up",
+        "h": 1,
+        "dir": "right",
         "color": "red",
-        "cap": "medium"
+        "cap": "small"
       },
       {
         "id": 2,
         "x": 7,
-        "y": 5,
-        "w": 2,
-        "h": 1,
-        "dir": "left",
-        "color": "blue",
-        "cap": "medium"
-      },
-      {
-        "id": 3,
-        "x": 3,
-        "y": 3,
+        "y": 0,
         "w": 1,
         "h": 2,
         "dir": "up",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 3,
+        "x": 4,
+        "y": 4,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
         "color": "green",
-        "cap": "medium"
+        "cap": "big"
       },
       {
         "id": 4,
-        "x": 2,
+        "x": 4,
         "y": 3,
         "w": 1,
         "h": 1,
-        "dir": "left",
+        "dir": "down",
         "color": "yellow",
         "cap": "small"
       },
       {
         "id": 5,
-        "x": 4,
-        "y": 0,
+        "x": 8,
+        "y": 5,
         "w": 1,
         "h": 1,
-        "dir": "down",
+        "dir": "right",
         "color": "purple",
         "cap": "small"
       },
       {
         "id": 6,
         "x": 7,
-        "y": 0,
+        "y": 5,
         "w": 1,
         "h": 1,
         "dir": "right",
@@ -66,7 +66,7 @@
       },
       {
         "id": 7,
-        "x": 5,
+        "x": 0,
         "y": 0,
         "w": 1,
         "h": 1,
@@ -76,78 +76,178 @@
       },
       {
         "id": 8,
-        "x": 4,
-        "y": 3,
+        "x": 1,
+        "y": 0,
         "w": 1,
         "h": 1,
-        "dir": "right",
+        "dir": "left",
         "color": "green",
         "cap": "small"
       },
       {
         "id": 9,
-        "x": 5,
-        "y": 1,
-        "w": 1,
-        "h": 2,
-        "dir": "down",
-        "color": "yellow",
-        "cap": "big"
-      },
-      {
-        "id": 10,
-        "x": 7,
-        "y": 2,
-        "w": 2,
-        "h": 1,
-        "dir": "left",
-        "color": "purple",
-        "cap": "medium"
-      },
-      {
-        "id": 11,
-        "x": 0,
-        "y": 1,
-        "w": 1,
-        "h": 2,
-        "dir": "down",
-        "color": "red",
-        "cap": "big"
-      },
-      {
-        "id": 12,
-        "x": 4,
-        "y": 1,
-        "w": 1,
-        "h": 2,
-        "dir": "down",
-        "color": "blue",
-        "cap": "medium"
-      },
-      {
-        "id": 13,
         "x": 8,
-        "y": 1,
+        "y": 0,
         "w": 1,
         "h": 1,
         "dir": "right",
-        "color": "green",
+        "color": "yellow",
         "cap": "small"
       },
       {
-        "id": 14,
+        "id": 10,
         "x": 0,
         "y": 5,
         "w": 1,
         "h": 1,
         "dir": "left",
+        "color": "purple",
+        "cap": "small"
+      },
+      {
+        "id": 11,
+        "x": 8,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 12,
+        "x": 6,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "small"
+      },
+      {
+        "id": 13,
+        "x": 4,
+        "y": 0,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 14,
+        "x": 3,
+        "y": 0,
+        "w": 1,
+        "h": 2,
+        "dir": "up",
+        "color": "yellow",
+        "cap": "medium"
+      },
+      {
+        "id": 15,
+        "x": 8,
+        "y": 3,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "purple",
+        "cap": "big"
+      },
+      {
+        "id": 16,
+        "x": 2,
+        "y": 0,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 17,
+        "x": 0,
+        "y": 1,
+        "w": 1,
+        "h": 2,
+        "dir": "up",
+        "color": "blue",
+        "cap": "medium"
+      },
+      {
+        "id": 18,
+        "x": 0,
+        "y": 3,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 19,
+        "x": 6,
+        "y": 1,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
         "color": "yellow",
         "cap": "small"
       },
       {
-        "id": 15,
-        "x": 6,
-        "y": 0,
+        "id": 20,
+        "x": 5,
+        "y": 5,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "purple",
+        "cap": "big"
+      },
+      {
+        "id": 21,
+        "x": 4,
+        "y": 1,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "red",
+        "cap": "big"
+      },
+      {
+        "id": 22,
+        "x": 1,
+        "y": 3,
+        "w": 2,
+        "h": 1,
+        "dir": "left",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 23,
+        "x": 1,
+        "y": 1,
+        "w": 1,
+        "h": 2,
+        "dir": "up",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 24,
+        "x": 2,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "yellow",
+        "cap": "small"
+      },
+      {
+        "id": 25,
+        "x": 2,
+        "y": 1,
         "w": 1,
         "h": 1,
         "dir": "up",
@@ -155,12 +255,112 @@
         "cap": "small"
       },
       {
-        "id": 16,
-        "x": 2,
-        "y": 5,
+        "id": 26,
+        "x": 7,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "down",
+        "color": "red",
+        "cap": "small"
+      },
+      {
+        "id": 27,
+        "x": 7,
+        "y": 2,
+        "w": 1,
+        "h": 2,
+        "dir": "down",
+        "color": "blue",
+        "cap": "medium"
+      },
+      {
+        "id": 28,
+        "x": 5,
+        "y": 4,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "green",
+        "cap": "medium"
+      },
+      {
+        "id": 29,
+        "x": 5,
+        "y": 2,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "yellow",
+        "cap": "small"
+      },
+      {
+        "id": 30,
+        "x": 1,
+        "y": 4,
         "w": 1,
         "h": 1,
         "dir": "left",
+        "color": "purple",
+        "cap": "small"
+      },
+      {
+        "id": 31,
+        "x": 1,
+        "y": 5,
+        "w": 2,
+        "h": 1,
+        "dir": "left",
+        "color": "red",
+        "cap": "big"
+      },
+      {
+        "id": 32,
+        "x": 3,
+        "y": 2,
+        "w": 2,
+        "h": 1,
+        "dir": "right",
+        "color": "blue",
+        "cap": "big"
+      },
+      {
+        "id": 33,
+        "x": 3,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "right",
+        "color": "green",
+        "cap": "small"
+      },
+      {
+        "id": 34,
+        "x": 2,
+        "y": 4,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "yellow",
+        "cap": "small"
+      },
+      {
+        "id": 35,
+        "x": 3,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "left",
+        "color": "purple",
+        "cap": "small"
+      },
+      {
+        "id": 36,
+        "x": 6,
+        "y": 3,
+        "w": 1,
+        "h": 1,
+        "dir": "up",
         "color": "red",
         "cap": "small"
       }
@@ -171,9 +371,9 @@
     "unlocked": 4
   },
   "loop": {
-    "capacity": 8,
-    "boardIndex": 4,
-    "track": "oval",
+    "capacity": 12,
+    "boardIndex": 6,
+    "track": "circle",
     "feeds": [
       {
         "side": "near",
@@ -183,23 +383,23 @@
     "queue": [
       {
         "color": "red",
-        "count": 88
+        "count": 160
       },
       {
         "color": "blue",
-        "count": 64
+        "count": 176
       },
       {
         "color": "green",
-        "count": 56
+        "count": 160
       },
       {
         "color": "yellow",
-        "count": 64
+        "count": 120
       },
       {
         "color": "purple",
-        "count": 56
+        "count": 144
       }
     ]
   },

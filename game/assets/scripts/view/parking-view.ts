@@ -8,9 +8,11 @@ import { SHADOW_Z } from './scene-stage';
  * than it is wide, like the reference art's.
  *
  * How deep is capped from both sides: the ring road's top lane ends at y = 0.75 and the
- * loop track's curb hangs down to y ≈ 2.15, which leaves the parking band 1.3 units to
- * live in — hence a stall shallower than the reference's, which has a much taller screen
- * to spend. How WIDE follows from that: a car scaled to a 1.06-deep stall is only about
+ * loop track's curb hangs down to y ≈ 2.22 (its drop shadow to 2.15), which leaves the
+ * parking band about 1.4 units to live in — hence a stall shallower than the reference's,
+ * which has a much taller screen to spend.
+ *
+ * How WIDE follows from that: a car scaled to a 1.06-deep stall is only about
  * 0.5 across (the models run 2:1 to 3:1), so a stall much wider than that leaves the car
  * looking lost in it. The row ends up spanning ±3.33 against a view about ±3.94 wide,
  * which is the margin the reference art has too.

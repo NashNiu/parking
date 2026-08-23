@@ -27,24 +27,54 @@ export type TrackShape = 'rect' | 'hex' | 'trap' | 'oval' | 'circle';
 export const TRACK_SHAPES: TrackShape[] = ['rect', 'hex', 'trap', 'oval', 'circle'];
 
 /**
- * The box every shape fits, in board units. Fixed by the camera and its neighbours, not
- * by taste: halfW comes from the visible half-width at the track's depth minus what a
- * feeder channel needs (see LANE in track-path.ts), halfH from the parking bay panel,
- * whose top edge is at y = 2.05 while the track centre sits at 3.8. There is no vertical
- * slack at all — the band's drop shadow already lands exactly on the panel's edge.
+ * The box every shape fits, in board units — an UPPER bound from the camera and the
+ * track's neighbours, and inside that bound a matter of composition.
+ *
+ * The ceilings: the visible half-width at the track's depth minus what a feeder channel
+ * needs beside it (LANE, track-path.ts) caps halfW at 2.60, and the parking bay panel,
+ * whose top edge is at y = 2.05 against a track centre at 3.8, caps halfH at 1.30. The
+ * ring used to sit exactly on both, which left a feeder channel 0.02 of clearance to the
+ * screen edge at its longest legal length — visually the channels were crushed against
+ * the frame while the ring dominated the board. Pulling halfW in to 2.15 hands that
+ * 0.45 to the channels, and it shortens the lap, so the rows on it also close up
+ * (a 20-slot ring goes from 0.73 between rows to 0.62).
+ *
+ * halfH is the one that cannot simply follow: the oval's tightest curvature is
+ * halfH^2/halfW, and MIN_CURVE_RADIUS (0.6) is a hard floor on it, so a 2.15 half-width
+ * needs halfH >= 1.14. 1.20 keeps a real margin there (0.67) and still lifts the band's
+ * drop shadow clear of the parking panel, which it used to land exactly on.
  */
-export const TRACK_BOX = { halfW: 2.6, halfH: 1.3 };
+export const TRACK_BOX = { halfW: 2.15, halfH: 1.20 };
 
 /**
- * Corner radius, the same for all three polygons: 0.60 is the SMALLEST value that clears
- * MIN_CURVE_RADIUS (0.6), and a fillet is what sets a rounded polygon's tightest curve.
- * Smaller reads as a crisper quadrilateral next to the oval, and was the first choice —
- * but a row of four figures stands 0.78 ACROSS the path, so on a 0.40 corner the innermost
- * figure lands within 0.01 of the arc's own centre and the row visibly folds.
+ * Corner radius, the same for all three polygons. A fillet is what sets a rounded
+ * polygon's tightest curve, and the tightest curve is what caps how densely the ring can
+ * be packed: a block of figures stands BLOCK_SPAN across the path, so on a corner of
+ * radius r the inside of that block travels only (r - span/2)/r as far as its centre, and
+ * the figures there close up by that factor. 0.60 -- the old value, and the smallest that
+ * clears MIN_CURVE_RADIUS -- forced the cells so far apart that the track read as mostly
+ * bare; 0.90 buys back a third of the pitch. Much above 1.0 and the trapezoid's short edge
+ * runs out of room for the two fillets that meet on it.
+ *
+ * `minFigureGap` in track-path.ts is what measures the consequence, and `capacityOptions`
+ * rejects any ring length whose figures would overlap -- so a change here shows up as a
+ * change in which ring lengths each shape may carry.
  */
-const RECT_R = 0.60;
-const HEX_R = 0.60;
-const TRAP_R = 0.60;
+const RECT_R = 0.90;
+const HEX_R = 0.90;
+const TRAP_R = 0.90;
+
+/**
+ * Where the hexagon's flat top ends and where the trapezoid's short edge does, each as a
+ * FRACTION of halfW rather than an absolute x. Both used to be absolute (1.7 and 1.9
+ * against a 2.6 half-width, which is where these two ratios come from), and both would
+ * have silently misdrawn the moment the box moved: at halfW 2.15 a literal 1.9 leaves the
+ * trapezoid's slant 0.25 wide instead of 0.58, which flattens it toward a rectangle and
+ * takes the 15-degree channel tilt -- the whole point of that shape -- with it.
+ */
+const HEX_FLAT = 1.7 / 2.6;
+const TRAP_TOP = 1.9 / 2.6;
+
 /** Straight pieces the ellipse is cut into; see `ellipsePoly`. */
 const OVAL_SEGMENTS = 120;
 
@@ -148,6 +178,8 @@ export interface ShapeDef {
 
 export function buildShape(shape: TrackShape): ShapeDef {
     const { halfW, halfH } = TRACK_BOX;
+    const hexFlat = HEX_FLAT * halfW;
+    const trapTop = TRAP_TOP * halfW;
     switch (shape) {
         case 'rect':
             return {
@@ -160,8 +192,8 @@ export function buildShape(shape: TrackShape): ShapeDef {
         case 'hex':
             return {
                 segs: roundedPoly([
-                    { x: -1.7, y: halfH }, { x: 1.7, y: halfH }, { x: halfW, y: 0 },
-                    { x: 1.7, y: -halfH }, { x: -1.7, y: -halfH }, { x: -halfW, y: 0 },
+                    { x: -hexFlat, y: halfH }, { x: hexFlat, y: halfH }, { x: halfW, y: 0 },
+                    { x: hexFlat, y: -halfH }, { x: -hexFlat, y: -halfH }, { x: -halfW, y: 0 },
                 ], HEX_R),
                 minRadius: HEX_R,
             };
@@ -171,7 +203,7 @@ export function buildShape(shape: TrackShape): ShapeDef {
             // 15 degrees, and everything downstream reads that from the path normal.
             return {
                 segs: roundedPoly([
-                    { x: -1.9, y: halfH }, { x: 1.9, y: halfH },
+                    { x: -trapTop, y: halfH }, { x: trapTop, y: halfH },
                     { x: halfW, y: -halfH }, { x: -halfW, y: -halfH },
                 ], TRAP_R),
                 minRadius: TRAP_R,
@@ -184,8 +216,9 @@ export function buildShape(shape: TrackShape): ShapeDef {
             };
         case 'circle':
             // Bounded by the VERTICAL budget, so its radius is halfH and its perimeter is
-            // barely half the quadrilateral's. That makes it the one genuinely short ring:
-            // 8 slots is its only legal length.
+            // barely 60% of the quadrilateral's. That makes it the one genuinely short
+            // ring: 8 and 12 slots are the only lengths it can carry, and the curve only
+            // ever uses 8.
             return {
                 segs: [arc(0, 0, halfH, Math.PI / 2, -2 * Math.PI)],
                 minRadius: halfH,
