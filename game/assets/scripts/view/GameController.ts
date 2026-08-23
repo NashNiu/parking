@@ -90,16 +90,22 @@ const RING_LOW = -5.76;
 const LOT_HALF_W = 3.83;
 const CELL_MAX = 1.4;
 /**
- * Bare board between one grid cell and the next. Half what it was: the visible gap between
- * two parked cars is this PLUS the air a car leaves inside its own cell (see `fill` in
- * car-builder), and at 0.12 the two together came to 0.22 on a 1.01 cell -- a fifth of a
- * car's length, which read as a loosely scattered lot rather than a full one.
+ * Bare board between one grid cell and the next. The visible gap between two cars nose to
+ * tail is this PLUS the air a car leaves inside its own cell (see `fill` in car-builder), and
+ * the pair have come down 0.22 -> 0.10 -> 0.03 on a cell of about 1.1. At 0.03 the cars very
+ * nearly touch, which is what a full car park looks like.
  *
- * The cell's pitch is fixed by the height the lot has to fill, so what comes off the gap
- * goes to the cars: they grow about a tenth. That is the trade this knob makes -- a denser
- * lot at the same size, not a smaller one.
+ * The cell's pitch is fixed by the height the lot has to fill, so what comes off the gap goes
+ * to the cars: they are about a fifth longer than they were at 0.12. That is the trade this
+ * knob makes -- a denser lot at the same size, not a smaller one.
+ *
+ * The gap SIDEWAYS between two cars is a separate thing and much bigger: a small car has a
+ * one-cell square footprint, its model is about twice as long as it is wide, and it is scaled
+ * uniformly to fit -- so it fills the cell along its length and leaves nearly half of it
+ * across. Neither this nor `fill` reaches that; only a stubbier model or a non-uniform
+ * stretch would.
  */
-const CELL_GAP = 0.06;
+const CELL_GAP = 0.02;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_SPEED = 8;
@@ -129,15 +135,19 @@ const CAMERA_DIST = 15;
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
  *
- * BUMP is how far past contact it presses. Cars are drawn at 90% of their footprint, so a
- * sliver of overlap in cell terms still reads as bodies touching rather than clipping.
- * The forward leg is capped: with a three-cell run-up, honest speed would make a refused
- * tap feel like a slow round trip.
+ * BUMP is how far past contact it presses, and it has to stay under the bare board between
+ * two cars nose to tail (CELL_GAP plus what `fill` leaves, about 0.03 now). It was 0.06 back
+ * when cars were drawn at 90% of their footprint and that slack was 0.22; at today's spacing
+ * the same number would drive one car a clear 0.03 INTO the other. The jolt is what sells the
+ * impact anyway -- see JOLT.
+ *
+ * The forward leg is capped: with a three-cell run-up, honest speed would make a refused tap
+ * feel like a slow round trip.
  */
 const NUDGE_SPEED = 5.5;
 const NUDGE_MIN = 0.12;
 const NUDGE_MAX = 0.35;
-const BUMP = 0.06;
+const BUMP = 0.02;
 const JOLT = 0.07;
 
 /** Board-space direction a car exits toward. Grid row 0 is at the TOP, hence up = +Y. */

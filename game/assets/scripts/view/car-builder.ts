@@ -228,11 +228,13 @@ export function buildCar(
     // keeps a long bus looking long instead of squashing it to fill a wide-shallow cell.
     const longDim = Math.max(sizeX, sizeY);
     const shortDim = Math.min(sizeX, sizeY);
-    // How much of its footprint a car takes up. The leftover is air on all four sides, so
-    // it lands BETWEEN neighbouring cars and adds to CELL_GAP: at 0.9 the two together left
-    // a fifth of a car between one car and the next. The shadow is drawn 8% wider than the
-    // body, so this cannot go much past 0.96 before shadows start meeting.
-    const fill = 0.96;
+    // How much of its footprint a car takes up ALONG the axis that binds. The leftover is air
+    // on all four sides, so it lands between neighbouring cars and adds to CELL_GAP: at 0.9
+    // the two together left a fifth of a car between one car and the next, and at 0.99 they
+    // leave about a thirtieth. The shadow is drawn 8% wider than the body but 6% shorter, and
+    // a car leaves far more air across its width than along its length (see below), so the
+    // shadows still have room.
+    const fill = 0.99;
     const s = Math.min((longDim * fill) / size.x, (shortDim * fill) / size.z);
 
     // Fitted dimensions after the uniform scale: length along body X, width along

@@ -103,11 +103,11 @@ test('each shape allows only the capacities whose seam reads', () => {
   // perimeter one place to put its cells. The circle's perimeter is 60% of the
   // quadrilaterals', so it lands one step lower.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [24],
-    hex: [24],
-    trap: [24],
-    oval: [24],
-    circle: [16],
+    rect: [28],
+    hex: [28],
+    trap: [28],
+    oval: [28],
+    circle: [20],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
@@ -151,10 +151,13 @@ test('a group is one row of four, and the row is as wide as the band lets it be'
   expect(blockRanks(GROUP_SIZE)).toBe(1);
   expect(BLOCK.across).toBe(GROUP_SIZE);
   expect(blockLength(GROUP_SIZE)).toBeCloseTo(BLOCK.figure, 10);
-  // Shoulder to shoulder: the across step is a figure's own width, so the heads touch and
-  // do not overlap. Tighter and the row interpenetrates on the ring's vertical stretches,
-  // where across-the-path is straight across the screen.
-  expect(BLOCK.acrossStep).toBeGreaterThanOrEqual(BLOCK.figure);
+  // The row is packed a shade tighter than the figures are wide, so their heads overlap by
+  // about a tenth. That is deliberate and it is what pays for the seam: what decides whether
+  // rows read as rows is the ratio between the nearest figure in the next row and the nearest
+  // one beside you, so a narrower row lets a narrower seam still read. `clearance` is the
+  // floor -- past it a row stops being a crowd and becomes one clipped blob.
+  expect(BLOCK.acrossStep).toBeLessThan(BLOCK.figure);
+  expect(BLOCK.acrossStep).toBeGreaterThanOrEqual(BLOCK.clearance);
 });
 
 test('two groups stand further apart than the members of one group', () => {
@@ -186,16 +189,16 @@ test('no two figures overlap anywhere on any legal ring', () => {
 
 test('a ring one step too short is rejected for seam alone', () => {
   // The seam ceiling has to be separable from every other rule, or it could be quietly
-  // deleted and the others would seem to cover for it. Twenty cells on a rounded rectangle
-  // is the next ring up from the legal one: it clears the doorway floor, and it holds every
-  // figure a clean 0.37 from the next row -- and it still leaves 0.37 of bare band between
-  // one row of four and the next, well over a figure, which is what makes a ring of single
-  // rows read as empty track with people on it.
-  const spacing = new TrackPath('rect').rowSpacing(20);
+  // deleted and the others would seem to cover for it. Twenty-four cells on a rounded
+  // rectangle is the next ring up from the legal one: it clears the doorway floor with room
+  // to spare, and it holds every figure a clean 0.31 from the next row -- and it still leaves
+  // 0.27 of bare band between one row of four and the next, which is what makes a ring of
+  // single rows read as empty track with people on it.
+  const spacing = new TrackPath('rect').rowSpacing(24);
   expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
-  expect(minFigureGap('rect', 20, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
+  expect(minFigureGap('rect', 24, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
   expect(spacing - blockLength(GROUP_SIZE)).toBeGreaterThan(SEAM_MAX);
-  expect(capacityOptions('rect')).not.toContain(20);
+  expect(capacityOptions('rect')).not.toContain(24);
 });
 
 test('the doorway is what stops the ring packing tighter still', () => {
@@ -212,7 +215,7 @@ test('the doorway is what stops the ring packing tighter still', () => {
     }
   }
   const circle = new TrackPath('circle');
-  for (const c of [20, 24]) {
+  for (const c of [24, 28]) {
     expect(circle.rowSpacing(c)).toBeLessThan(ROW_SPACING_MIN);
     expect(capacityOptions('circle')).not.toContain(c);
   }
@@ -260,10 +263,12 @@ test('the boarding gap never swallows a neighbouring row', () => {
 });
 
 test('lookahead tops out where the channel would leave the visible width', () => {
-  // The trapezoid docks closest to the centre of the four quadrilaterals, so it gets the
-  // extra batch that the shorter LANE.step bought.
+  // Nothing to do with capacity: with a multiple-of-four ring the entry always lands at
+  // t=0.25, so what a shape allows is decided by how far out its quarter point sits. The
+  // hexagon and the trapezoid dock closest to the centre of the four quadrilaterals, so they
+  // are the ones that pick up the extra batch each time LANE.step comes down.
   const EXPECTED: Record<TrackShape, number> = {
-    rect: 4, hex: 4, trap: 5, oval: 4, circle: 6,
+    rect: 4, hex: 5, trap: 5, oval: 4, circle: 7,
   };
   for (const shape of TRACK_SHAPES) {
     expect(maxLookahead(shape)).toBe(EXPECTED[shape]);
