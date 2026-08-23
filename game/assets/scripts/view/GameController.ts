@@ -89,7 +89,17 @@ const RING_OFF = 0.62;
 const RING_LOW = -5.76;
 const LOT_HALF_W = 3.83;
 const CELL_MAX = 1.4;
-const CELL_GAP = 0.12;
+/**
+ * Bare board between one grid cell and the next. Half what it was: the visible gap between
+ * two parked cars is this PLUS the air a car leaves inside its own cell (see `fill` in
+ * car-builder), and at 0.12 the two together came to 0.22 on a 1.01 cell -- a fifth of a
+ * car's length, which read as a loosely scattered lot rather than a full one.
+ *
+ * The cell's pitch is fixed by the height the lot has to fill, so what comes off the gap
+ * goes to the cars: they grow about a tenth. That is the trade this knob makes -- a denser
+ * lot at the same size, not a smaller one.
+ */
+const CELL_GAP = 0.06;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_SPEED = 8;

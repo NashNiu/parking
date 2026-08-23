@@ -39,8 +39,8 @@ function trackLevel(over: Partial<LevelData['loop']> = {}): LevelData {
     grid: { cols: 4, rows: 4, cars: [{ id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' }] },
     parking: { slots: 7, unlocked: 4 },
     loop: {
-      capacity: 20,
-      boardIndex: 10,
+      capacity: 24,
+      boardIndex: 12,
       track: 'rect',
       feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }],
       queue: [{ color: 'red', count: 16 }],
@@ -83,9 +83,9 @@ test('a capacity that is not a multiple of four is rejected', () => {
 });
 
 test('a capacity the shape cannot carry legibly is rejected', () => {
-  // The circle's perimeter is 7.54, so 16 slots is a row spacing of 0.47 -- under the
+  // The circle's perimeter is 7.54, so 24 slots is a row spacing of 0.31 -- under the
   // floor, where the boarding gap stops reading as a hole.
-  const level = trackLevel({ track: 'circle', capacity: 16, boardIndex: 8 });
+  const level = trackLevel({ track: 'circle', capacity: 24, boardIndex: 12 });
   expect(validateTrack(level).join(' ')).toContain('row spacing');
 });
 
@@ -124,7 +124,7 @@ test('a lookahead past the visible width is rejected', () => {
 test('the circle takes a longer lookahead than the quadrilateral', () => {
   // Its dock is at x=1.2, so the horizontal budget stretches to six batches.
   const feeds = [{ side: 'near', lookahead: 6 }] as Feed[];
-  expect(validateTrack(trackLevel({ track: 'circle', capacity: 12, boardIndex: 6, feeds }))).toEqual([]);
+  expect(validateTrack(trackLevel({ track: 'circle', capacity: 16, boardIndex: 8, feeds }))).toEqual([]);
 });
 
 test('every complaint names what is wrong', () => {

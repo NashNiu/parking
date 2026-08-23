@@ -103,11 +103,11 @@ test('each shape allows only the capacities whose seam reads', () => {
   // perimeter one place to put its cells. The circle's perimeter is 60% of the
   // quadrilaterals', so it lands one step lower.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [20],
-    hex: [20],
-    trap: [20],
-    oval: [20],
-    circle: [12],
+    rect: [24],
+    hex: [24],
+    trap: [24],
+    oval: [24],
+    circle: [16],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
@@ -186,33 +186,51 @@ test('no two figures overlap anywhere on any legal ring', () => {
 
 test('a ring one step too short is rejected for seam alone', () => {
   // The seam ceiling has to be separable from every other rule, or it could be quietly
-  // deleted and the others would seem to cover for it. Sixteen cells on a rounded rectangle
+  // deleted and the others would seem to cover for it. Twenty cells on a rounded rectangle
   // is the next ring up from the legal one: it clears the doorway floor, and it holds every
-  // figure a clean 0.46 from the next row -- and it still leaves 0.52 of bare band between
-  // one row of four and the next, more than twice a figure, which is what makes a ring of
-  // single rows read as empty track with people on it.
-  const spacing = new TrackPath('rect').rowSpacing(16);
+  // figure a clean 0.37 from the next row -- and it still leaves 0.37 of bare band between
+  // one row of four and the next, well over a figure, which is what makes a ring of single
+  // rows read as empty track with people on it.
+  const spacing = new TrackPath('rect').rowSpacing(20);
   expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
-  expect(minFigureGap('rect', 16, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
+  expect(minFigureGap('rect', 20, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
   expect(spacing - blockLength(GROUP_SIZE)).toBeGreaterThan(SEAM_MAX);
-  expect(capacityOptions('rect')).not.toContain(16);
+  expect(capacityOptions('rect')).not.toContain(20);
 });
 
-test('the doorway floor is what binds at the tight end, not the seam floor', () => {
-  // Which of two overlapping rules is load-bearing, recorded so that neither gets tuned in
-  // the belief that it is doing the other's job. A row is one figure deep, so any cell long
-  // enough to hold the boarding doorway (ROW_SPACING_MIN) has more than SEAM_MIN of band
-  // left over -- the seam FLOOR cannot currently reject anything, and the rings that get
-  // rejected at the tight end (the circle at 16 and 20) are rejected for the doorway.
-  expect(blockLength(GROUP_SIZE) + SEAM_MIN).toBeLessThan(ROW_SPACING_MIN);
+test('the doorway is what stops the ring packing tighter still', () => {
+  // Why the seam bottoms out where it does, recorded because it is not obvious from either
+  // constant on its own. The seam is a cell minus a row, so the only route to a smaller seam
+  // is a shorter cell -- and the cell cannot go below the boarding doorway without the
+  // doorway swallowing its neighbour. Every legal ring therefore sits within a figure's
+  // width of that floor, and the rings rejected at the tight end are rejected for it.
+  for (const shape of TRACK_SHAPES) {
+    for (const c of capacityOptions(shape)) {
+      const spacing = new TrackPath(shape).rowSpacing(c);
+      expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
+      expect(spacing - ROW_SPACING_MIN).toBeLessThan(BLOCK.figure);
+    }
+  }
   const circle = new TrackPath('circle');
-  for (const c of [16, 20]) {
+  for (const c of [20, 24]) {
     expect(circle.rowSpacing(c)).toBeLessThan(ROW_SPACING_MIN);
     expect(capacityOptions('circle')).not.toContain(c);
   }
-  // It would bind again at a deeper block -- two ranks put blockLength at 0.37, and then
-  // 0.37 + 0.20 clears 0.50 and the seam floor starts doing the rejecting.
-  expect(blockLength(BLOCK.across * 2) + SEAM_MIN).toBeGreaterThan(ROW_SPACING_MIN);
+});
+
+test('the channels are packed as tightly as the ring is', () => {
+  // The two halves of the track have separate spacing rules -- a ring cell's comes from the
+  // shape's perimeter, a channel slot's is LANE.step -- and nothing but this stops one being
+  // tuned without the other. They hold the same thing, one row of four, so the bare band
+  // between two waiting rows has to look like the bare band between two rows on the ring.
+  const laneSeam = LANE.step - blockLength(GROUP_SIZE);
+  expect(laneSeam).toBeGreaterThan(0);
+  for (const shape of TRACK_SHAPES) {
+    for (const c of capacityOptions(shape)) {
+      const ringSeam = new TrackPath(shape).rowSpacing(c) - blockLength(GROUP_SIZE);
+      expect(Math.abs(ringSeam - laneSeam)).toBeLessThan(BLOCK.figure / 2);
+    }
+  }
 });
 
 test('a second rank, if there ever is one, stands staggered and not in column', () => {
@@ -242,8 +260,10 @@ test('the boarding gap never swallows a neighbouring row', () => {
 });
 
 test('lookahead tops out where the channel would leave the visible width', () => {
+  // The trapezoid docks closest to the centre of the four quadrilaterals, so it gets the
+  // extra batch that the shorter LANE.step bought.
   const EXPECTED: Record<TrackShape, number> = {
-    rect: 4, hex: 4, trap: 4, oval: 4, circle: 6,
+    rect: 4, hex: 4, trap: 5, oval: 4, circle: 6,
   };
   for (const shape of TRACK_SHAPES) {
     expect(maxLookahead(shape)).toBe(EXPECTED[shape]);

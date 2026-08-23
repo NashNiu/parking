@@ -12,7 +12,7 @@ import { FeedSide, GROUP_SIZE } from './types';
 export const LANE = Object.freeze({
     bandHalf: 0.38,
     start: 0.52,
-    step: 0.45,
+    step: 0.40,
     margin: 0.25,
     edgeLimit: 4.67,
 });
@@ -23,9 +23,12 @@ export const LANE = Object.freeze({
  * point, on a curved or slanted stretch whose normal is nowhere near horizontal.
  *
  * Which of them a given shape may actually use is decided by `capacityOptions`, from the
- * shape's own perimeter and corners -- not from this list.
+ * shape's own perimeter -- not from this list. The list stops at 24 because 28 is where the
+ * rows stop reading as rows: on an oval at 28 the nearest figure in the NEXT row is exactly
+ * as far away as the one standing beside you (0.220 either way), and the eye then has
+ * nothing to group by.
  */
-export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
+export const CAPACITY_OPTIONS = [8, 12, 16, 20, 24] as const;
 
 /**
  * How the GROUP_SIZE figures of one ring cell stand: `across` of them side by side across
@@ -78,11 +81,15 @@ export function blockSpan(groupSize: number): number {
 }
 
 /**
- * Floor on a ring cell's arc length: it keeps the boarding doorway (GAP_ARC, 0.45) from
- * swallowing a whole neighbouring cell. The test in track-path.test.ts pins that ordering.
- * There is no matching ceiling -- how the ring READS is the seam's job, below.
+ * Floor on a ring cell's arc length: it keeps the boarding doorway (GAP_ARC) from swallowing
+ * a whole neighbouring cell. The test in track-path.test.ts pins that ordering. There is no
+ * matching ceiling -- how the ring READS is the seam's job, below.
+ *
+ * This floor, and GAP_ARC under it, are what cap how tightly the ring can be packed: the
+ * seam is the cell minus a row, so a shorter cell is the only way to a smaller seam, and
+ * the doorway is what stops the cell getting shorter.
  */
-export const ROW_SPACING_MIN = 0.50;
+export const ROW_SPACING_MIN = 0.42;
 
 /**
  * The bare band between one cell's block and the next, in board units: a cell's arc length
@@ -99,23 +106,30 @@ export const ROW_SPACING_MIN = 0.50;
  *
  * - the FLOOR is about one figure, so the break reads as a break even between two cells
  *   that happen to hold the same colour;
- * - the CEILING is about two, past which the ring reads as bare track with rows on it. It
- *   replaces an old bound on cell SPACING, which said this far less directly, since what
+ * - the CEILING is a bit over one, past which the ring reads as bare track with rows on it.
+ *   It replaces an old bound on cell SPACING, which said this far less directly, since what
  *   shows as emptiness is the band between rows and not the pitch of the cells.
  *
- * The ceiling is the tighter of the two in practice: it is what carries the ring from 12
- * cells to 20 now that a row is one figure deep instead of four ranks.
+ * The ceiling is the one that does the work: it is what carries the ring to 24 cells (16 on
+ * the circle), which is as tight as the boarding doorway lets the cells get. Every shape's
+ * seam lands in 0.22-0.27, and the channels sit at 0.18 -- see LANE.step, which has to be
+ * moved with this or the two halves of the track stop matching.
  */
 export const SEAM_MIN = 0.20;
-export const SEAM_MAX = 0.42;
+export const SEAM_MAX = 0.29;
 
 /**
- * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot,
- * which shrank with the ring: at 20 slots the doorway was 0.37 long and stopped reading
- * as a doorway. Must stay under ROW_SPACING_MIN so a gap never eats its neighbours -- and
- * that is what pulled it from 0.55 to 0.45 when the spacing floor came down to 0.50.
+ * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot, which
+ * shrank with the ring: at 20 slots the doorway was 0.37 long and stopped reading as a
+ * doorway. Must stay under ROW_SPACING_MIN so a gap never eats its neighbours, which is
+ * what has walked it down from 0.55 to 0.45 to 0.38 as the cells have got shorter.
+ *
+ * 0.38 against a cell of 0.44-0.49 means the doorway is now most of a cell wide: about one
+ * row of passengers, which is the right size for a door they leave through one row at a
+ * time. It is also the thing standing between the ring and an even tighter pack -- see
+ * ROW_SPACING_MIN.
  */
-export const GAP_ARC = 0.45;
+export const GAP_ARC = 0.38;
 
 /**
  * A block stands `blockSpan` (0.88) across the path, so on an arc tighter than half of that
