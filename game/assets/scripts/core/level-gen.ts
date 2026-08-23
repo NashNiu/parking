@@ -118,21 +118,21 @@ const TWIN: Feed[] = [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 
  *
  * Ring length is NOT one of the knobs any more. A shape's perimeter decides what it can
  * carry (see capacityOptions, and the seam rule behind it), and that comes out at exactly
- * one length per shape: 12 for the four quadrilaterals, 8 for the circle, whose perimeter is
- * 60% of theirs. So the curve turns the two knobs it still has -- how many batches a channel
- * shows, and whether there are two channels or one.
+ * one length per shape: 20 for the four quadrilaterals, 12 for the circle, whose perimeter
+ * is 60% of theirs. So the curve turns the two knobs it still has -- how many batches a
+ * channel shows, and whether there are two channels or one.
  */
 const TRACK_CURVE: TrackParams[] = [
-    { track: 'rect',   capacity: 12, feeds: TWIN },
-    { track: 'hex',    capacity: 12, feeds: TWIN },
-    { track: 'trap',   capacity: 12, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 2 }] },
-    { track: 'oval',   capacity: 12, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
-    { track: 'rect',   capacity: 12, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
-    { track: 'hex',    capacity: 12, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 1 }] },
-    { track: 'trap',   capacity: 12, feeds: [{ side: 'far', lookahead: 2 }] },
-    { track: 'oval',   capacity: 12, feeds: [{ side: 'far', lookahead: 1 }, { side: 'near', lookahead: 1 }] },
-    { track: 'circle', capacity: 8, feeds: [{ side: 'near', lookahead: 2 }] },
-    { track: 'circle', capacity: 8, feeds: [{ side: 'near', lookahead: 1 }] },
+    { track: 'rect',   capacity: 20, feeds: TWIN },
+    { track: 'hex',    capacity: 20, feeds: TWIN },
+    { track: 'trap',   capacity: 20, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 2 }] },
+    { track: 'oval',   capacity: 20, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
+    { track: 'rect',   capacity: 20, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
+    { track: 'hex',    capacity: 20, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 1 }] },
+    { track: 'trap',   capacity: 20, feeds: [{ side: 'far', lookahead: 2 }] },
+    { track: 'oval',   capacity: 20, feeds: [{ side: 'far', lookahead: 1 }, { side: 'near', lookahead: 1 }] },
+    { track: 'circle', capacity: 12, feeds: [{ side: 'near', lookahead: 2 }] },
+    { track: 'circle', capacity: 12, feeds: [{ side: 'near', lookahead: 1 }] },
 ];
 
 /**

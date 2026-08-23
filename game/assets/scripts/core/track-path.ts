@@ -29,20 +29,20 @@ export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
 
 /**
  * How the GROUP_SIZE figures of one ring cell stand: `across` of them side by side across
- * the path, the rest in ranks behind them, and every other rank shifted sideways by half a
- * step so the ranks interlock like brickwork instead of lining up in columns.
+ * the path, and -- if there are more than `across` of them -- the rest in ranks behind,
+ * every other rank shifted sideways by half a step so the ranks interlock like brickwork
+ * instead of lining up in columns.
  *
- * The shape of this block is what decides how dense the ring can be, and it took a
- * measurement to get right (see `minFigureGap`, and the test that pins it). Four abreast
- * in two ranks -- the obvious layout, and the one that shipped and clipped -- stands 1.00
- * across the path, which is wider than the band; on a corner the inside of a block that
- * wide travels barely a fifth as far as its centre, so the figures there piled into each
- * other however far apart the cells were spaced. Two abreast in four interlocking ranks
- * stands 0.82 across and keeps its inside within reach of the corners.
+ * At GROUP_SIZE 4 a block is ONE row of four and the rank machinery is inert. It is kept
+ * because GROUP_SIZE is a knob (see types.ts) and the shift is not optional once a second
+ * rank exists: a two-rank block whose ranks line up in columns closes to a rank step at the
+ * corners, where a cell's ranks swing together. `minFigureGap` is what checks whatever
+ * shape this describes, so a change here is caught rather than discovered on screen.
  *
- * `rankStep` is the along-path pitch of the ranks, and it is FIXED rather than shared out
- * over the cell: a block is 0.67 long on every ring, and what the cell has left over is
- * the seam (see SEAM_MIN) that separates one group from the next.
+ * `acrossStep` is 0.22 -- exactly a figure's width, so a row of four is people shoulder to
+ * shoulder rather than a picket fence with air between them, and the heads touch without
+ * overlapping. The row spans 0.88, which does overhang the 0.76 band slightly; a crowd
+ * spilling to the kerb reads better than a row narrow enough to fit.
  *
  * `figure` is how wide one figure is (its head, the widest part -- see pax-figure.ts), and
  * `clearance` is how close two of them may come before they read as one clipped blob
@@ -50,15 +50,12 @@ export const CAPACITY_OPTIONS = [8, 12, 16, 20] as const;
  * that core has to be able to check.
  */
 export const BLOCK = Object.freeze({
-    across: 2,
-    acrossStep: 0.40,
+    across: 4,
+    acrossStep: 0.22,
     rankStep: 0.15,
     figure: 0.22,
     clearance: 0.18,
 });
-
-/** Across-the-path extent of a whole block, including the half-step brickwork shift. */
-export const BLOCK_SPAN = BLOCK.acrossStep * (BLOCK.across - 1 + 0.5) + BLOCK.figure;
 
 /** Ranks in a block of `groupSize`, `BLOCK.across` of them abreast. */
 export function blockRanks(groupSize: number): number {
@@ -68,6 +65,16 @@ export function blockRanks(groupSize: number): number {
 /** Along-the-path extent of a whole block: the ranks, plus the width of a figure. */
 export function blockLength(groupSize: number): number {
     return BLOCK.rankStep * (blockRanks(groupSize) - 1) + BLOCK.figure;
+}
+
+/**
+ * Across-the-path extent of a whole block: the abreast figures, plus the brickwork shift if
+ * a second rank exists to carry one. Half of this is how far a block reaches from the
+ * centreline, which is what MIN_CURVE_RADIUS has to clear.
+ */
+export function blockSpan(groupSize: number): number {
+    const shift = blockRanks(groupSize) > 1 ? BLOCK.acrossStep / 2 : 0;
+    return BLOCK.acrossStep * (BLOCK.across - 1) + shift + BLOCK.figure;
 }
 
 /**
@@ -81,22 +88,26 @@ export const ROW_SPACING_MIN = 0.50;
  * The bare band between one cell's block and the next, in board units: a cell's arc length
  * minus the block that stands in it.
  *
- * This is what makes the ring legible, and getting it wrong is what made the ring
- * unreadable in the version before this. That version spaced a cell's RANKS at
- * spacing/ranks, so a block filled its cell exactly and the seam was identically zero at
- * every capacity -- 96 figures in one unbroken belt, with no way to see where one group
- * ended and the next began. A group is the unit the player acts on (it is what boards, all
- * at once, when its colour matches the car at the gap), so a group the eye cannot pick out
- * is a game the player cannot read.
+ * This is what makes the ring legible. A group is the unit the player acts on -- it is what
+ * boards, all at once, when its colour matches the car at the gap -- so a group the eye
+ * cannot pick out is a game the player cannot read. An earlier version had no such rule and
+ * spaced a cell's ranks at spacing/ranks, which made a block fill its cell exactly and left
+ * a seam of identically zero at every capacity: one unbroken belt of figures.
  *
- * - the FLOOR is about one figure wide, so the break reads as a break even between two
- *   cells that happen to hold the same colour;
- * - the CEILING is what stops the ring looking empty, and it replaces the old bound on
- *   spacing: `ROW_SPACING_MAX` said the same thing far less directly, since what shows as
- *   emptiness is bare track between blocks, not the pitch of the cells.
+ * Both ends are read in figures, because a figure is the only length on screen the player
+ * has to compare against:
+ *
+ * - the FLOOR is about one figure, so the break reads as a break even between two cells
+ *   that happen to hold the same colour;
+ * - the CEILING is about two, past which the ring reads as bare track with rows on it. It
+ *   replaces an old bound on cell SPACING, which said this far less directly, since what
+ *   shows as emptiness is the band between rows and not the pitch of the cells.
+ *
+ * The ceiling is the tighter of the two in practice: it is what carries the ring from 12
+ * cells to 20 now that a row is one figure deep instead of four ranks.
  */
 export const SEAM_MIN = 0.20;
-export const SEAM_MAX = 0.45;
+export const SEAM_MAX = 0.42;
 
 /**
  * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot,
@@ -107,10 +118,10 @@ export const SEAM_MAX = 0.45;
 export const GAP_ARC = 0.45;
 
 /**
- * A block stands BLOCK_SPAN (0.82) across the path, so on an arc tighter than this its
- * inner half would reach past the arc's own centre and turn inside out. It is a floor on
- * the shapes themselves; `minFigureGap` is the rule that actually decides what a corner
- * can carry, and it bites long before this does.
+ * A block stands `blockSpan` (0.88) across the path, so on an arc tighter than half of that
+ * its inner edge would reach past the arc's own centre and turn inside out. It is a floor
+ * on the shapes themselves, with margin; the seam band is the rule that actually decides
+ * what a shape can carry, and it bites long before this does.
  */
 export const MIN_CURVE_RADIUS = 0.6;
 

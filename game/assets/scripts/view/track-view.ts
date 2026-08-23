@@ -61,22 +61,23 @@ const SWING_STAGGER = 0.7;
 const NO_SHADE = (c: Color): Color => c;
 
 /**
- * Ranks in one cell's block. The block's shape -- how many abreast, how far apart, and the
- * half-step brickwork shift -- is core's `BLOCK`, because `minFigureGap` has to be able to
- * check it before a ring length is declared legal. Rank order is back to front: the LOWEST
- * indices are the rearmost rank, and `paintRow` shows the first `count` figures of a partly
- * boarded block, so a block empties from its leading edge -- the passengers nearest the
- * doorway are the ones already gone.
+ * Ranks in one cell's block -- ONE, at GROUP_SIZE 4: a group is a single row of four across
+ * the track. The block's shape (how many abreast, how far apart) is core's `BLOCK`, because
+ * `minFigureGap` has to be able to check it before a ring length is declared legal.
+ *
+ * The rank machinery below is kept for a deeper block, which GROUP_SIZE can ask for. Rank
+ * order is back to front: the LOWEST indices are the rearmost rank, and `paintRow` shows the
+ * first `count` figures of a partly boarded block, so a block empties from its leading edge
+ * -- the passengers nearest the doorway are the ones already gone.
  */
 const RANKS = blockRanks(GROUP_SIZE);
 
 /**
- * Along-lane step between the ranks of a WAITING block. A ring cell uses BLOCK.rankStep
- * outright; a lane slot cannot, because a slot is LANE.step (0.45) long and a block at that
- * pitch is 0.67 -- the head of the queue would grow into the batch behind it. So the lane
- * squeezes instead: the ranks get whatever is left of the slot once a figure's own width is
- * taken off. The waiting blocks are therefore tighter along the lane than the ring's, and
- * the seam between two of them is the one thing the channels do not get.
+ * Along-lane step between the ranks of a WAITING block, for the same reason a ring cell has
+ * its own: a lane slot is LANE.step (0.45) long and has to hold a whole block plus a gap
+ * before the batch behind it, which a block at the ring's own rank pitch would not leave.
+ * Inert while a block is a single row -- a row is 0.22 deep in a 0.45 slot, so the channels
+ * get their gap for nothing.
  */
 const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
 

@@ -1,7 +1,8 @@
 import {
   TrackPath, entryIndex, maxLookahead, capacityOptions,
   LANE, ROW_SPACING_MIN, SEAM_MIN, SEAM_MAX, CAPACITY_OPTIONS, ENTRY_NORMAL_MAX,
-  MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, blockRanks, blockLength, minFigureGap,
+  MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, blockRanks, blockLength, blockSpan,
+  minFigureGap,
 } from '../../game/assets/scripts/core/track-path';
 import { TRACK_SHAPES, TrackShape } from '../../game/assets/scripts/core/track-shapes';
 import { GROUP_SIZE } from '../../game/assets/scripts/core/types';
@@ -98,15 +99,15 @@ test('the near entry is a quarter lap from the gap and the far one three quarter
 });
 
 test('each shape allows only the capacities whose seam reads', () => {
-  // Exactly one length each: a block is a fixed 0.67 long, and the seam band leaves each
+  // Exactly one length each: a block is one row, 0.22 long, and the seam band leaves each
   // perimeter one place to put its cells. The circle's perimeter is 60% of the
   // quadrilaterals', so it lands one step lower.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [12],
-    hex: [12],
-    trap: [12],
-    oval: [12],
-    circle: [8],
+    rect: [20],
+    hex: [20],
+    trap: [20],
+    oval: [20],
+    circle: [12],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
@@ -129,11 +130,11 @@ test('a capacity is allowed exactly when it clears every rule', () => {
 });
 
 test('a block is the same length on every ring it can stand on', () => {
-  // The bug this rules out: the version before this spaced a cell's ranks at
-  // spacing/ranks, so a block stretched to fill whatever cell it was given and the seam
-  // between two groups came out identically zero at every capacity -- one unbroken belt of
-  // figures, with no way to see where a group ended. A block's length has to be a property
-  // of the block, so that what a longer cell buys is seam.
+  // The bug this rules out: an earlier version spaced a cell's ranks at spacing/ranks, so a
+  // block stretched to fill whatever cell it was given and the seam between two groups came
+  // out identically zero at every capacity -- one unbroken belt of figures, with no way to
+  // see where a group ended. A block's length has to be a property of the block, so that
+  // what a longer cell buys is seam.
   const len = blockLength(GROUP_SIZE);
   expect(len).toBeCloseTo(BLOCK.rankStep * (blockRanks(GROUP_SIZE) - 1) + BLOCK.figure, 10);
   for (const shape of TRACK_SHAPES) {
@@ -141,6 +142,19 @@ test('a block is the same length on every ring it can stand on', () => {
       expect(new TrackPath(shape).rowSpacing(c) - len).toBeGreaterThanOrEqual(SEAM_MIN);
     }
   }
+});
+
+test('a group is one row of four, and the row is as wide as the band lets it be', () => {
+  // What GROUP_SIZE 4 and BLOCK.across 4 mean together, asserted rather than assumed,
+  // because the rest of this file's numbers follow from it: one rank, so a block is exactly
+  // a figure deep and every cell's spare arc is seam.
+  expect(blockRanks(GROUP_SIZE)).toBe(1);
+  expect(BLOCK.across).toBe(GROUP_SIZE);
+  expect(blockLength(GROUP_SIZE)).toBeCloseTo(BLOCK.figure, 10);
+  // Shoulder to shoulder: the across step is a figure's own width, so the heads touch and
+  // do not overlap. Tighter and the row interpenetrates on the ring's vertical stretches,
+  // where across-the-path is straight across the screen.
+  expect(BLOCK.acrossStep).toBeGreaterThanOrEqual(BLOCK.figure);
 });
 
 test('two groups stand further apart than the members of one group', () => {
@@ -170,43 +184,56 @@ test('no two figures overlap anywhere on any legal ring', () => {
   }
 });
 
-test('a ring one step too long is rejected for seam, not for overlap', () => {
-  // The seam rule has to be separable from the overlap rule, or it could be quietly
-  // deleted and `minFigureGap` would seem to cover for it. A 16-cell rounded rectangle is
-  // the ring that shipped and could not be read: it clears the doorway floor AND it keeps
-  // every figure a clean 0.25 from its neighbours -- and it still leaves only 0.07 of bare
-  // band between one group of eight and the next, which is no boundary at all.
+test('a ring one step too short is rejected for seam alone', () => {
+  // The seam ceiling has to be separable from every other rule, or it could be quietly
+  // deleted and the others would seem to cover for it. Sixteen cells on a rounded rectangle
+  // is the next ring up from the legal one: it clears the doorway floor, and it holds every
+  // figure a clean 0.46 from the next row -- and it still leaves 0.52 of bare band between
+  // one row of four and the next, more than twice a figure, which is what makes a ring of
+  // single rows read as empty track with people on it.
   const spacing = new TrackPath('rect').rowSpacing(16);
   expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
   expect(minFigureGap('rect', 16, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
-  expect(spacing - blockLength(GROUP_SIZE)).toBeLessThan(SEAM_MIN);
+  expect(spacing - blockLength(GROUP_SIZE)).toBeGreaterThan(SEAM_MAX);
   expect(capacityOptions('rect')).not.toContain(16);
 });
 
-test('a ring short enough to look empty is rejected too', () => {
-  // The other end of the band, which is what the old spacing ceiling was for. Eight cells
-  // on a rounded rectangle leaves 0.81 of bare track between groups -- more than a group
-  // is long.
-  const seam = new TrackPath('rect').rowSpacing(8) - blockLength(GROUP_SIZE);
-  expect(seam).toBeGreaterThan(SEAM_MAX);
-  expect(capacityOptions('rect')).not.toContain(8);
+test('the doorway floor is what binds at the tight end, not the seam floor', () => {
+  // Which of two overlapping rules is load-bearing, recorded so that neither gets tuned in
+  // the belief that it is doing the other's job. A row is one figure deep, so any cell long
+  // enough to hold the boarding doorway (ROW_SPACING_MIN) has more than SEAM_MIN of band
+  // left over -- the seam FLOOR cannot currently reject anything, and the rings that get
+  // rejected at the tight end (the circle at 16 and 20) are rejected for the doorway.
+  expect(blockLength(GROUP_SIZE) + SEAM_MIN).toBeLessThan(ROW_SPACING_MIN);
+  const circle = new TrackPath('circle');
+  for (const c of [16, 20]) {
+    expect(circle.rowSpacing(c)).toBeLessThan(ROW_SPACING_MIN);
+    expect(capacityOptions('circle')).not.toContain(c);
+  }
+  // It would bind again at a deeper block -- two ranks put blockLength at 0.37, and then
+  // 0.37 + 0.20 clears 0.50 and the seam floor starts doing the rejecting.
+  expect(blockLength(BLOCK.across * 2) + SEAM_MIN).toBeGreaterThan(ROW_SPACING_MIN);
 });
 
-test('the brickwork shift is what makes the corners survivable', () => {
-  // Each rank sits half a step sideways from the one in front, so a figure never stands
-  // directly behind another. Without it the along-path gap alone would have to carry the
-  // clearance, and on a corner it does not: rank 1 of a cell and rank 0 of the next end up
-  // much closer than a figure is wide.
-  const ranks = blockRanks(GROUP_SIZE);
+test('a second rank, if there ever is one, stands staggered and not in column', () => {
+  // The shipped block is a single row (GROUP_SIZE 4), so this covers blockOffset's contract
+  // rather than today's ring -- deliberately, because the stagger is not optional once a
+  // second rank exists and GROUP_SIZE is a knob. Without it the along-path step alone
+  // carries the clearance between the ranks, and on a corner, where a cell's ranks swing
+  // together, that step is not enough: two figures in column end up closer than one is wide.
+  const doubled = BLOCK.across * 2;
+  const ranks = blockRanks(doubled);
+  expect(ranks).toBe(2);
+  const at = (i: number) => blockOffset(i, ranks, BLOCK.rankStep, { across: 0, along: 0 });
   const gap = (i: number, j: number): number => {
-    const a = blockOffset(i, ranks, BLOCK.rankStep, { across: 0, along: 0 });
-    const across = a.across, along = a.along;
-    const b = blockOffset(j, ranks, BLOCK.rankStep, { across: 0, along: 0 });
+    const a = at(i), across = a.across, along = a.along;
+    const b = at(j);
     return Math.hypot(across - b.across, along - b.along);
   };
-  // Figures 0 and 2 are in consecutive ranks, so only the shift keeps them apart.
-  expect(gap(0, 2)).toBeGreaterThan(BLOCK.acrossStep / 2);
-  expect(gap(0, 2)).toBeGreaterThan(BLOCK.rankStep);
+  // Figure 0 leads its rank; figure BLOCK.across is the one directly behind it, and only
+  // the half-step shift keeps the pair further apart than the rank step alone would.
+  expect(at(0).across).not.toBeCloseTo(at(BLOCK.across).across, 10);
+  expect(gap(0, BLOCK.across)).toBeGreaterThan(BLOCK.rankStep);
 });
 
 test('the boarding gap never swallows a neighbouring row', () => {
@@ -259,7 +286,11 @@ test('a non-multiple-of-four capacity is exactly what the normal rule catches', 
   expect(Math.abs(hex.normalAt(entryIndex(18, 9, 'near') / 18).y)).toBeGreaterThan(0.3);
 });
 
-test('every shape clears the curvature floor', () => {
+test('every shape clears the curvature floor, and the floor clears half a block', () => {
+  // A block reaches blockSpan/2 either side of the centreline, so an arc tighter than that
+  // turns its inner edge past the arc's own centre and inside out. MIN_CURVE_RADIUS has to
+  // sit above that, and every shape's tightest corner above MIN_CURVE_RADIUS.
+  expect(MIN_CURVE_RADIUS).toBeGreaterThan(blockSpan(GROUP_SIZE) / 2);
   for (const shape of TRACK_SHAPES) {
     expect(new TrackPath(shape).minRadius).toBeGreaterThanOrEqual(MIN_CURVE_RADIUS);
   }
