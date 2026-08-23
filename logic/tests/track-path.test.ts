@@ -2,15 +2,15 @@ import {
   TrackPath, entryIndex, maxLookahead, capacityOptions,
   LANE, ROW_SPACING_MIN, SEAM_MIN, SEAM_MAX, CAPACITY_OPTIONS, ENTRY_NORMAL_MAX,
   MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, blockRanks, blockLength, blockSpan,
-  minFigureGap,
+  minRowGap,
 } from '../../game/assets/scripts/core/track-path';
 import { TRACK_SHAPES, TrackShape } from '../../game/assets/scripts/core/track-shapes';
 import { GROUP_SIZE } from '../../game/assets/scripts/core/types';
 
 /**
  * The closest pair of figures on a full ring, split by whether the two come from the SAME
- * cell or from neighbouring ones. `minFigureGap` returns the smaller of the two; keeping
- * them apart is what lets a test say which KIND of pair is the closest.
+ * cell or from neighbouring ones. `minRowGap` answers only the second; measuring both here
+ * is what lets a test compare them, which is the legibility rule.
  */
 function figurePairs(shape: TrackShape, capacity: number): { intra: number; cross: number } {
   const path = new TrackPath(shape);
@@ -107,7 +107,7 @@ test('each shape allows only the capacities whose seam reads', () => {
     hex: [28],
     trap: [28],
     oval: [28],
-    circle: [20],
+    circle: [24],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
@@ -123,7 +123,7 @@ test('a capacity is allowed exactly when it clears every rule', () => {
       const seam = spacing - blockLength(GROUP_SIZE);
       const roomForDoorway = spacing >= ROW_SPACING_MIN;
       const reads = seam >= SEAM_MIN && seam <= SEAM_MAX;
-      const fits = minFigureGap(shape, c, GROUP_SIZE) >= BLOCK.clearance;
+      const fits = minRowGap(shape, c, GROUP_SIZE) >= BLOCK.clearance;
       expect(allowed.includes(c)).toBe(roomForDoorway && reads && fits);
     }
   }
@@ -152,12 +152,18 @@ test('a group is one row of four, and the row is as wide as the band lets it be'
   expect(BLOCK.across).toBe(GROUP_SIZE);
   expect(blockLength(GROUP_SIZE)).toBeCloseTo(BLOCK.figure, 10);
   // The row is packed a shade tighter than the figures are wide, so their heads overlap by
-  // about a tenth. That is deliberate and it is what pays for the seam: what decides whether
-  // rows read as rows is the ratio between the nearest figure in the next row and the nearest
-  // one beside you, so a narrower row lets a narrower seam still read. `clearance` is the
-  // floor -- past it a row stops being a crowd and becomes one clipped blob.
+  // about a tenth -- deliberately, and it is what pays for the seam: a narrower row lets a
+  // narrower seam still read as a break.
   expect(BLOCK.acrossStep).toBeLessThan(BLOCK.figure);
-  expect(BLOCK.acrossStep).toBeGreaterThanOrEqual(BLOCK.clearance);
+  // The floor is the ARM span, not the head, and the row sits exactly on it. Heads may
+  // overlap because a head is a ball and two of them merge into a wider ball; arms are the
+  // silhouette's edge, and two arms through each other read as one clipped body. This is why
+  // the ring cannot simply be packed tighter still: the seam only comes down as far as the
+  // row does, and the row stops here.
+  expect(BLOCK.acrossStep).toBeGreaterThanOrEqual(BLOCK.arms);
+  // Rows are held to a stricter rule than row-mates: two of them may touch and no closer.
+  expect(BLOCK.clearance).toBeGreaterThan(BLOCK.arms);
+  expect(BLOCK.clearance).toBe(BLOCK.figure);
 });
 
 test('two groups stand further apart than the members of one group', () => {
@@ -175,49 +181,64 @@ test('two groups stand further apart than the members of one group', () => {
   }
 });
 
-test('no two figures overlap anywhere on any legal ring', () => {
-  // The rule that was missing. Cells are spaced evenly by ARC LENGTH, but on a corner the
-  // inside of the track is shorter than the centreline, so the figures on the inside of a
-  // bend close up. Before this rule existed, level 1's ring (a rounded rectangle at 24
-  // cells) drew two figures 0.005 apart at its bottom-left corner -- on top of each other.
+test('no two rows touch anywhere on any legal ring', () => {
+  // Cells are spaced evenly by ARC LENGTH, but on a corner the inside of the track is
+  // shorter than the centreline, so figures on the inside of a bend close up on the row
+  // ahead. Before this rule existed, level 1's ring drew two figures 0.005 apart at its
+  // bottom-left corner -- on top of each other.
   for (const shape of TRACK_SHAPES) {
     for (const capacity of capacityOptions(shape)) {
-      expect(minFigureGap(shape, capacity, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
+      expect(minRowGap(shape, capacity, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
     }
   }
+});
+
+test('minRowGap measures the corners, not a constant', () => {
+  // It used to take the minimum over same-row pairs as well, and a row is rigid -- so the
+  // distance between two of its own figures is `acrossStep` whatever the shape and whatever
+  // the capacity. Being the smaller of the two, it WAS the answer, every time: the corner
+  // measurement was hidden behind a constant and `capacityOptions` was checking a tautology.
+  // If this ever returns acrossStep again, that is the bug back.
+  const seen = new Set<string>();
+  for (const shape of TRACK_SHAPES) {
+    for (const c of CAPACITY_OPTIONS) {
+      const gap = minRowGap(shape, c, GROUP_SIZE);
+      expect(gap).toBeGreaterThan(BLOCK.acrossStep);
+      seen.add(gap.toFixed(4));
+    }
+  }
+  expect(seen.size).toBeGreaterThan(TRACK_SHAPES.length);
 });
 
 test('a ring one step too short is rejected for seam alone', () => {
   // The seam ceiling has to be separable from every other rule, or it could be quietly
   // deleted and the others would seem to cover for it. Twenty-four cells on a rounded
   // rectangle is the next ring up from the legal one: it clears the doorway floor with room
-  // to spare, and it holds every figure a clean 0.31 from the next row -- and it still leaves
-  // 0.27 of bare band between one row of four and the next, which is what makes a ring of
+  // to spare, and it holds every row a clean 0.32 off the one ahead -- and it still leaves
+  // 0.22 of bare band between one row of four and the next, which is what makes a ring of
   // single rows read as empty track with people on it.
   const spacing = new TrackPath('rect').rowSpacing(24);
   expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
-  expect(minFigureGap('rect', 24, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
+  expect(minRowGap('rect', 24, GROUP_SIZE)).toBeGreaterThanOrEqual(BLOCK.clearance);
   expect(spacing - blockLength(GROUP_SIZE)).toBeGreaterThan(SEAM_MAX);
   expect(capacityOptions('rect')).not.toContain(24);
 });
 
-test('the doorway is what stops the ring packing tighter still', () => {
-  // Why the seam bottoms out where it does, recorded because it is not obvious from either
-  // constant on its own. The seam is a cell minus a row, so the only route to a smaller seam
-  // is a shorter cell -- and the cell cannot go below the boarding doorway without the
-  // doorway swallowing its neighbour. Every legal ring therefore sits within a figure's
-  // width of that floor, and the rings rejected at the tight end are rejected for it.
+test('row overlap is what stops the ring packing tighter still', () => {
+  // Why the seam bottoms out where it does. It is no longer the boarding doorway, which held
+  // this position for two rounds and now sits well under every legal ring; it is the corners.
+  // At 32 cells three of the five shapes bring the row ahead within a figure's width, and no
+  // narrower row can buy that back -- the row is already down to arms touching. That is why
+  // CAPACITY_OPTIONS stops at 28.
+  for (const shape of ['trap', 'oval', 'circle'] as TrackShape[]) {
+    expect(minRowGap(shape, 32, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
+  }
+  expect(Math.max(...CAPACITY_OPTIONS)).toBe(28);
+  // ...and the doorway floor really is slack now, on every ring that ships.
   for (const shape of TRACK_SHAPES) {
     for (const c of capacityOptions(shape)) {
-      const spacing = new TrackPath(shape).rowSpacing(c);
-      expect(spacing).toBeGreaterThanOrEqual(ROW_SPACING_MIN);
-      expect(spacing - ROW_SPACING_MIN).toBeLessThan(BLOCK.figure);
+      expect(new TrackPath(shape).rowSpacing(c)).toBeGreaterThan(ROW_SPACING_MIN);
     }
-  }
-  const circle = new TrackPath('circle');
-  for (const c of [24, 28]) {
-    expect(circle.rowSpacing(c)).toBeLessThan(ROW_SPACING_MIN);
-    expect(capacityOptions('circle')).not.toContain(c);
   }
 });
 
@@ -262,13 +283,22 @@ test('the boarding gap never swallows a neighbouring row', () => {
   expect(GAP_ARC).toBeLessThan(ROW_SPACING_MIN);
 });
 
+test('every shape has room for the five batches the curve opens with', () => {
+  // The curve's first two levels show five waiting batches a side, which is the most
+  // information the game ever gives the player at once. It is affordable because the ring
+  // narrowed to 1.85: at 2.15 a rounded rectangle had room for four.
+  for (const shape of TRACK_SHAPES) {
+    expect(maxLookahead(shape)).toBeGreaterThanOrEqual(5);
+  }
+});
+
 test('lookahead tops out where the channel would leave the visible width', () => {
   // Nothing to do with capacity: with a multiple-of-four ring the entry always lands at
   // t=0.25, so what a shape allows is decided by how far out its quarter point sits. The
   // hexagon and the trapezoid dock closest to the centre of the four quadrilaterals, so they
   // are the ones that pick up the extra batch each time LANE.step comes down.
   const EXPECTED: Record<TrackShape, number> = {
-    rect: 4, hex: 5, trap: 5, oval: 4, circle: 7,
+    rect: 5, hex: 6, trap: 6, oval: 5, circle: 7,
   };
   for (const shape of TRACK_SHAPES) {
     expect(maxLookahead(shape)).toBe(EXPECTED[shape]);
@@ -301,14 +331,16 @@ test('every shape docks its channels close to horizontal', () => {
 
 test('a non-multiple-of-four capacity is exactly what the normal rule catches', () => {
   // This is not hypothetical: oval-at-14 was in the first draft curve, and its entry cell
-  // lands on a curved stretch with the normal tilted 28 degrees -- a channel shoved
-  // diagonally off screen. Hex-at-18 was the other case, and it no longer trips the rule:
-  // the corner radius went from 0.60 to 0.90 to let the ring pack tighter, and a rounder
-  // hexagon has a flatter quarter point. One live case is enough to show the rule bites.
+  // lands on a curved stretch with the normal tilted 24 degrees -- a channel shoved
+  // diagonally off screen. It is also the ONLY shape the rule still catches, and that is
+  // worth stating rather than hiding: the polygons' corner radius has gone 0.60 -> 0.90 ->
+  // 1.10 to let the ring pack tighter, and the rounder they get the flatter their quarter
+  // points, so hex-at-18 -- the other original case -- now sits at 0.24 and passes. The oval
+  // has no fillet to round, so it is the one that keeps the rule honest.
   const oval = new TrackPath('oval');
   expect(Math.abs(oval.normalAt(entryIndex(14, 7, 'near') / 14).y)).toBeGreaterThan(ENTRY_NORMAL_MAX);
   const hex = new TrackPath('hex');
-  expect(Math.abs(hex.normalAt(entryIndex(18, 9, 'near') / 18).y)).toBeGreaterThan(0.3);
+  expect(Math.abs(hex.normalAt(entryIndex(18, 9, 'near') / 18).y)).toBeLessThan(ENTRY_NORMAL_MAX);
 });
 
 test('every shape clears the curvature floor, and the floor clears half a block', () => {

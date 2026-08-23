@@ -83,9 +83,9 @@ test('a capacity that is not a multiple of four is rejected', () => {
 });
 
 test('a capacity the shape cannot carry legibly is rejected', () => {
-  // The circle's perimeter is 7.54, so 24 slots is a row spacing of 0.31 -- under the
-  // floor, where the boarding gap stops reading as a hole.
-  const level = trackLevel({ track: 'circle', capacity: 24, boardIndex: 12 });
+  // The circle's perimeter is 7.85, so 28 slots is a row spacing of 0.28 -- a seam of 0.06,
+  // well under the floor, and rows that touch on the curve.
+  const level = trackLevel({ track: 'circle', capacity: 28, boardIndex: 14 });
   expect(validateTrack(level).join(' ')).toContain('row spacing');
 });
 
@@ -116,15 +116,15 @@ test('a lookahead of zero is rejected', () => {
 });
 
 test('a lookahead past the visible width is rejected', () => {
-  // rect docks its channel at x=2.15, which leaves room for four batches, not five.
-  const feeds = [{ side: 'near', lookahead: 5 }] as Feed[];
+  // rect docks its channel at x=1.85, which leaves room for five batches, not six.
+  const feeds = [{ side: 'near', lookahead: 6 }] as Feed[];
   expect(validateTrack(trackLevel({ feeds })).join(' ')).toContain('lookahead');
 });
 
 test('the circle takes a longer lookahead than the quadrilateral', () => {
-  // Its dock is at x=1.2, so the horizontal budget stretches to six batches.
-  const feeds = [{ side: 'near', lookahead: 6 }] as Feed[];
-  expect(validateTrack(trackLevel({ track: 'circle', capacity: 20, boardIndex: 10, feeds }))).toEqual([]);
+  // Its dock is at x=1.25, so the horizontal budget stretches to seven batches.
+  const feeds = [{ side: 'near', lookahead: 7 }] as Feed[];
+  expect(validateTrack(trackLevel({ track: 'circle', capacity: 24, boardIndex: 12, feeds }))).toEqual([]);
 });
 
 test('every complaint names what is wrong', () => {

@@ -102,7 +102,7 @@ export interface TrackParams {
     feeds: Feed[];
 }
 
-const TWIN: Feed[] = [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }];
+const TWIN: Feed[] = [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 5 }];
 
 /**
  * The track curve, one row per level.
@@ -118,21 +118,21 @@ const TWIN: Feed[] = [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 
  *
  * Ring length is NOT one of the knobs any more. A shape's perimeter decides what it can
  * carry (see capacityOptions, and the seam rule behind it), and that comes out at exactly
- * one length per shape: 28 for the four quadrilaterals, 20 for the circle, whose perimeter
- * is 60% of theirs. So the curve turns the two knobs it still has -- how many batches a
+ * one length per shape: 28 for the four quadrilaterals, 24 for the circle, whose perimeter
+ * is 75% of theirs. So the curve turns the two knobs it still has -- how many batches a
  * channel shows, and whether there are two channels or one.
  */
 const TRACK_CURVE: TrackParams[] = [
     { track: 'rect',   capacity: 28, feeds: TWIN },
     { track: 'hex',    capacity: 28, feeds: TWIN },
-    { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 2 }] },
-    { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
-    { track: 'rect',   capacity: 28, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 2 }] },
-    { track: 'hex',    capacity: 28, feeds: [{ side: 'far', lookahead: 2 }, { side: 'near', lookahead: 1 }] },
-    { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 2 }] },
-    { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 1 }, { side: 'near', lookahead: 1 }] },
-    { track: 'circle', capacity: 20, feeds: [{ side: 'near', lookahead: 2 }] },
-    { track: 'circle', capacity: 20, feeds: [{ side: 'near', lookahead: 1 }] },
+    { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
+    { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
+    { track: 'rect',   capacity: 28, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 4 }] },
+    { track: 'hex',    capacity: 28, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
+    { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 4 }] },
+    { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }] },
+    { track: 'circle', capacity: 24, feeds: [{ side: 'near', lookahead: 4 }] },
+    { track: 'circle', capacity: 24, feeds: [{ side: 'near', lookahead: 3 }] },
 ];
 
 /**

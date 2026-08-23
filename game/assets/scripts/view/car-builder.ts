@@ -231,21 +231,32 @@ export function buildCar(
     // How much of its footprint a car takes up ALONG the axis that binds. The leftover is air
     // on all four sides, so it lands between neighbouring cars and adds to CELL_GAP: at 0.9
     // the two together left a fifth of a car between one car and the next, and at 0.99 they
-    // leave about a thirtieth. The shadow is drawn 8% wider than the body but 6% shorter, and
-    // a car leaves far more air across its width than along its length (see below), so the
-    // shadows still have room.
+    // leave about a thirtieth.
     const fill = 0.99;
     const s = Math.min((longDim * fill) / size.x, (shortDim * fill) / size.z);
 
-    // Fitted dimensions after the uniform scale: length along body X, width along
-    // body Y (model Z after the lay-down), height along board-out +Z.
-    const len = size.x * s, wid = size.z * s, hgt = size.y * s;
+    // ...and that only ever closed the gap in ONE direction. A small car has a square
+    // one-cell footprint and a model about twice as long as it is wide, so fitting it whole
+    // fills the cell along its length and leaves nearly half of it across -- which is the
+    // wide channel of bare board between two columns of parked cars, and much the bigger of
+    // the two gaps. `fill` cannot reach it and neither can CELL_GAP.
+    //
+    // So the across axis gets its own scale: as much as WIDEN of the uniform one, and never
+    // more than the cell allows. A car comes out proportionally chunkier, which is the
+    // trade -- its length, its footprint and its stall size are all untouched. Turn WIDEN
+    // down to 1 to get honest proportions and the wide channels back.
+    const WIDEN = 1.3;
+    const sAcross = Math.min(s * WIDEN, (shortDim * fill) / size.z);
+
+    // Fitted dimensions after the scale: length along body X, width along body Y (model Z
+    // after the lay-down), height along board-out +Z. Only the width is non-uniform.
+    const len = size.x * s, wid = size.z * sAcross, hgt = size.y * s;
 
     // `lay` lays the upright model onto the board: Rx(90) turns model-up (+Y) into
     // board-out (+Z) so the roof faces the camera; the length stays along board X.
     const lay = new Node('lay');
     lay.setRotationFromEuler(90, 0, 0);
-    lay.setScale(s, s, s);
+    lay.setScale(s, s, sAcross);
     // Lift by half the car's height so the wheels REST ON the board plane. Without
     // this the centered geometry straddles the plane and its bottom half (0.3 for a
     // car, 0.7 for a truck) is swallowed by the opaque lot slab, whose near face is

@@ -162,11 +162,11 @@ test('the planning window narrows as the levels go on', () => {
     const w = planningWindow(trackParams(id));
     return w[w.length - 1];
   });
-  expect(tail).toEqual([10, 10, 9, 9, 9, 8, 23, 8, 7, 6]);
+  expect(tail).toEqual([12, 12, 11, 11, 11, 10, 25, 10, 10, 9]);
   for (let i = 1; i < tail.length; i++) {
     // Level 7 is index 6; skip the comparison INTO it (i === 6) and the one OUT of it
     // (i === 7). Both disjuncts used to read `i === 6`, so the "out of" skip never
-    // actually fired -- harmless here since tail[7] <= tail[6] (8 <= 23) holds anyway,
+    // actually fired -- harmless here since tail[7] <= tail[6] (10 <= 25) holds anyway,
     // and the toEqual above already pins the whole sequence.
     if (i === 6 || i === 7) continue;
     expect(tail[i]).toBeLessThanOrEqual(tail[i - 1]);

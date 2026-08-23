@@ -63,7 +63,7 @@ const NO_SHADE = (c: Color): Color => c;
 /**
  * Ranks in one cell's block -- ONE, at GROUP_SIZE 4: a group is a single row of four across
  * the track. The block's shape (how many abreast, how far apart) is core's `BLOCK`, because
- * `minFigureGap` has to be able to check it before a ring length is declared legal.
+ * `minRowGap` has to be able to check it before a ring length is declared legal.
  *
  * The rank machinery below is kept for a deeper block, which GROUP_SIZE can ask for. Rank
  * order is back to front: the LOWEST indices are the rearmost rank, and `paintRow` shows the

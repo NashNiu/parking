@@ -377,7 +377,7 @@
     "feeds": [
       {
         "side": "far",
-        "lookahead": 2
+        "lookahead": 4
       }
     ],
     "queue": [

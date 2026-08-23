@@ -32,37 +32,47 @@ export const TRACK_SHAPES: TrackShape[] = ['rect', 'hex', 'trap', 'oval', 'circl
  *
  * The ceilings: the visible half-width at the track's depth minus what a feeder channel
  * needs beside it (LANE, track-path.ts) caps halfW at 2.60, and the parking bay panel,
- * whose top edge is at y = 2.05 against a track centre at 3.8, caps halfH at 1.30. The
- * ring used to sit exactly on both, which left a feeder channel 0.02 of clearance to the
- * screen edge at its longest legal length — visually the channels were crushed against
- * the frame while the ring dominated the board. Pulling halfW in to 2.15 hands that
- * 0.45 to the channels, and it shortens the lap, so the rows on it also close up
- * (a 20-slot ring goes from 0.73 between rows to 0.62).
+ * whose top edge is at y = 2.05 against a track centre at 3.8, caps halfH at 1.30.
  *
- * halfH is the one that cannot simply follow: the oval's tightest curvature is
- * halfH^2/halfW, and MIN_CURVE_RADIUS (0.6) is a hard floor on it, so a 2.15 half-width
- * needs halfH >= 1.14. 1.20 keeps a real margin there (0.67) and still lifts the band's
- * drop shadow clear of the parking panel, which it used to land exactly on.
+ * halfW has walked in from both: 2.60 (on the ceiling, which left a channel 0.02 of
+ * clearance to the screen edge and made the ring dominate the board), to 2.15, to 1.85.
+ * What it buys is channel room, and the room buys WAITING BATCHES: a rounded rectangle
+ * docks its channel at halfW, so 1.85 leaves 1.67 beside it instead of 1.37 -- five
+ * batches of waiting passengers where 2.15 could only draw four.
+ *
+ * halfH does NOT follow it down, and that is the interesting part. The oval has no fillet
+ * to set its corners with: its tightest curvature is halfH^2/halfW, which makes it the
+ * sharpest curve on the board and therefore the shape that decides how densely the ring
+ * may be packed (a row of figures on a corner closes up toward the row ahead by the
+ * curvature -- see minRowGap). At halfW 1.85, halfH 1.20 gives 0.78 and halfH 1.25 gives
+ * 0.85, and that difference is the whole margin the oval has at 28 cells. 1.25 also keeps
+ * the band's drop shadow off the parking panel, which the 1.30 ceiling lands exactly on.
+ *
+ * Net: the ring is 14% narrower and 10% smaller in area than at 2.15 x 1.20, and rounder.
  */
-export const TRACK_BOX = { halfW: 2.15, halfH: 1.20 };
+export const TRACK_BOX = { halfW: 1.85, halfH: 1.25 };
 
 /**
  * Corner radius, the same for all three polygons. A fillet is what sets a rounded
  * polygon's tightest curve, and the tightest curve is what caps how densely the ring can
- * be packed: a block of figures stands BLOCK_SPAN across the path, so on a corner of
- * radius r the inside of that block travels only (r - span/2)/r as far as its centre, and
- * the figures there close up by that factor. 0.60 -- the old value, and the smallest that
- * clears MIN_CURVE_RADIUS -- forced the cells so far apart that the track read as mostly
- * bare; 0.90 buys back a third of the pitch. Much above 1.0 and the trapezoid's short edge
- * runs out of room for the two fillets that meet on it.
+ * be packed: a row of figures stands `blockSpan` across the path, so on a corner of radius
+ * r the inside of that row travels only (r - span/2)/r as far as its centre, and it closes
+ * up on the row ahead by that factor. So a LOOSER fillet is what buys density, which is
+ * the opposite of the intuition: 0.60 (the smallest that clears MIN_CURVE_RADIUS) forced
+ * the cells so far apart that the track read as mostly bare, 0.90 bought back a third of
+ * the pitch, and 1.10 is what lets 28 cells fit inside a 1.85-wide box.
  *
- * `minFigureGap` in track-path.ts is what measures the consequence, and `capacityOptions`
- * rejects any ring length whose figures would overlap -- so a change here shows up as a
+ * The ceiling is the shortest edge that has to hold two fillets. That used to be the
+ * trapezoid's short edge; at this box it is the hexagon's flat top, 2.42 wide against the
+ * 2.20 two fillets need -- so 1.10 has 0.22 of room and 1.20 would have none.
+ *
+ * `minRowGap` in track-path.ts is what measures the consequence, and `capacityOptions`
+ * rejects any ring length whose rows would overlap -- so a change here shows up as a
  * change in which ring lengths each shape may carry.
  */
-const RECT_R = 0.90;
-const HEX_R = 0.90;
-const TRAP_R = 0.90;
+const RECT_R = 1.10;
+const HEX_R = 1.10;
+const TRAP_R = 1.10;
 
 /**
  * Where the hexagon's flat top ends and where the trapezoid's short edge does, each as a

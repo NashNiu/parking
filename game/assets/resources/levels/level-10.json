@@ -371,13 +371,13 @@
     "unlocked": 4
   },
   "loop": {
-    "capacity": 20,
-    "boardIndex": 10,
+    "capacity": 24,
+    "boardIndex": 12,
     "track": "circle",
     "feeds": [
       {
         "side": "near",
-        "lookahead": 1
+        "lookahead": 3
       }
     ],
     "queue": [

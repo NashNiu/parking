@@ -377,11 +377,11 @@
     "feeds": [
       {
         "side": "far",
-        "lookahead": 3
+        "lookahead": 5
       },
       {
         "side": "near",
-        "lookahead": 3
+        "lookahead": 5
       }
     ],
     "queue": [
