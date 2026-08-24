@@ -3,10 +3,30 @@ import {
     Vec3, Mat4, utils, primitives,
 } from 'cc';
 import { Dir } from '../core/index';
+import { GridLayout } from './grid-layout';
 import { litMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 
 export type Cap = 'small' | 'medium' | 'big';
+
+const CAPS: Cap[] = ['small', 'medium', 'big'];
+
+/**
+ * Cells each capacity occupies, as (along, across). Mirrors level-gen's `pack`, which gives
+ * a small car one cell and everything bigger two; a copy rather than an import because core
+ * describes the footprint as w/h per piece and this needs it per CAP.
+ */
+const CAP_FOOTPRINT: Record<Cap, [number, number]> = {
+    small: [1, 1],
+    medium: [2, 1],
+    big: [2, 1],
+};
+
+/** How much of its footprint a car may take up, leaving a hair of board around it. */
+const FILL = 0.99;
+
+/** Model-space AABB per cap, measured once at preload. See `sharedCarScale`. */
+const modelSize: Partial<Record<Cap, Vec3>> = {};
 
 /**
  * Real 3D car art (cartoon GLB models made in Claude Design), one per capacity.
@@ -45,9 +65,9 @@ const prefabs: Partial<Record<Cap, Prefab>> = {};
  * direct uuid load. If both fail, buildCar falls back to a plain colored box.
  */
 export function preloadCarModels(done: () => void): void {
-    const caps: Cap[] = ['small', 'medium', 'big'];
+    const caps: Cap[] = CAPS;
     let remaining = caps.length;
-    const finish = (): void => { if (--remaining === 0) done(); };
+    const finish = (): void => { if (--remaining === 0) { measureModels(); done(); } };
     for (const cap of caps) {
         resources.load(MODEL_PATH[cap], Prefab, (err, prefab) => {
             if (!err && prefab) { prefabs[cap] = prefab; finish(); return; }
@@ -64,6 +84,50 @@ export function preloadCarModels(done: () => void): void {
 const _rootInv = new Mat4();
 const _m = new Mat4();
 const _c = new Vec3();
+
+/**
+ * Measure each loaded model's own AABB, once, by instantiating it and throwing the copy
+ * away. `localAABB` needs a live node, and `sharedCarScale` needs all three sizes before
+ * the first car is built -- so this runs at the end of preload rather than per car.
+ */
+function measureModels(): void {
+    for (const cap of CAPS) {
+        const prefab = prefabs[cap];
+        if (!prefab) continue;
+        const probe = instantiate(prefab) as unknown as Node;
+        modelSize[cap] = localAABB(probe).size.clone();
+        probe.destroy();
+    }
+}
+
+/**
+ * ONE scale for all three vehicles: the largest that still lets every capacity fit the
+ * footprint it is given.
+ *
+ * This is what makes the three read as three different vehicles. Each car used to be fitted
+ * to its OWN footprint, which threw the sizes away twice over -- a one-cell car got about
+ * half the scale factor of a two-cell one, so identical models came out at half the size;
+ * and of two models sharing the two-cell footprint, the LONGER one was scaled down further
+ * to fit, so it ended up smaller. A bus authored longer than a coach was drawn smaller than
+ * it. One shared factor means the models' own proportions survive into the game, which is
+ * the only place the size difference can come from.
+ *
+ * The cost is real and worth naming: whichever cap is tightest sets the scale for all of
+ * them, and every other cap then leaves part of its footprint bare. With footprints of one
+ * and two cells, a model set wants length ratios near 1 : 2 to fill them both.
+ */
+export function sharedCarScale(layout: GridLayout): number {
+    let s = Infinity;
+    for (const cap of CAPS) {
+        const size = modelSize[cap];
+        if (!size || size.x <= 0 || size.z <= 0) continue;
+        const [along, across] = CAP_FOOTPRINT[cap];
+        const f = layout.footprintSize(along, across);
+        const longDim = Math.max(f.x, f.y), shortDim = Math.min(f.x, f.y);
+        s = Math.min(s, (longDim * FILL) / size.x, (shortDim * FILL) / size.z);
+    }
+    return Number.isFinite(s) ? s : 1;
+}
 
 /**
  * Local-space AABB of an instantiated model, expressed in the model root's own
@@ -205,6 +269,7 @@ export interface BuiltCar {
  */
 export function buildCar(
     name: string, sizeX: number, sizeY: number, color: Color, dir: Dir, cap: Cap,
+    scale: number,
 ): BuiltCar {
     const root = new Node(name);
 
@@ -223,40 +288,27 @@ export function buildCar(
     const model = instantiate(prefab) as unknown as Node;
     const { center, size } = localAABB(model);
 
-    // Preserve the model's TRUE proportions: one uniform scale (no per-axis stretch),
-    // laying its length along the footprint's LONGER axis and fitting within it. This
-    // keeps a long bus looking long instead of squashing it to fill a wide-shallow cell.
+    // ONE uniform scale, shared with every other vehicle on the board (`sharedCarScale`),
+    // so the models' own sizes survive into the game. No per-axis stretch: a car that is
+    // 30% wider than the artist drew it is a different car.
+    //
+    // Clamped to this footprint as a guard rather than as the rule. The shared scale is
+    // already the smallest that fits every capacity, so the clamp should never bite -- but
+    // it is what stops a stale scale, or a model whose AABB was never measured, from drawing
+    // a car over its neighbours.
     const longDim = Math.max(sizeX, sizeY);
     const shortDim = Math.min(sizeX, sizeY);
-    // How much of its footprint a car takes up ALONG the axis that binds. The leftover is air
-    // on all four sides, so it lands between neighbouring cars and adds to CELL_GAP: at 0.9
-    // the two together left a fifth of a car between one car and the next, and at 0.99 they
-    // leave about a thirtieth.
-    const fill = 0.99;
-    const s = Math.min((longDim * fill) / size.x, (shortDim * fill) / size.z);
+    const s = Math.min(scale, (longDim * FILL) / size.x, (shortDim * FILL) / size.z);
 
-    // ...and that only ever closed the gap in ONE direction. A small car has a square
-    // one-cell footprint and a model about twice as long as it is wide, so fitting it whole
-    // fills the cell along its length and leaves nearly half of it across -- which is the
-    // wide channel of bare board between two columns of parked cars, and much the bigger of
-    // the two gaps. `fill` cannot reach it and neither can CELL_GAP.
-    //
-    // So the across axis gets its own scale: as much as WIDEN of the uniform one, and never
-    // more than the cell allows. A car comes out proportionally chunkier, which is the
-    // trade -- its length, its footprint and its stall size are all untouched. Turn WIDEN
-    // down to 1 to get honest proportions and the wide channels back.
-    const WIDEN = 1.3;
-    const sAcross = Math.min(s * WIDEN, (shortDim * fill) / size.z);
-
-    // Fitted dimensions after the scale: length along body X, width along body Y (model Z
-    // after the lay-down), height along board-out +Z. Only the width is non-uniform.
-    const len = size.x * s, wid = size.z * sAcross, hgt = size.y * s;
+    // Fitted dimensions: length along body X, width along body Y (model Z after the
+    // lay-down), height along board-out +Z.
+    const len = size.x * s, wid = size.z * s, hgt = size.y * s;
 
     // `lay` lays the upright model onto the board: Rx(90) turns model-up (+Y) into
     // board-out (+Z) so the roof faces the camera; the length stays along board X.
     const lay = new Node('lay');
     lay.setRotationFromEuler(90, 0, 0);
-    lay.setScale(s, s, sAcross);
+    lay.setScale(s, s, s);
     // Lift by half the car's height so the wheels REST ON the board plane. Without
     // this the centered geometry straddles the plane and its bottom half (0.3 for a
     // car, 0.7 for a truck) is swallowed by the opaque lot slab, whose near face is

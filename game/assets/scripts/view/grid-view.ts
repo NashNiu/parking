@@ -2,7 +2,7 @@ import { Node, Vec3 } from 'cc';
 import { Dir, GridSystem } from '../core/index';
 import { GridLayout } from './grid-layout';
 import { colorOf } from './colors';
-import { buildCar, Cap } from './car-builder';
+import { buildCar, sharedCarScale, Cap } from './car-builder';
 
 interface CarEntry {
     id: number;
@@ -29,10 +29,15 @@ export class GridView {
     ) {}
 
     render(): void {
+        // One scale for the whole board, so the three vehicle sizes stay in proportion to
+        // each other. Computed here rather than per car: it depends on the grid's cell size,
+        // which is a property of the level, and on all three models at once.
+        const scale = sharedCarScale(this.layout);
         for (const [id, car] of this.grid.cars) {
             const size = this.layout.footprintSize(car.w, car.h);
             const { root, body, len, wid } = buildCar(
                 `car-${id}`, size.x, size.y, colorOf(car.color), car.dir as Dir, car.cap as Cap,
+                scale,
             );
             root.setPosition(this.layout.cellCenter(car.x, car.y, car.w, car.h));
             this.parent.addChild(root);
