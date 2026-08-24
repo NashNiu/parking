@@ -6,9 +6,23 @@ import { BoardingSystem, BoardResult } from './boarding-system';
 
 export type GameState = 'playing' | 'won' | 'deadlock';
 
+/**
+ * Why a tap did nothing. The view needs this because the two real refusals look identical
+ * on the board -- the car simply stays put -- and want opposite things said about them: a
+ * blocked lane points at the car in the way, a full lot points at the parking row. The
+ * alternative was re-deriving it in the view from `canExit` and `hasFreeSlot`, i.e. two
+ * copies of the rule.
+ *
+ * 'over' is the game already being won or deadlocked, which the view normally intercepts
+ * before it gets this far.
+ */
+export type TapRefusal = 'blocked' | 'full' | 'over';
+
 export interface TapResult {
   ok: boolean;
   slotIndex: number;
+  /** Null when the tap succeeded. */
+  reason: TapRefusal | null;
 }
 
 export class GameCore {
@@ -36,14 +50,17 @@ export class GameCore {
   }
 
   tapCar(carId: number): TapResult {
-    if (this.state !== 'playing') return { ok: false, slotIndex: -1 };
-    if (!this.grid.canExit(carId)) return { ok: false, slotIndex: -1 };
-    if (!this.parking.hasFreeSlot()) return { ok: false, slotIndex: -1 };
+    if (this.state !== 'playing') return { ok: false, slotIndex: -1, reason: 'over' };
+    // A full lot is checked FIRST, and the order is the point: when both refusals apply,
+    // saying "blocked" would send the player to clear a car that no stall could take
+    // anyway. The condition that stops every tap on the board is the one to report.
+    if (!this.parking.hasFreeSlot()) return { ok: false, slotIndex: -1, reason: 'full' };
+    if (!this.grid.canExit(carId)) return { ok: false, slotIndex: -1, reason: 'blocked' };
     const car = this.grid.cars.get(carId)!;
     const slotIndex = this.parking.park(car);
     this.grid.removeCar(carId);
     this.updateState();
-    return { ok: true, slotIndex };
+    return { ok: true, slotIndex, reason: null };
   }
 
   stepLoop(): BoardResult {

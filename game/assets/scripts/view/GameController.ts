@@ -871,6 +871,8 @@ export class GameController extends Component {
         const res = this.core.tapCar(id);
         if (res.ok) {
             this.playDriveToSlot(id, dir ?? 'up', res.slotIndex);
+        } else if (res.reason === 'full') {
+            this.playLotFull(id);
         } else {
             this.playShake(id);
         }
@@ -948,11 +950,46 @@ export class GameController extends Component {
     }
 
     /**
+     * A tap refused because every stall is taken. The car cannot be the subject here: it
+     * may have a perfectly clear lane, and driving it at a blocker that does not exist
+     * would say the wrong thing. So the car only shudders in place, to answer the tap, and
+     * the answer itself is three things pointing at the bay — its panel blinks, the cars
+     * holding the stalls bob, and a toast says what to wait for.
+     *
+     * The parked cars bobbing is the part that carries the reasoning: they are why the bay
+     * is full, and their seat chips already show how many passengers each still needs. The
+     * toast names the way out for a player who has not yet worked out that a car leaves on
+     * its own once it fills.
+     */
+    private playLotFull(id: number): void {
+        const node = this.gridView!.getCarNode(id);
+        if (!node) return;
+
+        this.busy = true;
+        vibrate('medium');
+        this.jolt(node, new Vec3(1, 0, 0));
+
+        // No `flash` on the tapped car, unlike playShake: emissive lives on the material
+        // and litMaterial hands out one per COLOUR, so flashing this car glows every car
+        // sharing its paint, the parked ones included. On a blocked tap that is cosmetic
+        // noise; here it would light up a dozen cars that have nothing to do with why the
+        // tap was refused.
+        this.parkingView!.pulse();
+        for (const e of this.parked.values()) {
+            const body = e.node.getChildByName('body');
+            if (body) squash(body);
+        }
+        this.hud?.showToast('车位已满', '等车坐满后会自动开走');
+        this.scheduleOnce(() => { this.busy = false; }, 0.2);
+    }
+
+    /**
      * A refused tap. The car drives at whatever is in its way, both cars jolt on contact,
      * and it reverses into its slot.
      *
-     * With no blocker the refusal is a full parking row instead, and there is nothing to
-     * drive at — that keeps the old shudder in place.
+     * Only reached for a BLOCKED lane now — a full bay has its own answer, see
+     * `playLotFull`. The no-blocker branch stays as a guard: core has said the lane is
+     * blocked, and if the view cannot work out what by, a shudder still answers the tap.
      */
     private playShake(id: number): void {
         const node = this.gridView!.getCarNode(id);

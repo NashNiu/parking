@@ -1,4 +1,4 @@
-import { Node, Color, Vec3, MeshRenderer, utils, primitives } from 'cc';
+import { Node, Color, Vec3, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
 import { flatMaterial } from './materials';
 import { makeSlab, makeShadowSlab } from './slabs';
 import { SHADOW_Z } from './scene-stage';
@@ -50,8 +50,13 @@ const LOCK_SHACKLE = new Color(170, 178, 198);
  * body/shackle). Exposes slot positions so the controller can drive cars into them, and
  * the point under each stall where its seat chip hangs.
  */
+/** Warning tint for `pulse`: amber, not red -- a full bay is a wait, not a mistake. */
+const PULSE = new Color(255, 176, 64);
+
 export class ParkingView {
     private positions: Vec3[] = [];
+    /** The bay panel, kept so `pulse` can draw the eye to it. */
+    private panel: Node | null = null;
     constructor(
         private parent: Node,
         private slots: number,
@@ -74,6 +79,7 @@ export class ParkingView {
         const panel = makeSlab('ParkingPanel', panelW, panelH, 0.06, PANEL, PANEL_R);
         panel.setPosition(0, this.y, PANEL_Z);
         this.parent.addChild(panel);
+        this.panel = panel;
 
         for (let i = 0; i < this.slots; i++) {
             const locked = i >= this.unlocked;
@@ -120,6 +126,39 @@ export class ParkingView {
     /** The box a parked car has to fit inside, in board units. */
     static get slotSize(): { w: number; h: number } {
         return { w: SLOT_W, h: SLOT_H };
+    }
+
+    /**
+     * Blink the bay, so a tap refused for a full lot points HERE rather than at the car
+     * that was tapped.
+     *
+     * A blink and not a bounce, because the parked cars are siblings of this panel rather
+     * than children -- moving it would slide the row out from under them. And a material
+     * SWAP rather than `flash`, because flash drives the `emissive` property and a slab's
+     * material is builtin-unlit, which has none: flash on this node is a silent no-op.
+     * `flatMaterial` hands out one shared material per colour, so this is two objects being
+     * exchanged, not a material built per call.
+     */
+    pulse(): void {
+        const panel = this.panel;
+        if (!panel || !panel.isValid) return;
+        const mr = panel.getComponent(MeshRenderer);
+        if (!mr) return;
+        const on = flatMaterial(PULSE), off = flatMaterial(PANEL);
+        // Stop first and restore the resting colour by hand: a second tap landing mid-blink
+        // would otherwise cancel the tween that was going to put the panel back, and leave
+        // the bay amber for the rest of the level.
+        Tween.stopAllByTarget(panel);
+        mr.material = off;
+        tween(panel)
+            .call(() => { mr.material = on; })
+            .delay(0.11)
+            .call(() => { mr.material = off; })
+            .delay(0.09)
+            .call(() => { mr.material = on; })
+            .delay(0.11)
+            .call(() => { mr.material = off; })
+            .start();
     }
 
     /** Point on a stall's bottom edge, where its seat chip hangs. */

@@ -21,7 +21,7 @@ function soloLevel(): LevelData {
 
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
-  expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0 });
+  expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
   expect(game.grid.isEmpty()).toBe(true);
   expect(game.parking.parked[0]?.carId).toBe(1);
 });
@@ -39,7 +39,50 @@ test('tapCar fails when no free slot', () => {
   };
   const game = new GameCore(level);
   expect(game.tapCar(1).ok).toBe(true);
-  expect(game.tapCar(2)).toEqual({ ok: false, slotIndex: -1 });
+  expect(game.tapCar(2)).toEqual({ ok: false, slotIndex: -1, reason: 'full' });
+});
+
+test('a refused tap says which of the two reasons it was', () => {
+  // The view cannot tell these apart from the board: a car whose lane is blocked and a car
+  // in a full lot both simply do not move, and they need different things said about them
+  // -- one points at the car in the way, the other at the parking row. Deriving it in the
+  // view means re-implementing canExit there, so core answers it.
+  const level: LevelData = {
+    id: 4,
+    grid: { cols: 1, rows: 2, cars: [
+      { id: 1, x: 0, y: 1, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    ] },
+    parking: { slots: 4, unlocked: 4 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 32 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+  const game = new GameCore(level);
+  // Car 1 is behind car 2 and exits upward, so its lane is blocked; the lot is empty.
+  expect(game.tapCar(1)).toEqual({ ok: false, slotIndex: -1, reason: 'blocked' });
+  expect(game.tapCar(2).ok).toBe(true);
+  expect(game.tapCar(1).ok).toBe(true);
+});
+
+test('a full lot outranks a blocked lane', () => {
+  // Both refusals apply to car 1 here. "Blocked" would be a lie by omission: clearing the
+  // car in the way changes nothing while every stall is taken, and the player would be
+  // sent to solve the wrong problem. The global condition wins.
+  const level: LevelData = {
+    id: 5,
+    grid: { cols: 1, rows: 3, cars: [
+      { id: 1, x: 0, y: 2, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: 1, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+      { id: 3, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    ] },
+    parking: { slots: 4, unlocked: 1 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 48 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+  const game = new GameCore(level);
+  expect(game.tapCar(3).ok).toBe(true); // takes the only stall
+  expect(game.grid.canExit(1)).toBe(false); // still boxed in by car 2
+  expect(game.tapCar(1).reason).toBe('full');
 });
 
 test('playing a full level reaches won state', () => {
