@@ -43,10 +43,23 @@ const TITLE_PILL_H = PILL_H;
  * The toast: one line of what happened and one of what to do about it. It sits at the
  * canvas centre, which on this board is the empty band between the parking bay and the lot
  * -- close enough to the bay to belong to it, and over nothing it would hide.
+ *
+ * Dark and translucent, where the two corner pills are opaque white. That is the difference
+ * between them said in the styling: the pills are always there and always true, so they get
+ * to look built in; a toast is neither, and a scrim the board shows through reads as
+ * something passing before it has moved at all. It also stops a third white plate from
+ * competing with the two that are permanent.
+ *
+ * The title keeps nearly full alpha and the second line takes less. Translucency is for the
+ * plate; type that the board shows through is type nobody reads, and the whole point of the
+ * second line is that a new player reads it.
  */
-const TOAST_W = 340;
-const TOAST_H = 116;
+const TOAST_W = 320;
+const TOAST_H = 104;
 const TOAST_HOLD = 1.1;
+const TOAST_BG = new Color(26, 32, 50, 188);
+const TOAST_INK = new Color(255, 255, 255, 244);
+const TOAST_SUB = new Color(226, 232, 245, 196);
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -202,15 +215,17 @@ export class HudView {
     }
 
     private buildToast(): void {
-        const pill = roundedSprite('Toast', TOAST_W, TOAST_H, PILL_BG);
+        const pill = roundedSprite('Toast', TOAST_W, TOAST_H, TOAST_BG);
         this.canvas.addChild(pill);
         pill.setPosition(0, 0, 0);
+        // UIOpacity multiplies into the colours above rather than replacing them, so the
+        // fade-out starts from the plate's 188 and the type's own alpha, not from 255.
         this.toastFade = pill.addComponent(UIOpacity);
-        this.toastTitle = makeLabel(pill, 'ToastTitle', 40, 22);
-        this.toastTitle.color = PILL_INK;
+        this.toastTitle = makeLabel(pill, 'ToastTitle', 36, 20);
+        this.toastTitle.color = TOAST_INK;
         this.toastTitle.isBold = true;
-        this.toastSub = makeLabel(pill, 'ToastSub', 22, -26);
-        this.toastSub.color = PILL_CAPTION;
+        this.toastSub = makeLabel(pill, 'ToastSub', 22, -24);
+        this.toastSub.color = TOAST_SUB;
         pill.active = false;
         this.toast = pill;
     }
