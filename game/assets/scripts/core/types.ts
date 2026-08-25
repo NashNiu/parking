@@ -47,8 +47,10 @@ export interface Lot { w: number; h: number }
 /**
  * Each capacity's body size in board units, where one board unit is the pitch the old
  * grid used (0.7533 world units). The numbers are the three glb models' measured AABBs
- * divided by that pitch -- see `tools/check-car-models.mjs`, which prints them and now
- * fails the build if they drift from this table.
+ * divided by that pitch. Nothing guards them yet: `tools/check-car-models.mjs` still
+ * validates against the cell-footprint model this milestone deleted and does not mention
+ * CAP_BOX at all. Task 8 rewrites it to print these and fail the build if a model set
+ * drifts from them; until then a model swap can silently disagree with this table.
  *
  * This table is the SOURCE of the drawn size, which is the opposite of how it used to
  * work: a model AABB was fitted to a grid cell and the size fell out of the fit. Do

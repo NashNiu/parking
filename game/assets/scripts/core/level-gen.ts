@@ -218,7 +218,7 @@ function pickCap(rng: () => number): Cap {
  */
 interface Piece { x: number; y: number; w: number; h: number; cap: Cap }
 
-/** The cells a piece covers, in `footprint`'s "col,row" form. */
+/** The cells a piece covers, as "col,row" keys -- how `pack` tracks what is taken. */
 function pieceCells(p: Piece): string[] {
     const cells: string[] = [];
     for (let c = p.x; c < p.x + p.w; c++) {
@@ -328,8 +328,17 @@ function pack(rng: () => number, want: number): Piece[] {
  */
 // TEMPORARY (Task 5 replaces pack/peel/scatter wholesale): the grid packer feeding the
 // new collision model. Cars land on cell centres at right angles -- the old game in new
-// coordinates -- which is exactly what this task should produce: it changes how
-// blocking is COMPUTED and nothing about how the lot is filled.
+// coordinates.
+//
+// It changes how blocking is COMPUTED, and the lot comes out SPARSE as a side effect.
+// Do not read the sparseness as a packing bug: two small cars on adjacent cell centres
+// sit 0.036 apart nose to tail (pitch 1 minus body 0.964), which is under CLEARANCE, so
+// a column of them now mutually blocks. This peel therefore stalls with pieces still in
+// hand and drops them, every `generateLevel` attempt fails its car-count check, and the
+// level falls through to `repair`. Measured over ids 1..10: 6 to 36 cars against the 36
+// asked for, and about 35 seconds each. Task 5 fixes it by replacing cell centres with a
+// packer that honours CLEARANCE -- NOT by lowering CLEARANCE, which would give back the
+// tight gaps M7 spent several rounds winning.
 function peel(rng: () => number, pieces: Piece[]): { piece: Piece; dir: Dir }[] {
     const remaining = pieces.slice();
     const order: { piece: Piece; dir: Dir }[] = [];

@@ -22,7 +22,19 @@ export function heading(car: CarSpec): { dx: number; dy: number } {
 /** The car in `car`'s way, and how far it can go before touching it. */
 export interface Blockage {
     carId: number;
-    /** Board units of clear board ahead; 0 when they are already touching. */
+    /**
+     * Board units of clear board ahead. 0 means "nowhere to go", which covers more than
+     * touching: `sweepHit` returns 0 whenever the two boxes ALREADY OVERLAP, and it does
+     * so regardless of heading. So a gap of 0 can name a blocker that is BEHIND the
+     * mover, and in a column packed tighter than CLEARANCE every car reports blocked --
+     * the frontmost one included, with nothing at all in front of it.
+     *
+     * `firstBlocker` is therefore only MEANINGFUL on a lot where every pair of cars is at
+     * least CLEARANCE apart. That is not something this function can check; it is an
+     * invariant the lot has to arrive with, and Task 4's gap validation is what makes it
+     * sound. A lot that violates it gets answers that are arithmetically correct and
+     * gameplay nonsense.
+     */
     gap: number;
 }
 
