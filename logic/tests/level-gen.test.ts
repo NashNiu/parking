@@ -126,10 +126,11 @@ test('the car mix keeps the bodies covering about half the lot', () => {
   // test above, and this one is really about the capacity mix. It fails if CAP_MIX shifts
   // toward small bodies, or if CAR_SCALE comes down.
   //
-  // The floor is 0.40 rather than the measured 0.46 so that the sanctioned density
-  // escalation has somewhere to land: CAR_SCALE 0.95 scales area by 0.9025, which would
-  // put this at 0.415 -- under a 0.42 floor, failing for a change the plan permits.
-  expect(area / (IDS.length * LOT.w * LOT.h)).toBeGreaterThan(0.40);
+  // The floor is 0.38, not the 0.452 the ten shipped levels measure, so that the plan's
+  // sanctioned density escalation has somewhere to land: CAR_SCALE 0.95 scales area by
+  // 0.9025 and would put this at 0.408. A 0.42 floor would have failed a change the plan
+  // permits, and a 0.40 floor would have left it eight thousandths of headroom.
+  expect(area / (IDS.length * LOT.w * LOT.h)).toBeGreaterThan(0.38);
 });
 
 test('a later level is measurably harder than the first, at the same size', () => {

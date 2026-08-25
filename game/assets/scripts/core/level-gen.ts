@@ -449,10 +449,16 @@ function scatter(rng: () => number, p: GenParams): CarSpec[] {
         id: i + 1,
         x: round4(piece.x),
         y: round4(piece.y),
-        // Round BEFORE normalising, not after: a snapped 359.99996 survives the modulo
-        // unchanged and then rounds to a flat 360, which is outside the [0, 360) the
-        // level format promises.
-        angle: ((round4(angle) % 360) + 360) % 360,
+        // Normalise, round, then normalise ONCE more. The trailing modulo is what stops a
+        // snapped 359.99996 rounding up to a flat 360, which is outside the [0, 360) the
+        // level format promises -- and 360 % 360 is 0, so it lands where it should.
+        //
+        // The order matters both ways round. Rounding first and normalising after does fix
+        // the 360, but the modulo arithmetic then runs ON the rounded value and floating
+        // point does not preserve it: 51.3633 comes back as 51.36329999999998, and two
+        // thirds of the shipped angles grew tails like that. A value already inside
+        // [0, 360) is returned exactly by `% 360`, so doing it last costs nothing.
+        angle: round4(((angle % 360) + 360) % 360) % 360,
         color: PALETTE[i % p.colors],
         cap: piece.cap,
     }));
