@@ -52,9 +52,26 @@ export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage 
     const box = inflate(carBox(car), CLEARANCE);
     const { dx, dy } = heading(car);
     const range = Math.hypot(lot.w, lot.h) + CAP_BOX.big.len * CAR_SCALE;
+    // Circumscribed radius: no corner of a box sits farther than this from its own centre,
+    // whichever way the box is facing.
+    const halfDiag = (o: OBB) => Math.hypot(o.len / 2, o.wid / 2);
+    const boxHalfDiag = halfDiag(box);
     let best: Blockage | null = null;
     for (const other of cars) {
         if (other.id === car.id) continue;
+        // Broad-phase reject before the swept SAT test below, which is the expensive part
+        // (four projected-axis checks) called O(n) times per mover, O(n) movers per round,
+        // O(n) rounds per peel. `perp` is the perpendicular distance from `other`'s centre
+        // to the infinite line through `car`'s centre along (dx, dy) -- the lane the swept
+        // box's centre travels along. That distance does not change as the mover slides
+        // along the lane, and along the lane the SWEPT box never carries any of its own
+        // corners farther than `boxHalfDiag` off that line, whatever `t` is. So if `other`'s
+        // centre is already farther off the lane than the two boxes' circumscribed radii add
+        // up to, neither box's corners can reach the other's at any point of the sweep, and
+        // `sweepHit` would have to say so too -- this cannot discard a genuine blocker, only
+        // skip the arithmetic that would have proven the same negative.
+        const perp = Math.abs((other.x - car.x) * dy - (other.y - car.y) * dx);
+        if (perp > boxHalfDiag + halfDiag(carBox(other))) continue;
         const t = sweepHit(box, carBox(other), dx, dy);
         if (t === null || t > range) continue;
         if (!best || t < best.gap) best = { carId: other.id, gap: t };

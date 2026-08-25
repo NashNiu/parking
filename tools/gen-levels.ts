@@ -37,7 +37,7 @@ for (let id = 1; id <= count; id++) {
     const errors = validateLevel(level);
     const want = levelParams(id);
     const got = estimateDifficulty(level);
-    const pax = level.grid.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0);
+    const pax = level.lot.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0);
 
     if (errors.length > 0) {
         console.error(`[gen] level ${id} is invalid: ${errors.join('; ')}`);
