@@ -1,30 +1,42 @@
-// Report what the game will actually DRAW for the three car models, before importing them.
+// Check the three car models against the size core believes they are, before importing them.
 //
-// Why this exists: a model's own dimensions are not what ends up on the board. Every car is
-// scaled by ONE shared factor (car-builder's `sharedCarScale`) — the largest that still lets
-// each capacity fit the footprint it is given — so a model set's proportions decide three
-// things at once: how big each vehicle reads, how much of its footprint it fills, and how
-// much bare board is left beside it in the lot. Getting that wrong is invisible in a model
-// viewer and costs a full round trip through Claude Design and Cocos to discover.
+// Why this exists: `CAP_BOX` in core/types.ts is the SOURCE of every car's drawn size, and it
+// is a hand-copied table. Core cannot read a .glb — it must not even import from Cocos — so
+// nothing in the codebase can notice when a re-exported model stops matching it. The failure
+// is quiet and asymmetric: car-builder scales by `Math.min(len / size.x, wid / size.z)`, so a
+// model that grew silently SHRINKS the car on screen, and shrinks `pickCar`'s hit box with
+// it. A tap that misses is a long way from a diff that says why.
+//
+// This tool is that missing notice. It parses the glb itself and reproduces exactly what
+// car-builder does with it.
+//
+// Note what can and cannot go wrong. A model's ABSOLUTE size is irrelevant: each capacity is
+// scaled by its own `s`, so whatever the artist exported, the car is drawn at CAP_BOX times
+// the board pitch. What matters is the model's PROPORTIONS. `s` is a min over the two axes,
+// so if the model's length:width ratio drifts from the table's, one axis binds and the other
+// comes out SHORT -- the car no longer fills the box core reserved for it, and the gap shows
+// up as air beside a car that the packer thought was occupied.
 //
 // Usage (no dependencies, plain node, from the repo root):
 //   node tools/check-car-models.mjs
 //   node tools/check-car-models.mjs some/other/dir     # a candidate set before it is copied in
 //
 // Exits non-zero when it finds something that will look wrong, so it can gate a model swap:
-//   - two capacities whose models are the same size (they will be indistinguishable)
-//   - a capacity filling less than MIN_FILL of its footprint's length (a visible hole)
+//   - a model whose proportions leave more than BOX_TOLERANCE of its CAP_BOX row unfilled
+//   - two capacities the table gives the same size (they will be indistinguishable)
 //
 // Every number it needs comes from the source rather than a copy here, and a constant it
-// cannot find is a hard error — a silent default would make this tool lie.
+// cannot find is a hard error — a validator that fills in a default is a validator that lies.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const MIN_FILL = 0.85;
+/**
+ * How much of its declared CAP_BOX a car may leave unfilled before it is a problem, in board
+ * units. The three models currently ship at under a thousandth.
+ */
+const BOX_TOLERANCE = 0.02;
 const MODELS = { small: 'car', medium: 'bus', big: 'truck' };
-/** Cells each capacity occupies, as (along, across). Mirrors car-builder's CAP_FOOTPRINT. */
-const FOOTPRINT = { small: [1, 1], medium: [2, 1], big: [2, 1] };
 
 // ---------------------------------------------------------------- constants, from the source
 
@@ -38,9 +50,31 @@ function constant(file, name) {
     return parseFloat(m[1]);
 }
 
+/** `LOT` is an object literal, so `constant` cannot see it. */
+function lotExtent(file) {
+    const src = readFileSync(file, 'utf8');
+    const m = /^export const LOT: Lot = \{ w: ([\d.]+), h: ([\d.]+) \};/m.exec(src);
+    if (!m) {
+        console.error(`cannot find LOT in ${file} — this tool is out of date with the code`);
+        process.exit(2);
+    }
+    return { w: parseFloat(m[1]), h: parseFloat(m[2]) };
+}
+
+/** One row of CAP_BOX, likewise a literal rather than a bare number. */
+function capBox(file, cap) {
+    const src = readFileSync(file, 'utf8');
+    const m = new RegExp(`${cap}:\\s*\\{ len: ([\\d.]+), wid: ([\\d.]+) \\}`).exec(src);
+    if (!m) {
+        console.error(`cannot find CAP_BOX.${cap} in ${file} — this tool is out of date`);
+        process.exit(2);
+    }
+    return { len: parseFloat(m[1]), wid: parseFloat(m[2]) };
+}
+
 const CTRL = 'game/assets/scripts/view/GameController.ts';
 const GEN = 'game/assets/scripts/core/level-gen.ts';
-const BUILDER = 'game/assets/scripts/view/car-builder.ts';
+const TYPES = 'game/assets/scripts/core/types.ts';
 
 const ROAD_Y = constant(CTRL, 'ROAD_Y');
 const RING_OFF = constant(CTRL, 'RING_OFF');
@@ -48,19 +82,16 @@ const RING_LOW = constant(CTRL, 'RING_LOW');
 const LOT_HALF_W = constant(CTRL, 'LOT_HALF_W');
 const CELL_MAX = constant(CTRL, 'CELL_MAX');
 const CELL_GAP = constant(CTRL, 'CELL_GAP');
-const COLS = constant(GEN, 'GRID_COLS');
-const ROWS = constant(GEN, 'GRID_ROWS');
-const FILL = constant(BUILDER, 'FILL');
+const LOT = lotExtent(GEN);
 
-// GameController's own expression for the grid cell: whichever budget is tighter.
-const CELL = Math.min(
+// GameController's own expression, verbatim: the board scale is whichever budget is tighter.
+// One board unit is this many world units, which is what turns a measured AABB into the units
+// CAP_BOX is written in.
+const PITCH = Math.min(
     CELL_MAX,
-    (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / ROWS - CELL_GAP,
-    (2 * LOT_HALF_W - 0.3) / COLS - CELL_GAP,
-);
-
-/** GridLayout.footprintSize, for a footprint given in cells. */
-const footprint = (a, b) => [a * CELL + (a - 1) * CELL_GAP, b * CELL + (b - 1) * CELL_GAP];
+    (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / LOT.h - CELL_GAP,
+    (2 * LOT_HALF_W - 0.3) / LOT.w - CELL_GAP,
+) + CELL_GAP;
 
 // ---------------------------------------------------------------- the model's own AABB
 
@@ -147,45 +178,46 @@ function aabb(path) {
 const dir = process.argv[2] ?? 'game/assets/resources/models';
 const caps = Object.keys(MODELS);
 const model = {};
-for (const cap of caps) model[cap] = aabb(join(dir, `${MODELS[cap]}.glb`));
-
-// sharedCarScale: the largest that lets every capacity fit its own footprint.
-let k = Infinity;
+const table = {};
 for (const cap of caps) {
-    const [along, across] = footprint(...FOOTPRINT[cap]);
-    const long = Math.max(along, across), short = Math.min(along, across);
-    k = Math.min(k, (long * FILL) / model[cap].len, (short * FILL) / model[cap].wid);
+    model[cap] = aabb(join(dir, `${MODELS[cap]}.glb`));
+    table[cap] = capBox(TYPES, cap);
 }
 
 const f3 = (n) => n.toFixed(3).padStart(6);
-console.log(`grid cell ${CELL.toFixed(4)}   shared scale ${k.toFixed(4)}   (from ${dir})\n`);
-console.log('cap      model L x W x H          drawn L x W x H       along%   side air');
+console.log(`board pitch ${PITCH.toFixed(4)} world units   (models from ${dir})
+`);
+console.log('cap      model L x W x H           declared L x W   drawn L x W      short');
 const problems = [];
 for (const cap of caps) {
     const m = model[cap];
-    const [along, across] = footprint(...FOOTPRINT[cap]);
-    const long = Math.max(along, across), short = Math.min(along, across);
-    const drawn = { len: m.len * k, wid: m.wid * k, hgt: m.hgt * k };
-    const fill = drawn.len / long;
-    const air = (short - drawn.wid) / 2;
+    const want = table[cap];
+    // car-builder's own arithmetic: one uniform scale, the min over both axes.
+    const s = Math.min((want.len * PITCH) / m.len, (want.wid * PITCH) / m.wid);
+    const drawn = { len: (m.len * s) / PITCH, wid: (m.wid * s) / PITCH };
+    const short = Math.max(want.len - drawn.len, want.wid - drawn.wid);
     console.log(`${cap.padEnd(8)} ${f3(m.len)} x${f3(m.wid)} x${f3(m.hgt)}   `
-        + `${f3(drawn.len)} x${f3(drawn.wid)} x${f3(drawn.hgt)}    ${(fill * 100).toFixed(0).padStart(3)}%   ${air.toFixed(3)}`);
-    if (fill < MIN_FILL) {
-        problems.push(`${cap} fills only ${(fill * 100).toFixed(0)}% of its footprint's length `
-            + `— ${(long - drawn.len).toFixed(2)} of bare board inside its own cells. `
-            + `Its model is ${m.len.toFixed(2)} long and wants to be `
-            + `${((long * FILL) / k).toFixed(2)} at this shared scale.`);
+        + `${f3(want.len)} x${f3(want.wid)}   ${f3(drawn.len)} x${f3(drawn.wid)}   ${short.toFixed(4)}`);
+    if (short > BOX_TOLERANCE) {
+        const axis = (want.len - drawn.len) > (want.wid - drawn.wid) ? 'length' : 'width';
+        problems.push(`${cap}: the model is ${(m.len / m.wid).toFixed(3)} long for every 1 wide, `
+            + `but CAP_BOX asks for ${(want.len / want.wid).toFixed(3)}. Scaled uniformly it comes `
+            + `out ${short.toFixed(3)} board units short across its ${axis}, so the car does not `
+            + `fill the space the packer reserved for it. Either re-proportion the model, or set `
+            + `CAP_BOX.${cap} in core/types.ts to ${drawn.len.toFixed(3)} x ${drawn.wid.toFixed(3)} `
+            + `and re-run "cd logic && npm run gen" -- the packer sizes its boxes from that table, `
+            + `so the shipped levels stay laid out for the old size until they are regenerated.`);
     }
 }
 
 for (let i = 0; i < caps.length; i++) {
     for (let j = i + 1; j < caps.length; j++) {
-        const a = model[caps[i]], b = model[caps[j]];
-        const same = ['len', 'wid', 'hgt'].every((d) => Math.abs(a[d] - b[d]) < 0.01);
-        if (same) {
-            problems.push(`${caps[i]} and ${caps[j]} are the same size `
-                + `(${a.len.toFixed(2)} x ${a.wid.toFixed(2)} x ${a.hgt.toFixed(2)}) — `
-                + `one shared scale draws them identically, so the player cannot tell them apart.`);
+        const a = table[caps[i]], b = table[caps[j]];
+        if (Math.abs(a.len - b.len) < 0.01 && Math.abs(a.wid - b.wid) < 0.01) {
+            problems.push(`CAP_BOX gives ${caps[i]} and ${caps[j]} the same size `
+                + `(${a.len} x ${a.wid}) — the player cannot tell them apart. The models' own `
+                + `sizes cannot fix this: each is scaled to its own row, so the table is what `
+                + `decides how big the three read.`);
         }
     }
 }

@@ -1,5 +1,5 @@
 import { Node, Vec3 } from 'cc';
-import { CLEARANCE, GridSystem } from '../core/index';
+import { CLEARANCE, LotSystem } from '../core/index';
 import { BoardLayout } from './board-layout';
 import { colorOf } from './colors';
 import { buildCar, Cap } from './car-builder';
@@ -27,14 +27,14 @@ export class GridView {
 
     constructor(
         private parent: Node,
-        private grid: GridSystem,
+        private lot: LotSystem,
         private layout: BoardLayout,
     ) {
         this.slop = (CLEARANCE / 2) * layout.scale;
     }
 
     render(): void {
-        for (const [id, car] of this.grid.cars) {
+        for (const [id, car] of this.lot.cars) {
             const { len, wid } = this.layout.carSize(car.cap as Cap);
             const built = buildCar(
                 `car-${id}`, len, wid, colorOf(car.color), car.angle, car.cap as Cap,

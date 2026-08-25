@@ -1,5 +1,5 @@
 import { DEFAULT_FEEDS, LevelData } from './types';
-import { GridSystem } from './grid-system';
+import { LotSystem } from './lot-system';
 import { ParkingSystem } from './parking-system';
 import { LoopSystem } from './loop-system';
 import { BoardingSystem, BoardResult } from './boarding-system';
@@ -26,14 +26,14 @@ export interface TapResult {
 }
 
 export class GameCore {
-  readonly grid: GridSystem;
+  readonly lot: LotSystem;
   readonly parking: ParkingSystem;
   readonly loop: LoopSystem;
   readonly boarding: BoardingSystem;
   private state: GameState = 'playing';
 
   constructor(level: LevelData) {
-    this.grid = new GridSystem({ w: level.lot.w, h: level.lot.h }, level.lot.cars);
+    this.lot = new LotSystem({ w: level.lot.w, h: level.lot.h }, level.lot.cars);
     this.parking = new ParkingSystem(level.parking.slots, level.parking.unlocked);
     this.loop = new LoopSystem(
       level.loop.capacity,
@@ -55,10 +55,10 @@ export class GameCore {
     // saying "blocked" would send the player to clear a car that no stall could take
     // anyway. The condition that stops every tap on the board is the one to report.
     if (!this.parking.hasFreeSlot()) return { ok: false, slotIndex: -1, reason: 'full' };
-    if (!this.grid.canExit(carId)) return { ok: false, slotIndex: -1, reason: 'blocked' };
-    const car = this.grid.cars.get(carId)!;
+    if (!this.lot.canExit(carId)) return { ok: false, slotIndex: -1, reason: 'blocked' };
+    const car = this.lot.cars.get(carId)!;
     const slotIndex = this.parking.park(car);
-    this.grid.removeCar(carId);
+    this.lot.removeCar(carId);
     this.updateState();
     return { ok: true, slotIndex, reason: null };
   }
@@ -76,7 +76,7 @@ export class GameCore {
 
   private updateState(): void {
     if (
-      this.grid.isEmpty() &&
+      this.lot.isEmpty() &&
       this.parking.isEmpty() &&
       this.loop.isDrained()
     ) {
@@ -97,7 +97,7 @@ export class GameCore {
 
   private isDeadlocked(): boolean {
     const canBringOut =
-      this.parking.hasFreeSlot() && this.grid.movableCarIds().length > 0;
+      this.parking.hasFreeSlot() && this.lot.movableCarIds().length > 0;
     if (canBringOut) return false;
     const canFillSomething = this.parking.parked.some(
       (p) => p !== null && p.filled < p.capacity && this.hasRemainingColor(p.color),

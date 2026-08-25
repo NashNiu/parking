@@ -3,7 +3,7 @@ export * from './track-path';
 export * from './types';
 export * from './level-data';
 export * from './move-solver';
-export * from './grid-system';
+export * from './lot-system';
 export * from './parking-system';
 export * from './loop-system';
 export * from './boarding-system';

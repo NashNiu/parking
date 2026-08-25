@@ -22,7 +22,7 @@ function soloLevel(): LevelData {
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
   expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
-  expect(game.grid.isEmpty()).toBe(true);
+  expect(game.lot.isEmpty()).toBe(true);
   expect(game.parking.parked[0]?.carId).toBe(1);
 });
 
@@ -84,7 +84,7 @@ test('a full lot outranks a blocked lane', () => {
   };
   const game = new GameCore(level);
   expect(game.tapCar(3).ok).toBe(true); // takes the only stall
-  expect(game.grid.canExit(1)).toBe(false); // still boxed in by car 2
+  expect(game.lot.canExit(1)).toBe(false); // still boxed in by car 2
   expect(game.tapCar(1).reason).toBe('full');
 });
 

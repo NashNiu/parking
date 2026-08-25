@@ -13,7 +13,7 @@ test('a lone car exits and parks via GameCore', () => {
   const game = new GameCore(level);
   const res = game.tapCar(1);
   expect(res.ok).toBe(true);
-  expect(game.grid.isEmpty()).toBe(true);
+  expect(game.lot.isEmpty()).toBe(true);
   expect(game.parking.parked[res.slotIndex]?.carId).toBe(1);
 });
 

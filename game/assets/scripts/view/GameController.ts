@@ -418,7 +418,7 @@ export class GameController extends Component {
         this.gridRoot = gridRoot;
         // Same pitch the lot was sized from, or the slab and its cars drift apart.
         const layout = new BoardLayout(scale);
-        this.gridView = new GridView(gridRoot, this.core!.grid, layout);
+        this.gridView = new GridView(gridRoot, this.core!.lot, layout);
         this.gridView.render();
     }
 
@@ -836,7 +836,7 @@ export class GameController extends Component {
             this.hud?.showWin(3, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
-            for (const [id] of this.core!.grid.cars) {
+            for (const [id] of this.core!.lot.cars) {
                 const body = this.gridView?.getCarBody(id);
                 if (body) flash(body, new Color(255, 80, 80));
             }
@@ -905,7 +905,7 @@ export class GameController extends Component {
         const body = this.gridView.getCarBody(id);
         if (body) squash(body);
 
-        const angle = this.core.grid.cars.get(id)?.angle ?? 0;
+        const angle = this.core.lot.cars.get(id)?.angle ?? 0;
         const res = this.core.tapCar(id);
         if (res.ok) {
             this.playDriveToSlot(id, angle, res.slotIndex);
@@ -1034,10 +1034,10 @@ export class GameController extends Component {
         const body = this.gridView!.getCarBody(id);
         if (!node) return;
 
-        const car = this.core!.grid.cars.get(id);
-        const grid = this.core!.grid;
+        const car = this.core!.lot.cars.get(id);
+        const lot = this.core!.lot;
         const block = car
-            ? firstBlocker(car, Array.from(grid.cars.values()), grid.lot)
+            ? firstBlocker(car, Array.from(lot.cars.values()), lot.bounds)
             : null;
 
         this.busy = true;
