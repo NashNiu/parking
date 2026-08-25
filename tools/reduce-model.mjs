@@ -16,8 +16,16 @@
 //   3. simplify   — meshopt edge collapse, now that there are edges to collapse.
 //   4. normals    — recompute what step 2 invalidated (smooth, no longer faceted).
 //
-// Node and material names survive all four steps, which passenger-builder depends on:
-// it keys recoloring off the `paint` material name and LOD selection off node names.
+// Node and material names survive all four steps, which car-builder depends on: it keys
+// recoloring off the `paint` and `glass` material names.
+//
+// One thing the ratio must NOT be applied to: a primitive small enough that the shape IS
+// the triangles. The cars carry their direction arrow as a `roof_arrow` node of 24
+// triangles, and 30% of 24 is a chevron with no chevron left — it shipped once and read as
+// a blurry smudge on the longest vehicle, where the arrow is drawn biggest. So anything at
+// or under MIN_TRIS is left alone. 64 sits above the arrow and below the wheels (144),
+// which do survive the cut: a wheel is a body of revolution and loses its facets
+// gracefully, where an arrow loses its point.
 //
 // Usage (from the repo root, with the deps installed somewhere reachable):
 //   npm i --no-save @gltf-transform/core @gltf-transform/functions meshoptimizer
@@ -30,8 +38,13 @@
 // and commit eca16d4 has the original bytes if they are ever needed again.
 
 import { NodeIO } from '@gltf-transform/core';
-import { dedup, simplify, normals } from '@gltf-transform/functions';
+import { dedup, simplifyPrimitive, normals } from '@gltf-transform/functions';
 import { MeshoptSimplifier } from 'meshoptimizer';
+
+/** Primitives at or under this many triangles are left at full detail. See the note above. */
+const MIN_TRIS = 64;
+/** glTF draw mode TRIANGLES; the simplifier only handles triangle soups. */
+const TRIANGLES = 4;
 
 const [src, dst, ratioArg] = process.argv.slice(2);
 if (!src || !dst) {
@@ -90,11 +103,20 @@ for (const mesh of doc.getRoot().listMeshes()) {
 console.log('position-weld : indexed (welding alone never changes the triangle count)');
 
 await MeshoptSimplifier.ready;
-await doc.transform(
-    simplify({ simplifier: MeshoptSimplifier, ratio, error: 0.05, lockBorder: false }),
-    normals({ overwrite: true }),
-);
+const spared = [];
+for (const mesh of doc.getRoot().listMeshes()) {
+    for (const prim of mesh.listPrimitives()) {
+        const idx = prim.getIndices();
+        const tris = (idx ? idx.getCount() : prim.getAttribute('POSITION').getCount()) / 3;
+        const mode = prim.getMode();
+        if (mode !== TRIANGLES) { spared.push(`mode ${mode}`); continue; }
+        if (tris <= MIN_TRIS) { spared.push(`${prim.getMaterial()?.getName() ?? '?'} (${tris})`); continue; }
+        simplifyPrimitive(prim, { simplifier: MeshoptSimplifier, ratio, error: 0.05, lockBorder: false });
+    }
+}
+await doc.transform(normals({ overwrite: true }));
 console.log(`simplified    : ${triangles()} triangles (ratio=${ratio}), normals recomputed`);
+if (spared.length) console.log(`left alone    : ${spared.join(', ')}  (<= ${MIN_TRIS} triangles)`);
 
 await io.write(dst, doc);
 console.log('written       :', dst);
