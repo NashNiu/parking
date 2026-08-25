@@ -114,25 +114,50 @@ const CARS_PER_LEVEL = 36;
 /**
  * How far off the blocked-car target a level may land and still count as on target.
  *
- * Wider than the 1 it used to be, because a full lot takes this knob away: at 24 cars
- * 11-20 of them start blocked no matter what, so the level-to-level bands overlap and
- * `blockedRatio` can only pick the more or less tangled of the few solvable candidates it
- * gets, not set the number. Kept as one constant so the generator and the offline tool's
- * "on target" column cannot disagree about what on target means.
+ * Back to 1, re-measured for free-angle exits. It was widened to 3 in the grid era because
+ * a full 24-car lot left 11-20 cars blocked no matter what, so the level-to-level bands
+ * overlapped and the target could not actually set the number. With the band re-measured
+ * onto the range the geometry produces (see levelParams), all ten levels hit within 1 --
+ * and tightening it visibly straightens the ramp: at 3 the difficulty score rose on 3 of
+ * its 9 steps, at 1 it rises on 6, and level 5 stops coming out easier than level 1.
+ *
+ * Kept as one constant so the generator and the offline tool's "on target" column cannot
+ * disagree about what on target means.
  */
-export const BLOCKED_TOLERANCE = 3;
+export const BLOCKED_TOLERANCE = 1;
 
 /**
  * The difficulty curve. Car count is flat (see CARS_PER_LEVEL), so a later level is harder
- * by being more tangled and more colourful, never by being bigger. blockedRatio starts at
- * 0.5 because that is roughly where a solvable 24-car scatter already sits -- asking for
- * the old 0.1 would have made every level a nearest miss.
+ * by being more tangled and more colourful, never by being bigger.
+ *
+ * The blocked band is MEASURED, and re-measured for free-angle exits. A diagonal lane is a
+ * diagonal swath and clips more cars than a straight column, so the whole distribution sits
+ * higher than it did on the grid: sampling sixty levels gives blocked counts running 21 to
+ * 30, median 27. The grid-era band asked for 18 rising to 26, which spent its bottom third
+ * on targets the geometry cannot reach -- levels 1 to 3 landed one to three cars ABOVE their
+ * target and counted as on-target only because BLOCKED_TOLERANCE is 3. 0.61 to 0.78 puts the
+ * ramp across the range that actually exists.
+ *
+ * `minRounds` is NOT re-measured. Its `Math.min(5, ...)` cap only binds from id 10, where
+ * `2 + floor(9/3)` is 5 anyway, so it constrains no shipped level and there is nothing in
+ * the measurement that reaches it.
  */
+/**
+ * The blocked-car target for level 1 and for level 10, as a share of the lot. Measured, not
+ * chosen: see the note on `levelParams`.
+ */
+const BLOCKED_FIRST = 0.61;
+const BLOCKED_LAST = 0.78;
+
 export function levelParams(id: number): GenParams {
+    // Linear from first to last across the authored ten, then held. The old curve stepped by
+    // a flat 0.025 per level and capped, which put the same value on ids 11 and 111; this
+    // says the same thing without pretending the ramp continues.
+    const t = Math.min(1, Math.max(0, (id - 1) / 9));
     return {
         cars: CARS_PER_LEVEL,
         colors: Math.min(5, 2 + Math.floor((id - 1) / 3)),
-        blockedRatio: Math.min(0.75, 0.5 + (id - 1) * 0.025),
+        blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(5, 2 + Math.floor((id - 1) / 3)),
     };
 }

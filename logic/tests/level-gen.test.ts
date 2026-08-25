@@ -1,4 +1,4 @@
-import { generateLevel, levelParams, LOT } from '../../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, LOT, BLOCKED_TOLERANCE } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, LevelData } from '../../game/assets/scripts/core/types';
@@ -142,6 +142,31 @@ test('a later level is measurably harder than the first, at the same size', () =
   expect(last.cars).toBe(first.cars);
   expect(last.colors).toBeGreaterThan(first.colors);
   expect(last.score).toBeGreaterThan(first.score);
+});
+
+test('the curve actually sets the blocked-car count, within its stated tolerance', () => {
+  // The contract levelParams makes. Worth pinning because it was NOT true in the grid era
+  // and is easy to lose again: the band has to sit on the range the packer produces, or the
+  // generator quietly falls back to its nearest miss on every level and the ramp does
+  // nothing. Measured across the ten: every level lands within 1 of its target.
+  for (const id of IDS) {
+    const want = Math.round(levelParams(id).blockedRatio * levelParams(id).cars);
+    const got = estimateDifficulty(levelFor(id));
+    expect(Math.abs(got.blocked - want)).toBeLessThanOrEqual(BLOCKED_TOLERANCE);
+    expect(got.rounds).toBeGreaterThanOrEqual(levelParams(id).minRounds);
+  }
+});
+
+test('the second half of the curve is harder than the first', () => {
+  // Not step-by-step monotone, and deliberately not asserted as such. `score` weights
+  // solver rounds at 3x, and rounds is the one input the curve does not steer -- the
+  // generator takes the first candidate inside the blocked tolerance and that candidate's
+  // round count is whatever it happens to be, 6 to 12 across the ten. So the halves are
+  // what can be claimed honestly; a per-step assertion would be pinning luck.
+  const scores = IDS.map((id) => estimateDifficulty(levelFor(id)).score);
+  const front = scores.slice(0, 5).reduce((a, b) => a + b, 0);
+  const back = scores.slice(5).reduce((a, b) => a + b, 0);
+  expect(back).toBeGreaterThan(front);
 });
 
 test('a level is short enough to finish: passengers stay within the budget', () => {
