@@ -1,22 +1,22 @@
 import { Node, Vec3 } from 'cc';
-import { Dir, GridSystem } from '../core/index';
-import { GridLayout } from './grid-layout';
+import { GridSystem } from '../core/index';
+import { BoardLayout } from './board-layout';
 import { colorOf } from './colors';
-import { buildCar, sharedCarScale, Cap } from './car-builder';
+import { buildCar, Cap } from './car-builder';
 
 interface CarEntry {
     id: number;
     node: Node;
     body: Node;
-    hw: number; // half width (world)
-    hh: number; // half height (world)
-    len: number; // fitted body length (world)
-    wid: number; // fitted body width (world)
+    /** Fitted body length and width (world), and the heading they are drawn at. */
+    len: number;
+    wid: number;
+    angle: number;
 }
 
 /**
- * Renders the bottom grid: one placeholder car node per car in the GridSystem,
- * positioned by GridLayout. Supports world-space picking and removal.
+ * Renders the parking lot: one car node per car in the core, positioned and turned by
+ * BoardLayout. Supports world-space picking and removal.
  */
 export class GridView {
     private carNodes = new Map<number, Node>();
@@ -25,34 +25,51 @@ export class GridView {
     constructor(
         private parent: Node,
         private grid: GridSystem,
-        private layout: GridLayout,
+        private layout: BoardLayout,
     ) {}
 
     render(): void {
-        // One scale for the whole board, so the three vehicle sizes stay in proportion to
-        // each other. Computed here rather than per car: it depends on the grid's cell size,
-        // which is a property of the level, and on all three models at once.
-        const scale = sharedCarScale(this.layout);
         for (const [id, car] of this.grid.cars) {
-            const size = this.layout.footprintSize(car.w, car.h);
-            const { root, body, len, wid } = buildCar(
-                `car-${id}`, size.x, size.y, colorOf(car.color), car.dir as Dir, car.cap as Cap,
-                scale,
+            const { len, wid } = this.layout.carSize(car.cap as Cap);
+            const built = buildCar(
+                `car-${id}`, len, wid, colorOf(car.color), car.angle, car.cap as Cap,
             );
-            root.setPosition(this.layout.cellCenter(car.x, car.y, car.w, car.h));
-            this.parent.addChild(root);
-            this.carNodes.set(id, root);
-            this.entries.push({ id, node: root, body, hw: size.x / 2, hh: size.y / 2, len, wid });
+            built.root.setPosition(this.layout.toWorld(car.x, car.y));
+            this.parent.addChild(built.root);
+            this.carNodes.set(id, built.root);
+            this.entries.push({
+                id, node: built.root, body: built.body,
+                len: built.len, wid: built.wid, angle: car.angle,
+            });
         }
     }
 
-    /** Returns the id of the car whose footprint contains `local` (in gridRoot-local space), or null. */
+    /**
+     * The id of the car whose body contains `local` (in gridRoot-local space), or null.
+     *
+     * The box test runs in the CAR's own frame, not the board's: a car parked at an angle
+     * has no axis-aligned box worth testing against. The version this replaces compared
+     * against half-extents on the board axes, which for a diagonal car is a box up to 40%
+     * wider than the car -- a tap on the empty corner beside it picked it up, and with a
+     * lot this dense that corner belongs to a different car.
+     *
+     * Cars are iterated in insertion order and the first hit wins. Two cars cannot overlap
+     * (validateLevel enforces a clearance between every pair), so at most one can contain
+     * any point and the order does not matter.
+     */
     pickCar(local: Vec3): number | null {
         for (const e of this.entries) {
             const p = e.node.position; // gridRoot-local, stable under board tilt
-            if (Math.abs(local.x - p.x) <= e.hw && Math.abs(local.y - p.y) <= e.hh) {
-                return e.id;
-            }
+            // Rotate the offset by -angle to land in the car's frame, where its body is
+            // axis-aligned and a plain half-extent test is exact.
+            const r = -e.angle * Math.PI / 180;
+            const c = Math.cos(r);
+            const s = Math.sin(r);
+            const dx = local.x - p.x;
+            const dy = local.y - p.y;
+            const along = dx * c - dy * s;
+            const across = dx * s + dy * c;
+            if (Math.abs(along) <= e.len / 2 && Math.abs(across) <= e.wid / 2) return e.id;
         }
         return null;
     }
@@ -67,7 +84,7 @@ export class GridView {
     }
 
     /**
-     * The size the car's model was fitted to, so a caller moving it off the grid can refit
+     * The size the car's model was fitted to, so a caller moving it off the lot can refit
      * it. Read it BEFORE `detachCar`, which drops the entry it comes from.
      */
     getCarSize(id: number): { len: number; wid: number } | null {

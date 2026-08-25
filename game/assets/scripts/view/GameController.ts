@@ -3,10 +3,10 @@ import {
     input, Input, EventTouch, EventMouse, geometry, tween, Mat4, assetManager, EffectAsset,
 } from 'cc';
 import {
-    GameCore, validateLevel, LevelData, Dir, firstBlocker,
+    GameCore, validateLevel, LevelData, firstBlocker,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
-import { GridLayout } from './grid-layout';
+import { BoardLayout } from './board-layout';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
@@ -150,13 +150,16 @@ const NUDGE_MAX = 0.35;
 const BUMP = 0.02;
 const JOLT = 0.07;
 
-/** Board-space direction a car exits toward. Grid row 0 is at the TOP, hence up = +Y. */
-const DIR_VEC: Record<Dir, Vec3> = {
-    up: new Vec3(0, 1, 0),
-    down: new Vec3(0, -1, 0),
-    left: new Vec3(-1, 0, 0),
-    right: new Vec3(1, 0, 0),
-};
+/**
+ * Board-space unit vector a car with this heading drives along. Degrees, 0 = +X,
+ * counter-clockwise -- core's convention, and the board's +Y is world +Y, so there is no
+ * flip to apply. This replaces a four-entry lookup table that could only name four
+ * directions.
+ */
+function headingVec(angle: number): Vec3 {
+    const r = angle * Math.PI / 180;
+    return new Vec3(Math.cos(r), Math.sin(r), 0);
+}
 
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
@@ -208,8 +211,18 @@ export class GameController extends Component {
     private sfx: SfxManager | null = null;
     /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
     private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
-    /** Grid pitch in board units, so a blocked nudge can turn cells into distance. */
-    private gridStep = 1;
+    /**
+     * World units per board unit, so a blocked nudge can turn core's distance into a
+     * screen distance. One board unit is the pitch the old grid used, so this is the same
+     * number `gridStep` held and the arithmetic that reads it is unchanged.
+     */
+    private boardScale = 1;
+    /**
+     * The lot's own edges in board space -- the rectangle the cars actually sit in, not the
+     * slab, which is drawn wider to fill the frame. `routeToSlot` decides which lane a car
+     * joins by which of these edges its heading carries it across first.
+     */
+    private lotRect = { left: 0, right: 0, top: 0, bottom: 0 };
     /**
      * Cars still driving to a stall. `busy` only locks taps for the first leg, so the
      * player can keep tapping while a car finishes its lap of the ring road; this keeps
@@ -349,14 +362,23 @@ export class GameController extends Component {
         // and the slab is then widened to the full frame.
         const cell = Math.min(
             CELL_MAX,
-            (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / level.grid.rows - CELL_GAP,
-            (2 * LOT_HALF_W - 0.3) / level.grid.cols - CELL_GAP,
+            (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / level.lot.h - CELL_GAP,
+            (2 * LOT_HALF_W - 0.3) / level.lot.w - CELL_GAP,
         );
-        const step = cell + CELL_GAP;
-        this.gridStep = step;
-        const lotH = lotHeight(level.grid.rows, step);
-        const lotW = Math.max(lotWidth(level.grid.cols, step), 2 * LOT_HALF_W);
+        const scale = cell + CELL_GAP;
+        this.boardScale = scale;
+        const lotH = lotHeight(level.lot.h, scale);
+        const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * LOT_HALF_W);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
+        // The cars' own bounds, from the board extent rather than the drawn slab: `lotW` is
+        // widened to fill the frame and `lotH` carries an apron, and a car that left through
+        // either of those would be routed from a point it never reaches.
+        this.lotRect = {
+            left: -level.lot.w * scale / 2,
+            right: level.lot.w * scale / 2,
+            top: GRID_Y + level.lot.h * scale / 2,
+            bottom: GRID_Y - level.lot.h * scale / 2,
+        };
         this.ring = {
             top: ROAD_Y,
             bottom: GRID_Y - lotH / 2 - RING_OFF,
@@ -409,7 +431,7 @@ export class GameController extends Component {
         this.boardRoot.addChild(gridRoot);
         this.gridRoot = gridRoot;
         // Same pitch the lot was sized from, or the slab and its cars drift apart.
-        const layout = new GridLayout(level.grid.cols, level.grid.rows, cell, CELL_GAP);
+        const layout = new BoardLayout(scale);
         this.gridView = new GridView(gridRoot, this.core!.grid, layout);
         this.gridView.render();
     }
@@ -597,28 +619,46 @@ export class GameController extends Component {
     }
 
     /**
-     * Waypoints from a car's spot in the lot to a parking stall: out the way the car
-     * points until it meets the lane on that side, round the ring to the top lane, along
-     * that to the stall, then up into it.
+     * Waypoints from a car's place in the lot to a parking stall: straight out along its own
+     * heading until it clears the lot, then round the ring to the top lane, along that to
+     * the stall, then up into it.
      *
-     * The target always sits on the top lane, since every stall is above it. So a car
-     * that left by a side lane needs one corner and one that left by the bottom needs
-     * two, taking whichever side it is already nearer.
+     * The target always sits on the top lane, since every stall is above it. So a car that
+     * left by a side needs one corner and one that left by the bottom needs two, taking
+     * whichever side it is already nearer.
+     *
+     * A diagonal heading needs no case of its own. Whichever lot edge the car reaches FIRST
+     * decides the lane it joins, and everything past that is the same corner-turning the
+     * four-direction version did -- so what used to be four branches is now one comparison
+     * feeding the same three.
      */
-    private routeToSlot(from: Vec3, dir: Dir, slotX: number, parkY: number): Vec3[] {
+    private routeToSlot(from: Vec3, angle: number, slotX: number, parkY: number): Vec3[] {
         const r = this.ring;
+        const L = this.lotRect;
         const z = from.z;
-        const wp: Vec3[] = [];
-        if (dir === 'up') {
-            wp.push(new Vec3(from.x, r.top, z));
-        } else if (dir === 'down') {
-            const side = from.x < 0 ? r.left : r.right;
-            wp.push(new Vec3(from.x, r.bottom, z));
-            wp.push(new Vec3(side, r.bottom, z));
-            wp.push(new Vec3(side, r.top, z));
+        const d = headingVec(angle);
+        // Distance to each boundary it is actually heading toward; Infinity when it is not
+        // travelling that way at all, so `Math.min` ignores it.
+        const tx = Math.abs(d.x) < 1e-6
+            ? Infinity : ((d.x > 0 ? L.right : L.left) - from.x) / d.x;
+        const ty = Math.abs(d.y) < 1e-6
+            ? Infinity : ((d.y > 0 ? L.top : L.bottom) - from.y) / d.y;
+        // Clamped at zero: a car already past an edge would otherwise be sent backwards.
+        const t = Math.max(0, Math.min(tx, ty));
+        const out = new Vec3(from.x + d.x * t, from.y + d.y * t, z);
+        const wp: Vec3[] = [out];
+        if (ty <= tx) {
+            if (d.y > 0) {
+                wp.push(new Vec3(out.x, r.top, z));
+            } else {
+                const side = out.x < 0 ? r.left : r.right;
+                wp.push(new Vec3(out.x, r.bottom, z));
+                wp.push(new Vec3(side, r.bottom, z));
+                wp.push(new Vec3(side, r.top, z));
+            }
         } else {
-            const side = dir === 'left' ? r.left : r.right;
-            wp.push(new Vec3(side, from.y, z));
+            const side = d.x < 0 ? r.left : r.right;
+            wp.push(new Vec3(side, out.y, z));
             wp.push(new Vec3(side, r.top, z));
         }
         wp.push(new Vec3(slotX, r.top, z));
@@ -867,10 +907,10 @@ export class GameController extends Component {
         const body = this.gridView.getCarBody(id);
         if (body) squash(body);
 
-        const dir = this.core.grid.cars.get(id)?.dir as Dir | undefined;
+        const angle = this.core.grid.cars.get(id)?.angle ?? 0;
         const res = this.core.tapCar(id);
         if (res.ok) {
-            this.playDriveToSlot(id, dir ?? 'up', res.slotIndex);
+            this.playDriveToSlot(id, angle, res.slotIndex);
         } else if (res.reason === 'full') {
             this.playLotFull(id);
         } else {
@@ -878,7 +918,7 @@ export class GameController extends Component {
         }
     }
 
-    private playDriveToSlot(id: number, dir: Dir, slotIndex: number): void {
+    private playDriveToSlot(id: number, angle: number, slotIndex: number): void {
         const parkScale = this.stallScale(id); // before detachCar drops the car's size
         const node = this.gridView!.detachCar(id);
         if (!node) return;
@@ -886,7 +926,7 @@ export class GameController extends Component {
 
         const start = node.position.clone();
         const slot = this.parkingView!.getSlotPosition(slotIndex);
-        const route = this.routeToSlot(start, dir, slot.x, slot.y);
+        const route = this.routeToSlot(start, angle, slot.x, slot.y);
 
         this.busy = true;
         this.arriving++;
@@ -999,7 +1039,7 @@ export class GameController extends Component {
         const car = this.core!.grid.cars.get(id);
         const grid = this.core!.grid;
         const block = car
-            ? firstBlocker(car, Array.from(grid.cars.values()), grid.cols, grid.rows)
+            ? firstBlocker(car, Array.from(grid.cars.values()), grid.lot)
             : null;
 
         this.busy = true;
@@ -1013,8 +1053,11 @@ export class GameController extends Component {
             return;
         }
 
-        const dir = DIR_VEC[car.dir];
-        const dist = block.gap * this.gridStep + BUMP;
+        const dir = headingVec(car.angle);
+        // `block.gap` is board units and `boardScale` is world units per board unit, which
+        // is the same arithmetic this line always did -- one board unit is one old cell
+        // pitch, so only the names changed.
+        const dist = block.gap * this.boardScale + BUMP;
         const time = Math.min(NUDGE_MAX, Math.max(NUDGE_MIN, dist / NUDGE_SPEED));
         const start = node.position.clone();
         const target = new Vec3(start.x + dir.x * dist, start.y + dir.y * dist, start.z);

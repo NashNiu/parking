@@ -51,16 +51,17 @@ const ROAD_Z = -0.28;
 export const SHADOW_Z = -0.18;
 
 /**
- * Size the lot needs to cover a grid laid out at pitch `step`, plus a small apron. The
- * caller may draw it larger (it does, to fill the view) but never smaller.
+ * Size the lot slab needs to cover a board `h` units tall at `scale` world units per board
+ * unit, plus a small apron. The caller may draw it larger (it does, to fill the view) but
+ * never smaller.
  */
-export function lotHeight(rows: number, step: number): number {
-    return rows * step + 0.3;
+export function lotHeight(h: number, scale: number): number {
+    return h * scale + 0.3;
 }
 
-/** Width of the lot slab for a grid of `cols` at pitch `step`. */
-export function lotWidth(cols: number, step: number): number {
-    return cols * step + 0.3;
+/** Width of the lot slab for a board `w` units across. */
+export function lotWidth(w: number, scale: number): number {
+    return w * scale + 0.3;
 }
 
 /** Centreline of each lane of the ring road, in board space. */
