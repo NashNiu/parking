@@ -1,5 +1,5 @@
 import { validateLevel, validateTrack } from '../../game/assets/scripts/core/level-data';
-import { LevelData, Feed } from '../../game/assets/scripts/core/types';
+import { LevelData, Feed, CarSpec } from '../../game/assets/scripts/core/types';
 import { TrackShape } from '../../game/assets/scripts/core/track-shapes';
 
 function baseLevel(): LevelData {
@@ -30,6 +30,56 @@ test('unlocked greater than slots is reported', () => {
   const lvl = baseLevel();
   lvl.parking.unlocked = 5; // > slots 4
   expect(validateLevel(lvl)).toContain('unlocked > slots');
+});
+
+const okLevel = (cars: CarSpec[]): LevelData => ({
+  id: 1,
+  lot: { w: 9, h: 6, cars },
+  parking: { slots: 2, unlocked: 1 },
+  loop: {
+    capacity: 28,
+    boardIndex: 14,
+    queue: [{ color: 'red', count: cars.length * 16 }],
+  },
+  powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+});
+const c = (over: Partial<CarSpec>): CarSpec => ({
+  id: 1, x: 0, y: 0, angle: 0, color: 'red', cap: 'small', ...over,
+});
+
+test('a level whose cars sit apart and inside the lot has no geometry errors', () => {
+  const errs = validateLevel(okLevel([c({ id: 1, x: -2 }), c({ id: 2, x: 2 })]));
+  expect(errs.filter((e) => /lot|clearance|angle/.test(e))).toEqual([]);
+});
+
+test('a car hanging over the lot edge is an error', () => {
+  const errs = validateLevel(okLevel([c({ id: 1, x: 4.4 })]));
+  expect(errs.some((e) => e.includes('car 1') && e.includes('lot'))).toBe(true);
+});
+
+test('a car turned until it pokes out of the lot is an error', () => {
+  // Lengthways it clears the top edge; broadside it does not.
+  expect(validateLevel(okLevel([c({ id: 1, cap: 'big', y: 2.6, angle: 0 })]))
+    .some((e) => e.includes('lot'))).toBe(false);
+  expect(validateLevel(okLevel([c({ id: 1, cap: 'big', y: 2.6, angle: 90 })]))
+    .some((e) => e.includes('lot'))).toBe(true);
+});
+
+test('two cars closer than the clearance is an error', () => {
+  // Centres 0.98 apart: bodies 0.964 long, so 0.016 of gap -- under CLEARANCE.
+  const errs = validateLevel(okLevel([c({ id: 1, x: -0.49 }), c({ id: 2, x: 0.49 })]));
+  expect(errs.some((e) => e.includes('cars 1 and 2'))).toBe(true);
+});
+
+test('two cars exactly the clearance apart is not an error', () => {
+  const d = (0.964 + 0.04) / 2;
+  const errs = validateLevel(okLevel([c({ id: 1, x: -d }), c({ id: 2, x: d })]));
+  expect(errs.some((e) => e.includes('clearance'))).toBe(false);
+});
+
+test('a non-finite angle is an error and does not crash the rest of the check', () => {
+  const errs = validateLevel(okLevel([c({ id: 1, angle: NaN }), c({ id: 2, x: 3 })]));
+  expect(errs.some((e) => e.includes('car 1') && e.includes('angle'))).toBe(true);
 });
 
 /** A level that validates clean, so each test can break exactly one thing. */

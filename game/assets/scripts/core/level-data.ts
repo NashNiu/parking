@@ -1,8 +1,10 @@
-import { DEFAULT_FEEDS, DEFAULT_TRACK, LevelData, CAP_SIZE } from './types';
+import { DEFAULT_FEEDS, DEFAULT_TRACK, LevelData, CAP_SIZE, CLEARANCE } from './types';
 import { TRACK_SHAPES } from './track-shapes';
 import {
   capacityOptions, entryIndex, ENTRY_NORMAL_MAX, maxLookahead, MIN_CURVE_RADIUS, TrackPath,
 } from './track-path';
+import { inflate, insideRect, overlapMTV } from './geometry';
+import { carBox } from './move-solver';
 
 export function validateLevel(level: LevelData): string[] {
   const errors: string[] = [];
@@ -21,6 +23,33 @@ export function validateLevel(level: LevelData): string[] {
     const pax = paxCount[color] || 0;
     if (cap !== pax) {
       errors.push(`color ${color}: car capacity ${cap} != passengers ${pax}`);
+    }
+  }
+
+  // Geometry. The old grid made both of these true by construction -- an integer cell
+  // is inside the lot and two cars cannot share one. Free placement makes them things
+  // that have to be checked, and the relaxation packer's output is only trustworthy
+  // because this runs over it.
+  const cars = level.lot.cars;
+  for (const car of cars) {
+    if (!Number.isFinite(car.angle)) {
+      errors.push(`car ${car.id}: angle ${car.angle} is not a finite number`);
+      continue;
+    }
+    if (!insideRect(carBox(car), level.lot.w, level.lot.h)) {
+      errors.push(`car ${car.id} does not fit inside the lot`);
+    }
+  }
+  // Half the clearance on each of a pair, so the two together owe the full CLEARANCE.
+  const pad = CLEARANCE / 2;
+  for (let i = 0; i < cars.length; i++) {
+    if (!Number.isFinite(cars[i].angle)) continue;
+    for (let j = i + 1; j < cars.length; j++) {
+      if (!Number.isFinite(cars[j].angle)) continue;
+      const hit = overlapMTV(inflate(carBox(cars[i]), pad), inflate(carBox(cars[j]), pad));
+      if (hit) {
+        errors.push(`cars ${cars[i].id} and ${cars[j].id} are closer than the clearance`);
+      }
     }
   }
 
