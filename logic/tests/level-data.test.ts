@@ -82,6 +82,22 @@ test('a non-finite angle is an error and does not crash the rest of the check', 
   expect(errs.some((e) => e.includes('car 1') && e.includes('angle'))).toBe(true);
 });
 
+test('the clearance rule does not depend on the order the cars are listed in', () => {
+  // A pair is a pair: the verdict must not change with the order the level lists them.
+  // This is what pins the padding to HALF on EACH of the two rather than all of it on
+  // one -- the arithmetic Task 5's packer has to match exactly, or it settles on
+  // layouts this check then rejects and generation never converges. The pair is
+  // deliberately rotated: on a collinear pair the separating axis depends only on the
+  // SUM of the two paddings, so an uneven split is invisible there.
+  for (const d of [1.0, 1.016, 1.032, 1.048, 1.064, 1.08]) {
+    const a = c({ id: 1, x: 0, angle: 0 });
+    const b = c({ id: 2, x: d, angle: 45 });
+    const forward = validateLevel(okLevel([a, b])).some((e) => e.includes('clearance'));
+    const reversed = validateLevel(okLevel([b, a])).some((e) => e.includes('clearance'));
+    expect(reversed).toBe(forward);
+  }
+});
+
 /** A level that validates clean, so each test can break exactly one thing. */
 function trackLevel(over: Partial<LevelData['loop']> = {}): LevelData {
   return {
