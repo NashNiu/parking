@@ -1,10 +1,10 @@
 import { GameCore, LevelData } from '../../game/assets/scripts/core/index';
 
-test('a wide (multi-cell) car exits and parks via GameCore', () => {
+test('a lone car exits and parks via GameCore', () => {
   const level: LevelData = {
     id: 20,
-    grid: { cols: 2, rows: 2, cars: [
-      { id: 1, x: 0, y: 1, w: 2, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    lot: { w: 2, h: 2, cars: [
+      { id: 1, x: 0, y: -0.5, angle: 90, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 2, unlocked: 2 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
@@ -17,28 +17,32 @@ test('a wide (multi-cell) car exits and parks via GameCore', () => {
   expect(game.parking.parked[res.slotIndex]?.carId).toBe(1);
 });
 
-test('a wide car blocked in one lane cannot be tapped', () => {
+test('a car only partly in the lane still blocks it', () => {
+  // The old grid version of this put a two-cell-wide car under a one-cell one, so only
+  // one of its two columns was covered. Continuous coordinates say the same thing
+  // directly: the two bodies are offset 0.2 across the lane and 0.471 wide, so they
+  // still overlap sideways and car 2 stands in car 1's way.
   const level: LevelData = {
     id: 21,
-    grid: { cols: 2, rows: 2, cars: [
-      { id: 1, x: 0, y: 1, w: 2, h: 1, dir: 'up', color: 'red', cap: 'small' },
-      { id: 2, x: 1, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    lot: { w: 3, h: 3, cars: [
+      { id: 1, x: -0.1, y: -0.7, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0.1, y: 0.7, angle: 90, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 2, unlocked: 2 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 32 }] },
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
   const game = new GameCore(level);
-  expect(game.tapCar(1).ok).toBe(false); // column 1 blocked by car 2
-  expect(game.tapCar(2).ok).toBe(true);  // car 2 exits up (already at top row)
+  expect(game.tapCar(1).ok).toBe(false); // lane blocked by car 2
+  expect(game.tapCar(2).ok).toBe(true);  // car 2 has clear board above it
   expect(game.tapCar(1).ok).toBe(true);  // lane now clear
 });
 
 test('a big car (cap 32) fills and departs, level won', () => {
   const level: LevelData = {
     id: 22,
-    grid: { cols: 1, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'green', cap: 'big' },
+    lot: { w: 3, h: 3, cars: [
+      { id: 1, x: 0, y: 0, angle: 90, color: 'green', cap: 'big' },
     ] },
     parking: { slots: 2, unlocked: 2 },
     loop: { capacity: 6, boardIndex: 3, queue: [{ color: 'green', count: 32 }] },
@@ -57,8 +61,8 @@ test('a big car (cap 32) fills and departs, level won', () => {
 test('a medium car (cap 24) fills and departs, level won', () => {
   const level: LevelData = {
     id: 24,
-    grid: { cols: 1, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'yellow', cap: 'medium' },
+    lot: { w: 3, h: 3, cars: [
+      { id: 1, x: 0, y: 0, angle: 90, color: 'yellow', cap: 'medium' },
     ] },
     parking: { slots: 2, unlocked: 2 },
     loop: { capacity: 6, boardIndex: 3, queue: [{ color: 'yellow', count: 24 }] },
@@ -73,8 +77,8 @@ test('a medium car (cap 24) fills and departs, level won', () => {
 test('locked slots are not usable: unlocked<slots can deadlock', () => {
   const level: LevelData = {
     id: 23,
-    grid: { cols: 1, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'small' },
+    lot: { w: 2, h: 2, cars: [
+      { id: 1, x: 0, y: 0, angle: 90, color: 'blue', cap: 'small' },
     ] },
     parking: { slots: 3, unlocked: 1 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },

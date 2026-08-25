@@ -12,7 +12,6 @@ import { TrackShape } from './track-shapes';
  */
 export type FeedSide = 'far' | 'near';
 
-export type Dir = 'up' | 'down' | 'left' | 'right';
 export type Cap = 'small' | 'medium' | 'big';
 
 export const CAP_SIZE: Record<Cap, number> = {
@@ -21,16 +20,64 @@ export const CAP_SIZE: Record<Cap, number> = {
   big: 32,
 };
 
+/**
+ * One car in the lot. Continuous coordinates, not grid cells: `x`/`y` is the centre of
+ * the body and `angle` is the direction it drives out, in degrees, 0 = +X,
+ * counter-clockwise, normalised to [0, 360).
+ *
+ * There is no width or height field. A car's footprint is its MODEL's size (see
+ * CAP_BOX) at that angle, which is what lets three vehicle sizes read as three sizes
+ * instead of as one-cell and two-cell.
+ */
 export interface CarSpec {
   id: number;
   x: number;
   y: number;
-  w: number;
-  h: number;
-  dir: Dir;
+  angle: number;
   color: string;
   cap: Cap;
 }
+
+/** A body's own dimensions: `len` along its heading, `wid` across it. Board units. */
+export interface Box { len: number; wid: number }
+
+/** The lot's extent in board units. Origin is its centre, +Y up. */
+export interface Lot { w: number; h: number }
+
+/**
+ * Each capacity's body size in board units, where one board unit is the pitch the old
+ * grid used (0.7533 world units). The numbers are the three glb models' measured AABBs
+ * divided by that pitch -- see `tools/check-car-models.mjs`, which prints them and now
+ * fails the build if they drift from this table.
+ *
+ * This table is the SOURCE of the drawn size, which is the opposite of how it used to
+ * work: a model AABB was fitted to a grid cell and the size fell out of the fit. Do
+ * not re-derive CAP_BOX from a model at runtime -- core cannot see models, and the two
+ * directions together would be a circle.
+ */
+export const CAP_BOX: Record<Cap, Box> = {
+  small: { len: 0.964, wid: 0.471 },
+  medium: { len: 1.772, wid: 0.567 },
+  big: { len: 1.949, wid: 0.620 },
+};
+
+/**
+ * One factor on every car's size. The release valve for packing density: 36 cars at
+ * CAP_BOX cover 49.5% of a 9x6 lot, which random rotated rectangles handle with room
+ * to spare, so it starts at 1. Turn it down only if `pack` cannot seat all 36.
+ */
+export const CAR_SCALE = 1.0;
+
+/**
+ * The least board a car must have around it, in board units. Used in TWO places on
+ * purpose -- the packer keeps cars this far apart, and the lane check grows the moving
+ * car by it -- so that the rule reads: a gap you can see is closed IS closed.
+ *
+ * 0.04 is today's TIGHTEST gap (a small car nose to tail: pitch 1 minus body 0.964),
+ * not the average. M7 spent several rounds tightening these gaps and this must not
+ * quietly give that back.
+ */
+export const CLEARANCE = 0.04;
 
 export interface QueueGroup {
   color: string;
@@ -87,7 +134,7 @@ export const DEFAULT_FEEDS: Feed[] = [
 
 export interface LevelData {
   id: number;
-  grid: { cols: number; rows: number; cars: CarSpec[] };
+  lot: { w: number; h: number; cars: CarSpec[] };
   parking: { slots: number; unlocked: number };
   loop: {
     capacity: number;

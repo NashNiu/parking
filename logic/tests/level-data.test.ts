@@ -5,8 +5,8 @@ import { TrackShape } from '../../game/assets/scripts/core/track-shapes';
 function baseLevel(): LevelData {
   return {
     id: 1,
-    grid: { cols: 2, rows: 2, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    lot: { w: 2, h: 2, cars: [
+      { id: 1, x: 0, y: 0, angle: 90, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 4, unlocked: 4 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
@@ -36,7 +36,7 @@ test('unlocked greater than slots is reported', () => {
 function trackLevel(over: Partial<LevelData['loop']> = {}): LevelData {
   return {
     id: 1,
-    grid: { cols: 4, rows: 4, cars: [{ id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' }] },
+    lot: { w: 4, h: 4, cars: [{ id: 1, x: 0, y: 0, angle: 90, color: 'red', cap: 'small' }] },
     parking: { slots: 7, unlocked: 4 },
     loop: {
       capacity: 28,

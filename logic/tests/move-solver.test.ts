@@ -1,84 +1,103 @@
-import { footprint, pathClear, firstBlocker } from '../../game/assets/scripts/core/move-solver';
-import { CarSpec } from '../../game/assets/scripts/core/types';
+import { carBox, heading, pathClear, firstBlocker } from '../../game/assets/scripts/core/move-solver';
+import { CarSpec, CAP_BOX, CLEARANCE } from '../../game/assets/scripts/core/types';
 
+const LOT = { w: 9, h: 6 };
 const car = (over: Partial<CarSpec>): CarSpec => ({
-  id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small', ...over,
+  id: 1, x: 0, y: 0, angle: 0, color: 'red', cap: 'small', ...over,
 });
 
-test('footprint lists all occupied cells of a 2x1 car', () => {
-  expect(footprint(car({ x: 1, y: 1, w: 2, h: 1 })).sort())
-    .toEqual(['1,1', '2,1'].sort());
+/** Where two nose-to-tail cars first touch, clearance included. */
+const contact = (gapBetweenCentres: number): number =>
+  gapBetweenCentres - (CAP_BOX.small.len + 2 * CLEARANCE) / 2 - CAP_BOX.small.len / 2;
+
+test('a car box is its model size at its own heading', () => {
+  const b = carBox(car({ x: 1, y: 2, angle: 90 }));
+  expect(b.x).toBe(1);
+  expect(b.y).toBe(2);
+  expect(b.angle).toBe(90);
+  expect(b.len).toBeCloseTo(CAP_BOX.small.len, 6);
+  expect(b.wid).toBeCloseTo(CAP_BOX.small.wid, 6);
 });
 
-test('path is clear when nothing blocks the exit direction', () => {
-  const c = car({ x: 1, y: 2, dir: 'up' });
-  expect(pathClear(c, new Set(), 4, 4)).toBe(true);
+test('a big car has a bigger box than a small one', () => {
+  expect(carBox(car({ cap: 'big' })).len).toBeGreaterThan(carBox(car({ cap: 'small' })).len);
 });
 
-test('path is blocked by a car ahead in the exit direction', () => {
-  const c = car({ x: 1, y: 2, dir: 'up' });
-  const occupied = new Set(['1,0']); // blocks the upward column
-  expect(pathClear(c, occupied, 4, 4)).toBe(false);
+test('heading points the way the angle says', () => {
+  expect(heading(car({ angle: 0 })).dx).toBeCloseTo(1, 6);
+  expect(heading(car({ angle: 90 })).dy).toBeCloseTo(1, 6);
+  expect(heading(car({ angle: 180 })).dx).toBeCloseTo(-1, 6);
 });
 
-test('occupancy outside the exit path does not block', () => {
-  const c = car({ x: 1, y: 2, dir: 'up' });
-  const occupied = new Set(['0,0', '2,1']); // not in column x=1 above y=2
-  expect(pathClear(c, occupied, 4, 4)).toBe(true);
+test('an empty lot lets a car out whatever way it points', () => {
+  for (const angle of [0, 37, 90, 180, 254, 359]) {
+    expect(pathClear(car({ angle }), [car({ angle })], LOT)).toBe(true);
+  }
 });
 
-test('wide car needs every column of its width clear', () => {
-  const c = car({ x: 0, y: 1, w: 2, h: 1, dir: 'up' });
-  expect(pathClear(c, new Set(['1,0']), 4, 4)).toBe(false);
-  expect(pathClear(c, new Set(['3,0']), 4, 4)).toBe(true);
+test('a car in the way blocks the lane', () => {
+  const a = car({ id: 1, x: -2, y: 0, angle: 0 });
+  const b = car({ id: 2, x: 1, y: 0, angle: 0 });
+  expect(pathClear(a, [a, b], LOT)).toBe(false);
 });
 
-test('nothing ahead reports no blocker', () => {
-  const c = car({ x: 1, y: 2, dir: 'up' });
-  expect(firstBlocker(c, [c], 4, 4)).toBeNull();
+test('the same car pointing the other way is not blocked', () => {
+  const a = car({ id: 1, x: -2, y: 0, angle: 180 });
+  const b = car({ id: 2, x: 1, y: 0, angle: 0 });
+  expect(pathClear(a, [a, b], LOT)).toBe(true);
 });
 
-test('a car right against a blocker has no room to move', () => {
-  const c = car({ id: 1, x: 1, y: 2, dir: 'up' });
-  const wall = car({ id: 2, x: 1, y: 1 });
-  expect(firstBlocker(c, [c, wall], 4, 4)).toEqual({ carId: 2, gap: 0 });
+test('a car far enough to the side does not block', () => {
+  const a = car({ id: 1, x: -2, y: 0, angle: 0 });
+  const b = car({ id: 2, x: 1, y: 1, angle: 0 });
+  expect(pathClear(a, [a, b], LOT)).toBe(true);
 });
 
-test('gap counts the free cells before the blocker', () => {
-  const c = car({ id: 1, x: 1, y: 3, dir: 'up' });
-  const wall = car({ id: 2, x: 1, y: 1 });
-  expect(firstBlocker(c, [c, wall], 4, 4)).toEqual({ carId: 2, gap: 1 });
+test('the blocker report says which car and how much room is left', () => {
+  const a = car({ id: 1, x: -2, y: 0, angle: 0 });
+  const b = car({ id: 2, x: 1, y: 0, angle: 0 });
+  const block = firstBlocker(a, [a, b], LOT);
+  expect(block).not.toBeNull();
+  expect(block!.carId).toBe(2);
+  expect(block!.gap).toBeCloseTo(contact(3), 4);
 });
 
 test('the nearest blocker is the one reported', () => {
-  const c = car({ id: 1, x: 0, y: 0, dir: 'right' });
-  const near = car({ id: 2, x: 2, y: 0 });
-  const far = car({ id: 3, x: 3, y: 0 });
-  expect(firstBlocker(c, [c, near, far], 5, 4)).toEqual({ carId: 2, gap: 1 });
+  const a = car({ id: 1, x: -3, y: 0, angle: 0 });
+  const near = car({ id: 2, x: 0, y: 0, angle: 0 });
+  const far = car({ id: 3, x: 2, y: 0, angle: 0 });
+  expect(firstBlocker(a, [a, near, far], LOT)!.carId).toBe(2);
 });
 
-test('a long car does not block itself', () => {
-  const c = car({ id: 1, x: 1, y: 2, w: 1, h: 2, dir: 'up' });
-  expect(firstBlocker(c, [c], 4, 4)).toBeNull();
+test('a lane narrower than the clearance is not a lane', () => {
+  // Two cars leaving a slot exactly one small-car width wide: without the clearance
+  // the mover would fit, with it it does not.
+  const w = CAP_BOX.small.wid;
+  const a = car({ id: 1, x: -3, y: 0, angle: 0 });
+  const up = car({ id: 2, x: 0, y: w, angle: 0 });
+  const down = car({ id: 3, x: 0, y: -w, angle: 0 });
+  expect(pathClear(a, [a, up, down], LOT)).toBe(false);
 });
 
-test('a blocker outside the exit lane is ignored', () => {
-  const c = car({ id: 1, x: 1, y: 2, dir: 'up' });
-  const beside = car({ id: 2, x: 2, y: 0 });
-  expect(firstBlocker(c, [c, beside], 4, 4)).toBeNull();
+test('a lane with the clearance to spare is a lane', () => {
+  const w = CAP_BOX.small.wid + CLEARANCE + 0.02;
+  const a = car({ id: 1, x: -3, y: 0, angle: 0 });
+  const up = car({ id: 2, x: 0, y: w, angle: 0 });
+  const down = car({ id: 3, x: 0, y: -w, angle: 0 });
+  expect(pathClear(a, [a, up, down], LOT)).toBe(true);
 });
 
-test('firstBlocker and pathClear always agree', () => {
-  const cases: CarSpec[][] = [
-    [car({ id: 1, x: 1, y: 2, dir: 'up' }), car({ id: 2, x: 1, y: 0 })],
-    [car({ id: 1, x: 1, y: 2, dir: 'up' }), car({ id: 2, x: 3, y: 0 })],
-    [car({ id: 1, x: 0, y: 1, w: 2, h: 1, dir: 'right' }), car({ id: 2, x: 3, y: 1 })],
-    [car({ id: 1, x: 2, y: 1, dir: 'down' }), car({ id: 2, x: 2, y: 3 })],
-    [car({ id: 1, x: 2, y: 1, dir: 'left' }), car({ id: 2, x: 0, y: 1 })],
-  ];
-  for (const cars of cases) {
-    const occupied = new Set(cars.flatMap((c) => footprint(c)));
-    const clear = pathClear(cars[0], occupied, 4, 4);
-    expect(firstBlocker(cars[0], cars, 4, 4) === null).toBe(clear);
-  }
+test('a car does not block itself', () => {
+  const a = car({ id: 1, x: 0, y: 0, angle: 0 });
+  expect(firstBlocker(a, [a], LOT)).toBeNull();
+});
+
+test('a diagonal lane is checked along the diagonal, not along the axes', () => {
+  // A blocker due east does not stand in a north-east lane.
+  const a = car({ id: 1, x: -2, y: -2, angle: 45 });
+  const east = car({ id: 2, x: 1, y: -2, angle: 0 });
+  expect(pathClear(a, [a, east], LOT)).toBe(true);
+  // One on the diagonal does.
+  const ne = car({ id: 3, x: 0, y: 0, angle: 45 });
+  expect(pathClear(a, [a, ne], LOT)).toBe(false);
 });

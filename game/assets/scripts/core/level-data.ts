@@ -8,7 +8,7 @@ export function validateLevel(level: LevelData): string[] {
   const errors: string[] = [];
 
   const carCap: Record<string, number> = {};
-  for (const c of level.grid.cars) {
+  for (const c of level.lot.cars) {
     carCap[c.color] = (carCap[c.color] || 0) + CAP_SIZE[c.cap];
   }
   const paxCount: Record<string, number> = {};

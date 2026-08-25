@@ -2,7 +2,7 @@ import { ParkingSystem } from '../../game/assets/scripts/core/parking-system';
 import { CarSpec } from '../../game/assets/scripts/core/types';
 
 const car = (over: Partial<CarSpec>): CarSpec => ({
-  id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small', ...over,
+  id: 1, x: 0, y: 0, angle: 90, color: 'red', cap: 'small', ...over,
 });
 
 test('parks a car into a free slot and reports occupancy', () => {

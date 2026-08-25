@@ -1,30 +1,20 @@
-import { CarSpec } from './types';
-import { footprint, pathClear } from './move-solver';
+import { CarSpec, Lot } from './types';
+import { pathClear } from './move-solver';
 
 export class GridSystem {
-  cols: number;
-  rows: number;
+  lot: Lot;
   cars: Map<number, CarSpec>;
 
-  constructor(cols: number, rows: number, cars: CarSpec[]) {
-    this.cols = cols;
-    this.rows = rows;
+  constructor(lot: Lot, cars: CarSpec[]) {
+    this.lot = { w: lot.w, h: lot.h };
     this.cars = new Map(cars.map((c) => [c.id, { ...c }]));
-  }
-
-  private occupiedExcluding(carId: number): Set<string> {
-    const set = new Set<string>();
-    for (const [id, car] of this.cars) {
-      if (id === carId) continue;
-      for (const cell of footprint(car)) set.add(cell);
-    }
-    return set;
   }
 
   canExit(carId: number): boolean {
     const car = this.cars.get(carId);
     if (!car) return false;
-    return pathClear(car, this.occupiedExcluding(carId), this.cols, this.rows);
+    // pathClear skips the mover by id, so the whole list goes in as it stands.
+    return pathClear(car, [...this.cars.values()], this.lot);
   }
 
   removeCar(carId: number): void {

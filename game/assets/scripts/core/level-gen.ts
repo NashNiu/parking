@@ -1,6 +1,6 @@
-import { CAP_SIZE, Cap, CarSpec, Dir, Feed, LevelData, QueueGroup } from './types';
+import { CAP_SIZE, Cap, CarSpec, Feed, LevelData, Lot, QueueGroup } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { footprint, pathClear } from './move-solver';
+import { pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 
@@ -27,7 +27,21 @@ const UNLOCKED = 4;
 /** Colour keys, matching the view's palette (see view/colors.ts). */
 const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
 
+/** Local to the generator until Task 5 removes it: core no longer has a Dir type. */
+type Dir = 'up' | 'down' | 'left' | 'right';
 const DIRS: Dir[] = ['up', 'down', 'left', 'right'];
+
+/** The lot the generator fills, in board units. Origin is its centre, +Y up. */
+export const LOT: Lot = { w: 9, h: 6 };
+
+/** Grid cell (col, row, row 0 at the top) to board coordinates (centre origin, +Y up). */
+function toBoard(p: Piece): { x: number; y: number } {
+    return { x: p.x + p.w / 2 - LOT.w / 2, y: LOT.h / 2 - (p.y + p.h / 2) };
+}
+
+function dirAngle(dir: Dir): number {
+    return dir === 'up' ? 90 : dir === 'down' ? 270 : dir === 'left' ? 180 : 0;
+}
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -246,7 +260,7 @@ function assemble(id: number, cars: CarSpec[]): LevelData {
     const track = trackParams(id);
     return {
         id,
-        grid: { cols: GRID_COLS, rows: GRID_ROWS, cars },
+        lot: { w: LOT.w, h: LOT.h, cars },
         parking: { slots: SLOTS, unlocked: UNLOCKED },
         loop: {
             capacity: track.capacity,
@@ -312,26 +326,28 @@ function pack(rng: () => number, want: number): Piece[] {
  * A stuck peel drops the pieces it could not take. That leaves holes in the lot rather
  * than an unsolvable level, and it is why `generateLevel` still checks the car count.
  */
+// TEMPORARY (Task 5 replaces pack/peel/scatter wholesale): the grid packer feeding the
+// new collision model. Cars land on cell centres at right angles -- the old game in new
+// coordinates -- which is exactly what this task should produce: it changes how
+// blocking is COMPUTED and nothing about how the lot is filled.
 function peel(rng: () => number, pieces: Piece[]): { piece: Piece; dir: Dir }[] {
     const remaining = pieces.slice();
-    const occupied = new Set<string>(pieces.flatMap(pieceCells));
     const order: { piece: Piece; dir: Dir }[] = [];
     while (remaining.length > 0) {
+        const probes: CarSpec[] = remaining.map((p, i) => ({
+            id: i + 1, ...toBoard(p), angle: 0, color: '', cap: p.cap,
+        }));
         const moves: { i: number; dir: Dir }[] = [];
         for (let i = 0; i < remaining.length; i++) {
-            const piece = remaining[i];
-            for (const dir of dirsFor(piece)) {
-                // pathClear never looks at a car's own cells, so the id and colour here
-                // are placeholders it cannot read.
-                const probe: CarSpec = { ...piece, id: 0, dir, color: '' };
-                if (pathClear(probe, occupied, GRID_COLS, GRID_ROWS)) moves.push({ i, dir });
+            for (const dir of dirsFor(remaining[i])) {
+                if (pathClear({ ...probes[i], angle: dirAngle(dir) }, probes, LOT)) {
+                    moves.push({ i, dir });
+                }
             }
         }
         if (moves.length === 0) break;
         const move = pick(rng, moves);
-        const piece = remaining.splice(move.i, 1)[0];
-        for (const c of pieceCells(piece)) occupied.delete(c);
-        order.push({ piece, dir: move.dir });
+        order.push({ piece: remaining.splice(move.i, 1)[0], dir: move.dir });
     }
     return order;
 }
@@ -343,11 +359,8 @@ function peel(rng: () => number, pieces: Piece[]): { piece: Piece; dir: Dir }[] 
  */
 function scatter(rng: () => number, p: GenParams): CarSpec[] {
     return peel(rng, pack(rng, p.cars)).map(({ piece, dir }, i) => ({
-        id: i + 1,
-        x: piece.x, y: piece.y, w: piece.w, h: piece.h,
-        dir,
-        color: PALETTE[i % p.colors],
-        cap: piece.cap,
+        id: i + 1, ...toBoard(piece), angle: dirAngle(dir),
+        color: PALETTE[i % p.colors], cap: piece.cap,
     }));
 }
 

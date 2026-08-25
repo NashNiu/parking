@@ -33,7 +33,7 @@ export class GameCore {
   private state: GameState = 'playing';
 
   constructor(level: LevelData) {
-    this.grid = new GridSystem(level.grid.cols, level.grid.rows, level.grid.cars);
+    this.grid = new GridSystem({ w: level.lot.w, h: level.lot.h }, level.lot.cars);
     this.parking = new ParkingSystem(level.parking.slots, level.parking.unlocked);
     this.loop = new LoopSystem(
       level.loop.capacity,
