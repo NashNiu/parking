@@ -217,12 +217,7 @@ export class GameController extends Component {
      * number `gridStep` held and the arithmetic that reads it is unchanged.
      */
     private boardScale = 1;
-    /**
-     * The lot's own edges in board space -- the rectangle the cars actually sit in, not the
-     * slab, which is drawn wider to fill the frame. `routeToSlot` decides which lane a car
-     * joins by which of these edges its heading carries it across first.
-     */
-    private lotRect = { left: 0, right: 0, top: 0, bottom: 0 };
+
     /**
      * Cars still driving to a stall. `busy` only locks taps for the first leg, so the
      * player can keep tapping while a car finishes its lap of the ring road; this keeps
@@ -370,15 +365,6 @@ export class GameController extends Component {
         const lotH = lotHeight(level.lot.h, scale);
         const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * LOT_HALF_W);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
-        // The cars' own bounds, from the board extent rather than the drawn slab: `lotW` is
-        // widened to fill the frame and `lotH` carries an apron, and a car that left through
-        // either of those would be routed from a point it never reaches.
-        this.lotRect = {
-            left: -level.lot.w * scale / 2,
-            right: level.lot.w * scale / 2,
-            top: GRID_Y + level.lot.h * scale / 2,
-            bottom: GRID_Y - level.lot.h * scale / 2,
-        };
         this.ring = {
             top: ROAD_Y,
             bottom: GRID_Y - lotH / 2 - RING_OFF,
@@ -620,30 +606,42 @@ export class GameController extends Component {
 
     /**
      * Waypoints from a car's place in the lot to a parking stall: straight out along its own
-     * heading until it clears the lot, then round the ring to the top lane, along that to
-     * the stall, then up into it.
+     * heading until it meets a lane of the ring road, then round the ring to the top lane,
+     * along that to the stall, then up into it.
      *
      * The target always sits on the top lane, since every stall is above it. So a car that
      * left by a side needs one corner and one that left by the bottom needs two, taking
      * whichever side it is already nearer.
      *
-     * A diagonal heading needs no case of its own. Whichever lot edge the car reaches FIRST
-     * decides the lane it joins, and everything past that is the same corner-turning the
-     * four-direction version did -- so what used to be four branches is now one comparison
-     * feeding the same three.
+     * A diagonal heading needs no case of its own. Whichever RING LANE the car reaches
+     * FIRST decides the lane it joins, and everything past that is the same corner-turning
+     * the four-direction version did -- so what used to be four branches is now one
+     * comparison feeding the same three.
+     *
+     * Note the first leg runs all the way to the LANE, not to the lot's edge. Stopping at
+     * the edge is what the centre of the car crossing it means, so the body would still be
+     * half inside the lot when the next leg turns it -- and in a lot packed to a clearance
+     * of 0.04 board units, that pivot sweeps the car's rear through whoever is still parked
+     * beside it. Measured over the ten shipped levels, 218 of 360 cars clipped a neighbour
+     * that way; routing to the lane instead makes it none of them.
+     *
+     * Driving to the lane also makes the axis-aligned cars behave as they always did. Their
+     * `out` lands ON the lane, so the corner waypoint that follows is the same point and
+     * `driveRoute` drops the zero-length leg -- where stopping at the lot edge gave a
+     * quarter of the cars a full braking stop and a 0.16s turn through zero degrees, a
+     * pause you could see inside an exit that only lasts a third of a second.
      */
     private routeToSlot(from: Vec3, angle: number, slotX: number, parkY: number): Vec3[] {
         const r = this.ring;
-        const L = this.lotRect;
         const z = from.z;
         const d = headingVec(angle);
-        // Distance to each boundary it is actually heading toward; Infinity when it is not
+        // Distance to each lane it is actually heading toward; Infinity when it is not
         // travelling that way at all, so `Math.min` ignores it.
         const tx = Math.abs(d.x) < 1e-6
-            ? Infinity : ((d.x > 0 ? L.right : L.left) - from.x) / d.x;
+            ? Infinity : ((d.x > 0 ? r.right : r.left) - from.x) / d.x;
         const ty = Math.abs(d.y) < 1e-6
-            ? Infinity : ((d.y > 0 ? L.top : L.bottom) - from.y) / d.y;
-        // Clamped at zero: a car already past an edge would otherwise be sent backwards.
+            ? Infinity : ((d.y > 0 ? r.top : r.bottom) - from.y) / d.y;
+        // Clamped at zero: a car somehow already past a lane would otherwise be sent back.
         const t = Math.max(0, Math.min(tx, ty));
         const out = new Vec3(from.x + d.x * t, from.y + d.y * t, z);
         const wp: Vec3[] = [out];

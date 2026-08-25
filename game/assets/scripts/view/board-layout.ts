@@ -11,8 +11,10 @@ import { Cap, CAP_BOX, CAR_SCALE } from '../core/index';
  * position is already a position.
  *
  * `scale` is world units per board unit. One board unit is the pitch the old 9x6 grid used,
- * which is why the camera framing and the lot slab survive this milestone untouched: the
- * numbers coming out of here are the same numbers GridLayout produced for the same car.
+ * which is why the camera framing and the lot slab survive this milestone untouched --
+ * `toWorld` lands a car on the same world point `cellCenter` gave its equivalent cell.
+ * `carSize` is the part that deliberately does NOT agree: it answers with the body's size
+ * rather than the cell's, which is the whole reason this class exists.
  */
 export class BoardLayout {
     constructor(public readonly scale: number) {}

@@ -7,10 +7,10 @@ import { litMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
-// not a second declaration of the same three strings.
-export { Cap };
-
-const CAPS: Cap[] = ['small', 'medium', 'big'];
+// not a second declaration of the same three strings. `export type`, not `export`: this is
+// a type and Cocos transpiles each module without the others' type information, so a value
+// re-export clause would have it emit a runtime binding core/index has no value for.
+export type { Cap };
 
 /**
  * Real 3D car art (cartoon GLB models made in Claude Design), one per capacity.
@@ -49,7 +49,7 @@ const prefabs: Partial<Record<Cap, Prefab>> = {};
  * direct uuid load. If both fail, buildCar falls back to a plain colored box.
  */
 export function preloadCarModels(done: () => void): void {
-    const caps: Cap[] = CAPS;
+    const caps: Cap[] = ['small', 'medium', 'big'];
     let remaining = caps.length;
     const finish = (): void => { if (--remaining === 0) done(); };
     for (const cap of caps) {
@@ -201,9 +201,9 @@ export function buildCar(
 ): BuiltCar {
     const root = new Node(name);
 
-    // body: the animatable node. Carries the dir spin (about the board normal) and
-    // is what squash/flash target. Kept separate from `root` so movement tweens on
-    // root and picking (root.position + footprint half-extents) stay clean.
+    // body: the animatable node. Carries the heading (about the board normal) and is what
+    // squash/flash target. Kept separate from `root` so movement tweens live on root and
+    // `pickCar` can undo the heading itself to test the tap in the car's own frame.
     const body = new Node('body');
     root.addChild(body);
 

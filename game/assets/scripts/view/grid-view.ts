@@ -1,5 +1,5 @@
 import { Node, Vec3 } from 'cc';
-import { GridSystem } from '../core/index';
+import { CLEARANCE, GridSystem } from '../core/index';
 import { BoardLayout } from './board-layout';
 import { colorOf } from './colors';
 import { buildCar, Cap } from './car-builder';
@@ -22,11 +22,16 @@ export class GridView {
     private carNodes = new Map<number, Node>();
     private entries: CarEntry[] = [];
 
+    /** Half a clearance, in world units. See `pickCar`. */
+    private readonly slop: number;
+
     constructor(
         private parent: Node,
         private grid: GridSystem,
         private layout: BoardLayout,
-    ) {}
+    ) {
+        this.slop = (CLEARANCE / 2) * layout.scale;
+    }
 
     render(): void {
         for (const [id, car] of this.grid.cars) {
@@ -56,6 +61,13 @@ export class GridView {
      * Cars are iterated in insertion order and the first hit wins. Two cars cannot overlap
      * (validateLevel enforces a clearance between every pair), so at most one can contain
      * any point and the order does not matter.
+     *
+     * The box is grown by SLOP, because an exact body is a small target: a small car is
+     * 0.355 world units across in a frame about 9.8 wide, which is a finger's width and no
+     * more. Half a clearance on each side is the most that is provably safe -- core keeps
+     * every pair of bodies a full clearance apart, so two grown boxes still cannot both
+     * contain a point, and first-hit stays unambiguous. Wanting a bigger target than that
+     * would mean picking the NEAREST car rather than the first one that contains the tap.
      */
     pickCar(local: Vec3): number | null {
         for (const e of this.entries) {
@@ -69,7 +81,8 @@ export class GridView {
             const dy = local.y - p.y;
             const along = dx * c - dy * s;
             const across = dx * s + dy * c;
-            if (Math.abs(along) <= e.len / 2 && Math.abs(across) <= e.wid / 2) return e.id;
+            if (Math.abs(along) <= e.len / 2 + this.slop
+                && Math.abs(across) <= e.wid / 2 + this.slop) return e.id;
         }
         return null;
     }
