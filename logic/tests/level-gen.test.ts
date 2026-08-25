@@ -102,7 +102,7 @@ test('every level fills the lot, and fills it equally', () => {
   }
 });
 
-test('the lot reads as a full car park', () => {
+test('the car mix keeps the bodies covering about half the lot', () => {
   // Averaged over all ten levels rather than checked on level 1 alone. Each car's
   // capacity is an independent draw from CAP_MIX, and 36 draws leave enough variance
   // in the resulting mix of small/medium/big bodies that a single level's area share
@@ -119,7 +119,17 @@ test('the lot reads as a full car park', () => {
   }
   // Bodies cover just under half the lot -- the old 0.8 counted cells claimed, which
   // included the ring of air a square cell left around an oblong car.
-  expect(area / (IDS.length * LOT.w * LOT.h)).toBeGreaterThan(0.42);
+  //
+  // Note what this can and cannot catch. The sum depends only on WHICH capacities were
+  // drawn, not on where they ended up, so a packer that piled all 36 cars in one corner
+  // would score identically -- the guard against that is the car-count assertion in the
+  // test above, and this one is really about the capacity mix. It fails if CAP_MIX shifts
+  // toward small bodies, or if CAR_SCALE comes down.
+  //
+  // The floor is 0.40 rather than the measured 0.46 so that the sanctioned density
+  // escalation has somewhere to land: CAR_SCALE 0.95 scales area by 0.9025, which would
+  // put this at 0.415 -- under a 0.42 floor, failing for a change the plan permits.
+  expect(area / (IDS.length * LOT.w * LOT.h)).toBeGreaterThan(0.40);
 });
 
 test('a later level is measurably harder than the first, at the same size', () => {
@@ -216,6 +226,13 @@ test('the curve keeps producing legal tracks past the authored table', () => {
   // consecutive ids cover every one of them exactly once -- 11 rect, 12 hex, 13 trap,
   // 14 oval, 15 circle. Fifteen ids ran that same cycle three times over, at about a
   // second of packing each.
+  //
+  // Honest about what that cost: only the first two assertions are shape-determined. The
+  // third is a spot check on the packer over ids no level file covers, and for that one
+  // the shape period is beside the point -- it went from fifteen samples to five. Ids 1-10
+  // are checked exhaustively by `every generated level passes every rule validateLevel
+  // has`, and no id past 10 ships, so five is a deliberate trade of tail sampling for a
+  // suite that finishes.
   for (let id = 11; id <= 15; id++) {
     const p = trackParams(id);
     expect(capacityOptions(p.track)).toContain(p.capacity);

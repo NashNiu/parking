@@ -22,10 +22,13 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * The lot, in board units -- one unit is the pitch the old 9x6 grid used, so the
  * camera framing and the view's board scale are untouched by this milestone.
  *
- * 36 cars at CAP_BOX cover 26.7 of these 54 square units, just under half. That is a
- * comfortable target for random rotated rectangles; the old grid's "88% occupied"
- * counted CELLS CLAIMED, and the difference between the two numbers is exactly the
- * ring of side air a square cell left around an oblong car.
+ * 36 cars drawn from CAP_MIX would cover 26.7 of these 54 square units on paper. The ten
+ * shipped levels actually carry 24.4, or 45%, because the packer's own success filter
+ * reshapes the mix -- an attempt heavy in big bodies is likelier to fail to settle, so
+ * what survives skews small: 238 small cars over 360 against the 198 CAP_MIX predicts.
+ * Either number is a comfortable target for random rotated rectangles. The old grid's
+ * "88% occupied" counted CELLS CLAIMED, and the difference between that and this is
+ * exactly the ring of side air a square cell left around an oblong car.
  *
  * If the camera framing changes, this changes with it: see LOT_HALF_W in GameController.
  */
@@ -49,16 +52,35 @@ const SNAP_SHARE = 0.25;
  * Below this, a residual `overlapMTV` reading is floating-point noise from a pair the
  * relaxation already settled, not a real overlap still to resolve.
  *
- * Without this floor, `pack` can get stuck forever regardless of RELAX_ITERS: a pair
- * that has converged to within a few ULPs of touching keeps reporting a non-null MTV
+ * Without this floor, no attempt can ever settle: a pair that has converged to within a
+ * few ULPs of touching keeps reporting a non-null MTV
  * (SAT's `<=` test almost never lands on an exact tie), and the push it computes --
  * half that residual -- is smaller than the position's own floating-point precision at
- * board-unit magnitudes, so `+=` silently does nothing. `moved` then never goes false
- * and the loop burns every iteration on a pair that was, physically, already done.
+ * board-unit magnitudes, so `+=` silently does nothing. `moved` then never goes false,
+ * so the loop runs out its RELAX_ITERS and the attempt is written off -- it cannot hang,
+ * it just burns every iteration on a pair that was, physically, already done.
  * 1e-9 sits far above the noise this is built to catch (observed around 1e-15) and far
  * below CLEARANCE (0.04), so it cannot paper over an overlap the game would show.
  */
 const SETTLED_GAP = 1e-9;
+
+/**
+ * Slack the packer keeps on top of its half-clearance, to survive `round4`.
+ *
+ * The relaxation's fixed point is pairs at almost exactly touching -- push a pair apart,
+ * its neighbours push it back, and a dense lot settles with several pairs flush to within
+ * floating-point noise. `scatter` then rounds every centre to four places, moving each by
+ * up to 5e-5 per axis, so a flush pair can drift up to ~1.4e-4 closer. Without this
+ * margin those pairs land just under the clearance and `validateLevel` throws the whole
+ * attempt away: measured, 30 of the 35 fully-packed attempts for level 1 and 41 of 43 for
+ * level 2, leaving the difficulty search an effective pool of 5 and 2 out of ATTEMPTS.
+ *
+ * The wall rule never had this problem because `clampInside` clamps the INFLATED box, so
+ * it already leaves half a clearance of margin against the lot edge. This gives the
+ * pairwise rule the equivalent. 1.5e-4 covers the worst rounding drift with room to spare
+ * and is three hundred times smaller than CLEARANCE, so it cannot hide a real gap.
+ */
+const ROUND_MARGIN = 1.5e-4;
 
 /** What the curve asks of a level. Every field is non-decreasing in the level id. */
 export interface GenParams {
@@ -233,7 +255,7 @@ function pieceBox(p: Piece): OBB {
  * `validateLevel` uses, so the packer cannot settle on something the check rejects.
  */
 function packBox(p: Piece): OBB {
-    return inflate(pieceBox(p), CLEARANCE / 2);
+    return inflate(pieceBox(p), CLEARANCE / 2 + ROUND_MARGIN);
 }
 
 /** Slide a piece until its box is back inside the lot. Mutates it. */
@@ -292,7 +314,13 @@ function assemble(id: number, cars: CarSpec[]): LevelData {
  * overlapping pairs apart along their minimum translation vector is about thirty
  * lines and is the difference between seating 36 and seating 28.
  *
- * Big bodies are placed first, so the hardest ones get the emptiest board.
+ * Big bodies come first in the list, which is NOT the head start it looks like: every
+ * piece is scattered before any relaxation runs, so nobody gets an emptier board than
+ * anybody else. What the sort actually decides is which rng draws map to which capacity,
+ * and the `i < j` order the separation sweep walks pairs in -- which biases who gets
+ * clamped against a wall when a chain of pushes reaches one. The head-start reading is a
+ * leftover from the reject-sampling version this replaced, where placement order was
+ * load-bearing.
  *
  * A quarter of the angles snap to a right angle. Uniformly random angles read as
  * uniform noise -- the reference the design came from has a tidy outer band, and
@@ -421,7 +449,10 @@ function scatter(rng: () => number, p: GenParams): CarSpec[] {
         id: i + 1,
         x: round4(piece.x),
         y: round4(piece.y),
-        angle: round4(((angle % 360) + 360) % 360),
+        // Round BEFORE normalising, not after: a snapped 359.99996 survives the modulo
+        // unchanged and then rounds to a flat 360, which is outside the [0, 360) the
+        // level format promises.
+        angle: ((round4(angle) % 360) + 360) % 360,
         color: PALETTE[i % p.colors],
         cap: piece.cap,
     }));

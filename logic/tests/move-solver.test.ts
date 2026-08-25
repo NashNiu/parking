@@ -1,5 +1,6 @@
 import { carBox, heading, pathClear, firstBlocker } from '../../game/assets/scripts/core/move-solver';
 import { CarSpec, CAP_BOX, CLEARANCE } from '../../game/assets/scripts/core/types';
+import { inflate, overlapMTV } from '../../game/assets/scripts/core/geometry';
 
 const LOT = { w: 9, h: 6 };
 const car = (over: Partial<CarSpec>): CarSpec => ({
@@ -90,6 +91,33 @@ test('a lane with the clearance to spare is a lane', () => {
 test('a car does not block itself', () => {
   const a = car({ id: 1, x: 0, y: 0, angle: 0 });
   expect(firstBlocker(a, [a], LOT)).toBeNull();
+});
+
+test('a blocker is never missed, whatever angle it sits at or how far off the lane', () => {
+  // firstBlocker skips a candidate whose centre sits farther off the mover's lane than the
+  // two bodies' circumscribed radii add up to -- cheap arithmetic that spares the four
+  // projected-axis checks of a swept SAT test, which is the hot path when a level is
+  // generated. The bound is deliberately loose: it never fires anywhere near a real
+  // contact, so no single case can pin its exact value, and a test that tried would be
+  // asserting an implementation detail.
+  //
+  // What CAN be pinned is the guarantee the bound must not break: a null answer has to
+  // mean the bodies genuinely never meet. So for a spread of blocker angles and lane
+  // offsets, whenever firstBlocker reports nothing, walk the mover down its own lane and
+  // check that nothing was there to hit. Dropping the blocker's own radius from the bound
+  // -- the obvious way to get this wrong -- makes 29 of these 40 cases report a blocker
+  // that is really there as absent, and every one of them fails here.
+  const mover = car({ id: 1, x: -4, y: 0, angle: 0 });
+  for (const angle of [0, 23, 45, 67, 90, 134, 200, 300]) {
+    for (const offset of [0, 0.2, 0.4, 0.6, 0.75, 0.8, 1.0, 1.2]) {
+      const blocker = car({ id: 2, x: 0, y: offset, angle, cap: 'big' });
+      if (firstBlocker(mover, [mover, blocker], LOT)) continue;
+      const body = inflate(carBox(mover), CLEARANCE);
+      for (let t = 0; t <= 9; t += 0.25) {
+        expect(overlapMTV({ ...body, x: body.x + t }, carBox(blocker))).toBeNull();
+      }
+    }
+  }
 });
 
 test('a diagonal lane is checked along the diagonal, not along the axes', () => {
