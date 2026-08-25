@@ -132,19 +132,35 @@ export const BLOCKED_TOLERANCE = 1;
  *
  * The blocked band is MEASURED, and re-measured for free-angle exits. A diagonal lane is a
  * diagonal swath and clips more cars than a straight column, so the whole distribution sits
- * higher than it did on the grid: sampling sixty levels gives blocked counts running 21 to
- * 30, median 27. The grid-era band asked for 18 rising to 26, which spent its bottom third
- * on targets the geometry cannot reach -- levels 1 to 3 landed one to three cars ABOVE their
- * target and counted as on-target only because BLOCKED_TOLERANCE is 3. 0.61 to 0.78 puts the
- * ramp across the range that actually exists.
+ * higher than it did on the grid. The grid-era band asked for 18 rising to 26, which spent
+ * its bottom third on targets the geometry cannot reach -- levels 1 to 3 landed one to three
+ * cars ABOVE their target and counted as on-target only because BLOCKED_TOLERANCE was 3. The
+ * curve was not setting the number; it was being overruled by whatever the packer produced.
  *
- * `minRounds` is NOT re-measured. Its `Math.min(5, ...)` cap only binds from id 10, where
- * `2 + floor(9/3)` is 5 anyway, so it constrains no shipped level and there is nothing in
- * the measurement that reaches it.
- */
-/**
- * The blocked-car target for level 1 and for level 10, as a share of the lot. Measured, not
- * chosen: see the note on `levelParams`.
+ * Be careful what the measurement can and cannot say, because the obvious reading of it is
+ * circular. Sampling sixty levels gives blocked counts of 21 to 30 with median 27 -- but the
+ * generator ACCEPTS a candidate only inside the window the old band already defined, so for
+ * ids 11 and up (old target 27, old tolerance 3) the observed 24..30 is exactly that window's
+ * edges, not the geometry's. What survives the censoring is the SHAPE inside the window (the
+ * generator takes the first hit, so it does not bias within it) and the floor of 21, which
+ * came from ids 1-10 whose old windows reached down to 15 and so was not clipped.
+ *
+ * 0.78 is the measured upper quartile. 0.61 is NOT a quartile -- the quartiles are about 0.70
+ * to 0.78, and a band that narrow is barely a ramp, so the low end is set at the observed
+ * floor instead. The cost is real and named: level 1's target of 22 sits at the very edge of
+ * what the packer produces, eight of the ten levels land at or above their target, and a
+ * future geometry change that lifts the floor by two cars breaks ids 1 to 3. What makes that
+ * acceptable is that it breaks LOUDLY -- `the curve actually sets the blocked-car count`
+ * fails the moment it happens.
+ *
+ * `minRounds` IS re-measured, because its trigger fired: the ten levels' solver rounds run 6
+ * to 12, median 9, all of them at or above the old cap of 5. That cap binds from id 13
+ * (`2 + floor(12/3)` is 6), not from id 10 where the raw formula already gives 5 -- so
+ * raising it to the measured median changes nothing for the shipped ten and only stops the
+ * endless tail asking for fewer rounds than the geometry comfortably supports.
+ *
+ * BLOCKED_FIRST and BLOCKED_LAST below are the level-1 and level-10 targets as a share of
+ * the lot; everything above is why they are those numbers.
  */
 const BLOCKED_FIRST = 0.61;
 const BLOCKED_LAST = 0.78;
@@ -158,7 +174,7 @@ export function levelParams(id: number): GenParams {
         cars: CARS_PER_LEVEL,
         colors: Math.min(5, 2 + Math.floor((id - 1) / 3)),
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
-        minRounds: Math.min(5, 2 + Math.floor((id - 1) / 3)),
+        minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
 }
 

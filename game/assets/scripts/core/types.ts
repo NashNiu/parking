@@ -47,10 +47,10 @@ export interface Lot { w: number; h: number }
 /**
  * Each capacity's body size in board units, where one board unit is the pitch the old
  * grid used (0.7533 world units). The numbers are the three glb models' measured AABBs
- * divided by that pitch. Nothing guards them yet: `tools/check-car-models.mjs` still
- * validates against the cell-footprint model this milestone deleted and does not mention
- * CAP_BOX at all. Task 8 rewrites it to print these and fail the build if a model set
- * drifts from them; until then a model swap can silently disagree with this table.
+ * divided by that pitch. `tools/check-car-models.mjs` is what guards them: it parses the
+ * glb files and fails if a model's proportions leave any of these rows unfilled. Run it
+ * after any model swap -- core cannot read a .glb, so nothing else can notice this table
+ * going stale, and the failure is backwards: a model that GREW makes the car smaller.
  *
  * This table is the SOURCE of the drawn size, which is the opposite of how it used to
  * work: a model AABB was fitted to a grid cell and the size fell out of the fit. Do
@@ -64,9 +64,11 @@ export const CAP_BOX: Record<Cap, Box> = {
 };
 
 /**
- * One factor on every car's size. The release valve for packing density: 36 cars at
- * CAP_BOX cover 49.5% of a 9x6 lot, which random rotated rectangles handle with room
- * to spare, so it starts at 1. Turn it down only if `pack` cannot seat all 36.
+ * One factor on every car's size. The release valve for packing density: 36 cars drawn from
+ * CAP_MIX would cover 49.5% of a 9x6 lot on paper, and the ten shipped levels come out at
+ * 45% (41.7% to 50.0% level by level, since each car's capacity is an independent draw).
+ * Random rotated rectangles handle that with room to spare, so it starts at 1. Turn it down
+ * only if `pack` cannot seat all 36.
  */
 export const CAR_SCALE = 1.0;
 

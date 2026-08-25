@@ -149,23 +149,32 @@ test('the curve actually sets the blocked-car count, within its stated tolerance
   // and is easy to lose again: the band has to sit on the range the packer produces, or the
   // generator quietly falls back to its nearest miss on every level and the ramp does
   // nothing. Measured across the ten: every level lands within 1 of its target.
+  // Only the blocked count is asserted. A companion `rounds >= minRounds` check would be
+  // vacuous: minRounds runs 2..5 over these ten while the rounds they actually come out with
+  // run 6..12, so it could only fire in the case this line already catches -- the generator
+  // giving up and returning a nearest miss.
   for (const id of IDS) {
     const want = Math.round(levelParams(id).blockedRatio * levelParams(id).cars);
-    const got = estimateDifficulty(levelFor(id));
-    expect(Math.abs(got.blocked - want)).toBeLessThanOrEqual(BLOCKED_TOLERANCE);
-    expect(got.rounds).toBeGreaterThanOrEqual(levelParams(id).minRounds);
+    expect(Math.abs(estimateDifficulty(levelFor(id)).blocked - want))
+      .toBeLessThanOrEqual(BLOCKED_TOLERANCE);
   }
 });
 
-test('the second half of the curve is harder than the first', () => {
-  // Not step-by-step monotone, and deliberately not asserted as such. `score` weights
-  // solver rounds at 3x, and rounds is the one input the curve does not steer -- the
-  // generator takes the first candidate inside the blocked tolerance and that candidate's
-  // round count is whatever it happens to be, 6 to 12 across the ten. So the halves are
-  // what can be claimed honestly; a per-step assertion would be pinning luck.
-  const scores = IDS.map((id) => estimateDifficulty(levelFor(id)).score);
-  const front = scores.slice(0, 5).reduce((a, b) => a + b, 0);
-  const back = scores.slice(5).reduce((a, b) => a + b, 0);
+test('the second half of the curve is harder than the first, by what the curve steers', () => {
+  // Halves, not step-by-step: the generator takes the FIRST candidate inside the blocked
+  // tolerance, so any single level's exact figures are partly luck.
+  //
+  // And measured on `blocked * 2 + colors` rather than on `score`. Score also carries solver
+  // rounds at 3x, and rounds is the one input the curve does not steer at all -- it comes out
+  // between 6 and 12 across these ten with no target of its own. Including it made half the
+  // margin noise, which would let a genuinely inverted curve pass on a lucky draw. These two
+  // terms are the ones levelParams actually sets, so this is the claim it can defend.
+  const steered = IDS.map((id) => {
+    const d = estimateDifficulty(levelFor(id));
+    return d.blocked * 2 + d.colors;
+  });
+  const front = steered.slice(0, 5).reduce((a, b) => a + b, 0);
+  const back = steered.slice(5).reduce((a, b) => a + b, 0);
   expect(back).toBeGreaterThan(front);
 });
 

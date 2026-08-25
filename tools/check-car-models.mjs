@@ -7,8 +7,14 @@
 // model that grew silently SHRINKS the car on screen, and shrinks `pickCar`'s hit box with
 // it. A tap that misses is a long way from a diff that says why.
 //
-// This tool is that missing notice. It parses the glb itself and reproduces exactly what
-// car-builder does with it.
+// This tool is that missing notice. It parses the glb itself and runs car-builder's own
+// arithmetic over it.
+//
+// One property worth knowing before trusting the numbers: the PASS/FAIL is scale-invariant.
+// `drawn = m * min(want.len / m.len, want.wid / m.wid)` cancels every common factor, so
+// CAR_SCALE and the board pitch drop out of the shortfall entirely. They are carried anyway,
+// because the printed "drawn" column is meant to be the size that appears on screen -- but a
+// wrong PITCH would give a wrong headline and the same verdict.
 //
 // Note what can and cannot go wrong. A model's ABSOLUTE size is irrelevant: each capacity is
 // scaled by its own `s`, so whatever the artist exported, the car is drawn at CAP_BOX times
@@ -32,8 +38,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * How much of its declared CAP_BOX a car may leave unfilled before it is a problem, in board
- * units. The three models currently ship at under a thousandth.
+ * How much of its declared CAP_BOX a car may leave unfilled before it is a problem, as a
+ * FRACTION of the axis it is short on. Relative rather than absolute, so it means the same
+ * thing to a small car's 0.471 width as to a big one's 1.949 length -- 0.02 board units was
+ * 4% of the one and 1% of the other. The three models currently ship at under 0.2%.
  */
 const BOX_TOLERANCE = 0.02;
 const MODELS = { small: 'car', medium: 'bus', big: 'truck' };
@@ -61,10 +69,21 @@ function lotExtent(file) {
     return { w: parseFloat(m[1]), h: parseFloat(m[2]) };
 }
 
-/** One row of CAP_BOX, likewise a literal rather than a bare number. */
+/**
+ * One row of CAP_BOX, likewise a literal rather than a bare number.
+ *
+ * Scoped to the CAP_BOX declaration rather than searched across the file: `len`/`wid` is a
+ * shape any future `Record<Cap, Box>` could share, and matching one of those instead would
+ * be silent.
+ */
 function capBox(file, cap) {
     const src = readFileSync(file, 'utf8');
-    const m = new RegExp(`${cap}:\\s*\\{ len: ([\\d.]+), wid: ([\\d.]+) \\}`).exec(src);
+    const block = /export const CAP_BOX: Record<Cap, Box> = \{([\s\S]*?)\n\};/.exec(src);
+    if (!block) {
+        console.error(`cannot find the CAP_BOX declaration in ${file} — this tool is out of date`);
+        process.exit(2);
+    }
+    const m = new RegExp(`${cap}:\\s*\\{ len: ([\\d.]+), wid: ([\\d.]+) \\}`).exec(block[1]);
     if (!m) {
         console.error(`cannot find CAP_BOX.${cap} in ${file} — this tool is out of date`);
         process.exit(2);
@@ -83,6 +102,7 @@ const LOT_HALF_W = constant(CTRL, 'LOT_HALF_W');
 const CELL_MAX = constant(CTRL, 'CELL_MAX');
 const CELL_GAP = constant(CTRL, 'CELL_GAP');
 const LOT = lotExtent(GEN);
+const CAR_SCALE = constant(TYPES, 'CAR_SCALE');
 
 // GameController's own expression, verbatim: the board scale is whichever budget is tighter.
 // One board unit is this many world units, which is what turns a measured AABB into the units
@@ -185,39 +205,60 @@ for (const cap of caps) {
 }
 
 const f3 = (n) => n.toFixed(3).padStart(6);
-console.log(`board pitch ${PITCH.toFixed(4)} world units   (models from ${dir})
-`);
+console.log(`board pitch ${PITCH.toFixed(4)} world units, car scale ${CAR_SCALE}   (models from ${dir})\n`);
 console.log('cap      model L x W x H           declared L x W   drawn L x W      short');
 const problems = [];
 for (const cap of caps) {
     const m = model[cap];
     const want = table[cap];
     // car-builder's own arithmetic: one uniform scale, the min over both axes.
-    const s = Math.min((want.len * PITCH) / m.len, (want.wid * PITCH) / m.wid);
-    const drawn = { len: (m.len * s) / PITCH, wid: (m.wid * s) / PITCH };
-    const short = Math.max(want.len - drawn.len, want.wid - drawn.wid);
+    const wantLen = want.len * CAR_SCALE * PITCH;
+    const wantWid = want.wid * CAR_SCALE * PITCH;
+    const s = Math.min(wantLen / m.len, wantWid / m.wid);
+    const drawn = { len: (m.len * s) / (CAR_SCALE * PITCH), wid: (m.wid * s) / (CAR_SCALE * PITCH) };
+    const shortLen = (want.len - drawn.len) / want.len;
+    const shortWid = (want.wid - drawn.wid) / want.wid;
+    const short = Math.max(shortLen, shortWid);
     console.log(`${cap.padEnd(8)} ${f3(m.len)} x${f3(m.wid)} x${f3(m.hgt)}   `
-        + `${f3(want.len)} x${f3(want.wid)}   ${f3(drawn.len)} x${f3(drawn.wid)}   ${short.toFixed(4)}`);
+        + `${f3(want.len)} x${f3(want.wid)}   ${f3(drawn.len)} x${f3(drawn.wid)}   `
+        + `${(short * 100).toFixed(2)}%`);
     if (short > BOX_TOLERANCE) {
-        const axis = (want.len - drawn.len) > (want.wid - drawn.wid) ? 'length' : 'width';
+        const axis = shortLen > shortWid ? 'length' : 'width';
         problems.push(`${cap}: the model is ${(m.len / m.wid).toFixed(3)} long for every 1 wide, `
             + `but CAP_BOX asks for ${(want.len / want.wid).toFixed(3)}. Scaled uniformly it comes `
-            + `out ${short.toFixed(3)} board units short across its ${axis}, so the car does not `
-            + `fill the space the packer reserved for it. Either re-proportion the model, or set `
+            + `out ${(short * 100).toFixed(1)}% short across its ${axis}, so the car does not fill `
+            + `the space the packer reserved for it. Either re-proportion the model, or set `
             + `CAP_BOX.${cap} in core/types.ts to ${drawn.len.toFixed(3)} x ${drawn.wid.toFixed(3)} `
             + `and re-run "cd logic && npm run gen" -- the packer sizes its boxes from that table, `
             + `so the shipped levels stay laid out for the old size until they are regenerated.`);
     }
 }
 
+// Two ways the three can fail to read as three, and they need separate checks.
+//
+// The table can say they are the same size, which no model can fix: each is scaled to its own
+// row, so the table is what decides how big the three come out.
 for (let i = 0; i < caps.length; i++) {
     for (let j = i + 1; j < caps.length; j++) {
         const a = table[caps[i]], b = table[caps[j]];
         if (Math.abs(a.len - b.len) < 0.01 && Math.abs(a.wid - b.wid) < 0.01) {
             problems.push(`CAP_BOX gives ${caps[i]} and ${caps[j]} the same size `
                 + `(${a.len} x ${a.wid}) — the player cannot tell them apart. The models' own `
-                + `sizes cannot fix this: each is scaled to its own row, so the table is what `
-                + `decides how big the three read.`);
+                + `sizes cannot fix this: each is scaled to its own row.`);
+        }
+    }
+}
+// Or two of the glb files can be the same MESH, which the shortfall check above cannot see:
+// copy truck.glb over bus.glb and its ratio is close enough to the bus row to pass, so the
+// bus would silently be drawn as a shrunken truck. Compare the raw AABBs for that.
+for (let i = 0; i < caps.length; i++) {
+    for (let j = i + 1; j < caps.length; j++) {
+        const a = model[caps[i]], b = model[caps[j]];
+        if (['len', 'wid', 'hgt'].every((d) => Math.abs(a[d] - b[d]) < 1e-4)) {
+            problems.push(`${MODELS[caps[i]]}.glb and ${MODELS[caps[j]]}.glb are the same mesh `
+                + `(${a.len.toFixed(3)} x ${a.wid.toFixed(3)} x ${a.hgt.toFixed(3)}) — one is a copy `
+                + `of the other, so ${caps[i]} and ${caps[j]} will be the same vehicle at two `
+                + `sizes. Which file was overwritten is not something this can tell you.`);
         }
     }
 }
