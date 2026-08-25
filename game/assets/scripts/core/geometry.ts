@@ -106,3 +106,46 @@ export function insideRect(o: OBB, w: number, h: number): boolean {
     }
     return true;
 }
+
+/**
+ * How far `a` may travel along the unit vector (dx, dy) before it touches `b`; null
+ * when it never does, 0 when they are already in contact.
+ *
+ * Swept separating-axis test. On each candidate axis the two boxes project to
+ * intervals, and the mover's speed along that axis says at what DISTANCE those
+ * intervals start and stop overlapping. The boxes are in contact exactly over the
+ * intersection of the four windows, so the answer is the largest window start --
+ * provided it is not past the smallest window end.
+ *
+ * Two behaviours worth naming, because callers depend on both:
+ *  - contact strictly behind the mover reports null, not a negative distance. A car
+ *    does not reverse into the car behind it, so a blocker back there is not a
+ *    blocker. This falls out of clamping the window start at 0.
+ *  - boxes that already overlap report 0 regardless of heading. The caller asked how
+ *    far it may go before contact, and the answer is nowhere.
+ */
+export function sweepHit(a: OBB, b: OBB, dx: number, dy: number): number | null {
+    let enter = 0;
+    let exit = Infinity;
+    for (const [ax, ay] of axesOf(a, b)) {
+        const [alo, ahi] = project(a, ax, ay);
+        const [blo, bhi] = project(b, ax, ay);
+        const speed = dx * ax + dy * ay;
+        if (Math.abs(speed) < 1e-12) {
+            // Nothing closes on this axis. Apart here means apart forever.
+            if (ahi <= blo || bhi <= alo) return null;
+            continue;
+        }
+        const t1 = (blo - ahi) / speed;
+        const t2 = (bhi - alo) / speed;
+        if (t1 < t2) {
+            if (t1 > enter) enter = t1;
+            if (t2 < exit) exit = t2;
+        } else {
+            if (t2 > enter) enter = t2;
+            if (t1 < exit) exit = t1;
+        }
+        if (enter > exit) return null;
+    }
+    return enter <= exit ? enter : null;
+}
