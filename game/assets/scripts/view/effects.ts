@@ -1,6 +1,5 @@
 import { Node, Vec3, Color, tween, Tween, MeshRenderer, utils, primitives } from 'cc';
 import { unlitMaterial, setEmissive } from './materials';
-import { boxPart, makeMerged, MeshPart } from './slabs';
 
 let activeParticles = 0;
 const MAX_PARTICLES = 80;
@@ -64,52 +63,15 @@ export function squash(body: Node): void {
         .start();
 }
 
-/** Bar thickness of the blocker ring, in world units. */
-const RING_BAR = 0.05;
-
-/** Clear of the tallest car (0.39). Under the orthographic camera height costs no offset. */
-const RING_Z = 0.5;
-
-/**
- * Ring the car that is in the way, so a refused tap says WHICH car refused it.
- *
- * `flash` was supposed to be this and cannot be. It works through `setEmissive`, which
- * mutates the material in place -- and `litMaterial` is cached PER COLOUR, with
- * `recolorCar` handing the same instance to every car sharing a paint. So flashing the
- * blocker lit every car of its colour: on level 1, two colours over 36 cars, about
- * eighteen of them at once. The one mechanism that answers "what stopped me" was spraying
- * across half the lot, which is why a blocker that reaches only a hair into the lane read
- * as nothing at all. (materials.ts calls this in-place mutation "at most cosmetic". For
- * emissive-as-decoration it is; for emissive-as-the-answer it is the whole bug.)
- *
- * Geometry, not emissive, so it cannot bleed: its own node, its own mesh, parented to the
- * body so it carries the car's heading. It pulses inward twice and destroys itself -- and
- * it appears only AFTER a tap has been refused, so it gives no puzzle away.
- */
-export function blockerRing(body: Node, len: number, wid: number): void {
-    const w = len + RING_BAR * 2;
-    const h = wid + RING_BAR * 2;
-    const parts: MeshPart[] = [
-        boxPart(w, RING_BAR, 0.02, 0, h / 2),
-        boxPart(w, RING_BAR, 0.02, 0, -h / 2),
-        boxPart(RING_BAR, h, 0.02, -w / 2, 0),
-        boxPart(RING_BAR, h, 0.02, w / 2, 0),
-    ];
-    const ring = makeMerged('blocker-ring', parts, new Color(255, 238, 88, 255));
-    ring.setPosition(0, 0, RING_Z);
-    ring.setScale(1.35, 1.35, 1);
-    body.addChild(ring);
-    tween(ring)
-        .to(0.12, { scale: new Vec3(1, 1, 1) }, { easing: 'quadOut' })
-        .to(0.10, { scale: new Vec3(1.18, 1.18, 1) })
-        .to(0.10, { scale: new Vec3(1, 1, 1) })
-        .delay(0.28)
-        .call(() => { if (ring.isValid) ring.destroy(); })
-        .start();
-}
-
 /**
  * Red emissive pulse (used when a car can't exit).
+ *
+ * Note what this CANNOT do: name one car. `setEmissive` mutates the material in place and
+ * `litMaterial` is cached per COLOUR, with `recolorCar` handing the same instance to every
+ * car sharing a paint -- so flashing a single car lights every car of its colour, about
+ * eighteen of them on level 1. Fine as "something happened" feedback, useless as "this is
+ * the one". A geometric ring that could name the blocker was built and then removed at the
+ * same time as the lane guides; see the README.
  * Fades bright -> dark: the tweened factor `k` starts at 1 and ends at 0
  * (tween {t:1}->{t:0}, reading the target's own `.t`, since `onUpdate`'s
  * `ratio` argument goes the other way, 0->1, over the tween's duration).
