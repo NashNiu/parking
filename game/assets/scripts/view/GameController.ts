@@ -1,12 +1,14 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
-    input, Input, EventTouch, EventMouse, geometry, tween, Mat4, assetManager, EffectAsset,
+    input, Input, EventTouch, EventMouse, EventKeyboard, KeyCode, geometry, tween, Mat4,
+    assetManager, EffectAsset,
 } from 'cc';
 import {
     GameCore, validateLevel, LevelData, firstBlocker,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
 import { BoardLayout } from './board-layout';
+import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
@@ -223,6 +225,9 @@ export class GameController extends Component {
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
+    private layout: BoardLayout | null = null;
+    /** The footprint overlay while it is shown. See `toggleDebugOverlay`. */
+    private debugOverlay: Node | null = null;
     private sfx: SfxManager | null = null;
     /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
     private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
@@ -294,6 +299,7 @@ export class GameController extends Component {
     onDestroy() {
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+        input.off(Input.EventType.KEY_UP, this.onKeyUp, this);
     }
 
     /**
@@ -433,6 +439,7 @@ export class GameController extends Component {
         this.gridRoot = gridRoot;
         // Same pitch the lot was sized from, or the slab and its cars drift apart.
         const layout = new BoardLayout(scale);
+        this.layout = layout;
         this.gridView = new GridView(gridRoot, this.core!.lot, layout);
         this.gridView.render();
     }
@@ -893,6 +900,31 @@ export class GameController extends Component {
     private registerInput(): void {
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+        input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
+    }
+
+    /** D toggles the footprint overlay. Keyboard only, so it never fires on a phone. */
+    private onKeyUp(e: EventKeyboard): void {
+        if (e.keyCode === KeyCode.KEY_D) this.toggleDebugOverlay();
+    }
+
+    /**
+     * Show or hide core's ground truth over the lot: see `debug-overlay.ts` for how to read
+     * it. Rebuilt on every toggle rather than kept in sync, because a stale overlay would be
+     * exactly the kind of lie it exists to catch.
+     */
+    private toggleDebugOverlay(): void {
+        if (this.debugOverlay) {
+            this.debugOverlay.destroy();
+            this.debugOverlay = null;
+            return;
+        }
+        if (!this.core || !this.gridRoot || !this.layout) return;
+        const lot = this.core.lot;
+        this.debugOverlay = buildFootprintOverlay(
+            Array.from(lot.cars.values()), lot.bounds, this.layout,
+        );
+        this.gridRoot.addChild(this.debugOverlay);
     }
 
     private onTouchEnd(e: EventTouch): void {
