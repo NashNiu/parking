@@ -99,11 +99,16 @@ const CELL_MAX = 1.4;
  * to the cars: they are about a fifth longer than they were at 0.12. That is the trade this
  * knob makes -- a denser lot at the same size, not a smaller one.
  *
- * The gap SIDEWAYS between two cars is a separate thing and much bigger: a small car has a
- * one-cell square footprint, its model is about twice as long as it is wide, and it is scaled
- * uniformly to fit -- so it fills the cell along its length and leaves nearly half of it
- * across. Neither this nor `fill` reaches that; only a stubbier model or a non-uniform
- * stretch would.
+ * There used to be a second, much bigger gap SIDEWAYS between two cars, which neither this
+ * nor the old `fill` could reach: a small car had a one-cell SQUARE footprint and a model
+ * about twice as long as it was wide, so scaling it uniformly filled the cell along its
+ * length and left nearly half of it across. That is gone -- a car's footprint is its body
+ * now, at whatever angle it is parked, so there is no cell for it to rattle around in and
+ * nothing here to reach.
+ *
+ * What this constant still does is set the board's scale: it is subtracted from the pitch
+ * the lot's height allows, and the remainder is the world size of one board unit. Cars are
+ * spaced by core's CLEARANCE, not by this.
  */
 const CELL_GAP = 0.02;
 const EXIT_X = 7.5;
@@ -135,11 +140,13 @@ const CAMERA_DIST = 15;
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
  *
- * BUMP is how far past contact it presses, and it has to stay under the bare board between
- * two cars nose to tail (CELL_GAP plus what `fill` leaves, about 0.03 now). It was 0.06 back
- * when cars were drawn at 90% of their footprint and that slack was 0.22; at today's spacing
- * the same number would drive one car a clear 0.03 INTO the other. The jolt is what sells the
- * impact anyway -- see JOLT.
+ * BUMP is how far past the reported stopping point it presses, and it has to stay under the
+ * bare board between two cars nose to tail. That distance is core's CLEARANCE, 0.04 board
+ * units or 0.030 world -- and `firstBlocker` measures its gap from a mover already inflated
+ * by CLEARANCE, so the car stops a clearance short of touching and BUMP eats into that.
+ * At 0.020 it still leaves 0.010 of daylight; anything over 0.030 would drive one car into
+ * the other. It was 0.06 back when cars were drawn at 90% of a grid cell and the slack was
+ * 0.22. The jolt is what sells the impact anyway -- see JOLT.
  *
  * The forward leg is capped: with a three-cell run-up, honest speed would make a refused tap
  * feel like a slow round trip.
@@ -772,12 +779,12 @@ export class GameController extends Component {
      * Uniform scale that fits car `id`'s model into a parking stall. Read it BEFORE
      * `detachCar`, which drops the entry holding the car's fitted size.
      *
-     * Never larger than 1: a stall (0.78 x 1.06) is deeper than a grid cell, so fitting a
-     * SMALL car to it worked out at 1.9 -- the car nearly doubled as it drove up, which
+     * Never larger than 1: a stall (0.78 x 1.06) is deeper than a small car is long, so
+     * fitting one to it worked out at 1.9 -- the car nearly doubled as it drove up, which
      * reads as the wrong car arriving rather than as parking. This makes the refit a
-     * shrink-only affair: a car that already fits keeps exactly the size it had in the
-     * lot, and only the ones too big for the stall (a bus, whose two-cell footprint is
-     * longer than the stall is deep) come down to fit.
+     * shrink-only affair: a car that already fits keeps exactly the size it had in the lot,
+     * and only the ones too long for it (a bus at 1.33 world units against a stall 1.06
+     * deep) come down.
      */
     private stallScale(id: number): number {
         const size = this.gridView!.getCarSize(id);
@@ -874,7 +881,7 @@ export class GameController extends Component {
         if (this.busy) return;
 
         // Ray from the tap, intersected with the (possibly tilted) board plane, then
-        // converted into gridRoot-local space where car footprints are defined.
+        // converted into gridRoot-local space, where the cars' own positions live.
         const ray = new geometry.Ray();
         this.cam.screenPointToRay(screenX, screenY, ray);
         const gr = this.gridRoot;
