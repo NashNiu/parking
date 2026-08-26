@@ -146,6 +146,14 @@ const CAMERA_DIST = 15;
 const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
 
 /**
+ * Draw core's footprints and lane bars from the moment a level loads, and log what core
+ * decided on every tap. DIAGNOSTIC ONLY -- set back to false once the lot's verdicts have
+ * been confirmed against it. `D` toggles it either way at runtime; this is only the state
+ * it starts in, so that reading it never depends on the preview having keyboard focus.
+ */
+const DEBUG_FOOTPRINTS = true;
+
+/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -442,6 +450,7 @@ export class GameController extends Component {
         this.layout = layout;
         this.gridView = new GridView(gridRoot, this.core!.lot, layout);
         this.gridView.render();
+        if (DEBUG_FOOTPRINTS) this.toggleDebugOverlay();
     }
 
     private setupCamera(): void {
@@ -903,6 +912,27 @@ export class GameController extends Component {
         input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
     }
 
+    /**
+     * What core decided about this tap, as one line. The `blocked` case names the car core
+     * picked as the blocker and how much room it measured, which is the pair of facts a
+     * screenshot cannot show and the whole argument turns on.
+     */
+    private logTap(id: number, angle: number, verdict: string): void {
+        const car = this.core?.lot.cars.get(id);
+        if (!car) return;
+        const lot = this.core!.lot;
+        const b = firstBlocker(car, Array.from(lot.cars.values()), lot.bounds);
+        const who = `car ${id} (${car.cap}) at (${car.x.toFixed(2)}, ${car.y.toFixed(2)}) heading ${angle.toFixed(1)}`;
+        if (b) {
+            const by = lot.cars.get(b.carId);
+            console.log(`[tap] ${who} -> ${verdict}; core says BLOCKED by car ${b.carId}`
+                + `${by ? ` (${by.cap}) at (${by.x.toFixed(2)}, ${by.y.toFixed(2)})` : ''}`
+                + `, ${b.gap.toFixed(3)} board units of room`);
+        } else {
+            console.log(`[tap] ${who} -> ${verdict}; core says the lane is CLEAR`);
+        }
+    }
+
     /** D toggles the footprint overlay. Keyboard only, so it never fires on a phone. */
     private onKeyUp(e: EventKeyboard): void {
         if (e.keyCode === KeyCode.KEY_D) this.toggleDebugOverlay();
@@ -983,6 +1013,7 @@ export class GameController extends Component {
 
         const angle = this.core.lot.cars.get(id)?.angle ?? 0;
         const res = this.core.tapCar(id);
+        if (DEBUG_FOOTPRINTS) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
             this.playDriveToSlot(id, angle, res.slotIndex);
         } else if (res.reason === 'full') {
