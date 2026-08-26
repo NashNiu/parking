@@ -136,6 +136,14 @@ const CAMERA_Y = 0;
 const CAMERA_DIST = 15;
 
 /**
+ * Half the world the camera shows vertically. This is exactly what a 45-degree vertical
+ * fov showed at CAMERA_DIST on the board plane, so every framing constant derived from
+ * that perspective frame -- RING_LOW, LOT_HALF_W, the +/-4.90 by +/-6.21 box -- stays
+ * true verbatim under the orthographic projection that replaced it. See `setupCamera`.
+ */
+const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
+
+/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -436,17 +444,46 @@ export class GameController extends Component {
             return;
         }
         this.cam = camNode.getComponent(Camera);
-        // Straight on, down the board's normal. At a 45-degree VERTICAL fov the visible
-        // half-height is 0.414 * d, so 15 shows 6.21 above and below the board centre,
-        // which takes the circuit's top edge (5.48) and the bottom ring lane (-6.15) and
-        // still leaves 0.7 at the top for the HUD. Across, it shows 4.90 — the outermost
-        // waiting rows sit at 4.65.
+        // Straight on, down the board's normal, showing VIEW_HALF_H (6.21) above and below
+        // the board centre -- which takes the circuit's top edge (5.48) and the bottom ring
+        // lane (-6.15) and still leaves 0.7 at the top for the HUD. Across, it shows 4.90;
+        // the outermost waiting rows sit at 4.65.
         //
         // (The tilted 2.5D framing this replaces was pos (0, 5, 12), lookAt (0, -0.3, 0),
         // and needs BOARD_TILT back at 52 to make sense.)
         camNode.setPosition(new Vec3(0, CAMERA_Y, CAMERA_DIST));
         camNode.lookAt(new Vec3(0, CAMERA_Y, 0));
         if (this.cam) {
+            // ORTHOGRAPHIC, and this is load-bearing rather than a matter of taste: the
+            // gameplay is strictly 2D and core reasons about each car's FOOTPRINT on the
+            // board plane, but a car is drawn STANDING on that plane, its roof `hgt` closer
+            // to the camera (see `buildCar`). A perspective camera scales that roof by
+            // d/(d-hgt) about its own axis and shoves it radially outward -- and the lot is
+            // centred at y = -2.73 while the axis is at y = 0, so the whole lot is off-axis
+            // and the bottom of it is ~5 units out. Measured over the ten shipped levels the
+            // roof landed a MEDIAN of 0.109 board units from the footprint core was reasoning
+            // about, peaking at 0.187. CLEARANCE is 0.04, so the picture was lying by two to
+            // five times the entire gap budget, and it broke three things at once:
+            //
+            //  - blocked/clear. Re-running core's own sweep on the projected boxes disagreed
+            //    with core on 13 of 360 cars, 10 of them "core says you may go, the eye says
+            //    that blue car is in the way".
+            //  - the size hierarchy. What you see is the roof plus whatever side wall the
+            //    perspective reveals, which grows with distance off-axis: two MEDIUM cars --
+            //    same model, same CAP_BOX row -- drew up to 26% apart in width, and 34 of the
+            //    73 medium cars drew wider than some big one.
+            //  - picking. `onTap` intersects its ray with the board plane and `pickCar` tests
+            //    the footprint, so the player aimed at a roof that was not over the box.
+            //
+            // Under ortho a car projects exactly onto its footprint whatever its height and
+            // wherever it sits -- in the lot, driving the ring, parked in a stall. Do not put
+            // the perspective projection back without also giving core the roof plane.
+            //
+            // Nothing about the framing moves: orthoHeight is the half-height the 45-degree
+            // fov already had AT THE BOARD PLANE, so z = 0 is pixel-identical and everything
+            // else shifts by at most the 2.4% it was being magnified by.
+            this.cam.projection = Camera.ProjectionType.ORTHO;
+            this.cam.orthoHeight = VIEW_HALF_H;
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
             // Matches the ground panel, so any sliver outside it doesn't flash a
             // different colour.
