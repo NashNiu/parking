@@ -16,7 +16,7 @@ import { TrackView } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
-import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
+import { squash, flash, blockerRing, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { preloadCarModels } from './car-builder';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
@@ -1182,6 +1182,13 @@ export class GameController extends Component {
                 if (body) { squash(body); flash(body, hit); }
                 if (otherBody) { squash(otherBody); flash(otherBody, hit); }
                 if (other) this.jolt(other, across);
+                // The ring is what actually names the blocker -- `flash` above cannot,
+                // since emissive lives on a per-COLOUR material and lights every car
+                // sharing that paint. See `blockerRing`.
+                const otherSize = this.gridView!.getCarSize(block.carId);
+                if (otherBody && otherSize) {
+                    blockerRing(otherBody, otherSize.len, otherSize.wid);
+                }
             })
             .by(0.045, { position: out })
             .by(0.06, { position: back })
