@@ -1,10 +1,10 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
     input, Input, EventTouch, EventMouse, EventKeyboard, KeyCode, geometry, tween, Mat4,
-    assetManager, EffectAsset,
+    assetManager, EffectAsset, screen,
 } from 'cc';
 import {
-    GameCore, validateLevel, LevelData, firstBlocker,
+    GameCore, validateLevel, LevelData, firstBlocker, LANE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
 import { BoardLayout } from './board-layout';
@@ -138,10 +138,10 @@ const CAMERA_Y = 0;
 const CAMERA_DIST = 15;
 
 /**
- * Half the world the camera shows vertically. This is exactly what a 45-degree vertical
- * fov showed at CAMERA_DIST on the board plane, so every framing constant derived from
- * that perspective frame -- RING_LOW, LOT_HALF_W, the +/-4.90 by +/-6.21 box -- stays
- * true verbatim under the orthographic projection that replaced it. See `setupCamera`.
+ * The LEAST the camera shows vertically: exactly what a 45-degree vertical fov showed at
+ * CAMERA_DIST on the board plane, which is why every framing constant derived from that
+ * perspective frame -- RING_LOW, LOT_HALF_W, the +/-4.90 by +/-6.21 box -- stays true
+ * verbatim. On a viewport too narrow to hold the board it is not enough; see `fitCamera`.
  */
 const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
 
@@ -233,6 +233,14 @@ export class GameController extends Component {
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
+    /**
+     * Half the world width that MUST be on screen for this level: the outer reach of its
+     * widest feeder channel, or the lot's cars, whichever is further out. Measured per
+     * level rather than assumed -- see `setupBoard`.
+     */
+    private contentHalfW = LOT_HALF_W;
+    /** Aspect the camera was last fitted to, so `update` only refits when it changes. */
+    private fitAspect = 0;
     private layout: BoardLayout | null = null;
     /** The footprint overlay while it is shown. See `toggleDebugOverlay`. */
     private debugOverlay: Node | null = null;
@@ -419,9 +427,32 @@ export class GameController extends Component {
         // crash rather than draw. The warn loop above has already said which field is wrong.
         const rawTrack = level.loop.track as TrackShape;
         const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
+        const path = new TrackPath(shape);
+
+        // How wide the board has to be on screen, for `fitCamera`.
+        //
+        // LANE.edgeLimit, not this level's own measured channel reach. It is the bound core
+        // already states and `validateTrack` already enforces -- every legal level's channels
+        // stay inside it -- so it is the same number for every level, which is the point.
+        // The shipped levels' own reaches run 3.39 to 4.36, because their lookaheads differ
+        // (that being a difficulty knob), and fitting each exactly would zoom the board to
+        // somewhere between 66% and 85% PER LEVEL. The lot is an identical 9 x 6 in all ten,
+        // so watching it change size from one level to the next would read as a bug -- this
+        // repo has already had that complaint once, about parked cars.
+        //
+        // The lot's cars are the other candidate and sit well inside it (3.39 against 4.67),
+        // but they are maxed in anyway, so a future wider lot zooms out instead of clipping.
+        this.contentHalfW = Math.max(LANE.edgeLimit, (level.lot.w / 2) * scale);
+        // Invalidate the cached aspect: `fitCamera` short-circuits on aspect alone, and a
+        // level whose lot is wider than the last one's needs a refit at the same aspect.
+        // Fit straight away too, so a level's first frame is already framed rather than
+        // being one frame late.
+        this.fitAspect = 0;
+        this.fitCamera();
+
         this.loopView = new TrackView(
             loopRoot,
-            new TrackPath(shape),
+            path,
             // capacity and boardIndex are the same values on `level.loop` and on `loop`
             // (LoopSystem copies both at construction) -- read off whichever is already
             // in hand on each side of the comma.
@@ -495,9 +526,11 @@ export class GameController extends Component {
             // wherever it sits -- in the lot, driving the ring, parked in a stall. Do not put
             // the perspective projection back without also giving core the roof plane.
             //
-            // Nothing about the framing moves: orthoHeight is the half-height the 45-degree
-            // fov already had AT THE BOARD PLANE, so z = 0 is pixel-identical and everything
-            // else shifts by at most the 2.4% it was being magnified by.
+            // The framing this starts at is the half-height the 45-degree fov already had AT
+            // THE BOARD PLANE, so z = 0 came out pixel-identical to the perspective frame and
+            // everything else shifted by at most the 2.4% it had been magnified by. It is a
+            // FLOOR, not the final value: `fitCamera` raises it on a viewport too narrow to
+            // hold the board, which is every portrait phone.
             this.cam.projection = Camera.ProjectionType.ORTHO;
             this.cam.orthoHeight = VIEW_HALF_H;
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
@@ -507,7 +540,40 @@ export class GameController extends Component {
         }
     }
 
+    /**
+     * Zoom out far enough that the whole board is on screen, whatever shape the screen is.
+     *
+     * The vertical half-view is `VIEW_HALF_H` and the horizontal follows from the aspect
+     * (that is how an orthographic camera works, and how the perspective camera before it
+     * worked too -- its fovAxis was VERTICAL). So a narrow viewport shows LESS across, and
+     * every framing constant in this file was chosen against the roughly 0.79-aspect editor
+     * preview window. A portrait phone is 0.46: 2.87 across where the board needs 4.67.
+     *
+     * Raising orthoHeight is the whole fix. It costs nothing on a viewport already wide
+     * enough -- the preview keeps the exact framing it had, a 4:3 tablet gives up 0.3% --
+     * and on a 1170x2532 phone it steps back to 61% of that scale. That number sounds worse
+     * than it is: what the player sees is the fraction of the SCREEN the board fills, and
+     * the lot lands on 73% of the width there, against the 69% the preview shows today. All
+     * the slack goes vertical, which is where a phone has room to spare and where the notch
+     * and the home bar want it anyway.
+     *
+     * Nothing else moves: no constant here, no core geometry, no level data. The board is
+     * laid out exactly as before and the camera simply steps back.
+     */
+    private fitCamera(): void {
+        if (!this.cam) return;
+        const size = screen.windowSize;
+        const aspect = size.width / Math.max(1, size.height);
+        if (!Number.isFinite(aspect) || aspect <= 0) return;
+        if (Math.abs(aspect - this.fitAspect) < 1e-4) return;
+        this.fitAspect = aspect;
+        this.cam.orthoHeight = Math.max(VIEW_HALF_H, this.contentHalfW / aspect);
+    }
+
     update(dt: number): void {
+        // Before the guards: the window can be resized while the level is over, or between
+        // levels, and a stale zoom would be visible either way.
+        this.fitCamera();
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
         // level (nothing left to fill the parked cars, nothing left that can move).
