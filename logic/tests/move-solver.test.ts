@@ -7,9 +7,14 @@ const car = (over: Partial<CarSpec>): CarSpec => ({
   id: 1, x: 0, y: 0, angle: 0, color: 'red', cap: 'small', ...over,
 });
 
-/** Where two nose-to-tail cars first touch, clearance included. */
+/**
+ * Where two nose-to-tail cars first touch, clearance included: half of it on each body,
+ * which is the rule every reader of CLEARANCE applies. Collinear axis-aligned cars only see
+ * the SUM, so this number is unchanged from when the mover carried the whole clearance --
+ * the two splits part company only once the pair is rotated (see the heading sweep below).
+ */
 const contact = (gapBetweenCentres: number): number =>
-  gapBetweenCentres - (CAP_BOX.small.len + 2 * CLEARANCE) / 2 - CAP_BOX.small.len / 2;
+  gapBetweenCentres - (CAP_BOX.small.len + CLEARANCE) / 2 - (CAP_BOX.small.len + CLEARANCE) / 2;
 
 test('a car box is its model size at its own heading', () => {
   const b = carBox(car({ x: 1, y: 2, angle: 90 }));
@@ -128,4 +133,57 @@ test('a diagonal lane is checked along the diagonal, not along the axes', () => 
   // One on the diagonal does.
   const ne = car({ id: 3, x: 0, y: 0, angle: 45 });
   expect(pathClear(a, [a, ne], LOT)).toBe(false);
+});
+
+test('a car parked behind you is not your blocker, on a lot the level rule accepts', () => {
+  // Real geometry, straight out of level 1: the pair that made a tapped car refuse to move
+  // while naming a blocker 175 degrees off its own nose.
+  //
+  // validateLevel's rule is that each of a pair, grown by CLEARANCE/2, stays clear of the
+  // other. firstBlocker used to grow the MOVER by a WHOLE clearance and sweep it against a
+  // BARE neighbour. For axis-aligned boxes those are the same rule -- each adds CLEARANCE to
+  // the sum of the projected radii -- which is why the grid era never saw this. For ROTATED
+  // boxes they are not: growing a box by d adds d * (|n.u| + |n.v|) to its radius on axis n,
+  // anywhere between d and d * sqrt(2). Piling the whole clearance onto one box can reach
+  // sqrt(2) * CLEARANCE where splitting it between the two reaches as little as CLEARANCE.
+  // So a pair the level rule calls legal could still overlap under the lane test -- and
+  // sweepHit answers 0 for boxes that already overlap WHATEVER the heading, which is how a
+  // car behind you ends up named as the thing in your way.
+  const mover = car({ id: 27, x: 0.7237, y: 2.4712, angle: 29.7888, cap: 'small' });
+  const behind = car({ id: 26, x: -0.5793, y: 1.8721, angle: 58.3434, cap: 'big' });
+
+  // The pair is legal -- this line is exactly what validateLevel enforces.
+  expect(overlapMTV(
+    inflate(carBox(mover), CLEARANCE / 2), inflate(carBox(behind), CLEARANCE / 2),
+  )).toBeNull();
+
+  expect(firstBlocker(mover, [mover, behind], LOT)).toBeNull();
+});
+
+test('the lane test and the level rule are one clearance predicate, at every heading', () => {
+  // The pathology is specific: two boxes that overlap make sweepHit answer 0 on EVERY
+  // heading, so the mover reports blocked by something it is driving away from. Putting the
+  // neighbour directly astern makes that unmistakable -- there is nothing ahead to find, so
+  // any answer at all is the bug. Only configurations the level rule accepts are asserted
+  // on; the rest are not this function's problem.
+  //
+  // Rotated pairs are the whole point, so both headings sweep. With the mover inflated by a
+  // whole CLEARANCE this fails on 84 of these cases; with the clearance split between the
+  // pair, none.
+  for (const moverAngle of [0, 17, 31, 45, 62, 78, 90]) {
+    const astern = (moverAngle + 180) * Math.PI / 180;
+    for (const otherAngle of [0, 23, 45, 67, 90, 113, 135]) {
+      const mover = car({ id: 1, x: 0, y: 0, angle: moverAngle, cap: 'small' });
+      for (let d = 1.0; d <= 2.0; d += 0.02) {
+        const other = car({
+          id: 2, x: Math.cos(astern) * d, y: Math.sin(astern) * d, angle: otherAngle, cap: 'big',
+        });
+        const legal = overlapMTV(
+          inflate(carBox(mover), CLEARANCE / 2), inflate(carBox(other), CLEARANCE / 2),
+        ) === null;
+        if (!legal) continue;
+        expect(firstBlocker(mover, [mover, other], LOT)).toBeNull();
+      }
+    }
+  }
 });

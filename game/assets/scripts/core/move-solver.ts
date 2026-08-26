@@ -29,6 +29,11 @@ export interface Blockage {
      * mover, and in a column packed tighter than CLEARANCE every car reports blocked --
      * the frontmost one included, with nothing at all in front of it.
      *
+     * On a lot that satisfies the clearance rule this can no longer happen, because the
+     * sweep below now inflates the pair the way `validateLevel` inflates it -- half each --
+     * so boxes that passed validation cannot be overlapping when the sweep starts. Splitting
+     * the clearance unevenly is what used to break that: see `firstBlocker`.
+     *
      * `firstBlocker` is therefore only MEANINGFUL on a lot where every pair of cars is at
      * least CLEARANCE apart. That is not something this function can check; it is an
      * invariant the lot has to arrive with, and Task 4's gap validation is what makes it
@@ -49,7 +54,20 @@ export interface Blockage {
  * car length; anything the sweep reports past that is arithmetic noise, not a car.
  */
 export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage | null {
-    const box = inflate(carBox(car), CLEARANCE);
+    // HALF a clearance on the mover and half on each candidate, which is the SAME predicate
+    // validateLevel enforces pairwise -- not the whole clearance piled onto the mover.
+    //
+    // For axis-aligned boxes the two are identical: either way CLEARANCE is added to the sum
+    // of the projected radii, which is why the grid era could write it whichever way it liked.
+    // For ROTATED boxes they part company. Growing a box by d adds d * (|n.u| + |n.v|) to its
+    // radius on axis n -- d when the box is square-on to n, d * sqrt(2) at 45 degrees. So the
+    // whole clearance on one box reaches as much as sqrt(2) * CLEARANCE where splitting it
+    // between the pair reaches as little as CLEARANCE, and a pair the level rule had passed
+    // could still overlap here. `sweepHit` answers 0 for boxes that already overlap WHATEVER
+    // the heading, so the mover came back blocked by a car it was driving away from: 15 of
+    // the 360 cars across the ten shipped levels, every one of them with a gap of exactly 0
+    // and a "blocker" between 128 and 159 degrees off its own nose.
+    const box = inflate(carBox(car), CLEARANCE / 2);
     const { dx, dy } = heading(car);
     const range = Math.hypot(lot.w, lot.h) + CAP_BOX.big.len * CAR_SCALE;
     // Circumscribed radius: no corner of a box sits farther than this from its own centre,
@@ -70,9 +88,14 @@ export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage 
         // up to, neither box's corners can reach the other's at any point of the sweep, and
         // `sweepHit` would have to say so too -- this cannot discard a genuine blocker, only
         // skip the arithmetic that would have proven the same negative.
+        // Grown by the other half of the clearance, so the pair of inflated boxes is exactly
+        // the pair validateLevel checked. The broad-phase bound below must measure THIS box
+        // and not the bare one, or it would be reading a smaller radius than the narrow phase
+        // goes on to use and could reject a genuine blocker.
+        const otherBox = inflate(carBox(other), CLEARANCE / 2);
         const perp = Math.abs((other.x - car.x) * dy - (other.y - car.y) * dx);
-        if (perp > boxHalfDiag + halfDiag(carBox(other))) continue;
-        const t = sweepHit(box, carBox(other), dx, dy);
+        if (perp > boxHalfDiag + halfDiag(otherBox)) continue;
+        const t = sweepHit(box, otherBox, dx, dy);
         if (t === null || t > range) continue;
         if (!best || t < best.gap) best = { carId: other.id, gap: t };
     }

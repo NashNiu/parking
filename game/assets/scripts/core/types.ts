@@ -74,8 +74,15 @@ export const CAR_SCALE = 1.0;
 
 /**
  * The least board a car must have around it, in board units. Used in TWO places on
- * purpose -- the packer keeps cars this far apart, and the lane check grows the moving
- * car by it -- so that the rule reads: a gap you can see is closed IS closed.
+ * purpose -- the packer keeps cars this far apart, and the lane check applies the same
+ * separation -- so that the rule reads: a gap you can see is closed IS closed.
+ *
+ * Every reader splits it HALF ON EACH of a pair (`validateLevel`, `packBox`, `firstBlocker`,
+ * and `pickCar`'s slop). That is not a detail: growing one box by the whole clearance and
+ * leaving the other bare is a DIFFERENT rule once boxes can rotate, because inflating a box
+ * by d adds d * (|n.u| + |n.v|) to its radius on axis n -- d square-on, d * sqrt(2) at 45
+ * degrees. The two agreed while every car was axis-aligned and parted company the moment
+ * angles became free. Add a reader, split it in half.
  *
  * 0.04 is today's TIGHTEST gap (a small car nose to tail: pitch 1 minus body 0.964),
  * not the average. M7 spent several rounds tightening these gaps and this must not

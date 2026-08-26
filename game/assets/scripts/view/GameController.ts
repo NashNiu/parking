@@ -151,7 +151,7 @@ const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
  * been confirmed against it. `D` toggles it either way at runtime; this is only the state
  * it starts in, so that reading it never depends on the preview having keyboard focus.
  */
-const DEBUG_FOOTPRINTS = true;
+const DEBUG_FOOTPRINTS = false;
 
 /**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
