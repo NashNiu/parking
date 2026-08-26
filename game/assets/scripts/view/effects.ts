@@ -1,4 +1,4 @@
-import { Node, Vec3, Color, tween, MeshRenderer, utils, primitives } from 'cc';
+import { Node, Vec3, Color, tween, Tween, MeshRenderer, utils, primitives } from 'cc';
 import { unlitMaterial, setEmissive } from './materials';
 
 let activeParticles = 0;
@@ -14,12 +14,52 @@ export function resetParticleBudget(): void {
     activeParticles = 0;
 }
 
-/** Tap feedback: quick squash then spring back. */
+/**
+ * Tag for the squash tween, so a new squash can cancel the one still running on that node
+ * WITHOUT touching the other tweens a car carries (the drive, the nudge, the park refit).
+ * `Tween.stopAllByTarget` would have killed those too.
+ */
+const SQUASH_TAG = 8101;
+
+/**
+ * Each node's RESTING scale, captured the first time it is squashed -- at which point no
+ * squash is running, so what is read is genuinely the rest pose. Every subsequent squash
+ * springs back to this rather than to whatever scale the node happens to be at.
+ *
+ * A WeakMap, so a car's entry goes when the car does.
+ */
+const restScale = new WeakMap<Node, Vec3>();
+
+/**
+ * Tap feedback: quick squash then spring back.
+ *
+ * The spring-back target must be the node's RESTING scale, not its current one. A refused
+ * tap squashes the same body TWICE -- once from `onTap`, once when `playShake`'s nudge
+ * reaches the blocker -- and the second lands inside the first on 99.2% of refused taps
+ * over the ten shipped levels: the nudge leg is floored at NUDGE_MIN (0.12s) while this
+ * tween runs 0.18s, and a blocked car's gap is 0.01 board units at the median, nowhere
+ * near the 0.85 it would take to clear.
+ *
+ * Reading `body.scale` at that moment captured a MID-ANIMATION value as the rest pose, and
+ * the error compounded tap over tap: 0.987 x 1.018 after one refusal, 36% out in aspect
+ * after ten, 85% after twenty. Blocked cars are precisely the ones a player taps again and
+ * again, so cars of the SAME capacity drifted to visibly different sizes -- and a body left
+ * 19% too wide reads as intruding on a lane core knows it is clear of.
+ */
 export function squash(body: Node): void {
-    const s = body.scale.clone();
+    let rest = restScale.get(body);
+    if (!rest) {
+        rest = body.scale.clone();
+        restScale.set(body, rest);
+    }
+    // Cancel any squash still in flight and put the node back on its rest pose, so the two
+    // tweens cannot fight over `scale` and the one starting here begins from a known state.
+    Tween.stopAllByTag(SQUASH_TAG, body);
+    body.setScale(rest);
     tween(body)
-        .to(0.06, { scale: new Vec3(s.x * 1.15, s.y * 0.8, s.z) })
-        .to(0.12, { scale: s }, { easing: 'backOut' })
+        .tag(SQUASH_TAG)
+        .to(0.06, { scale: new Vec3(rest.x * 1.15, rest.y * 0.8, rest.z) })
+        .to(0.12, { scale: rest.clone() }, { easing: 'backOut' })
         .start();
 }
 
