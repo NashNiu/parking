@@ -4,7 +4,7 @@ import {
     assetManager, EffectAsset, screen,
 } from 'cc';
 import {
-    GameCore, validateLevel, LevelData, firstBlocker, LANE,
+    GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
 import { BoardLayout } from './board-layout';
@@ -362,7 +362,60 @@ export class GameController extends Component {
             this.tickAcc = 0;
             this.loading = false;
             console.log(`[Game] level '${name}' started, state=${this.core.getState()}`);
+            if (this.core.getState() !== 'playing') this.logStartupDiagnosis(level);
         });
+    }
+
+    /**
+     * Why a level was not `playing` the moment it loaded.
+     *
+     * That should be impossible: all ten shipped levels come up with 8 to 14 movable cars
+     * and four free stalls, verified against core directly. A WeChat mini-game build
+     * reported `state=deadlock` for level 1 where node and the mobile browser both report
+     * `playing` on the same JSON and the same core, so the difference is in the build, not
+     * in the data -- and guessing which part of the build is exactly what this avoids.
+     *
+     * The values printed are the ones the verdict is made of. `isDeadlocked` is
+     * `!(hasFreeSlot && movable > 0)` with no parked car left to fill, so on a fresh level
+     * it can only mean `movable === 0` -- every car reporting blocked. The car's resolved BOX
+     * is printed with them because that is the likeliest way to get there: a NaN in `len` or
+     * `wid` makes every projection NaN, every comparison in `sweepHit` false, and the sweep
+     * falls out returning 0 -- which reads as "in contact" for every pair, whatever the
+     * heading. CAR_SCALE and CAP_BOX are printed for the same reason: they are the two
+     * module-level constants `carBox` multiplies, and a bundler that left either undefined at
+     * init would produce exactly this and nothing else.
+     */
+    private logStartupDiagnosis(level: LevelData): void {
+        const core = this.core!;
+        const cars = level.lot.cars;
+        const first = cars[0];
+        const box = first ? carBox(first) : null;
+        // The discriminator. A gap of exactly 0 means the swept test found the pair already
+        // in contact, and it is what a NaN anywhere in the geometry degenerates to -- every
+        // comparison in `sweepHit` goes false and it falls out returning 0. So "every car
+        // blocked, every gap 0" is arithmetic gone bad, while a spread of real positive gaps
+        // means the geometry is fine and the lot genuinely is jammed.
+        let blocked = 0, zeroGap = 0;
+        for (const c of cars) {
+            const b = firstBlocker(c, cars, core.lot.bounds);
+            if (!b) continue;
+            blocked++;
+            if (b.gap === 0 || !Number.isFinite(b.gap)) zeroGap++;
+        }
+        console.warn('[Game] not playing at load: ' + JSON.stringify({
+            jsonCars: cars.length,
+            coreCars: core.lot.cars.size,
+            movable: core.lot.movableCarIds().length,
+            blocked,
+            zeroOrNaNGap: zeroGap,
+            freeSlot: core.parking.hasFreeSlot(),
+            bounds: core.lot.bounds,
+            carScale: CAR_SCALE,
+            capBox: CAP_BOX,
+            firstCar: first ? { id: first.id, cap: first.cap, angle: first.angle } : null,
+            firstBox: box ? { len: box.len, wid: box.wid } : null,
+            firstBlocker: first ? firstBlocker(first, cars, core.lot.bounds) : null,
+        }));
     }
 
     /** Tear the current board down and load `name` — used for both replay and advancing. */
