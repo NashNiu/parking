@@ -3,7 +3,6 @@ import { CLEARANCE, LotSystem } from '../core/index';
 import { BoardLayout } from './board-layout';
 import { colorOf } from './colors';
 import { buildCar, Cap } from './car-builder';
-import { buildLaneGuide, paintLaneGuide, GUIDE_NODE } from './lane-guides';
 
 interface CarEntry {
     id: number;
@@ -41,13 +40,6 @@ export class GridView {
                 `car-${id}`, len, wid, colorOf(car.color), car.angle, car.cap as Cap,
             );
             built.root.setPosition(this.layout.toWorld(car.x, car.y));
-            // The exit lane, drawn on the board so the heading can be followed further than
-            // a roof arrow carries the eye. Parented to the car's root, so it travels and
-            // dies with the car; `detachCar` drops it before a departure animation, since a
-            // guide is a statement about a parked car's lane and a leaving car has none.
-            const guide = buildLaneGuide(car, this.lot.bounds, this.layout);
-            paintLaneGuide(guide, colorOf(car.color));
-            built.root.addChild(guide);
             this.parent.addChild(built.root);
             this.carNodes.set(id, built.root);
             this.entries.push({
@@ -116,7 +108,6 @@ export class GridView {
     /** Stop tracking a car and return its node WITHOUT destroying it (for park animation). */
     detachCar(id: number): Node | null {
         const node = this.carNodes.get(id) ?? null;
-        node?.getChildByName(GUIDE_NODE)?.destroy();
         this.carNodes.delete(id);
         this.entries = this.entries.filter((e) => e.id !== id);
         return node;

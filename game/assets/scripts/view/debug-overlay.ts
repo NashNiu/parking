@@ -2,7 +2,6 @@ import { Node, Color } from 'cc';
 import { CAP_BOX, CAR_SCALE, CarSpec, firstBlocker, Lot } from '../core/index';
 import { boxPart, makeMerged, MeshPart } from './slabs';
 import { BoardLayout } from './board-layout';
-import { laneRunToEdge } from './lane-guides';
 
 /**
  * Ground truth, drawn on the board: the exact box `core` reasons about for each car, and
@@ -41,6 +40,24 @@ const LANE = 0.035;
 /** A car core says can leave, and one it says is blocked. */
 const CLEAR = new Color(0, 235, 120, 255);
 const BLOCKED = new Color(255, 40, 200, 255);
+
+/**
+ * How far a ray from `(x, y)` along `(dx, dy)` runs before it leaves the `w` x `h` lot, in
+ * board units. Only used to give a CLEAR car's lane bar somewhere to stop; core does not
+ * need it, since a car that hits nothing simply drives out.
+ */
+function laneRunToEdge(
+    x: number, y: number, dx: number, dy: number, w: number, h: number,
+): number {
+    let t = Infinity;
+    if (Math.abs(dx) > 1e-9) {
+        t = Math.min(t, Math.max((w / 2 - x) / dx, (-w / 2 - x) / dx));
+    }
+    if (Math.abs(dy) > 1e-9) {
+        t = Math.min(t, Math.max((h / 2 - y) / dy, (-h / 2 - y) / dy));
+    }
+    return Number.isFinite(t) ? Math.max(0, t) : 0;
+}
 
 function outlineParts(len: number, wid: number): MeshPart[] {
     return [
