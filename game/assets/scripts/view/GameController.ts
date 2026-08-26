@@ -1013,7 +1013,9 @@ export class GameController extends Component {
 
         const angle = this.core.lot.cars.get(id)?.angle ?? 0;
         const res = this.core.tapCar(id);
-        if (DEBUG_FOOTPRINTS) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
+        // Tied to the overlay BEING VISIBLE, not to the constant: D turns the overlay on at
+        // runtime, and a diagnostic you switched on that stays silent is worse than none.
+        if (this.debugOverlay) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
             this.playDriveToSlot(id, angle, res.slotIndex);
         } else if (res.reason === 'full') {

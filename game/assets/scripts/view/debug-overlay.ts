@@ -2,6 +2,7 @@ import { Node, Color } from 'cc';
 import { CAP_BOX, CAR_SCALE, CarSpec, firstBlocker, Lot } from '../core/index';
 import { boxPart, makeMerged, MeshPart } from './slabs';
 import { BoardLayout } from './board-layout';
+import { laneRunToEdge } from './lane-guides';
 
 /**
  * Ground truth, drawn on the board: the exact box `core` reasons about for each car, and
@@ -41,22 +42,6 @@ const LANE = 0.035;
 const CLEAR = new Color(0, 235, 120, 255);
 const BLOCKED = new Color(255, 40, 200, 255);
 
-/**
- * How far a ray from `(x, y)` along `(dx, dy)` runs before it leaves the `w` x `h` lot,
- * in board units. Used only to give a clear car's lane bar somewhere to stop; core does
- * not need this, since a car that hits nothing simply drives out.
- */
-function distanceToEdge(x: number, y: number, dx: number, dy: number, w: number, h: number): number {
-    let t = Infinity;
-    if (Math.abs(dx) > 1e-9) {
-        t = Math.min(t, Math.max((w / 2 - x) / dx, (-w / 2 - x) / dx));
-    }
-    if (Math.abs(dy) > 1e-9) {
-        t = Math.min(t, Math.max((h / 2 - y) / dy, (-h / 2 - y) / dy));
-    }
-    return Number.isFinite(t) ? Math.max(0, t) : 0;
-}
-
 function outlineParts(len: number, wid: number): MeshPart[] {
     return [
         boxPart(len, BAR, 0.02, 0, wid / 2),
@@ -88,7 +73,7 @@ export function buildFootprintOverlay(
         // when core found nothing in the way at all.
         const run = block
             ? block.gap
-            : distanceToEdge(car.x, car.y, Math.cos(r), Math.sin(r), lot.w, lot.h);
+            : laneRunToEdge(car.x, car.y, Math.cos(r), Math.sin(r), lot.w, lot.h);
         const laneLen = Math.max(0.02, run * layout.scale);
 
         const parts = outlineParts(len, wid);
