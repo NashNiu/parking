@@ -8,13 +8,13 @@ const car = (over: Partial<CarSpec>): CarSpec => ({
 });
 
 /**
- * Where two nose-to-tail cars first touch, clearance included: half of it on each body,
- * which is the rule every reader of CLEARANCE applies. Collinear axis-aligned cars only see
- * the SUM, so this number is unchanged from when the mover carried the whole clearance --
- * the two splits part company only once the pair is rotated (see the heading sweep below).
+ * Where two nose-to-tail cars' BODIES first touch. No clearance term: the lane test asks
+ * only whether the bodies would collide. CLEARANCE governs how a parked lot is laid out
+ * (`validateLevel`, `packBox`) and how forgiving a tap is (`pickCar`), not how much daylight
+ * a moving car needs.
  */
 const contact = (gapBetweenCentres: number): number =>
-  gapBetweenCentres - (CAP_BOX.small.len + CLEARANCE) / 2 - (CAP_BOX.small.len + CLEARANCE) / 2;
+  gapBetweenCentres - CAP_BOX.small.len;
 
 test('a car box is its model size at its own heading', () => {
   const b = carBox(car({ x: 1, y: 2, angle: 90 }));
@@ -75,22 +75,25 @@ test('the nearest blocker is the one reported', () => {
   expect(firstBlocker(a, [a, near, far], LOT)!.carId).toBe(2);
 });
 
-test('a lane narrower than the clearance is not a lane', () => {
-  // Two cars leaving a slot exactly one small-car width wide: without the clearance
-  // the mover would fit, with it it does not.
-  const w = CAP_BOX.small.wid;
+/** A channel between two cars parked either side of the lane, `w` off the centreline. */
+const channel = (w: number): CarSpec[] => [
+  car({ id: 2, x: 0, y: w, angle: 0 }),
+  car({ id: 3, x: 0, y: -w, angle: 0 }),
+];
+
+test('a channel the body exactly fits is a lane', () => {
+  // The channel's clear width is 2w - small.wid, and the mover needs small.wid of it, so
+  // w = small.wid is exactly flush. Flush counts as apart (see `sweepHit`), so it goes --
+  // and it goes with NO daylight, which is the deliberate trade: the lane demands no
+  // clearance margin, only that the bodies miss. Room to spare naturally also goes.
   const a = car({ id: 1, x: -3, y: 0, angle: 0 });
-  const up = car({ id: 2, x: 0, y: w, angle: 0 });
-  const down = car({ id: 3, x: 0, y: -w, angle: 0 });
-  expect(pathClear(a, [a, up, down], LOT)).toBe(false);
+  expect(pathClear(a, [a, ...channel(CAP_BOX.small.wid)], LOT)).toBe(true);
+  expect(pathClear(a, [a, ...channel(CAP_BOX.small.wid + CLEARANCE)], LOT)).toBe(true);
 });
 
-test('a lane with the clearance to spare is a lane', () => {
-  const w = CAP_BOX.small.wid + CLEARANCE + 0.02;
+test('a channel narrower than the body is not a lane', () => {
   const a = car({ id: 1, x: -3, y: 0, angle: 0 });
-  const up = car({ id: 2, x: 0, y: w, angle: 0 });
-  const down = car({ id: 3, x: 0, y: -w, angle: 0 });
-  expect(pathClear(a, [a, up, down], LOT)).toBe(true);
+  expect(pathClear(a, [a, ...channel(CAP_BOX.small.wid - 0.01)], LOT)).toBe(false);
 });
 
 test('a car does not block itself', () => {
@@ -135,6 +138,23 @@ test('a diagonal lane is checked along the diagonal, not along the axes', () => 
   expect(pathClear(a, [a, ne], LOT)).toBe(false);
 });
 
+test('a car goes if its BODY would clear the neighbour, however fine the margin', () => {
+  // The rule is bodies-only: driving through a gap requires no clearance at all, so the
+  // boundary sits exactly where the two bodies would touch. CLEARANCE is about how a PARKED
+  // lot is laid out and how forgiving a tap is -- not about how much daylight a moving car
+  // needs. This is the deliberate trade named in the README: a car may now squeeze past with
+  // a margin too fine to see, in exchange for never refusing a gap that is genuinely open.
+  const touch = (CAP_BOX.small.wid + CAP_BOX.big.wid) / 2;
+  const a = car({ id: 1, x: 0, y: 0, angle: 0, cap: 'small' });
+  // Placed well along the lane, so the PAIR is a legal parked pair (the level rule looks at
+  // where cars stand, and these stand 3 units apart); the squeeze happens only once the
+  // mover draws level with it.
+  const clears = car({ id: 2, x: 3, y: touch + 0.005, angle: 0, cap: 'big' });
+  const collides = car({ id: 3, x: 3, y: touch - 0.005, angle: 0, cap: 'big' });
+  expect(pathClear(a, [a, clears], LOT)).toBe(true);
+  expect(pathClear(a, [a, collides], LOT)).toBe(false);
+});
+
 test('a car parked behind you is not your blocker, on a lot the level rule accepts', () => {
   // Real geometry, straight out of level 1: the pair that made a tapped car refuse to move
   // while naming a blocker 175 degrees off its own nose.
@@ -160,16 +180,19 @@ test('a car parked behind you is not your blocker, on a lot the level rule accep
   expect(firstBlocker(mover, [mover, behind], LOT)).toBeNull();
 });
 
-test('the lane test and the level rule are one clearance predicate, at every heading', () => {
+test('nothing parked astern is ever a blocker, at every pair of headings', () => {
   // The pathology is specific: two boxes that overlap make sweepHit answer 0 on EVERY
   // heading, so the mover reports blocked by something it is driving away from. Putting the
   // neighbour directly astern makes that unmistakable -- there is nothing ahead to find, so
   // any answer at all is the bug. Only configurations the level rule accepts are asserted
   // on; the rest are not this function's problem.
   //
-  // Rotated pairs are the whole point, so both headings sweep. With the mover inflated by a
-  // whole CLEARANCE this fails on 84 of these cases; with the clearance split between the
-  // pair, none.
+  // Rotated pairs are the whole point, so both headings sweep. This failed on 84 of these
+  // cases when the mover carried a whole CLEARANCE into the sweep against bare neighbours --
+  // an inflation the level rule never guaranteed room for, since growing one box by d can
+  // cost up to d * sqrt(2) on a diagonal axis where splitting d between the pair costs as
+  // little as d. The lane sweeps BARE bodies now, so it asks for less room than the level
+  // rule already reserved and the overlap cannot arise at all.
   for (const moverAngle of [0, 17, 31, 45, 62, 78, 90]) {
     const astern = (moverAngle + 180) * Math.PI / 180;
     for (const otherAngle of [0, 23, 45, 67, 90, 113, 135]) {

@@ -73,16 +73,25 @@ export const CAP_BOX: Record<Cap, Box> = {
 export const CAR_SCALE = 1.0;
 
 /**
- * The least board a car must have around it, in board units. Used in TWO places on
- * purpose -- the packer keeps cars this far apart, and the lane check applies the same
- * separation -- so that the rule reads: a gap you can see is closed IS closed.
+ * The least board a PARKED car must have around it, in board units. It governs how a lot is
+ * laid out (`packBox`, `validateLevel`) and how forgiving a tap is (`pickCar`'s slop). It
+ * does NOT govern driving: `firstBlocker` sweeps bare bodies, so a car goes whenever its
+ * body would clear whatever is beside its lane, however fine the margin.
  *
- * Every reader splits it HALF ON EACH of a pair (`validateLevel`, `packBox`, `firstBlocker`,
- * and `pickCar`'s slop). That is not a detail: growing one box by the whole clearance and
- * leaving the other bare is a DIFFERENT rule once boxes can rotate, because inflating a box
- * by d adds d * (|n.u| + |n.v|) to its radius on axis n -- d square-on, d * sqrt(2) at 45
- * degrees. The two agreed while every car was axis-aligned and parted company the moment
- * angles became free. Add a reader, split it in half.
+ * That split is deliberate and was measured. Demanding this margin of the LANE too refused
+ * 18 of 250 blocked cars that would genuinely have squeezed past, the widest real daylight
+ * refused being 2.7 screen px -- a boundary far too fine to see, so cars sitting near it
+ * looked passable and were not. Dropping it costs little in the other direction precisely
+ * BECAUSE the packer still enforces it: parked pairs are a whole clearance apart, so most
+ * channels are already at least this wide and only 4 of 114 passable cars now shave past
+ * with under 1.3 px, the tightest at 0.5 px.
+ *
+ * Every reader that does apply it splits it HALF ON EACH of a pair. That is not a detail:
+ * growing one box by the whole clearance and leaving the other bare is a DIFFERENT rule once
+ * boxes can rotate, because inflating a box by d adds d * (|n.u| + |n.v|) to its radius on
+ * axis n -- d square-on, d * sqrt(2) at 45 degrees. The two agreed while every car was
+ * axis-aligned and parted company the moment angles became free. Add a reader, split it in
+ * half.
  *
  * 0.04 is today's TIGHTEST gap (a small car nose to tail: pitch 1 minus body 0.964),
  * not the average. M7 spent several rounds tightening these gaps and this must not

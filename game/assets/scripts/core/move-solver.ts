@@ -1,5 +1,5 @@
-import { inflate, OBB, sweepHit } from './geometry';
-import { CAP_BOX, CarSpec, CAR_SCALE, CLEARANCE, Lot } from './types';
+import { OBB, sweepHit } from './geometry';
+import { CAP_BOX, CarSpec, CAR_SCALE, Lot } from './types';
 
 /** The oriented box a car occupies: its model's size at its own heading. */
 export function carBox(car: CarSpec): OBB {
@@ -23,16 +23,13 @@ export function heading(car: CarSpec): { dx: number; dy: number } {
 export interface Blockage {
     carId: number;
     /**
-     * Board units of clear board ahead. 0 means "nowhere to go", which covers more than
-     * touching: `sweepHit` returns 0 whenever the two boxes ALREADY OVERLAP, and it does
-     * so regardless of heading. So a gap of 0 can name a blocker that is BEHIND the
-     * mover, and in a column packed tighter than CLEARANCE every car reports blocked --
-     * the frontmost one included, with nothing at all in front of it.
+     * Board units of clear board ahead. 0 would mean "nowhere to go", which covers more
+     * than touching: `sweepHit` returns 0 whenever the two boxes ALREADY OVERLAP, and it
+     * does so regardless of heading -- so a gap of 0 could name a blocker BEHIND the mover.
      *
-     * On a lot that satisfies the clearance rule this can no longer happen, because the
-     * sweep below now inflates the pair the way `validateLevel` inflates it -- half each --
-     * so boxes that passed validation cannot be overlapping when the sweep starts. Splitting
-     * the clearance unevenly is what used to break that: see `firstBlocker`.
+     * That cannot arise now. The sweep uses BARE bodies, and `validateLevel` keeps every
+     * parked pair a whole CLEARANCE apart, so nothing overlaps when the sweep starts and
+     * every gap reported is strictly positive.
      *
      * `firstBlocker` is therefore only MEANINGFUL on a lot where every pair of cars is at
      * least CLEARANCE apart. That is not something this function can check; it is an
@@ -46,28 +43,26 @@ export interface Blockage {
 /**
  * The nearest car blocking `car`'s exit, or null when it can drive out.
  *
- * The mover is grown by CLEARANCE before the sweep, so a lane too narrow to be worth
- * calling a lane is not one. `cars` may include `car` itself; it is skipped by id.
+ * Bodies only -- see the note inside on why the lane demands no clearance margin. `cars`
+ * may include `car` itself; it is skipped by id.
  *
  * There is no need to work out where the car leaves the lot. Every car is INSIDE the
  * lot, so any contact happens before the mover has covered the lot's diagonal plus one
  * car length; anything the sweep reports past that is arithmetic noise, not a car.
  */
 export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage | null {
-    // HALF a clearance on the mover and half on each candidate, which is the SAME predicate
-    // validateLevel enforces pairwise -- not the whole clearance piled onto the mover.
+    // BARE bodies, no clearance margin: a car goes if its body would clear whatever is
+    // beside its lane, however fine the margin. Requiring a margin here was measured and
+    // rejected -- with CLEARANCE (0.04 board units, about 2.6 screen px) demanded of the
+    // lane, 18 of the 250 blocked cars across the ten levels would actually have squeezed
+    // past, the widest real daylight refused being 2.7 px. A threshold that fine cannot be
+    // seen, so every car sitting near it looked passable and was not.
     //
-    // For axis-aligned boxes the two are identical: either way CLEARANCE is added to the sum
-    // of the projected radii, which is why the grid era could write it whichever way it liked.
-    // For ROTATED boxes they part company. Growing a box by d adds d * (|n.u| + |n.v|) to its
-    // radius on axis n -- d when the box is square-on to n, d * sqrt(2) at 45 degrees. So the
-    // whole clearance on one box reaches as much as sqrt(2) * CLEARANCE where splitting it
-    // between the pair reaches as little as CLEARANCE, and a pair the level rule had passed
-    // could still overlap here. `sweepHit` answers 0 for boxes that already overlap WHATEVER
-    // the heading, so the mover came back blocked by a car it was driving away from: 15 of
-    // the 360 cars across the ten shipped levels, every one of them with a gap of exactly 0
-    // and a "blocker" between 128 and 159 degrees off its own nose.
-    const box = inflate(carBox(car), CLEARANCE / 2);
+    // The trade is deliberate and runs the other way now: a car may thread a gap with a
+    // margin too fine to see, which can read as scraping. What it will never do is refuse a
+    // gap that is genuinely open. See CLEARANCE in types.ts for where the margin still
+    // applies -- laying out a parked lot, and how forgiving a tap is.
+    const box = carBox(car);
     const { dx, dy } = heading(car);
     const range = Math.hypot(lot.w, lot.h) + CAP_BOX.big.len * CAR_SCALE;
     // Circumscribed radius: no corner of a box sits farther than this from its own centre,
@@ -88,11 +83,7 @@ export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage 
         // up to, neither box's corners can reach the other's at any point of the sweep, and
         // `sweepHit` would have to say so too -- this cannot discard a genuine blocker, only
         // skip the arithmetic that would have proven the same negative.
-        // Grown by the other half of the clearance, so the pair of inflated boxes is exactly
-        // the pair validateLevel checked. The broad-phase bound below must measure THIS box
-        // and not the bare one, or it would be reading a smaller radius than the narrow phase
-        // goes on to use and could reject a genuine blocker.
-        const otherBox = inflate(carBox(other), CLEARANCE / 2);
+        const otherBox = carBox(other);
         const perp = Math.abs((other.x - car.x) * dy - (other.y - car.y) * dx);
         if (perp > boxHalfDiag + halfDiag(otherBox)) continue;
         const t = sweepHit(box, otherBox, dx, dy);
