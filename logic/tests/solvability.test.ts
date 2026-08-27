@@ -1,13 +1,15 @@
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/index';
 import { LevelData } from '../../game/assets/scripts/core/index';
 
-// A 1x2 column: red on top (exits up), blue below it (blocked until red leaves).
+// One column, both cars exiting upward: red above, blue below it and blocked until red
+// leaves. Red's body spans y 0.52..1.48 and blue's -1.89..-0.11, so the two are 0.63
+// apart -- well over CLEARANCE, and blue is still squarely behind red.
 function solvableLevel(): LevelData {
   return {
     id: 1,
-    grid: { cols: 1, rows: 2, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
-      { id: 2, x: 0, y: 1, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'medium' },
+    lot: { w: 4, h: 4, cars: [
+      { id: 1, x: 0, y: 1, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: -1, angle: 90, color: 'blue', cap: 'medium' },
     ] },
     parking: { slots: 4, unlocked: 4 },
     loop: { capacity: 5, boardIndex: 3, queue: [
@@ -22,12 +24,14 @@ test('a conservation-valid, clearable level is solvable', () => {
 });
 
 test('a gridlocked level (mutual block) is not solvable', () => {
-  // 2x1 row: car A at (0,0) exits right but B blocks; B at (1,0) exits left but A blocks.
+  // Nose to nose: car 1 drives +X into car 2, car 2 drives -X into car 1. Their bodies
+  // span x -1.08..-0.12 and 0.12..1.08, so each still has 0.20 of clear board ahead of
+  // it once the clearance is added -- a real gap, and still a mutual block.
   const level: LevelData = {
     id: 2,
-    grid: { cols: 2, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'right', color: 'red', cap: 'small' },
-      { id: 2, x: 1, y: 0, w: 1, h: 1, dir: 'left', color: 'red', cap: 'small' },
+    lot: { w: 4, h: 4, cars: [
+      { id: 1, x: -0.6, y: 0, angle: 0, color: 'red', cap: 'small' },
+      { id: 2, x: 0.6, y: 0, angle: 180, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 4, unlocked: 4 },
     loop: { capacity: 5, boardIndex: 3, queue: [{ color: 'red', count: 32 }] },
@@ -54,9 +58,10 @@ test('estimateDifficulty reports rounds, cars, colors, blocked', () => {
 test('a fully unblocked level clears in one round', () => {
   const level: LevelData = {
     id: 3,
-    grid: { cols: 2, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
-      { id: 2, x: 1, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    // Side by side, both exiting upward: neither is ever in the other's lane.
+    lot: { w: 4, h: 4, cars: [
+      { id: 1, x: -1, y: 0, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 1, y: 0, angle: 90, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 4, unlocked: 4 },
     loop: { capacity: 5, boardIndex: 3, queue: [{ color: 'red', count: 32 }] },

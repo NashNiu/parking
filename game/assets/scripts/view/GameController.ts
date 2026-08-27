@@ -1,16 +1,18 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
-    input, Input, EventTouch, EventMouse, geometry, tween, Mat4, assetManager, EffectAsset,
+    input, Input, EventTouch, EventMouse, EventKeyboard, KeyCode, geometry, tween, Mat4,
+    assetManager, EffectAsset, screen,
 } from 'cc';
 import {
-    GameCore, validateLevel, LevelData, Dir, firstBlocker,
+    GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
-import { GridLayout } from './grid-layout';
+import { BoardLayout } from './board-layout';
+import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
-import { ParkingView } from './parking-view';
-import { TrackView } from './track-view';
+import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
+import { TrackView, trackReach } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
@@ -73,23 +75,29 @@ const ROAD_Y = 0.3;
 const ROAD_H = 0.9;
 const RING_OFF = 0.62;
 
-/**
- * The box the lot and its ring road have to live in, straight off the camera frame
- * (±4.90 across, ±6.21 down — see CAMERA_DIST). RING_LOW is the lowest a lane centreline
- * can sit with its outer edge still on screen, and LOT_HALF_W is what is left across once
- * a lane and its offset are taken off each side. A taller grid therefore takes a SMALLER
- * cell rather than hanging off the bottom, which is what a 6-row level used to do: its
- * ring reached y = -7.96.
- *
- * The lot slab is then drawn LOT_HALF_W wide whatever the grid needs, so it reaches the
- * edge of the view on both sides and the cars sit centred on it. The cell can't grow to
- * match: 6 rows in a 4.5-unit-tall budget is what fixes it, and only a taller view (a real
- * phone, rather than this squat preview window) changes that.
- */
-const RING_LOW = -5.76;
-const LOT_HALF_W = 3.83;
 const CELL_MAX = 1.4;
-const CELL_GAP = 0.12;
+/**
+ * Bare board between one grid cell and the next. The visible gap between two cars nose to
+ * tail is this PLUS the air a car leaves inside its own cell (see `fill` in car-builder), and
+ * the pair have come down 0.22 -> 0.10 -> 0.03 on a cell of about 1.1. At 0.03 the cars very
+ * nearly touch, which is what a full car park looks like.
+ *
+ * The cell's pitch is fixed by the height the lot has to fill, so what comes off the gap goes
+ * to the cars: they are about a fifth longer than they were at 0.12. That is the trade this
+ * knob makes -- a denser lot at the same size, not a smaller one.
+ *
+ * There used to be a second, much bigger gap SIDEWAYS between two cars, which neither this
+ * nor the old `fill` could reach: a small car had a one-cell SQUARE footprint and a model
+ * about twice as long as it was wide, so scaling it uniformly filled the cell along its
+ * length and left nearly half of it across. That is gone -- a car's footprint is its body
+ * now, at whatever angle it is parked, so there is no cell for it to rattle around in and
+ * nothing here to reach.
+ *
+ * What this constant still does is set the board's scale: it is subtracted from the pitch
+ * the lot's height allows, and the remainder is the world size of one board unit. Cars are
+ * spaced by core's CLEARANCE, not by this.
+ */
+const CELL_GAP = 0.02;
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_SPEED = 8;
@@ -98,45 +106,93 @@ const EXIT_SPEED = 8;
 const DRIVE_SPEED = 9;
 
 /**
- * How much of its stall a parked car fills, across and along. A car is built to fit its
- * GRID cell, which is a different size - and on a tall level a much smaller one - so it is
- * refitted to the stall on arrival rather than scaled by a fixed factor, which is what left
- * level 2's parked cars half the size of level 1's. Along the stall it may overhang a
- * little: a long bus held strictly inside would be scaled down until it read as a toy.
+ * How much of its stall a parked car may fill, across and along -- the ceiling `stallScale`
+ * enforces, not a target it aims for.
+ *
+ * With the stall now sized off `CAP_BOX.big` (see `stallFootprint`), no car reaches either
+ * ceiling: the biggest one comes to 75% of the width against this 80%, and 90% of the depth
+ * against this 102%. That headroom is the point. It is what makes `stallScale` come out at
+ * exactly 1 for every capacity, so a parked car keeps the size it had in the lot -- and it
+ * is the margin a re-exported model can drift into without silently shrinking cars again.
+ *
+ * Along the stall a car may overhang slightly (hence 1.02 rather than 1.00): a long bus
+ * held strictly inside would be scaled down until it read as a toy.
  */
 const STALL_FILL_W = 0.8;
 const STALL_FILL_H = 1.02;
 
-/**
- * Where the camera sits, in board units. CAMERA_Y is the midpoint of everything drawn
- * (circuit top to bottom ring lane) so the margins come out even.
- */
-const CAMERA_Y = 0;
 const CAMERA_DIST = 15;
+
+/**
+ * Aspect of the editor preview window, and the only thing every framing constant in this
+ * file was ever chosen against. Used solely as the assumption when the real window has not
+ * reported a size yet -- see `viewFrame`.
+ */
+const PREVIEW_ASPECT = 0.79;
+
+/**
+ * The LEAST the camera shows vertically: exactly what a 45-degree vertical fov showed at
+ * CAMERA_DIST on the board plane, which is why every framing constant derived from that
+ * perspective frame. It is the FLOOR the fit starts from, not the final value: on a
+ * viewport too narrow to hold the board it is not enough, and on one much taller than the
+ * board the layout spends the difference. See `viewFrame` and `fitCamera`.
+ */
+const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
+
+/**
+ * Draw core's footprints and lane bars from the moment a level loads, and log what core
+ * decided on every tap. DIAGNOSTIC ONLY -- set back to false once the lot's verdicts have
+ * been confirmed against it. `D` toggles it either way at runtime; this is only the state
+ * it starts in, so that reading it never depends on the preview having keyboard focus.
+ */
+const DEBUG_FOOTPRINTS = false;
+
+/**
+ * Seconds a startup preload gets before the game goes on without it.
+ *
+ * Both preloads already degrade gracefully when an asset ERRORS -- litMaterial falls back
+ * to flat shading, buildCar falls back to a plain coloured box. Neither degraded when a
+ * load simply never called back, and a real device has failure modes the editor never
+ * shows, so the whole game sat on the splash screen forever with nothing logged. A
+ * deadline is what makes those existing fallbacks reachable.
+ *
+ * Generous on purpose: a phone on a slow connection fetching the package is doing real
+ * work, and cutting it off early would trade a hang for a permanently ugly board.
+ */
+const PRELOAD_DEADLINE = 8;
 
 /**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
  *
- * BUMP is how far past contact it presses. Cars are drawn at 90% of their footprint, so a
- * sliver of overlap in cell terms still reads as bodies touching rather than clipping.
- * The forward leg is capped: with a three-cell run-up, honest speed would make a refused
- * tap feel like a slow round trip.
+ * BUMP is how far past the reported stopping point it presses, and it has to stay under the
+ * bare board between two cars nose to tail. That distance is core's CLEARANCE, 0.04 board
+ * units or 0.030 world -- and `firstBlocker` measures its gap from a mover already inflated
+ * by CLEARANCE, so the car stops a clearance short of touching and BUMP eats into that.
+ * At 0.020 it still leaves 0.010 of daylight; anything over 0.030 would drive one car into
+ * the other. It was 0.06 back when cars were drawn at 90% of a grid cell and the slack was
+ * 0.22. The jolt is what sells the impact anyway -- see JOLT.
+ *
+ * The forward leg is capped: with a three-cell run-up, honest speed would make a refused tap
+ * feel like a slow round trip.
  */
 const NUDGE_SPEED = 5.5;
 const NUDGE_MIN = 0.12;
 const NUDGE_MAX = 0.35;
-const BUMP = 0.06;
+const BUMP = 0.02;
 const JOLT = 0.07;
 
-/** Board-space direction a car exits toward. Grid row 0 is at the TOP, hence up = +Y. */
-const DIR_VEC: Record<Dir, Vec3> = {
-    up: new Vec3(0, 1, 0),
-    down: new Vec3(0, -1, 0),
-    left: new Vec3(-1, 0, 0),
-    right: new Vec3(1, 0, 0),
-};
+/**
+ * Board-space unit vector a car with this heading drives along. Degrees, 0 = +X,
+ * counter-clockwise -- core's convention, and the board's +Y is world +Y, so there is no
+ * flip to apply. This replaces a four-entry lookup table that could only name four
+ * directions.
+ */
+function headingVec(angle: number): Vec3 {
+    const r = angle * Math.PI / 180;
+    return new Vec3(Math.cos(r), Math.sin(r), 0);
+}
 
 /** Body angle (degrees about the board normal) for a car heading down / to the right. */
 const FACE_DOWN = 270;
@@ -185,11 +241,36 @@ export class GameController extends Component {
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
+    /**
+     * Half the world box that MUST be on screen, for the board AS BUILT -- not for the
+     * level, and not from a constant. `buildBoard` measures it off what it actually laid
+     * out, and `fitCamera` zooms to whichever of the two the screen's shape makes binding.
+     *
+     * Measured rather than assumed because the wrong direction is silent: a box too small
+     * crops (which is what shipped to the first phone), and a box too large just pads.
+     */
+    private needHalfW: number = LANE.edgeLimit;
+    private needHalfH = VIEW_HALF_H;
+    /**
+     * Board y the camera is centred on: the midpoint of everything drawn. Was a constant 0,
+     * which is the midpoint of nothing in particular -- see `buildBoard`.
+     */
+    private camY = 0;
+    /** Aspect the camera was last fitted to, so `update` only refits when it changes. */
+    private fitAspect = 0;
+    private layout: BoardLayout | null = null;
+    /** The footprint overlay while it is shown. See `toggleDebugOverlay`. */
+    private debugOverlay: Node | null = null;
     private sfx: SfxManager | null = null;
     /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
     private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
-    /** Grid pitch in board units, so a blocked nudge can turn cells into distance. */
-    private gridStep = 1;
+    /**
+     * World units per board unit, so a blocked nudge can turn core's distance into a
+     * screen distance. One board unit is the pitch the old grid used, so this is the same
+     * number `gridStep` held and the arithmetic that reads it is unchanged.
+     */
+    private boardScale = 1;
+
     /**
      * Cars still driving to a stall. `busy` only locks taps for the first leg, so the
      * player can keep tapping while a car finishes its lap of the ring road; this keeps
@@ -228,13 +309,45 @@ export class GameController extends Component {
             console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
         }
         this.registerInput();
+        // First thing this component logs. If a device hangs on the splash and this line is
+        // absent, the scene never got as far as running the controller and the problem is
+        // below us, in the engine or the asset download; if it is present, the hang is in
+        // the preload chain below and the deadline warnings will say which step.
+        console.log('[Game] controller start');
         // Preload builtin-standard so lit materials get real lighting; it lives in
         // the `internal` bundle but isn't preloaded unless something already uses it.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
         // Then preload the car GLB models (buildCar is synchronous and needs the
         // prefab resident) before loading the level. Passengers are procedural
         // (pax-figure.ts) and need no preload of their own.
-        this.preloadLitEffect(() => preloadCarModels(() => this.loadLevel(this.levelName)));
+        //
+        // Each step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
+        // back used to strand the game on the splash screen with nothing logged.
+        this.withDeadline('builtin-standard preload', (d) => this.preloadLitEffect(d), () => {
+            this.withDeadline('car model preload', (d) => preloadCarModels(d), () => {
+                this.loadLevel(this.levelName);
+            });
+        });
+    }
+
+    /**
+     * Run `step`, and continue when it reports finished OR when PRELOAD_DEADLINE passes,
+     * whichever comes first. `done` runs exactly once either way -- a step that calls back
+     * late finds the latch already closed and is ignored, so nothing runs twice.
+     */
+    private withDeadline(label: string, step: (done: () => void) => void, done: () => void): void {
+        let fired = false;
+        const finish = (timedOut: boolean): void => {
+            if (fired) return;
+            fired = true;
+            if (timedOut) {
+                console.warn(`[Game] ${label} did not finish within ${PRELOAD_DEADLINE}s`
+                    + ' — starting without it');
+            }
+            done();
+        };
+        this.scheduleOnce(() => finish(true), PRELOAD_DEADLINE);
+        step(() => finish(false));
     }
 
     /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */
@@ -251,6 +364,7 @@ export class GameController extends Component {
     onDestroy() {
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+        input.off(Input.EventType.KEY_UP, this.onKeyUp, this);
     }
 
     /**
@@ -271,7 +385,15 @@ export class GameController extends Component {
     private loadLevel(name: string): void {
         this.loading = true;
         this.levelName = name; // tracks the level in play, so nextLevelName() advances from it
+        // Same reasoning as the preloads: say so rather than sitting silent. There is no
+        // useful fallback for a level that never arrives -- the board would be empty -- so
+        // this only reports; it does not pretend to recover.
+        let arrived = false;
+        this.scheduleOnce(() => {
+            if (!arrived) console.error(`[Game] level '${name}' has not loaded after ${PRELOAD_DEADLINE}s`);
+        }, PRELOAD_DEADLINE);
         resources.load(`levels/${name}`, JsonAsset, (err, asset) => {
+            arrived = true;
             if (err) {
                 console.error('[Game] failed to load level', name, err);
                 this.loading = false;
@@ -297,7 +419,60 @@ export class GameController extends Component {
             this.tickAcc = 0;
             this.loading = false;
             console.log(`[Game] level '${name}' started, state=${this.core.getState()}`);
+            if (this.core.getState() !== 'playing') this.logStartupDiagnosis(level);
         });
+    }
+
+    /**
+     * Why a level was not `playing` the moment it loaded.
+     *
+     * That should be impossible: all ten shipped levels come up with 8 to 14 movable cars
+     * and four free stalls, verified against core directly. A WeChat mini-game build
+     * reported `state=deadlock` for level 1 where node and the mobile browser both report
+     * `playing` on the same JSON and the same core, so the difference is in the build, not
+     * in the data -- and guessing which part of the build is exactly what this avoids.
+     *
+     * The values printed are the ones the verdict is made of. `isDeadlocked` is
+     * `!(hasFreeSlot && movable > 0)` with no parked car left to fill, so on a fresh level
+     * it can only mean `movable === 0` -- every car reporting blocked. The car's resolved BOX
+     * is printed with them because that is the likeliest way to get there: a NaN in `len` or
+     * `wid` makes every projection NaN, every comparison in `sweepHit` false, and the sweep
+     * falls out returning 0 -- which reads as "in contact" for every pair, whatever the
+     * heading. CAR_SCALE and CAP_BOX are printed for the same reason: they are the two
+     * module-level constants `carBox` multiplies, and a bundler that left either undefined at
+     * init would produce exactly this and nothing else.
+     */
+    private logStartupDiagnosis(level: LevelData): void {
+        const core = this.core!;
+        const cars = level.lot.cars;
+        const first = cars[0];
+        const box = first ? carBox(first) : null;
+        // The discriminator. A gap of exactly 0 means the swept test found the pair already
+        // in contact, and it is what a NaN anywhere in the geometry degenerates to -- every
+        // comparison in `sweepHit` goes false and it falls out returning 0. So "every car
+        // blocked, every gap 0" is arithmetic gone bad, while a spread of real positive gaps
+        // means the geometry is fine and the lot genuinely is jammed.
+        let blocked = 0, zeroGap = 0;
+        for (const c of cars) {
+            const b = firstBlocker(c, cars, core.lot.bounds);
+            if (!b) continue;
+            blocked++;
+            if (b.gap === 0 || !Number.isFinite(b.gap)) zeroGap++;
+        }
+        console.warn('[Game] not playing at load: ' + JSON.stringify({
+            jsonCars: cars.length,
+            coreCars: core.lot.cars.size,
+            movable: core.lot.movableCarIds().length,
+            blocked,
+            zeroOrNaNGap: zeroGap,
+            freeSlot: core.parking.hasFreeSlot(),
+            bounds: core.lot.bounds,
+            carScale: CAR_SCALE,
+            capBox: CAP_BOX,
+            firstCar: first ? { id: first.id, cap: first.cap, angle: first.angle } : null,
+            firstBox: box ? { len: box.len, wid: box.wid } : null,
+            firstBlocker: first ? firstBlocker(first, cars, core.lot.bounds) : null,
+        }));
     }
 
     /** Tear the current board down and load `name` — used for both replay and advancing. */
@@ -317,25 +492,34 @@ export class GameController extends Component {
     }
 
     private buildBoard(level: LevelData): void {
-        const LOOP_Y = 3.8;
-        // The parking band sits between the ring road's top lane (which ends at y = 0.75)
-        // and the loop track's curb (whose shadow hangs down to y ~ 2.15); a stall 1.06 deep
-        // centred here fills that band with a little margin at each end.
-        const PARKING_Y = 1.4;
 
+        // The box the lot and its ring road have to live in. These were CONSTANTS
+        // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
+        // of the editor preview window -- and a phone's frame is neither of those numbers.
+        // It is +/-4.67 by +/-10.11, narrower AND much taller, so the pair were wrong in
+        // both directions at once: the ring road's outer kerb landed at 4.90 in a 4.67-wide
+        // view (clipped, on every phone), while 4.5 units of vertical budget went unused
+        // because the lot was still being sized against a 6.21 half-height.
+        //
+        // `ringLow` is the lowest a ring lane's CENTRELINE can sit with its outer edge still
+        // on screen; `lotHalfW` is what is left across once a lane and its offset come off
+        // each side. Same two roles as the constants, read off the real frame.
+        const frame = this.viewFrame();
+        const ringLow = -(frame.halfH - ROAD_H / 2);
+        const lotHalfW = frame.halfW - RING_OFF - ROAD_H / 2;
         // The lot hangs exactly one lane below the top road, so the road stays put and the
         // lot moves with the grid's size. The cell takes whichever budget is tighter — the
         // rows against the height left under the stalls, or the columns against the width —
         // and the slab is then widened to the full frame.
         const cell = Math.min(
             CELL_MAX,
-            (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / level.grid.rows - CELL_GAP,
-            (2 * LOT_HALF_W - 0.3) / level.grid.cols - CELL_GAP,
+            (ROAD_Y - 2 * RING_OFF - ringLow - 0.3) / level.lot.h - CELL_GAP,
+            (2 * lotHalfW - 0.3) / level.lot.w - CELL_GAP,
         );
-        const step = cell + CELL_GAP;
-        this.gridStep = step;
-        const lotH = lotHeight(level.grid.rows, step);
-        const lotW = Math.max(lotWidth(level.grid.cols, step), 2 * LOT_HALF_W);
+        const scale = cell + CELL_GAP;
+        this.boardScale = scale;
+        const lotH = lotHeight(level.lot.h, scale);
+        const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * lotHalfW);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
             top: ROAD_Y,
@@ -362,9 +546,68 @@ export class GameController extends Component {
         // crash rather than draw. The warn loop above has already said which field is wrong.
         const rawTrack = level.loop.track as TrackShape;
         const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
+        const path = new TrackPath(shape);
+
+        // Where the parking bay and the loop track go, up the board.
+        //
+        // Both were constants (PARKING_Y 1.4, LOOP_Y 3.8), which meant the bay had to fit a
+        // 1.4-unit band between the ring road's top lane and the track's curb -- and a stall
+        // that has to fit a BUS is 2.13 deep, not 1.06. The dependency runs the other way
+        // now: the stall is sized from the board (`stallFootprint`), the bay sits directly on
+        // top of the road, and the track is pushed up to clear it. That is the whole reason a
+        // bus can park at its full size.
+        //
+        // It also spends height that was going begging: the board reached y = 7.31 of the
+        // 8.98 the phone's frame allows, so pushing the track up costs nothing and takes the
+        // blank band from 23% of the screen to 16%.
+        const reach = trackReach(path);
+        const stall = stallFootprint(scale);
+        const bay = bayPanelSize(level.parking.slots, stall);
+        // Clear air between the road and the bay, and between the bay and the track's
+        // outermost waiting figure. One constant for both, since both are the same job.
+        const BAND_GAP = 0.16;
+        const bandBottom = ROAD_Y + ROAD_H / 2 + BAND_GAP;
+        const PARKING_Y = bandBottom + bay.h / 2;
+        const LOOP_Y = bandBottom + bay.h + BAND_GAP - reach.bottom;
+
+        // Frame the camera on what was actually drawn.
+        //
+        // ACROSS: LANE.edgeLimit, not this level's own measured channel reach. It is the
+        // bound core states and `validateTrack` enforces -- every legal level's channels
+        // stay inside it -- so it is the same number for every level, which is the point.
+        // The shipped levels' own reaches run 3.08 to 4.36 (their lookaheads differ, that
+        // being a difficulty knob), and fitting each exactly would zoom the board by a
+        // different amount PER LEVEL. The lot is the same size in all ten, so watching it
+        // change from one level to the next would read as a bug -- this repo has already had
+        // that complaint once, about parked cars. The lot's own ring road is maxed in anyway,
+        // so a wider lot zooms out rather than clipping.
+        //
+        // Counter-intuitive and measured, so it does not get re-litigated: fitting to the
+        // real 2.51 rather than 4.67 makes the cars SMALLER, not bigger. The ring road costs
+        // a fixed 1.07 of WORLD width per side, so zooming in makes it eat a larger share of
+        // the screen -- the lot went from 82% of the width to 75%, and the cars with it.
+        //
+        // DOWN: the drawn ring's top -- its path, plus a block across the centreline, plus a
+        // figure standing up the screen from its feet (see `trackReach`; the figures lie IN
+        // the board plane, so that last 0.55 is real and easy to miss) -- down to the ring
+        // road's outer kerb. The camera then centres on the MIDPOINT of that, where it used
+        // to sit at a constant y = 0. The two are 1.3 units apart, which at phone zoom is
+        // 130 px of margin taken off one end of the screen and handed to the other.
+        const contentTop = LOOP_Y + reach.top;
+        const contentBottom = this.ring.bottom - ROAD_H / 2;
+        this.camY = (contentTop + contentBottom) / 2;
+        this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2 + RING_OFF + ROAD_H / 2);
+        this.needHalfH = Math.max(VIEW_HALF_H, (contentTop - contentBottom) / 2);
+        // Invalidate the cached aspect: `fitCamera` short-circuits on aspect alone, and the
+        // board it has to hold -- and the y it has to look at -- have both just changed. Fit
+        // straight away too, so a level's first frame is already framed rather than being
+        // one frame late.
+        this.fitAspect = 0;
+        this.fitCamera();
+
         this.loopView = new TrackView(
             loopRoot,
-            new TrackPath(shape),
+            path,
             // capacity and boardIndex are the same values on `level.loop` and on `loop`
             // (LoopSystem copies both at construction) -- read off whichever is already
             // in hand on each side of the comma.
@@ -380,7 +623,7 @@ export class GameController extends Component {
         const parkingRoot = new Node('ParkingRoot');
         this.boardRoot.addChild(parkingRoot);
         this.parkingView = new ParkingView(
-            parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y,
+            parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y, scale,
         );
         this.parkingView.render();
 
@@ -389,9 +632,11 @@ export class GameController extends Component {
         this.boardRoot.addChild(gridRoot);
         this.gridRoot = gridRoot;
         // Same pitch the lot was sized from, or the slab and its cars drift apart.
-        const layout = new GridLayout(level.grid.cols, level.grid.rows, cell, CELL_GAP);
-        this.gridView = new GridView(gridRoot, this.core!.grid, layout);
+        const layout = new BoardLayout(scale);
+        this.layout = layout;
+        this.gridView = new GridView(gridRoot, this.core!.lot, layout);
         this.gridView.render();
+        if (DEBUG_FOOTPRINTS) this.toggleDebugOverlay();
     }
 
     private setupCamera(): void {
@@ -401,17 +646,46 @@ export class GameController extends Component {
             return;
         }
         this.cam = camNode.getComponent(Camera);
-        // Straight on, down the board's normal. At a 45-degree VERTICAL fov the visible
-        // half-height is 0.414 * d, so 15 shows 6.21 above and below the board centre,
-        // which takes the circuit's top edge (5.48) and the bottom ring lane (-6.15) and
-        // still leaves 0.7 at the top for the HUD. Across, it shows 4.90 — the outermost
-        // waiting rows sit at 4.65.
+        // Straight on, down the board's normal. Where along y it looks is `buildBoard`'s
+        // to say (see `camY`) and it has not run yet, so this is the placeholder framing the
+        // first frame is drawn with.
         //
         // (The tilted 2.5D framing this replaces was pos (0, 5, 12), lookAt (0, -0.3, 0),
         // and needs BOARD_TILT back at 52 to make sense.)
-        camNode.setPosition(new Vec3(0, CAMERA_Y, CAMERA_DIST));
-        camNode.lookAt(new Vec3(0, CAMERA_Y, 0));
+        this.placeCamera(camNode);
         if (this.cam) {
+            // ORTHOGRAPHIC, and this is load-bearing rather than a matter of taste: the
+            // gameplay is strictly 2D and core reasons about each car's FOOTPRINT on the
+            // board plane, but a car is drawn STANDING on that plane, its roof `hgt` closer
+            // to the camera (see `buildCar`). A perspective camera scales that roof by
+            // d/(d-hgt) about its own axis and shoves it radially outward -- and the lot is
+            // centred at y = -2.73 while the axis is at y = 0, so the whole lot is off-axis
+            // and the bottom of it is ~5 units out. Measured over the ten shipped levels the
+            // roof landed a MEDIAN of 0.109 board units from the footprint core was reasoning
+            // about, peaking at 0.187. CLEARANCE is 0.04, so the picture was lying by two to
+            // five times the entire gap budget, and it broke three things at once:
+            //
+            //  - blocked/clear. Re-running core's own sweep on the projected boxes disagreed
+            //    with core on 13 of 360 cars, 10 of them "core says you may go, the eye says
+            //    that blue car is in the way".
+            //  - the size hierarchy. What you see is the roof plus whatever side wall the
+            //    perspective reveals, which grows with distance off-axis: two MEDIUM cars --
+            //    same model, same CAP_BOX row -- drew up to 26% apart in width, and 34 of the
+            //    73 medium cars drew wider than some big one.
+            //  - picking. `onTap` intersects its ray with the board plane and `pickCar` tests
+            //    the footprint, so the player aimed at a roof that was not over the box.
+            //
+            // Under ortho a car projects exactly onto its footprint whatever its height and
+            // wherever it sits -- in the lot, driving the ring, parked in a stall. Do not put
+            // the perspective projection back without also giving core the roof plane.
+            //
+            // The framing this starts at is the half-height the 45-degree fov already had AT
+            // THE BOARD PLANE, so z = 0 came out pixel-identical to the perspective frame and
+            // everything else shifted by at most the 2.4% it had been magnified by. It is a
+            // FLOOR, not the final value: `fitCamera` raises it on a viewport too narrow to
+            // hold the board, which is every portrait phone.
+            this.cam.projection = Camera.ProjectionType.ORTHO;
+            this.cam.orthoHeight = VIEW_HALF_H;
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
             // Matches the ground panel, so any sliver outside it doesn't flash a
             // different colour.
@@ -419,7 +693,59 @@ export class GameController extends Component {
         }
     }
 
+    /**
+     * The visible box in board units at the CURRENT screen shape, half-width by half-height.
+     *
+     * An orthographic camera fixes its vertical half-view and lets the horizontal follow the
+     * aspect (which is how the perspective camera before it worked too -- its fovAxis was
+     * VERTICAL). So a narrow viewport shows LESS across: the 0.79-aspect editor preview
+     * window is 4.90 across, a 0.46 portrait phone only 2.87, and the board needs 4.67.
+     * `fitCamera` buys that back by raising orthoHeight, and the frame that comes out is
+     * what the board then has to be laid out into -- hence this, rather than the constants
+     * `buildBoard` used to use, which only ever described the preview window.
+     *
+     * Costs nothing on a viewport already wide enough: the preview keeps the framing it had
+     * to within a rounding error, a 4:3 tablet gives up 0.3%.
+     */
+    private viewFrame(): { halfW: number; halfH: number } {
+        const size = screen.windowSize;
+        const raw = size.width / Math.max(1, size.height);
+        // Zero or NaN only happens before the window has a size. Assume the preview's own
+        // shape rather than dividing by it; `update` refits the moment a real one arrives.
+        const aspect = Number.isFinite(raw) && raw > 0 ? raw : PREVIEW_ASPECT;
+        const halfH = Math.max(VIEW_HALF_H, LANE.edgeLimit / aspect);
+        return { halfW: halfH * aspect, halfH };
+    }
+
+    /**
+     * Zoom out far enough that the whole board is on screen, whatever shape the screen is,
+     * and look at the middle of it.
+     *
+     * Fits to `needHalfW`/`needHalfH` -- what the board as BUILT requires -- not to the
+     * frame `viewFrame` offered. The two agree at the aspect the board was laid out for; a
+     * later resize can only make the camera step further back, never crop what is drawn.
+     */
+    private fitCamera(): void {
+        if (!this.cam) return;
+        const size = screen.windowSize;
+        const aspect = size.width / Math.max(1, size.height);
+        if (!Number.isFinite(aspect) || aspect <= 0) return;
+        if (Math.abs(aspect - this.fitAspect) < 1e-4) return;
+        this.fitAspect = aspect;
+        this.cam.orthoHeight = Math.max(this.needHalfH, this.needHalfW / aspect);
+        this.placeCamera(this.cam.node);
+    }
+
+    /** Point the camera straight down the board's normal at `camY`. */
+    private placeCamera(camNode: Node): void {
+        camNode.setPosition(new Vec3(0, this.camY, CAMERA_DIST));
+        camNode.lookAt(new Vec3(0, this.camY, 0));
+    }
+
     update(dt: number): void {
+        // Before the guards: the window can be resized while the level is over, or between
+        // levels, and a stale zoom would be visible either way.
+        this.fitCamera();
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
         // level (nothing left to fill the parked cars, nothing left that can move).
@@ -577,28 +903,58 @@ export class GameController extends Component {
     }
 
     /**
-     * Waypoints from a car's spot in the lot to a parking stall: out the way the car
-     * points until it meets the lane on that side, round the ring to the top lane, along
-     * that to the stall, then up into it.
+     * Waypoints from a car's place in the lot to a parking stall: straight out along its own
+     * heading until it meets a lane of the ring road, then round the ring to the top lane,
+     * along that to the stall, then up into it.
      *
-     * The target always sits on the top lane, since every stall is above it. So a car
-     * that left by a side lane needs one corner and one that left by the bottom needs
-     * two, taking whichever side it is already nearer.
+     * The target always sits on the top lane, since every stall is above it. So a car that
+     * left by a side needs one corner and one that left by the bottom needs two, taking
+     * whichever side it is already nearer.
+     *
+     * A diagonal heading needs no case of its own. Whichever RING LANE the car reaches
+     * FIRST decides the lane it joins, and everything past that is the same corner-turning
+     * the four-direction version did -- so what used to be four branches is now one
+     * comparison feeding the same three.
+     *
+     * Note the first leg runs all the way to the LANE, not to the lot's edge. Stopping at
+     * the edge is what the centre of the car crossing it means, so the body would still be
+     * half inside the lot when the next leg turns it -- and in a lot packed to a clearance
+     * of 0.04 board units, that pivot sweeps the car's rear through whoever is still parked
+     * beside it. Measured over the ten shipped levels, 218 of 360 cars clipped a neighbour
+     * that way; routing to the lane instead makes it none of them.
+     *
+     * Driving to the lane also makes the axis-aligned cars behave as they always did. Their
+     * `out` lands ON the lane, so the corner waypoint that follows is the same point and
+     * `driveRoute` drops the zero-length leg -- where stopping at the lot edge gave a
+     * quarter of the cars a full braking stop and a 0.16s turn through zero degrees, a
+     * pause you could see inside an exit that only lasts a third of a second.
      */
-    private routeToSlot(from: Vec3, dir: Dir, slotX: number, parkY: number): Vec3[] {
+    private routeToSlot(from: Vec3, angle: number, slotX: number, parkY: number): Vec3[] {
         const r = this.ring;
         const z = from.z;
-        const wp: Vec3[] = [];
-        if (dir === 'up') {
-            wp.push(new Vec3(from.x, r.top, z));
-        } else if (dir === 'down') {
-            const side = from.x < 0 ? r.left : r.right;
-            wp.push(new Vec3(from.x, r.bottom, z));
-            wp.push(new Vec3(side, r.bottom, z));
-            wp.push(new Vec3(side, r.top, z));
+        const d = headingVec(angle);
+        // Distance to each lane it is actually heading toward; Infinity when it is not
+        // travelling that way at all, so `Math.min` ignores it.
+        const tx = Math.abs(d.x) < 1e-6
+            ? Infinity : ((d.x > 0 ? r.right : r.left) - from.x) / d.x;
+        const ty = Math.abs(d.y) < 1e-6
+            ? Infinity : ((d.y > 0 ? r.top : r.bottom) - from.y) / d.y;
+        // Clamped at zero: a car somehow already past a lane would otherwise be sent back.
+        const t = Math.max(0, Math.min(tx, ty));
+        const out = new Vec3(from.x + d.x * t, from.y + d.y * t, z);
+        const wp: Vec3[] = [out];
+        if (ty <= tx) {
+            if (d.y > 0) {
+                wp.push(new Vec3(out.x, r.top, z));
+            } else {
+                const side = out.x < 0 ? r.left : r.right;
+                wp.push(new Vec3(out.x, r.bottom, z));
+                wp.push(new Vec3(side, r.bottom, z));
+                wp.push(new Vec3(side, r.top, z));
+            }
         } else {
-            const side = dir === 'left' ? r.left : r.right;
-            wp.push(new Vec3(side, from.y, z));
+            const side = d.x < 0 ? r.left : r.right;
+            wp.push(new Vec3(side, out.y, z));
             wp.push(new Vec3(side, r.top, z));
         }
         wp.push(new Vec3(slotX, r.top, z));
@@ -714,17 +1070,22 @@ export class GameController extends Component {
      * Uniform scale that fits car `id`'s model into a parking stall. Read it BEFORE
      * `detachCar`, which drops the entry holding the car's fitted size.
      *
-     * Never larger than 1: a stall (0.78 x 1.06) is deeper than a grid cell, so fitting a
-     * SMALL car to it worked out at 1.9 -- the car nearly doubled as it drove up, which
-     * reads as the wrong car arriving rather than as parking. This makes the refit a
-     * shrink-only affair: a car that already fits keeps exactly the size it had in the
-     * lot, and only the ones too big for the stall (a bus, whose two-cell footprint is
-     * longer than the stall is deep) come down to fit.
+     * Never larger than 1: a stall is deeper than a small car is long, so fitting one to it
+     * worked out at 1.9 -- the car nearly doubled as it drove up, which reads as the wrong
+     * car arriving rather than as parking. So the refit is a shrink-only affair.
+     *
+     * As of the board-scaled stall it should now be a NO-OP: the stall is sized to hold the
+     * longest body there is, so every capacity comes out at 1 and keeps exactly the size it
+     * had in the lot. It is kept because it is the only thing standing between a drifted
+     * CAP_BOX (or a re-exported model) and a car drawn straight over its neighbours -- and
+     * because it is what used to fire. When the stall was fixed at 0.78 x 1.06 while the lot
+     * grew, this shrank a bus to 0.563 and left it parking NARROWER than the small car next
+     * to it, 0.344 against 0.464 across.
      */
     private stallScale(id: number): number {
         const size = this.gridView!.getCarSize(id);
         if (!size || size.len <= 0 || size.wid <= 0) return 1;
-        const slot = ParkingView.slotSize;
+        const slot = this.parkingView!.slotSize;
         return Math.min(
             1,
             (slot.w * STALL_FILL_W) / size.wid,
@@ -778,7 +1139,7 @@ export class GameController extends Component {
             this.hud?.showWin(3, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
-            for (const [id] of this.core!.grid.cars) {
+            for (const [id] of this.core!.lot.cars) {
                 const body = this.gridView?.getCarBody(id);
                 if (body) flash(body, new Color(255, 80, 80));
             }
@@ -791,6 +1152,52 @@ export class GameController extends Component {
     private registerInput(): void {
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
+        input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
+    }
+
+    /**
+     * What core decided about this tap, as one line. The `blocked` case names the car core
+     * picked as the blocker and how much room it measured, which is the pair of facts a
+     * screenshot cannot show and the whole argument turns on.
+     */
+    private logTap(id: number, angle: number, verdict: string): void {
+        const car = this.core?.lot.cars.get(id);
+        if (!car) return;
+        const lot = this.core!.lot;
+        const b = firstBlocker(car, Array.from(lot.cars.values()), lot.bounds);
+        const who = `car ${id} (${car.cap}) at (${car.x.toFixed(2)}, ${car.y.toFixed(2)}) heading ${angle.toFixed(1)}`;
+        if (b) {
+            const by = lot.cars.get(b.carId);
+            console.log(`[tap] ${who} -> ${verdict}; core says BLOCKED by car ${b.carId}`
+                + `${by ? ` (${by.cap}) at (${by.x.toFixed(2)}, ${by.y.toFixed(2)})` : ''}`
+                + `, ${b.gap.toFixed(3)} board units of room`);
+        } else {
+            console.log(`[tap] ${who} -> ${verdict}; core says the lane is CLEAR`);
+        }
+    }
+
+    /** D toggles the footprint overlay. Keyboard only, so it never fires on a phone. */
+    private onKeyUp(e: EventKeyboard): void {
+        if (e.keyCode === KeyCode.KEY_D) this.toggleDebugOverlay();
+    }
+
+    /**
+     * Show or hide core's ground truth over the lot: see `debug-overlay.ts` for how to read
+     * it. Rebuilt on every toggle rather than kept in sync, because a stale overlay would be
+     * exactly the kind of lie it exists to catch.
+     */
+    private toggleDebugOverlay(): void {
+        if (this.debugOverlay) {
+            this.debugOverlay.destroy();
+            this.debugOverlay = null;
+            return;
+        }
+        if (!this.core || !this.gridRoot || !this.layout) return;
+        const lot = this.core.lot;
+        this.debugOverlay = buildFootprintOverlay(
+            Array.from(lot.cars.values()), lot.bounds, this.layout,
+        );
+        this.gridRoot.addChild(this.debugOverlay);
     }
 
     private onTouchEnd(e: EventTouch): void {
@@ -816,7 +1223,7 @@ export class GameController extends Component {
         if (this.busy) return;
 
         // Ray from the tap, intersected with the (possibly tilted) board plane, then
-        // converted into gridRoot-local space where car footprints are defined.
+        // converted into gridRoot-local space, where the cars' own positions live.
         const ray = new geometry.Ray();
         this.cam.screenPointToRay(screenX, screenY, ray);
         const gr = this.gridRoot;
@@ -847,16 +1254,21 @@ export class GameController extends Component {
         const body = this.gridView.getCarBody(id);
         if (body) squash(body);
 
-        const dir = this.core.grid.cars.get(id)?.dir as Dir | undefined;
+        const angle = this.core.lot.cars.get(id)?.angle ?? 0;
         const res = this.core.tapCar(id);
+        // Tied to the overlay BEING VISIBLE, not to the constant: D turns the overlay on at
+        // runtime, and a diagnostic you switched on that stays silent is worse than none.
+        if (this.debugOverlay) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
-            this.playDriveToSlot(id, dir ?? 'up', res.slotIndex);
+            this.playDriveToSlot(id, angle, res.slotIndex);
+        } else if (res.reason === 'full') {
+            this.playLotFull(id);
         } else {
             this.playShake(id);
         }
     }
 
-    private playDriveToSlot(id: number, dir: Dir, slotIndex: number): void {
+    private playDriveToSlot(id: number, angle: number, slotIndex: number): void {
         const parkScale = this.stallScale(id); // before detachCar drops the car's size
         const node = this.gridView!.detachCar(id);
         if (!node) return;
@@ -864,7 +1276,7 @@ export class GameController extends Component {
 
         const start = node.position.clone();
         const slot = this.parkingView!.getSlotPosition(slotIndex);
-        const route = this.routeToSlot(start, dir, slot.x, slot.y);
+        const route = this.routeToSlot(start, angle, slot.x, slot.y);
 
         this.busy = true;
         this.arriving++;
@@ -928,21 +1340,56 @@ export class GameController extends Component {
     }
 
     /**
+     * A tap refused because every stall is taken. The car cannot be the subject here: it
+     * may have a perfectly clear lane, and driving it at a blocker that does not exist
+     * would say the wrong thing. So the car only shudders in place, to answer the tap, and
+     * the answer itself is three things pointing at the bay — its panel blinks, the cars
+     * holding the stalls bob, and a toast says what to wait for.
+     *
+     * The parked cars bobbing is the part that carries the reasoning: they are why the bay
+     * is full, and their seat chips already show how many passengers each still needs. The
+     * toast names the way out for a player who has not yet worked out that a car leaves on
+     * its own once it fills.
+     */
+    private playLotFull(id: number): void {
+        const node = this.gridView!.getCarNode(id);
+        if (!node) return;
+
+        this.busy = true;
+        vibrate('medium');
+        this.jolt(node, new Vec3(1, 0, 0));
+
+        // No `flash` on the tapped car, unlike playShake: emissive lives on the material
+        // and litMaterial hands out one per COLOUR, so flashing this car glows every car
+        // sharing its paint, the parked ones included. On a blocked tap that is cosmetic
+        // noise; here it would light up a dozen cars that have nothing to do with why the
+        // tap was refused.
+        this.parkingView!.pulse();
+        for (const e of this.parked.values()) {
+            const body = e.node.getChildByName('body');
+            if (body) squash(body);
+        }
+        this.hud?.showToast('车位已满', '等车坐满后会自动开走');
+        this.scheduleOnce(() => { this.busy = false; }, 0.2);
+    }
+
+    /**
      * A refused tap. The car drives at whatever is in its way, both cars jolt on contact,
      * and it reverses into its slot.
      *
-     * With no blocker the refusal is a full parking row instead, and there is nothing to
-     * drive at — that keeps the old shudder in place.
+     * Only reached for a BLOCKED lane now — a full bay has its own answer, see
+     * `playLotFull`. The no-blocker branch stays as a guard: core has said the lane is
+     * blocked, and if the view cannot work out what by, a shudder still answers the tap.
      */
     private playShake(id: number): void {
         const node = this.gridView!.getCarNode(id);
         const body = this.gridView!.getCarBody(id);
         if (!node) return;
 
-        const car = this.core!.grid.cars.get(id);
-        const grid = this.core!.grid;
+        const car = this.core!.lot.cars.get(id);
+        const lot = this.core!.lot;
         const block = car
-            ? firstBlocker(car, Array.from(grid.cars.values()), grid.cols, grid.rows)
+            ? firstBlocker(car, Array.from(lot.cars.values()), lot.bounds)
             : null;
 
         this.busy = true;
@@ -956,8 +1403,11 @@ export class GameController extends Component {
             return;
         }
 
-        const dir = DIR_VEC[car.dir];
-        const dist = block.gap * this.gridStep + BUMP;
+        const dir = headingVec(car.angle);
+        // `block.gap` is board units and `boardScale` is world units per board unit, which
+        // is the same arithmetic this line always did -- one board unit is one old cell
+        // pitch, so only the names changed.
+        const dist = block.gap * this.boardScale + BUMP;
         const time = Math.min(NUDGE_MAX, Math.max(NUDGE_MIN, dist / NUDGE_SPEED));
         const start = node.position.clone();
         const target = new Vec3(start.x + dir.x * dist, start.y + dir.y * dist, start.z);

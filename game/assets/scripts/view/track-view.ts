@@ -4,8 +4,8 @@ import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
 import {
-    BLOCK, blockOffset, blockRanks, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE, PaxGroup,
-    TrackPath,
+    BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
+    PaxGroup, TrackPath,
 } from '../core/index';
 
 /**
@@ -63,7 +63,7 @@ const NO_SHADE = (c: Color): Color => c;
 /**
  * Ranks in one cell's block -- ONE, at GROUP_SIZE 4: a group is a single row of four across
  * the track. The block's shape (how many abreast, how far apart) is core's `BLOCK`, because
- * `minFigureGap` has to be able to check it before a ring length is declared legal.
+ * `minRowGap` has to be able to check it before a ring length is declared legal.
  *
  * The rank machinery below is kept for a deeper block, which GROUP_SIZE can ask for. Rank
  * order is back to front: the LOWEST indices are the rearmost rank, and `paintRow` shows the
@@ -83,6 +83,36 @@ const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
 
 /** Scratch for `layoutRow`'s per-figure offset, so a per-frame call allocates nothing. */
 const OFFSET_SCRATCH = { across: 0, along: 0 };
+
+/**
+ * How far the drawn ring reaches above and below its own origin, in board units.
+ *
+ * The camera frames the board off this (see `buildBoard`), so it has to be MEASURED rather
+ * than taken as the path's own extent. Two things stick out past the path:
+ *
+ *  - half a block across the centreline (`blockSpan / 2` = 0.46 at GROUP_SIZE 8), which is
+ *    already a shade wider than the white band it rides on -- see BLOCK in core.
+ *  - a whole `PAX_HEIGHT` above that, and this is the one that surprises: the figures lie
+ *    IN the board plane along +Y (`pax-figure.ts` builds body and head up the local Y),
+ *    they do not stand up out of it. Under the orthographic camera a passenger's head is
+ *    therefore a full 0.55 above the row its feet are in -- the tallest thing on the board
+ *    by a wide margin, and 0.55 of framing budget that reading the path alone misses.
+ *
+ * Only the top gets the figure height; the bottom edge of a row is its feet.
+ */
+export function trackReach(path: TrackPath): { top: number; bottom: number } {
+    const SAMPLES = 240;
+    const p = { x: 0, y: 0 };
+    let top = -Infinity;
+    let bottom = Infinity;
+    for (let i = 0; i < SAMPLES; i++) {
+        path.pointAt(i / SAMPLES, p);
+        if (p.y > top) top = p.y;
+        if (p.y < bottom) bottom = p.y;
+    }
+    const across = blockSpan(GROUP_SIZE) / 2;
+    return { top: top + across + PAX_HEIGHT, bottom: bottom - across };
+}
 
 /**
  * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy) and

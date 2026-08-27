@@ -5,9 +5,9 @@ import { GameCore, validateLevel, LevelData } from '../../game/assets/scripts/co
 function level(): LevelData {
   return {
     id: 10,
-    grid: { cols: 1, rows: 2, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red',  cap: 'small'  }, // top, exits up
-      { id: 2, x: 0, y: 1, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'medium' }, // blocked by car 1
+    lot: { w: 4, h: 4, cars: [
+      { id: 1, x: 0, y: 1, angle: 90, color: 'red',  cap: 'small'  }, // above, exits up
+      { id: 2, x: 0, y: -1, angle: 90, color: 'blue', cap: 'medium' }, // blocked by car 1
     ] },
     parking: { slots: 4, unlocked: 4 },
     loop: { capacity: 5, boardIndex: 3, queue: [

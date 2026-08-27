@@ -11,7 +11,7 @@ import { CarSpec, GROUP_SIZE } from '../../game/assets/scripts/core/types';
 const G = GROUP_SIZE;
 
 const car = (over: Partial<CarSpec>): CarSpec => ({
-  id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small', ...over,
+  id: 1, x: 0, y: 0, angle: 90, color: 'red', cap: 'small', ...over,
 });
 
 test('a whole block boards in one tick when the car has room for it', () => {

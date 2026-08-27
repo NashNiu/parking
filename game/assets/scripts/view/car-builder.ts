@@ -2,11 +2,15 @@ import {
     Node, Color, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
     Vec3, Mat4, utils, primitives,
 } from 'cc';
-import { Dir } from '../core/index';
+import { Cap } from '../core/index';
 import { litMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 
-export type Cap = 'small' | 'medium' | 'big';
+// Re-exported so the view layer can keep importing Cap from here; it is core's type now,
+// not a second declaration of the same three strings. `export type`, not `export`: this is
+// a type and Cocos transpiles each module without the others' type information, so a value
+// re-export clause would have it emit a runtime binding core/index has no value for.
+export type { Cap };
 
 /**
  * Real 3D car art (cartoon GLB models made in Claude Design), one per capacity.
@@ -139,40 +143,21 @@ function recolorCar(model: Node, color: Color): void {
     }
 }
 
-/**
- * Spin (about the board normal +Z) applied to `body`. After the Rx(90) lay-down the
- * model's length runs along board X and its baked roof arrow points +X. From there:
- *  - Square footprint (1×1): no "longer axis", so orient by the exit direction — the
- *    arrow points at the exit (up→90, down→270, left→180, right→0).
- *  - Longer axis is X (wide car): keep length along X; flip 180° for `left` so the
- *    arrow aims at the exit. up/down here are the "wide car facing across its length"
- *    mismatch — the arrow can't point at the exit — accepted per design.
- *  - Longer axis is Y (tall car): rotate 90° so length runs along board Y; arrow points
- *    +Y (up), 270° for `down`.
- */
-function orientAngle(dir: Dir, sizeX: number, sizeY: number): number {
-    if (Math.abs(sizeX - sizeY) < 1e-3) {
-        return dir === 'up' ? 90 : dir === 'down' ? 270 : dir === 'left' ? 180 : 0;
-    }
-    if (sizeX > sizeY) return dir === 'left' ? 180 : 0;
-    return dir === 'down' ? 270 : 90;
-}
-
 /** Safety fallback if a model prefab failed to load: a plain colored box. */
-function fallbackBox(body: Node, sizeX: number, sizeY: number, color: Color): void {
+function fallbackBox(body: Node, len: number, wid: number, color: Color): void {
     const box = new Node('box');
     const mr = box.addComponent(MeshRenderer);
-    mr.mesh = utils.createMesh(primitives.box({ width: sizeX * 0.9, height: sizeY * 0.9, length: 0.5 }));
+    mr.mesh = utils.createMesh(primitives.box({ width: len * 0.9, height: wid * 0.9, length: 0.5 }));
     mr.material = litMaterial(color);
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     box.setPosition(0, 0, 0.25); // rest on the board plane, not straddling it
     body.addChild(box);
-    addShadow(body, sizeX * 0.9, sizeY * 0.9);
+    addShadow(body, len * 0.9, wid * 0.9);
 }
 
 /**
- * Contact shadow, parented to `body` and sized to the car's ACTUAL footprint
- * (`len` along body X, `wid` along body Y) so the `dir` spin rotates it with the
+ * Contact shadow, parented to `body` and sized to the car's ACTUAL body
+ * (`len` along body X, `wid` along body Y) so the heading rotates it with the
  * car — a car pointing up gets a tall narrow shadow, not a wide flat one. Sits
  * centered under the car: in board space the key light travels almost straight
  * into the board (-Z), so there's no meaningful lateral shadow offset to fake.
@@ -186,54 +171,62 @@ function addShadow(body: Node, len: number, wid: number): void {
 
 /** What `buildCar` hands back: the nodes to move and animate, and the size it settled on. */
 export interface BuiltCar {
-    /** Move this; kept unrotated so footprint picking stays valid. */
+    /** Move this; kept unrotated, so `pickCar` can undo the body's heading itself. */
     root: Node;
-    /** Animate this — squash/flash/drive operate on it. */
+    /** Animate this — squash/flash/drive operate on it, and it carries the heading. */
     body: Node;
-    /** Fitted length along the body's own X, in board units. */
+    /** Drawn length along the body's own X, in world units. */
     len: number;
-    /** Fitted width along the body's own Y. */
+    /** Drawn width along the body's own Y. */
     wid: number;
 }
 
 /**
- * Build a cartoon car sized to its footprint from the real 3D model. The model is laid
- * onto the tilted board (roof facing the camera), lifted so its wheels rest on the board
- * plane, given a footprint-matched contact shadow, and recolored to `color`. The fitted
- * size comes back with it: a car that later leaves the grid for a parking stall has to be
- * refitted to the stall, and only this scale knows how big it currently is.
+ * Build a cartoon car at the size and heading core says it has. The model is laid onto the
+ * tilted board (roof facing the camera), lifted so its wheels rest on the board plane,
+ * given a body-matched contact shadow, recolored to `color`, and turned to `angle`.
+ *
+ * `len` and `wid` arrive from BoardLayout.carSize, which reads core's CAP_BOX. There is no
+ * footprint to fit inside any more and no shared scale to negotiate: the table says how big
+ * the car is and the model is scaled to match. What that removes is the reason three
+ * vehicle sizes used to read as two -- every car was fitted to its OWN footprint, so a
+ * one-cell car got about half the factor a two-cell one did, and of two models sharing the
+ * two-cell footprint the LONGER one was scaled down further to fit and came out smaller.
+ *
+ * The fitted size comes back with it: a car that later leaves the lot for a parking stall
+ * has to be refitted to the stall, and only this knows how big it currently is.
  */
 export function buildCar(
-    name: string, sizeX: number, sizeY: number, color: Color, dir: Dir, cap: Cap,
+    name: string, len: number, wid: number, color: Color, angle: number, cap: Cap,
 ): BuiltCar {
     const root = new Node(name);
 
-    // body: the animatable node. Carries the dir spin (about the board normal) and
-    // is what squash/flash target. Kept separate from `root` so movement tweens on
-    // root and picking (root.position + footprint half-extents) stay clean.
+    // body: the animatable node. Carries the heading (about the board normal) and is what
+    // squash/flash target. Kept separate from `root` so movement tweens live on root and
+    // `pickCar` can undo the heading itself to test the tap in the car's own frame.
     const body = new Node('body');
     root.addChild(body);
 
     const prefab = prefabs[cap];
     if (!prefab) {
-        fallbackBox(body, sizeX, sizeY, color);
-        return { root, body, len: Math.max(sizeX, sizeY), wid: Math.min(sizeX, sizeY) };
+        fallbackBox(body, len, wid, color);
+        body.setRotationFromEuler(0, 0, angle);
+        return { root, body, len, wid };
     }
 
     const model = instantiate(prefab) as unknown as Node;
     const { center, size } = localAABB(model);
 
-    // Preserve the model's TRUE proportions: one uniform scale (no per-axis stretch),
-    // laying its length along the footprint's LONGER axis and fitting within it. This
-    // keeps a long bus looking long instead of squashing it to fill a wide-shallow cell.
-    const longDim = Math.max(sizeX, sizeY);
-    const shortDim = Math.min(sizeX, sizeY);
-    const fill = 0.9;
-    const s = Math.min((longDim * fill) / size.x, (shortDim * fill) / size.z);
+    // One uniform scale, no per-axis stretch: a car 30% wider than the artist drew it is a
+    // different car. CAP_BOX was measured FROM this model, so the two ratios agree to
+    // within rounding; taking the smaller is what keeps a re-exported model from spilling
+    // past the size core believes it has -- core cannot see models, so this is the only
+    // place a drifted export can be contained.
+    const s = Math.min(len / size.x, wid / size.z);
 
-    // Fitted dimensions after the uniform scale: length along body X, width along
-    // body Y (model Z after the lay-down), height along board-out +Z.
-    const len = size.x * s, wid = size.z * s, hgt = size.y * s;
+    // What the model actually came out as, which is what the caller gets back: length along
+    // body X, width along body Y (model Z after the lay-down), height along board-out +Z.
+    const drawnLen = size.x * s, drawnWid = size.z * s, hgt = size.y * s;
 
     // `lay` lays the upright model onto the board: Rx(90) turns model-up (+Y) into
     // board-out (+Z) so the roof faces the camera; the length stays along board X.
@@ -251,8 +244,13 @@ export function buildCar(
     body.addChild(lay);
 
     recolorCar(model, color);
-    addShadow(body, len, wid);
+    addShadow(body, drawnLen, drawnWid);
 
-    body.setRotationFromEuler(0, 0, orientAngle(dir, sizeX, sizeY));
-    return { root, body, len, wid };
+    // The body carries the heading. After the Rx(90) lay-down the model's length runs along
+    // board X and its baked roof arrow points +X, so a spin of `angle` about the board
+    // normal puts both the body and the arrow where core says the car is going. That the
+    // arrow agrees with the exit is now true by construction: there is no footprint for the
+    // body to be laid along, so there is no orientation left for the two to disagree about.
+    body.setRotationFromEuler(0, 0, angle);
+    return { root, body, len: drawnLen, wid: drawnWid };
 }

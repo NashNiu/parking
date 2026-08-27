@@ -10,8 +10,8 @@ function reds(n: number): PaxGroup[] {
 function soloLevel(): LevelData {
   return {
     id: 1,
-    grid: { cols: 1, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    lot: { w: 2, h: 2, cars: [
+      { id: 1, x: 0, y: 0, angle: 90, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 4, unlocked: 4 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
@@ -21,17 +21,18 @@ function soloLevel(): LevelData {
 
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
-  expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0 });
-  expect(game.grid.isEmpty()).toBe(true);
+  expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
+  expect(game.lot.isEmpty()).toBe(true);
   expect(game.parking.parked[0]?.carId).toBe(1);
 });
 
 test('tapCar fails when no free slot', () => {
   const level: LevelData = {
     id: 3,
-    grid: { cols: 2, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
-      { id: 2, x: 1, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
+    // Side by side, both with clear board above: the refusal must be the lot, not a lane.
+    lot: { w: 3, h: 2, cars: [
+      { id: 1, x: -0.7, y: 0, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0.7, y: 0, angle: 90, color: 'red', cap: 'small' },
     ] },
     parking: { slots: 4, unlocked: 1 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 32 }] },
@@ -39,7 +40,52 @@ test('tapCar fails when no free slot', () => {
   };
   const game = new GameCore(level);
   expect(game.tapCar(1).ok).toBe(true);
-  expect(game.tapCar(2)).toEqual({ ok: false, slotIndex: -1 });
+  expect(game.tapCar(2)).toEqual({ ok: false, slotIndex: -1, reason: 'full' });
+});
+
+test('a refused tap says which of the two reasons it was', () => {
+  // The view cannot tell these apart from the board: a car whose lane is blocked and a car
+  // in a full lot both simply do not move, and they need different things said about them
+  // -- one points at the car in the way, the other at the parking row. Deriving it in the
+  // view means re-implementing canExit there, so core answers it.
+  const level: LevelData = {
+    id: 4,
+    // One column: car 1 below car 2, both exiting upward, so car 1's lane is blocked.
+    lot: { w: 2, h: 3, cars: [
+      { id: 1, x: 0, y: -0.7, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: 0.7, angle: 90, color: 'red', cap: 'small' },
+    ] },
+    parking: { slots: 4, unlocked: 4 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 32 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+  const game = new GameCore(level);
+  // Car 1 is behind car 2 and exits upward, so its lane is blocked; the lot is empty.
+  expect(game.tapCar(1)).toEqual({ ok: false, slotIndex: -1, reason: 'blocked' });
+  expect(game.tapCar(2).ok).toBe(true);
+  expect(game.tapCar(1).ok).toBe(true);
+});
+
+test('a full lot outranks a blocked lane', () => {
+  // Both refusals apply to car 1 here. "Blocked" would be a lie by omission: clearing the
+  // car in the way changes nothing while every stall is taken, and the player would be
+  // sent to solve the wrong problem. The global condition wins.
+  const level: LevelData = {
+    id: 5,
+    // One column of three, all exiting upward: 3 on top is free, 2 blocks 1.
+    lot: { w: 2, h: 4, cars: [
+      { id: 1, x: 0, y: -1.2, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: 0, angle: 90, color: 'red', cap: 'small' },
+      { id: 3, x: 0, y: 1.2, angle: 90, color: 'red', cap: 'small' },
+    ] },
+    parking: { slots: 4, unlocked: 1 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 48 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+  const game = new GameCore(level);
+  expect(game.tapCar(3).ok).toBe(true); // takes the only stall
+  expect(game.lot.canExit(1)).toBe(false); // still boxed in by car 2
+  expect(game.tapCar(1).reason).toBe('full');
 });
 
 test('playing a full level reaches won state', () => {
@@ -58,9 +104,10 @@ test('deadlock is detected when the ring is jammed with an unboardable color', (
   // boarding index, and the parked red car can never fill or free its slot.
   const level: LevelData = {
     id: 4,
-    grid: { cols: 1, rows: 2, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
-      { id: 2, x: 0, y: 1, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'small' },
+    // One column: red above and free, blue below it and blocked -- as before.
+    lot: { w: 2, h: 3, cars: [
+      { id: 1, x: 0, y: 0.7, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: -0.7, angle: 90, color: 'blue', cap: 'small' },
     ] },
     parking: { slots: 1, unlocked: 1 },
     loop: { capacity: 2, boardIndex: 0, queue: [
@@ -85,9 +132,10 @@ test('a color still reachable through an emptied ring cell is not a deadlock', (
   // which empties a cell and lets the pool feed the rest in. Play must continue.
   const level: LevelData = {
     id: 5,
-    grid: { cols: 1, rows: 2, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'red', cap: 'small' },
-      { id: 2, x: 0, y: 1, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'small' },
+    // One column: red above and free, blue below it and blocked -- as before.
+    lot: { w: 2, h: 3, cars: [
+      { id: 1, x: 0, y: 0.7, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 0, y: -0.7, angle: 90, color: 'blue', cap: 'small' },
     ] },
     parking: { slots: 1, unlocked: 1 },
     loop: { capacity: 2, boardIndex: 0, queue: [
@@ -110,8 +158,8 @@ test('deadlock is detected when no progress is possible', () => {
   // and once parked there is no other car to move.
   const level: LevelData = {
     id: 2,
-    grid: { cols: 1, rows: 1, cars: [
-      { id: 1, x: 0, y: 0, w: 1, h: 1, dir: 'up', color: 'blue', cap: 'small' },
+    lot: { w: 2, h: 2, cars: [
+      { id: 1, x: 0, y: 0, angle: 90, color: 'blue', cap: 'small' },
     ] },
     parking: { slots: 1, unlocked: 1 },
     loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },

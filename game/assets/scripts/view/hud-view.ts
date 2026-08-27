@@ -1,4 +1,4 @@
-import { Node, Label, UITransform, Color, Layers, Vec3, tween } from 'cc';
+import { Node, Label, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import { roundedSprite, dotSprite } from './ui-shapes';
 
 function canvasSize(canvas: Node): { w: number; h: number } {
@@ -39,6 +39,28 @@ const PILL_MARGIN = 0.03;
 const TITLE_PILL_W = 190;
 const TITLE_PILL_H = PILL_H;
 
+/**
+ * The toast: one line of what happened and one of what to do about it. It sits at the
+ * canvas centre, which on this board is the empty band between the parking bay and the lot
+ * -- close enough to the bay to belong to it, and over nothing it would hide.
+ *
+ * Dark and translucent, where the two corner pills are opaque white. That is the difference
+ * between them said in the styling: the pills are always there and always true, so they get
+ * to look built in; a toast is neither, and a scrim the board shows through reads as
+ * something passing before it has moved at all. It also stops a third white plate from
+ * competing with the two that are permanent.
+ *
+ * The title keeps nearly full alpha and the second line takes less. Translucency is for the
+ * plate; type that the board shows through is type nobody reads, and the whole point of the
+ * second line is that a new player reads it.
+ */
+const TOAST_W = 320;
+const TOAST_H = 104;
+const TOAST_HOLD = 1.1;
+const TOAST_BG = new Color(26, 32, 50, 188);
+const TOAST_INK = new Color(255, 255, 255, 244);
+const TOAST_SUB = new Color(226, 232, 245, 196);
+
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
 const CHIP_H = 58;
@@ -66,6 +88,11 @@ export class HudView {
     private progressLabel: Label;
     private bannerLabel: Label;
     private starLabels: Label[] = [];
+    /** The toast pill and its parts, built on first use. See `showToast`. */
+    private toast: Node | null = null;
+    private toastFade: UIOpacity | null = null;
+    private toastTitle: Label | null = null;
+    private toastSub: Label | null = null;
 
     constructor(canvas: Node) {
         this.canvas = canvas;
@@ -155,6 +182,52 @@ export class HudView {
     /** Half the chip's height, so the caller can hang it off a stall's bottom edge. */
     get seatChipHalfHeight(): number {
         return CHIP_H / 2;
+    }
+
+    /**
+     * Show a passing message. Built on first use and reused after that, so a player
+     * hammering a refused tap restarts one toast instead of stacking a pile of them --
+     * which is also why every tween on the pill is stopped before the next one starts.
+     *
+     * `sub` carries what to DO. A toast that only names the problem ("the bay is full")
+     * leaves a new player stuck, because the thing they have not worked out yet is that a
+     * car leaves by itself once its seats fill.
+     */
+    showToast(title: string, sub: string): void {
+        if (!this.toast) this.buildToast();
+        const pill = this.toast!;
+        this.toastTitle!.string = title;
+        this.toastSub!.string = sub;
+        Tween.stopAllByTarget(pill);
+        Tween.stopAllByTarget(this.toastFade!);
+        pill.active = true;
+        pill.setScale(0.85, 0.85, 1);
+        this.toastFade!.opacity = 255;
+        tween(pill)
+            .to(0.12, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: Vec3.ONE })
+            .start();
+        tween(this.toastFade!)
+            .delay(TOAST_HOLD)
+            .to(0.25, { opacity: 0 })
+            .call(() => { pill.active = false; })
+            .start();
+    }
+
+    private buildToast(): void {
+        const pill = roundedSprite('Toast', TOAST_W, TOAST_H, TOAST_BG);
+        this.canvas.addChild(pill);
+        pill.setPosition(0, 0, 0);
+        // UIOpacity multiplies into the colours above rather than replacing them, so the
+        // fade-out starts from the plate's 188 and the type's own alpha, not from 255.
+        this.toastFade = pill.addComponent(UIOpacity);
+        this.toastTitle = makeLabel(pill, 'ToastTitle', 36, 20);
+        this.toastTitle.color = TOAST_INK;
+        this.toastTitle.isBold = true;
+        this.toastSub = makeLabel(pill, 'ToastSub', 22, -24);
+        this.toastSub.color = TOAST_SUB;
+        pill.active = false;
+        this.toast = pill;
     }
 
     setLevel(id: number): void {
