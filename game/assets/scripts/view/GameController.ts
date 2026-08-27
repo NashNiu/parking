@@ -256,6 +256,16 @@ export class GameController extends Component {
      * which is the midpoint of nothing in particular -- see `buildBoard`.
      */
     private camY = 0;
+    /**
+     * The board's own vertical extent, and the shares of the SCREEN reserved above and
+     * below it for the HUD (see HudView.topReserve). `fitCamera` frames the first between
+     * the other two, which is why they are fields rather than locals: the split has to be
+     * redone whenever the aspect changes, not just when a level loads.
+     */
+    private contentTop = 0;
+    private contentBottom = 0;
+    private padTop = 0;
+    private padBottom = 0;
     /** Aspect the camera was last fitted to, so `update` only refits when it changes. */
     private fitAspect = 0;
     private layout: BoardLayout | null = null;
@@ -593,11 +603,23 @@ export class GameController extends Component {
         // road's outer kerb. The camera then centres on the MIDPOINT of that, where it used
         // to sit at a constant y = 0. The two are 1.3 units apart, which at phone zoom is
         // 130 px of margin taken off one end of the screen and handed to the other.
-        const contentTop = LOOP_Y + reach.top;
-        const contentBottom = this.ring.bottom - ROAD_H / 2;
-        this.camY = (contentTop + contentBottom) / 2;
+        this.contentTop = LOOP_Y + reach.top;
+        this.contentBottom = this.ring.bottom - ROAD_H / 2;
+        // The HUD's bands are part of the framing, not something to be overlapped. They
+        // arrive as fractions of the SCREEN's height because that is what they are -- a
+        // notch and a plate of fixed design units both scale with the viewport, and the
+        // board does not. So the board gets what is left: with `f` reserved, the content
+        // has to fit in (1 - f) of the frame, hence the divisor below rather than a plain
+        // halving. On a screen with no notch this still reserves the plate's own band,
+        // which is the difference between the title clearing the ring by arithmetic and
+        // clearing it by luck.
+        this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
+        this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
+        const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
         this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2 + RING_OFF + ROAD_H / 2);
-        this.needHalfH = Math.max(VIEW_HALF_H, (contentTop - contentBottom) / 2);
+        this.needHalfH = Math.max(
+            VIEW_HALF_H, (this.contentTop - this.contentBottom) / (2 * usable),
+        );
         // Invalidate the cached aspect: `fitCamera` short-circuits on aspect alone, and the
         // board it has to hold -- and the y it has to look at -- have both just changed. Fit
         // straight away too, so a level's first frame is already framed rather than being
@@ -737,7 +759,17 @@ export class GameController extends Component {
         if (!Number.isFinite(aspect) || aspect <= 0) return;
         if (Math.abs(aspect - this.fitAspect) < 1e-4) return;
         this.fitAspect = aspect;
-        this.cam.orthoHeight = Math.max(this.needHalfH, this.needHalfW / aspect);
+        const oh = Math.max(this.needHalfH, this.needHalfW / aspect);
+        this.cam.orthoHeight = oh;
+        // Reserve the HUD's bands off the top and bottom, then centre the board in what is
+        // left. `surplus` is the room a viewport wider than the board needs hands back, and
+        // it splits evenly -- reserving a share of the screen is a floor on those bands,
+        // not a claim on everything going spare.
+        const view = 2 * oh;
+        const surplus = view - (this.contentTop - this.contentBottom)
+            - (this.padTop + this.padBottom) * view;
+        const top = this.padTop * view + Math.max(0, surplus) / 2;
+        this.camY = this.contentTop + top - oh;
         this.placeCamera(this.cam.node);
     }
 

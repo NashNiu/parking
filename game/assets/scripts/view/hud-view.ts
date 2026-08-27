@@ -1,6 +1,44 @@
 import { Node, Label, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import { roundedSprite, dotSprite } from './ui-shapes';
 
+declare const wx: any;
+
+/**
+ * The screen's unusable top and bottom edges, as FRACTIONS of its height: the notch or
+ * Dynamic Island above, the home indicator below.
+ *
+ * Fractions, not pixels, because that is the only form in which the number is portable.
+ * `safeArea` and `screenHeight` come back from wx in logical px, the canvas measures itself
+ * in design units, and the ratio between those two is a project setting this file does not
+ * read -- but their QUOTIENT is the same in either. `topReserve` hands the same fractions to
+ * the camera for the same reason.
+ *
+ * Zero off-device (browser, editor preview), which is exactly right: there is no notch
+ * there, and the layout should not pretend otherwise.
+ *
+ * Read once and cached. Nothing here changes while the game runs, and getSystemInfoSync is
+ * one of the slower wx calls.
+ */
+let insets: { top: number; bottom: number } | null = null;
+
+function safeInsets(): { top: number; bottom: number } {
+    if (insets) return insets;
+    insets = { top: 0, bottom: 0 };
+    try {
+        const info = typeof wx !== 'undefined' && wx.getSystemInfoSync
+            ? wx.getSystemInfoSync() : null;
+        const h = info && info.screenHeight;
+        const area = info && info.safeArea;
+        if (h > 0 && area) {
+            insets = {
+                top: Math.max(0, Math.min(0.3, area.top / h)),
+                bottom: Math.max(0, Math.min(0.3, (h - area.bottom) / h)),
+            };
+        }
+    } catch { /* leave it at zero -- a missing inset is a cosmetic loss, not a crash */ }
+    return insets;
+}
+
 function canvasSize(canvas: Node): { w: number; h: number } {
     const ct = canvas.getComponent(UITransform);
     return ct ? { w: ct.width, h: ct.height } : { w: 720, h: 1280 };
@@ -44,12 +82,15 @@ const PILL_MARGIN = 0.03;
  * sizes are fixed design units and the margin is a fraction of the width, so the band they
  * occupy moves with the design resolution and a pixel claim would be fiction.
  *
- * Which is also why the counter drops only HALF a row. Sideways it is safe: the ring's path
+ * Which is also why the counter drops only HALF a row: sideways it is safe (the ring's path
  * spans at most +/-1.85 and its figures +/-1.96, while this pill's right edge lands near
- * -1.96 -- they touch at best. But a full row down puts the plate's bottom at roughly 12.5%
- * of the height against the ring's 8.3%, so the touch would be a real overlap over the
- * ring's leftmost top row. Half a row lands at about 10%, above the 10.3% where that row's
- * heads actually start.
+ * -1.96 -- they touch at best), but a full row down would turn that touch into an overlap
+ * over the ring's leftmost top row.
+ *
+ * The title plate does not rely on any of that. It sits under the notch (`safeInsets`) and
+ * the BOARD gets out of its way: `topReserve` tells the camera how much of the screen the
+ * plate owns, and `fitCamera` frames the board below it -- see `buildBoard`. Centring it and
+ * leaving the board where it was is what put the plate behind the Dynamic Island.
  */
 const TITLE_PILL_W = 190;
 const TITLE_PILL_H = PILL_H;
@@ -116,7 +157,9 @@ export class HudView {
         // Both readouts share one line, at the pill's own half-height below the top margin,
         // which is what puts them where the reference art has them rather than jammed
         // against the top edge.
-        const line = h / 2 - margin - PILL_H / 2;
+        // Below the notch, not below the top edge. The centred plate is directly under a
+        // Dynamic Island otherwise, which is where it went the first time.
+        const line = h / 2 - safeInsets().top * h - margin - PILL_H / 2;
         this.levelLabel = this.buildTitlePill(canvas, 0, line);
         // Dropped half its own height plus a margin -- clear of the status bar it used to
         // share, and no further. A FULL row lower was tried on paper and rejected: see
@@ -139,6 +182,27 @@ export class HudView {
             label.node.active = false;
             this.starLabels.push(label);
         }
+    }
+
+    /**
+     * How much of the screen's height the centred title owns, top edge down, as a fraction:
+     * the notch plus the plate and its margin. The camera reserves it (see `buildBoard`) so
+     * the board never reaches up into it.
+     *
+     * The COUNTER is deliberately not in this number even though it hangs lower. It sits on
+     * the left, where the ring never reaches at any height (its figures stop at x +/-1.96,
+     * the pill starts outside that), so reserving board height for it would push the board
+     * down for nothing.
+     */
+    topReserve(): number {
+        const { w, h } = canvasSize(this.canvas);
+        if (!(h > 0)) return safeInsets().top;
+        return safeInsets().top + (w * PILL_MARGIN + PILL_H) / h;
+    }
+
+    /** The home indicator's band, as a fraction of the screen's height. */
+    bottomReserve(): number {
+        return safeInsets().bottom;
     }
 
     /**
