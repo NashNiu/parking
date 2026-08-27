@@ -508,15 +508,28 @@ export class GameController extends Component {
         // of the editor preview window -- and a phone's frame is neither of those numbers.
         // It is +/-4.67 by +/-10.11, narrower AND much taller, so the pair were wrong in
         // both directions at once: the ring road's outer kerb landed at 4.90 in a 4.67-wide
-        // view (clipped, on every phone), while 4.5 units of vertical budget went unused
-        // because the lot was still being sized against a 6.21 half-height.
+        // view, while 4.5 units of vertical budget went unused because the lot was still
+        // being sized against a 6.21 half-height. (The side lane IS over the edge again
+        // now -- see the asymmetry below -- but by 0.21 and on purpose, where before it was
+        // by 0.23 and by accident, on a lane the layout believed was fully visible.)
         //
         // `ringLow` is the lowest a ring lane's CENTRELINE can sit with its outer edge still
-        // on screen; `lotHalfW` is what is left across once a lane and its offset come off
-        // each side. Same two roles as the constants, read off the real frame.
+        // on screen; `lotHalfW` is what is left across once the lot's offset to the side
+        // lane comes off each side.
+        //
+        // Note the asymmetry, which is deliberate. Downwards the whole lane has to fit,
+        // because the bottom lane's outer kerb IS the bottom of the board and the lot sits
+        // right above it. Sideways only the OFFSET is reserved, so the side lane's
+        // centreline lands on the frame edge and its outer half is over it. The side lanes
+        // carry no traffic -- a departing car drives the TOP lane, out to EXIT_X -- so they
+        // are there to close the ring, and a road leaving the screen reads as a road, which
+        // is what the top lane has always done at 13 units wide. Reserving their full width
+        // instead spent 1.07 units a side on almost invisible asphalt and left the lot at
+        // 76% of the screen; this puts it at 82%, and the cell that comes free makes the
+        // cars 2.5% bigger on top of that.
         const frame = this.viewFrame();
         const ringLow = -(frame.halfH - ROAD_H / 2);
-        const lotHalfW = frame.halfW - RING_OFF - ROAD_H / 2;
+        const lotHalfW = frame.halfW - RING_OFF;
         // The lot hangs exactly one lane below the top road, so the road stays put and the
         // lot moves with the grid's size. The cell takes whichever budget is tighter — the
         // rows against the height left under the stalls, or the columns against the width —
@@ -616,7 +629,7 @@ export class GameController extends Component {
         this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
         this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
         const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
-        this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2 + RING_OFF + ROAD_H / 2);
+        this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2 + RING_OFF);
         this.needHalfH = Math.max(
             VIEW_HALF_H, (this.contentTop - this.contentBottom) / (2 * usable),
         );
