@@ -2,24 +2,68 @@ import { Node, Color, Vec3, MeshRenderer, utils, primitives, tween, Tween } from
 import { flatMaterial } from './materials';
 import { makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, MeshPart } from './slabs';
 import { SHADOW_Z } from './scene-stage';
+import { CAP_BOX, CAR_SCALE } from '../core/index';
 
 /**
- * Stall footprint and pitch, in board units. A car parks nose-up, so the stall is deeper
- * than it is wide, like the reference art's.
+ * Stall footprint and pitch, as AIR AROUND THE LONGEST CAR BODY -- so the bay is sized by
+ * the same board scale as everything else, rather than fixed in world units.
  *
- * How deep is capped from both sides: the ring road's top lane ends at y = 0.75 and the
- * loop track's curb hangs down to y ≈ 2.22 (its drop shadow to 2.15), which leaves the
- * parking band about 1.4 units to live in — hence a stall shallower than the reference's,
- * which has a much taller screen to spend.
+ * It used to be fixed (0.78 x 1.06 x 0.98), sized to a parking band 1.4 units tall, and
+ * that broke the size hierarchy: a stall shallower than a bus is long forced `stallScale`
+ * to shrink the bus to fit, while a small car -- already short enough -- kept its full
+ * size. The bus parked NARROWER THAN THE SMALL CAR beside it (0.344 against 0.464 world
+ * units across, 26% thinner). The inversion was always there; the portrait lot made it
+ * obvious by making the lot's cars 31% bigger without making the stall any deeper.
  *
- * How WIDE follows from that: a car scaled to a 1.06-deep stall is only about
- * 0.5 across (the models run 2:1 to 3:1), so a stall much wider than that leaves the car
- * looking lost in it. The row ends up spanning ±3.33 against a view about ±3.94 wide,
- * which is the margin the reference art has too.
+ * Sizing the stall off `CAP_BOX.big` fixes it at the root: the deepest stall a level can
+ * need is the longest body it can hold, so every capacity now parks at scale 1 and keeps
+ * EXACTLY the size it had in the lot. The car you tapped is the car that parks.
+ *
+ * The three multipliers are chosen so a big car fills 90% of the stall's depth and 75% of
+ * its width, which leaves `STALL_FILL_W`/`STALL_FILL_H` in GameController with 7% and 13%
+ * of headroom respectively -- enough that a re-exported model drifting slightly does not
+ * silently start shrinking cars again. `STALL_PITCH_AIR` is the gap between neighbours:
+ * 15% of a stall's width.
  */
-const SLOT_W = 0.78;
-const SLOT_H = 1.06;
-const PITCH = 0.98;
+const STALL_AIR_LEN = 1.11;
+const STALL_AIR_WID = 1.33;
+const STALL_PITCH_AIR = 1.15;
+
+/**
+ * The stall width every piece of trim below was drawn against -- rim thickness, corner
+ * radii, panel padding, the whole padlock glyph. Those are shapes, not sizes, so they are
+ * scaled by `slotW / GLYPH_REF_W` rather than re-derived: the bay then looks identical at
+ * any board scale instead of growing coarse trim on a phone and clumsy trim in a preview
+ * window.
+ */
+const GLYPH_REF_W = 0.78;
+
+/** A stall's box and the row's pitch, at a given board scale. */
+export interface StallBox {
+    w: number;
+    h: number;
+    pitch: number;
+}
+
+/** The stall a lot at `scale` world units per board unit needs. */
+export function stallFootprint(scale: number): StallBox {
+    const w = CAP_BOX.big.wid * CAR_SCALE * STALL_AIR_WID * scale;
+    const h = CAP_BOX.big.len * CAR_SCALE * STALL_AIR_LEN * scale;
+    return { w, h, pitch: w * STALL_PITCH_AIR };
+}
+
+/**
+ * Outer size of the bay panel behind a row of `slots` stalls. Exported because the caller
+ * has to know how tall the band is BEFORE it can decide where the loop track goes -- see
+ * `buildBoard`.
+ */
+export function bayPanelSize(slots: number, box: StallBox): { w: number; h: number } {
+    const g = box.w / GLYPH_REF_W;
+    return {
+        w: (slots - 1) * box.pitch + box.w + 2 * PANEL_PAD_X * g,
+        h: box.h + 2 * PANEL_PAD_Y * g,
+    };
+}
 
 /** Padding from the outermost stall to the edge of the bay panel behind the row. */
 const PANEL_PAD_X = 0.22;
@@ -101,47 +145,66 @@ export class ParkingView {
     private positions: Vec3[] = [];
     /** The bay panel, kept so `pulse` can draw the eye to it. */
     private panel: Node | null = null;
+    /** This board's stall box, and the trim scale that goes with it. */
+    private readonly box: StallBox;
+    private readonly g: number;
+
     constructor(
         private parent: Node,
         private slots: number,
         private unlocked: number,
         private y: number,
-    ) {}
+        scale: number,
+    ) {
+        this.box = stallFootprint(scale);
+        this.g = this.box.w / GLYPH_REF_W;
+    }
 
     render(): void {
-        const startX = -((this.slots - 1) * PITCH) / 2;
-        const panelW = (this.slots - 1) * PITCH + SLOT_W + 2 * PANEL_PAD_X;
-        const panelH = SLOT_H + 2 * PANEL_PAD_Y;
+        const { w: slotW, h: slotH, pitch } = this.box;
+        const g = this.g;
+        const startX = -((this.slots - 1) * pitch) / 2;
+        const { w: panelW, h: panelH } = bayPanelSize(this.slots, this.box);
 
         // The bay panel: a light band behind the whole row, with a drop shadow onto the
         // road below. It separates the stalls from the ground and gives the dark pads
         // something to read against.
-        const shadow = makeShadowSlab('ParkingShadow', panelW, panelH, PANEL_R);
-        shadow.setPosition(0, this.y - DROP, SHADOW_Z);
+        const shadow = makeShadowSlab('ParkingShadow', panelW, panelH, PANEL_R * g);
+        shadow.setPosition(0, this.y - DROP * g, SHADOW_Z);
         this.parent.addChild(shadow);
 
-        const panel = makeSlab('ParkingPanel', panelW, panelH, 0.06, PANEL, PANEL_R);
+        const panel = makeSlab('ParkingPanel', panelW, panelH, 0.06, PANEL, PANEL_R * g);
         panel.setPosition(0, this.y, PANEL_Z);
         this.parent.addChild(panel);
         this.panel = panel;
 
         for (let i = 0; i < this.slots; i++) {
             const locked = i >= this.unlocked;
-            const pos = new Vec3(startX + i * PITCH, this.y, 0);
+            const pos = new Vec3(startX + i * pitch, this.y, 0);
 
             if (locked) {
                 // Same rim-and-pad build as an open stall, just dimmer, so the row reads as
                 // seven slots rather than four slots and three holes.
-                const rim = makeSlab(`slot-rim-${i}`, SLOT_W, SLOT_H, 0.06, RIM_LOCKED, PAD_R);
+                const rim = makeSlab(
+                    `slot-rim-${i}`, slotW, slotH, 0.06, RIM_LOCKED, PAD_R * g,
+                );
                 rim.setPosition(pos.x, pos.y, RIM_Z);
                 this.parent.addChild(rim);
 
                 const pad = makeSlab(
-                    `slot-${i}`, SLOT_W - 2 * RIM, SLOT_H - 2 * RIM, 0.06,
-                    PAD_LOCKED, PAD_R - RIM,
+                    `slot-${i}`, slotW - 2 * RIM * g, slotH - 2 * RIM * g, 0.06,
+                    PAD_LOCKED, (PAD_R - RIM) * g,
                 );
                 pad.setPosition(pos.x, pos.y, PAD_Z);
                 this.parent.addChild(pad);
+
+                // The whole glyph goes under one node scaled by `g`, so the four pieces
+                // keep their measured relationship to each other (see LOCK_BODY_Y) at any
+                // board scale, and their z order with it.
+                const lock = new Node(`lock-${i}`);
+                lock.setPosition(pos.x, pos.y, 0);
+                lock.setScale(g, g, g);
+                this.parent.addChild(lock);
 
                 const sh = new Node('shackle');
                 const smr = sh.addComponent(MeshRenderer);
@@ -150,15 +213,15 @@ export class ParkingView {
                 ));
                 smr.material = flatMaterial(LOCK_SHACKLE);
                 smr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
-                sh.setPosition(pos.x, pos.y + LOCK_SHACKLE_Y, LOCK_SHACKLE_Z);
+                sh.setPosition(0, LOCK_SHACKLE_Y, LOCK_SHACKLE_Z);
                 sh.setRotationFromEuler(90, 0, 0);
-                this.parent.addChild(sh);
+                lock.addChild(sh);
 
                 const body = makeSlab(
                     'lockbody', LOCK_BODY_W, LOCK_BODY_H, 0.1, LOCK_BODY, LOCK_BODY_R,
                 );
-                body.setPosition(pos.x, pos.y + LOCK_BODY_Y, LOCK_BODY_Z);
-                this.parent.addChild(body);
+                body.setPosition(0, LOCK_BODY_Y, LOCK_BODY_Z);
+                lock.addChild(body);
 
                 // Keyhole: a disc over a tapering slot, in the PAD's own colour so it reads
                 // as punched through the body rather than painted on it. One merged mesh --
@@ -168,18 +231,21 @@ export class ParkingView {
                     boxPart(0.035, 0.075, 0.06, 0, -0.045),
                 ];
                 const keyhole = makeMerged('lockkey', key, PAD_LOCKED);
-                keyhole.setPosition(pos.x, pos.y + LOCK_BODY_Y, LOCK_KEY_Z);
-                this.parent.addChild(keyhole);
+                keyhole.setPosition(0, LOCK_BODY_Y, LOCK_KEY_Z);
+                lock.addChild(keyhole);
             } else {
                 // An open stall is two nested slabs: the light rim shows as a border
                 // because the dark pad on top of it is inset by RIM on every side. Two
                 // draw calls instead of the four edge strips this replaces.
-                const rim = makeSlab(`slot-rim-${i}`, SLOT_W, SLOT_H, 0.06, PAD_RIM, PAD_R);
+                const rim = makeSlab(
+                    `slot-rim-${i}`, slotW, slotH, 0.06, PAD_RIM, PAD_R * g,
+                );
                 rim.setPosition(pos.x, pos.y, RIM_Z);
                 this.parent.addChild(rim);
 
                 const pad = makeSlab(
-                    `slot-${i}`, SLOT_W - 2 * RIM, SLOT_H - 2 * RIM, 0.06, PAD, PAD_R - RIM,
+                    `slot-${i}`, slotW - 2 * RIM * g, slotH - 2 * RIM * g, 0.06, PAD,
+                    (PAD_R - RIM) * g,
                 );
                 pad.setPosition(pos.x, pos.y, PAD_Z);
                 this.parent.addChild(pad);
@@ -193,9 +259,12 @@ export class ParkingView {
         return this.positions[index].clone();
     }
 
-    /** The box a parked car has to fit inside, in board units. */
-    static get slotSize(): { w: number; h: number } {
-        return { w: SLOT_W, h: SLOT_H };
+    /**
+     * The box a parked car has to fit inside, in world units. An INSTANCE getter now: the
+     * stall is sized from this board's scale, so there is no board-independent answer.
+     */
+    get slotSize(): { w: number; h: number } {
+        return { w: this.box.w, h: this.box.h };
     }
 
     /**
@@ -234,6 +303,6 @@ export class ParkingView {
     /** Point on a stall's bottom edge, where its seat chip hangs. */
     getChipAnchor(index: number): Vec3 {
         const pos = this.positions[index];
-        return new Vec3(pos.x, pos.y - SLOT_H / 2, 0);
+        return new Vec3(pos.x, pos.y - this.box.h / 2, 0);
     }
 }

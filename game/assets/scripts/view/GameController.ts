@@ -11,7 +11,7 @@ import { BoardLayout } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
-import { ParkingView } from './parking-view';
+import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
@@ -106,11 +106,17 @@ const EXIT_SPEED = 8;
 const DRIVE_SPEED = 9;
 
 /**
- * How much of its stall a parked car fills, across and along. A car is built to fit its
- * GRID cell, which is a different size - and on a tall level a much smaller one - so it is
- * refitted to the stall on arrival rather than scaled by a fixed factor, which is what left
- * level 2's parked cars half the size of level 1's. Along the stall it may overhang a
- * little: a long bus held strictly inside would be scaled down until it read as a toy.
+ * How much of its stall a parked car may fill, across and along -- the ceiling `stallScale`
+ * enforces, not a target it aims for.
+ *
+ * With the stall now sized off `CAP_BOX.big` (see `stallFootprint`), no car reaches either
+ * ceiling: the biggest one comes to 75% of the width against this 80%, and 90% of the depth
+ * against this 102%. That headroom is the point. It is what makes `stallScale` come out at
+ * exactly 1 for every capacity, so a parked car keeps the size it had in the lot -- and it
+ * is the margin a re-exported model can drift into without silently shrinking cars again.
+ *
+ * Along the stall a car may overhang slightly (hence 1.02 rather than 1.00): a long bus
+ * held strictly inside would be scaled down until it read as a toy.
  */
 const STALL_FILL_W = 0.8;
 const STALL_FILL_H = 1.02;
@@ -486,11 +492,6 @@ export class GameController extends Component {
     }
 
     private buildBoard(level: LevelData): void {
-        const LOOP_Y = 3.8;
-        // The parking band sits between the ring road's top lane (which ends at y = 0.75)
-        // and the loop track's curb (whose shadow hangs down to y ~ 2.15); a stall 1.06 deep
-        // centred here fills that band with a little margin at each end.
-        const PARKING_Y = 1.4;
 
         // The box the lot and its ring road have to live in. These were CONSTANTS
         // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
@@ -547,6 +548,28 @@ export class GameController extends Component {
         const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
         const path = new TrackPath(shape);
 
+        // Where the parking bay and the loop track go, up the board.
+        //
+        // Both were constants (PARKING_Y 1.4, LOOP_Y 3.8), which meant the bay had to fit a
+        // 1.4-unit band between the ring road's top lane and the track's curb -- and a stall
+        // that has to fit a BUS is 2.13 deep, not 1.06. The dependency runs the other way
+        // now: the stall is sized from the board (`stallFootprint`), the bay sits directly on
+        // top of the road, and the track is pushed up to clear it. That is the whole reason a
+        // bus can park at its full size.
+        //
+        // It also spends height that was going begging: the board reached y = 7.31 of the
+        // 8.98 the phone's frame allows, so pushing the track up costs nothing and takes the
+        // blank band from 23% of the screen to 16%.
+        const reach = trackReach(path);
+        const stall = stallFootprint(scale);
+        const bay = bayPanelSize(level.parking.slots, stall);
+        // Clear air between the road and the bay, and between the bay and the track's
+        // outermost waiting figure. One constant for both, since both are the same job.
+        const BAND_GAP = 0.16;
+        const bandBottom = ROAD_Y + ROAD_H / 2 + BAND_GAP;
+        const PARKING_Y = bandBottom + bay.h / 2;
+        const LOOP_Y = bandBottom + bay.h + BAND_GAP - reach.bottom;
+
         // Frame the camera on what was actually drawn.
         //
         // ACROSS: LANE.edgeLimit, not this level's own measured channel reach. It is the
@@ -570,7 +593,6 @@ export class GameController extends Component {
         // road's outer kerb. The camera then centres on the MIDPOINT of that, where it used
         // to sit at a constant y = 0. The two are 1.3 units apart, which at phone zoom is
         // 130 px of margin taken off one end of the screen and handed to the other.
-        const reach = trackReach(path);
         const contentTop = LOOP_Y + reach.top;
         const contentBottom = this.ring.bottom - ROAD_H / 2;
         this.camY = (contentTop + contentBottom) / 2;
@@ -601,7 +623,7 @@ export class GameController extends Component {
         const parkingRoot = new Node('ParkingRoot');
         this.boardRoot.addChild(parkingRoot);
         this.parkingView = new ParkingView(
-            parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y,
+            parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y, scale,
         );
         this.parkingView.render();
 
@@ -1048,17 +1070,22 @@ export class GameController extends Component {
      * Uniform scale that fits car `id`'s model into a parking stall. Read it BEFORE
      * `detachCar`, which drops the entry holding the car's fitted size.
      *
-     * Never larger than 1: a stall (0.78 x 1.06) is deeper than a small car is long, so
-     * fitting one to it worked out at 1.9 -- the car nearly doubled as it drove up, which
-     * reads as the wrong car arriving rather than as parking. This makes the refit a
-     * shrink-only affair: a car that already fits keeps exactly the size it had in the lot,
-     * and only the ones too long for it (a bus at 1.33 world units against a stall 1.06
-     * deep) come down.
+     * Never larger than 1: a stall is deeper than a small car is long, so fitting one to it
+     * worked out at 1.9 -- the car nearly doubled as it drove up, which reads as the wrong
+     * car arriving rather than as parking. So the refit is a shrink-only affair.
+     *
+     * As of the board-scaled stall it should now be a NO-OP: the stall is sized to hold the
+     * longest body there is, so every capacity comes out at 1 and keeps exactly the size it
+     * had in the lot. It is kept because it is the only thing standing between a drifted
+     * CAP_BOX (or a re-exported model) and a car drawn straight over its neighbours -- and
+     * because it is what used to fire. When the stall was fixed at 0.78 x 1.06 while the lot
+     * grew, this shrank a bus to 0.563 and left it parking NARROWER than the small car next
+     * to it, 0.344 against 0.464 across.
      */
     private stallScale(id: number): number {
         const size = this.gridView!.getCarSize(id);
         if (!size || size.len <= 0 || size.wid <= 0) return 1;
-        const slot = ParkingView.slotSize;
+        const slot = this.parkingView!.slotSize;
         return Math.min(
             1,
             (slot.w * STALL_FILL_W) / size.wid,

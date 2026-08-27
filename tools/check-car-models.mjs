@@ -69,6 +69,17 @@ function lotExtent(file) {
     return { w: parseFloat(m[1]), h: parseFloat(m[2]) };
 }
 
+/** `LANE.edgeLimit` lives inside an Object.freeze literal, so `constant` cannot see it. */
+function laneEdgeLimit(file) {
+    const src = readFileSync(file, 'utf8');
+    const m = /^\s*edgeLimit: ([\d.]+),/m.exec(src);
+    if (!m) {
+        console.error(`cannot find LANE.edgeLimit in ${file} — this tool is out of date`);
+        process.exit(2);
+    }
+    return parseFloat(m[1]);
+}
+
 /**
  * One row of CAP_BOX, likewise a literal rather than a bare number.
  *
@@ -94,19 +105,38 @@ function capBox(file, cap) {
 const CTRL = 'game/assets/scripts/view/GameController.ts';
 const GEN = 'game/assets/scripts/core/level-gen.ts';
 const TYPES = 'game/assets/scripts/core/types.ts';
+const TRACK = 'game/assets/scripts/core/track-path.ts';
 
 const ROAD_Y = constant(CTRL, 'ROAD_Y');
+const ROAD_H = constant(CTRL, 'ROAD_H');
 const RING_OFF = constant(CTRL, 'RING_OFF');
-const RING_LOW = constant(CTRL, 'RING_LOW');
-const LOT_HALF_W = constant(CTRL, 'LOT_HALF_W');
 const CELL_MAX = constant(CTRL, 'CELL_MAX');
 const CELL_GAP = constant(CTRL, 'CELL_GAP');
+const CAMERA_DIST = constant(CTRL, 'CAMERA_DIST');
+const EDGE_LIMIT = laneEdgeLimit(TRACK);
 const LOT = lotExtent(GEN);
 const CAR_SCALE = constant(TYPES, 'CAR_SCALE');
 
-// GameController's own expression, verbatim: the board scale is whichever budget is tighter.
-// One board unit is this many world units, which is what turns a measured AABB into the units
-// CAP_BOX is written in.
+/**
+ * The screen the pitch is reported for. There is no single board pitch any more: the board
+ * is laid out into whatever frame the viewport leaves (see `viewFrame` in GameController),
+ * so the same lot is worth 0.99 world units per board unit on this phone and 0.57 in a squat
+ * editor preview window. A reference has to be named, and the phone is the one that ships.
+ *
+ * The PASS/FAIL does not depend on it, for the reason in the header: the shortfall cancels
+ * every common factor. The pitch is carried so the printed "drawn" column is a size that
+ * actually appears on a screen.
+ */
+const REF_SCREEN = { w: 1170, h: 2532 };
+
+// GameController's own arithmetic, verbatim: `viewFrame` for the reference screen, then the
+// two budgets it hands the cell, then whichever of them is tighter.
+const REF_ASPECT = REF_SCREEN.w / REF_SCREEN.h;
+const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
+const VIEW_HALF_Y = Math.max(VIEW_HALF_H, EDGE_LIMIT / REF_ASPECT);
+const VIEW_HALF_X = VIEW_HALF_Y * REF_ASPECT;
+const RING_LOW = -(VIEW_HALF_Y - ROAD_H / 2);
+const LOT_HALF_W = VIEW_HALF_X - RING_OFF - ROAD_H / 2;
 const PITCH = Math.min(
     CELL_MAX,
     (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / LOT.h - CELL_GAP,
@@ -205,7 +235,8 @@ for (const cap of caps) {
 }
 
 const f3 = (n) => n.toFixed(3).padStart(6);
-console.log(`board pitch ${PITCH.toFixed(4)} world units, car scale ${CAR_SCALE}   (models from ${dir})\n`);
+console.log(`board pitch ${PITCH.toFixed(4)} world units at ${REF_SCREEN.w}x${REF_SCREEN.h},`
+    + ` lot ${LOT.w}x${LOT.h}, car scale ${CAR_SCALE}   (models from ${dir})\n`);
 console.log('cap      model L x W x H           declared L x W   drawn L x W      short');
 const problems = [];
 for (const cap of caps) {
