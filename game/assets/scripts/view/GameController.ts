@@ -154,6 +154,20 @@ const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
 const DEBUG_FOOTPRINTS = false;
 
 /**
+ * Seconds a startup preload gets before the game goes on without it.
+ *
+ * Both preloads already degrade gracefully when an asset ERRORS -- litMaterial falls back
+ * to flat shading, buildCar falls back to a plain coloured box. Neither degraded when a
+ * load simply never called back, and a real device has failure modes the editor never
+ * shows, so the whole game sat on the splash screen forever with nothing logged. A
+ * deadline is what makes those existing fallbacks reachable.
+ *
+ * Generous on purpose: a phone on a slow connection fetching the package is doing real
+ * work, and cutting it off early would trade a hang for a permanently ugly board.
+ */
+const PRELOAD_DEADLINE = 8;
+
+/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -292,13 +306,45 @@ export class GameController extends Component {
             console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
         }
         this.registerInput();
+        // First thing this component logs. If a device hangs on the splash and this line is
+        // absent, the scene never got as far as running the controller and the problem is
+        // below us, in the engine or the asset download; if it is present, the hang is in
+        // the preload chain below and the deadline warnings will say which step.
+        console.log('[Game] controller start');
         // Preload builtin-standard so lit materials get real lighting; it lives in
         // the `internal` bundle but isn't preloaded unless something already uses it.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
         // Then preload the car GLB models (buildCar is synchronous and needs the
         // prefab resident) before loading the level. Passengers are procedural
         // (pax-figure.ts) and need no preload of their own.
-        this.preloadLitEffect(() => preloadCarModels(() => this.loadLevel(this.levelName)));
+        //
+        // Each step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
+        // back used to strand the game on the splash screen with nothing logged.
+        this.withDeadline('builtin-standard preload', (d) => this.preloadLitEffect(d), () => {
+            this.withDeadline('car model preload', (d) => preloadCarModels(d), () => {
+                this.loadLevel(this.levelName);
+            });
+        });
+    }
+
+    /**
+     * Run `step`, and continue when it reports finished OR when PRELOAD_DEADLINE passes,
+     * whichever comes first. `done` runs exactly once either way -- a step that calls back
+     * late finds the latch already closed and is ignored, so nothing runs twice.
+     */
+    private withDeadline(label: string, step: (done: () => void) => void, done: () => void): void {
+        let fired = false;
+        const finish = (timedOut: boolean): void => {
+            if (fired) return;
+            fired = true;
+            if (timedOut) {
+                console.warn(`[Game] ${label} did not finish within ${PRELOAD_DEADLINE}s`
+                    + ' — starting without it');
+            }
+            done();
+        };
+        this.scheduleOnce(() => finish(true), PRELOAD_DEADLINE);
+        step(() => finish(false));
     }
 
     /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */
@@ -336,7 +382,15 @@ export class GameController extends Component {
     private loadLevel(name: string): void {
         this.loading = true;
         this.levelName = name; // tracks the level in play, so nextLevelName() advances from it
+        // Same reasoning as the preloads: say so rather than sitting silent. There is no
+        // useful fallback for a level that never arrives -- the board would be empty -- so
+        // this only reports; it does not pretend to recover.
+        let arrived = false;
+        this.scheduleOnce(() => {
+            if (!arrived) console.error(`[Game] level '${name}' has not loaded after ${PRELOAD_DEADLINE}s`);
+        }, PRELOAD_DEADLINE);
         resources.load(`levels/${name}`, JsonAsset, (err, asset) => {
+            arrived = true;
             if (err) {
                 console.error('[Game] failed to load level', name, err);
                 this.loading = false;
