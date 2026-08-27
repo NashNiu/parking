@@ -63,6 +63,20 @@ export class GameCore {
     return { ok: true, slotIndex, reason: null };
   }
 
+  /**
+   * Open one locked stall, and return its index (-1 if there was none, or the game is
+   * over). Free, and immediately usable.
+   *
+   * This is the player's way out of a full bay, which is why `isDeadlocked` counts a
+   * lockable stall as room: a level is not over while there is still one to open.
+   */
+  unlockSlot(): number {
+    if (this.state !== 'playing') return -1;
+    const slot = this.parking.unlock();
+    if (slot >= 0) this.updateState();
+    return slot;
+  }
+
   stepLoop(): BoardResult {
     if (this.state !== 'playing') return { boardedColor: null, boardedCount: 0, departedCarIds: [], boardedSlots: [] };
     const res = this.boarding.tick();
@@ -96,8 +110,14 @@ export class GameCore {
   }
 
   private isDeadlocked(): boolean {
-    const canBringOut =
-      this.parking.hasFreeSlot() && this.lot.movableCarIds().length > 0;
+    // A LOCKABLE stall counts as room. The player can open one for free (`unlockSlot`), so
+    // a bay that is full but not fully unlocked still has a legal move in it -- calling
+    // that a deadlock would end a level the player could have carried on playing. This is
+    // also the whole shape of the mechanic: the locked stalls are the way out of a bay
+    // filled with the wrong colours, and the more of them are open the harder the level is
+    // to lose.
+    const room = this.parking.hasFreeSlot() || this.parking.canUnlock();
+    const canBringOut = room && this.lot.movableCarIds().length > 0;
     if (canBringOut) return false;
     const canFillSomething = this.parking.parked.some(
       (p) => p !== null && p.filled < p.capacity && this.hasRemainingColor(p.color),

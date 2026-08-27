@@ -99,3 +99,25 @@ test('two cars parked in order fill in that order', () => {
   for (let i = 0; i < 16; i++) p.board(first);
   expect(p.findMatchingSlot('red')).toBe(second);
 });
+
+test('a locked slot can be unlocked, up to the bay total', () => {
+  const p = new ParkingSystem(7, 4);
+  expect(p.parked.length).toBe(4);
+  expect(p.canUnlock()).toBe(true);
+  expect(p.unlock()).toBe(4);   // the new slot's index
+  expect(p.unlock()).toBe(5);
+  expect(p.unlock()).toBe(6);
+  expect(p.canUnlock()).toBe(false);
+  expect(p.unlock()).toBe(-1);
+  expect(p.parked.length).toBe(7);
+});
+
+test('an unlocked slot is immediately usable and starts empty', () => {
+  const p = new ParkingSystem(7, 1);
+  p.park(car({ id: 1, color: 'red', cap: 'small' }));
+  expect(p.hasFreeSlot()).toBe(false);
+  const slot = p.unlock();
+  expect(p.hasFreeSlot()).toBe(true);
+  expect(p.parked[slot]).toBeNull();
+  expect(p.park(car({ id: 2, color: 'blue', cap: 'small' }))).toBe(slot);
+});

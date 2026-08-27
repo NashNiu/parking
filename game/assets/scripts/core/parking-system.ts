@@ -43,6 +43,28 @@ export class ParkingSystem {
     return this.parked.some((p) => p === null);
   }
 
+  /** Whether any of the bay's stalls is still locked. */
+  canUnlock(): boolean {
+    return this.parked.length < this.slots;
+  }
+
+  /**
+   * Open the next locked stall and return its index, or -1 when they are all open.
+   *
+   * `parked.length` IS the unlocked count -- the array is built `unlocked` long, not
+   * `slots` long -- so opening a stall is appending one empty slot. That also means every
+   * existing index keeps its car and its `seq`, which the boarding order depends on.
+   *
+   * Deliberately not a throw on exhaustion, unlike `park`. A player double-tapping the
+   * last locked stall is ordinary, and -1 is a thing the caller can render; `park`'s throw
+   * guards an invariant the caller checked first (`hasFreeSlot`) and so cannot happen.
+   */
+  unlock(): number {
+    if (!this.canUnlock()) return -1;
+    this.parked.push(null);
+    return this.parked.length - 1;
+  }
+
   park(car: CarSpec): number {
     const idx = this.parked.findIndex((p) => p === null);
     if (idx === -1) throw new Error('no free parking slot');

@@ -1295,6 +1295,23 @@ export class GameController extends Component {
         const localHit = new Vec3();
         Vec3.transformMat4(localHit, worldHit, inv);
 
+        // The parking bay comes first, and not just for tidiness: it sits ABOVE the lot, so
+        // a tap that lands on a stall cannot be a tap on a car, and answering it here means
+        // `pickCar` never sees it. The hit has to be re-expressed in the BOARD's frame --
+        // `localHit` is gridRoot-local and gridRoot is offset down by the lot's half-height,
+        // while the bay's stalls are positioned in parkingRoot, which sits at the board's
+        // origin.
+        if (this.boardRoot) {
+            const bInv = new Mat4();
+            Mat4.invert(bInv, this.boardRoot.worldMatrix);
+            const boardHit = new Vec3();
+            Vec3.transformMat4(boardHit, worldHit, bInv);
+            if (this.parkingView.hitsNextLocked(boardHit)) {
+                this.unlockNextSlot();
+                return;
+            }
+        }
+
         const id = this.gridView.pickCar(localHit);
         if (id == null) return;
 
@@ -1373,6 +1390,30 @@ export class GameController extends Component {
                 this.syncSeatCounts();
             },
         });
+    }
+
+    /**
+     * Open the next locked stall, on a tap on it.
+     *
+     * Free, for now: the button says "tap me" with a play triangle because that is where a
+     * rewarded video goes, but nothing is being asked for yet. When an ad is wired in, this
+     * is the one place that changes -- everything below it already treats an unlock as a
+     * thing that either happened or did not.
+     *
+     * Core decides WHICH stall opens (always the leftmost locked one, see
+     * ParkingSystem.unlock) and the view is told the index, so the two counts cannot drift.
+     * A refusal is silent: the only way to get one is to tap a stall that no longer exists,
+     * which the hit test already rules out.
+     */
+    private unlockNextSlot(): void {
+        const slot = this.core!.unlockSlot();
+        if (slot < 0) return;
+        this.sfx?.play('tap');
+        vibrate('light');
+        this.parkingView!.openSlot(slot);
+        // A newly opened stall can end a deadlock -- which is the whole point of the
+        // mechanic -- and it can also be the last thing a won level was waiting for.
+        this.syncSeatCounts();
     }
 
     /**

@@ -19,6 +19,25 @@ function soloLevel(): LevelData {
   };
 }
 
+/**
+ * Three green cars in a row and a queue with no green in it: nothing parked can ever fill,
+ * so the bay is a one-way street. Starts with 2 of 3 slots open, which is what lets a test
+ * fill the bay and still have something to unlock.
+ */
+function deadlockLevel(): LevelData {
+  return {
+    id: 5,
+    lot: { w: 4, h: 2, cars: [
+      { id: 1, x: -1.2, y: 0, angle: 90, color: 'green', cap: 'small' },
+      { id: 2, x: 0, y: 0, angle: 90, color: 'green', cap: 'small' },
+      { id: 3, x: 1.2, y: 0, angle: 90, color: 'green', cap: 'small' },
+    ] },
+    parking: { slots: 3, unlocked: 2 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+}
+
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
   expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
@@ -173,4 +192,31 @@ test('deadlock is detected when no progress is possible', () => {
   expect(game.getState()).toBe('deadlock');
   game.stepLoop(); // guarded no-op once state is no longer 'playing'
   expect(game.getState()).toBe('deadlock');
+});
+
+test('a full bay with a locked slot left is not a deadlock', () => {
+  // The player can still unlock, so the game is not over -- reporting deadlock here would
+  // end a level the player had a legal move in. Two colours the ring will never carry, so
+  // nothing parked can ever fill: the ONLY way out is the locked slot.
+  const level = deadlockLevel();
+  const core = new GameCore(level);
+  // Fill both starting slots with cars whose colour the queue does not contain.
+  expect(core.tapCar(1).ok).toBe(true);
+  expect(core.tapCar(2).ok).toBe(true);
+  core.stepLoop();
+  expect(core.parking.hasFreeSlot()).toBe(false);
+  expect(core.parking.canUnlock()).toBe(true);
+  expect(core.getState()).toBe('playing');
+  // Unlock, park the last one, and now there is nothing left to unlock.
+  expect(core.unlockSlot()).toBeGreaterThanOrEqual(0);
+  expect(core.tapCar(3).ok).toBe(true);
+  core.stepLoop();
+  expect(core.parking.canUnlock()).toBe(false);
+  expect(core.getState()).toBe('deadlock');
+});
+
+test('unlockSlot refuses once every slot is open', () => {
+  const core = new GameCore(deadlockLevel());
+  expect(core.unlockSlot()).toBe(2);
+  expect(core.unlockSlot()).toBe(-1);
 });

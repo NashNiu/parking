@@ -97,6 +97,58 @@ export function roundedSlabPart(
     return { positions, normals, uvs, indices };
 }
 
+/**
+ * A right-pointing triangle as a mergeable part, `w` across and `h` tall, centred on
+ * (`ox`, `oy`, 0) and `d` deep. Front and back faces plus the three sides, so it reads the
+ * same whichever way the board is turned.
+ *
+ * Flat-shaded like everything else here: one normal per face, no sharing of vertices
+ * between faces, which is what keeps `mergeParts`' colours exactly as authored.
+ */
+export function triPart(w: number, h: number, d: number, ox = 0, oy = 0): MeshPart {
+    const positions: number[] = [];
+    const normals: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+    const hw = w / 2, hh = h / 2, hd = d / 2;
+    // The three corners, in the board plane: apex right, base left.
+    const c: [number, number][] = [
+        [ox - hw, oy + hh],
+        [ox - hw, oy - hh],
+        [ox + hw, oy],
+    ];
+    const face = (z: number, nz: number, wind: number[]): void => {
+        const base = positions.length / 3;
+        for (const i of [0, 1, 2]) {
+            positions.push(c[i][0], c[i][1], z);
+            normals.push(0, 0, nz);
+            uvs.push(0, 0);
+        }
+        indices.push(base + wind[0], base + wind[1], base + wind[2]);
+    };
+    face(hd, 1, [0, 1, 2]);
+    face(-hd, -1, [0, 2, 1]);
+    // Sides: one quad per edge, its own normal, so the silhouette stays crisp.
+    for (let i = 0; i < 3; i++) {
+        const [x0, y0] = c[i];
+        const [x1, y1] = c[(i + 1) % 3];
+        const dx = x1 - x0, dy = y1 - y0;
+        const len = Math.hypot(dx, dy) || 1;
+        // Outward normal of a clockwise-wound edge, in the board plane.
+        const nx = dy / len, ny = -dx / len;
+        const base = positions.length / 3;
+        for (const [x, y, z] of [
+            [x0, y0, hd], [x1, y1, hd], [x1, y1, -hd], [x0, y0, -hd],
+        ] as const) {
+            positions.push(x, y, z);
+            normals.push(nx, ny, 0);
+            uvs.push(0, 0);
+        }
+        indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    }
+    return { positions, normals, uvs, indices };
+}
+
 /** A box as a mergeable part, centred on (`ox`, `oy`, 0). For dashes and grid lines. */
 export function boxPart(w: number, h: number, d: number, ox = 0, oy = 0): MeshPart {
     return roundedSlabPart(w, h, d, 0, ox, oy);
