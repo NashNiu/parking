@@ -184,7 +184,35 @@ export function levelParams(id: number): GenParams {
     const t = Math.min(1, Math.max(0, (id - 1) / 9));
     return {
         cars: CARS_PER_LEVEL,
-        colors: Math.min(5, 2 + Math.floor((id - 1) / 3)),
+        // The colour count IS the difficulty, and it is the only knob here that is. Measured
+        // by playing every shipped level with a careless policy -- fill every free stall with
+        // whatever can move, every tick -- at 4 open stalls, 8 seeds, with the cars recoloured
+        // and the queue rebuilt from their capacities so the level stays winnable in
+        // principle. Loss rate against colour count:
+        //
+        //     colours   2      3      4      5      6
+        //     level 1   0%     0%     0%    38%    13%
+        //     level 3   0%    50%    50%   100%   100%
+        //     level 6   0%     0%    38%    75%    75%
+        //     level 9  50%    63%    75%   100%   100%
+        //
+        // At 2 and 3 colours a careless player simply cannot lose most levels, which is what
+        // "there is no difficulty" meant. The old ramp spent ids 1-3 on 2 colours and never
+        // passed 5, so seven of the ten levels sat in the flat part of that table.
+        //
+        // What makes the steeper ramp FAIR rather than just harsher: a careful policy --
+        // bring a car out only when the ring is carrying a lot of its colour and it is not
+        // already parked, and keep one stall spare -- wins all ten levels at every count from
+        // 2 to 6, at 4 open stalls, with nothing unlocked. The difficulty is in the choosing,
+        // not in the dice.
+        //
+        // Level 1 stays at 2 colours deliberately: it is the level that teaches what a colour
+        // match is, and the table says it is the one level where 2 colours costs nothing.
+        // Level 2 is already at 3.
+        //
+        // 6 is the ceiling because PALETTE has six entries and the view has exactly those six
+        // in `colors.ts`. A seventh would draw grey (see `colorOf`).
+        colors: Math.min(6, 2 + Math.floor(id / 2)),
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };

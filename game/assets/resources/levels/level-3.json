@@ -25,7 +25,7 @@
         "x": -0.8639,
         "y": -0.6366,
         "angle": 270,
-        "color": "red",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -33,7 +33,7 @@
         "x": -0.0137,
         "y": -3.0881,
         "angle": 268.8792,
-        "color": "blue",
+        "color": "red",
         "cap": "medium"
       },
       {
@@ -41,7 +41,7 @@
         "x": -0.8751,
         "y": 3.5086,
         "angle": 33.7133,
-        "color": "red",
+        "color": "blue",
         "cap": "small"
       },
       {
@@ -49,7 +49,7 @@
         "x": 0.0759,
         "y": 2.6205,
         "angle": 121.1496,
-        "color": "blue",
+        "color": "green",
         "cap": "big"
       },
       {
@@ -73,7 +73,7 @@
         "x": 2.9301,
         "y": 2.1601,
         "angle": 353.4636,
-        "color": "red",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -81,7 +81,7 @@
         "x": 1.6591,
         "y": -2.1703,
         "angle": 22.3981,
-        "color": "blue",
+        "color": "red",
         "cap": "medium"
       },
       {
@@ -89,7 +89,7 @@
         "x": 1.7876,
         "y": -3.3895,
         "angle": 282.7855,
-        "color": "red",
+        "color": "blue",
         "cap": "small"
       },
       {
@@ -97,7 +97,7 @@
         "x": 0.7508,
         "y": -3.4365,
         "angle": 296.809,
-        "color": "blue",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -121,7 +121,7 @@
         "x": -2.1413,
         "y": 2.7818,
         "angle": 55.2738,
-        "color": "red",
+        "color": "green",
         "cap": "medium"
       },
       {
@@ -129,7 +129,7 @@
         "x": -1.1076,
         "y": 2.765,
         "angle": 187.081,
-        "color": "blue",
+        "color": "red",
         "cap": "small"
       },
       {
@@ -137,7 +137,7 @@
         "x": -1.8937,
         "y": -2.5674,
         "angle": 264.9701,
-        "color": "red",
+        "color": "blue",
         "cap": "big"
       },
       {
@@ -145,7 +145,7 @@
         "x": 0.3964,
         "y": 0.9261,
         "angle": 78.7301,
-        "color": "blue",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -169,7 +169,7 @@
         "x": 1.6201,
         "y": 1.3395,
         "angle": 90,
-        "color": "red",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -177,7 +177,7 @@
         "x": 1.056,
         "y": 0.7904,
         "angle": 90,
-        "color": "blue",
+        "color": "red",
         "cap": "small"
       },
       {
@@ -185,7 +185,7 @@
         "x": -1.2835,
         "y": 1.9788,
         "angle": 199.1259,
-        "color": "red",
+        "color": "blue",
         "cap": "big"
       },
       {
@@ -193,7 +193,7 @@
         "x": 2.3509,
         "y": 0.6046,
         "angle": 280.9471,
-        "color": "blue",
+        "color": "green",
         "cap": "medium"
       },
       {
@@ -217,7 +217,7 @@
         "x": 1.3767,
         "y": -0.3864,
         "angle": 58.4881,
-        "color": "red",
+        "color": "green",
         "cap": "medium"
       },
       {
@@ -225,7 +225,7 @@
         "x": -0.0924,
         "y": 0.135,
         "angle": 0,
-        "color": "blue",
+        "color": "red",
         "cap": "small"
       },
       {
@@ -233,7 +233,7 @@
         "x": -3.0785,
         "y": -1.7851,
         "angle": 291.4384,
-        "color": "red",
+        "color": "blue",
         "cap": "small"
       },
       {
@@ -241,7 +241,7 @@
         "x": 0.0529,
         "y": -0.4824,
         "angle": 7.5624,
-        "color": "blue",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -265,7 +265,7 @@
         "x": -2.5349,
         "y": -0.3156,
         "angle": 111.1336,
-        "color": "red",
+        "color": "green",
         "cap": "small"
       },
       {
@@ -273,7 +273,7 @@
         "x": -1.8507,
         "y": -0.0277,
         "angle": 142.299,
-        "color": "blue",
+        "color": "red",
         "cap": "small"
       },
       {
@@ -281,7 +281,7 @@
         "x": -3.1618,
         "y": -0.2633,
         "angle": 279.8968,
-        "color": "red",
+        "color": "blue",
         "cap": "small"
       },
       {
@@ -289,7 +289,7 @@
         "x": -1.2427,
         "y": 0.3555,
         "angle": 337.2822,
-        "color": "blue",
+        "color": "green",
         "cap": "small"
       }
     ]
@@ -315,11 +315,15 @@
     "queue": [
       {
         "color": "red",
-        "count": 352
+        "count": 224
       },
       {
         "color": "blue",
-        "count": 352
+        "count": 248
+      },
+      {
+        "color": "green",
+        "count": 232
       }
     ]
   },
