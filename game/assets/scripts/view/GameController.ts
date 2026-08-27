@@ -617,6 +617,11 @@ export class GameController extends Component {
             // are or where each one joins (see Channel in core/loop-system.ts).
             loop.channels,
             LOOP_Y, this.TICK,
+            // What the camera shows across, so the lanes can run off the edge of it
+            // rather than stopping short. `frame.halfW`, not LANE.edgeLimit: on a
+            // viewport wider than the board needs the two differ by a quarter of a unit,
+            // and a lane that stopped at the bound would leave a visible gap.
+            frame.halfW,
         );
         this.loopView.update(loop.ring, loop.channels);
 

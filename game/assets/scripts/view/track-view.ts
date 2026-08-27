@@ -85,6 +85,13 @@ const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
 const OFFSET_SCRATCH = { across: 0, along: 0 };
 
 /**
+ * Corner radius of a lane slab. Only its INNER end is ever seen now -- the outer end is
+ * drawn past the edge of the screen (see `buildLanes`) -- but the radius still has to be
+ * counted into how far past, or the rounding lands just inside the frame.
+ */
+const LANE_SLAB_R = 0.2;
+
+/**
  * How far the drawn ring reaches above and below its own origin, in board units.
  *
  * The camera frames the board off this (see `buildBoard`), so it has to be MEASURED rather
@@ -237,6 +244,13 @@ export class TrackView {
     constructor(
         parent: Node, path: TrackPath, capacity: number, boardIndex: number,
         channels: Channel[], y: number, tick: number,
+        /**
+         * Visible half-width of the board, in board units -- what the camera actually
+         * shows across at this screen's shape, NOT the LANE.edgeLimit bound. The lanes
+         * are drawn out past it so they leave the screen rather than stopping short of
+         * it; see `buildLanes`.
+         */
+        private edgeX: number,
     ) {
         this.path = path;
         this.capacity = capacity;
@@ -358,11 +372,22 @@ export class TrackView {
      * is symmetric top to bottom. The trapezoid's entry sits on a slanted edge, so its
      * channel leaves at 15 degrees and everything here follows that automatically.
      *
-     * The outward reach is bounded: `dockX + BAND_HALF + LANE_START +
+     * The WAITING SLOTS are bounded: `dockX + BAND_HALF + LANE_START +
      * (lookahead - 1) * LANE_STEP + LANE.margin` must stay inside the visible
      * half-width (LANE.edgeLimit, 4.67). validateTrack enforces exactly that, against
      * the same constants (LANE.margin included, not a restated literal), so a level
      * that gets here already fits.
+     *
+     * The SLAB is not, and deliberately: it runs from the ring out PAST the edge of the
+     * screen. The shipped levels' slots stop 0.31 to 1.6 units short of the frame, which
+     * drew each channel as a rounded white tray floating with a gap beside it -- the queue
+     * looked like it ended there. A lane that leaves the screen reads as a queue that
+     * continues off it, which is the truth: level 1 has 744 more passengers to come.
+     *
+     * Only the slab is extended. No figures are drawn beyond `lookahead`, because a
+     * waiting figure's COLOUR is information the player plans against -- inventing the
+     * ones past the lookahead would either show colours that are not next, or hand out
+     * lookahead the level did not grant, and lookahead is a difficulty knob.
      */
     private buildLanes(parent: Node): void {
         for (const channel of this.channels) {
@@ -377,20 +402,44 @@ export class TrackView {
                 0,
             );
             const span = LANE_STEP * (channel.lookahead - 1);
-            const slabW = span + LANE.margin * 2;
-            // Floor centred on the slots it carries, and turned to follow the lane so a
-            // tilted channel's slab tilts with it rather than sticking out square.
-            const mid = new Vec3(first.x + out.x * span / 2, first.y + out.y * span / 2, 0);
+            // Where the slab starts and ends, as distances along `out` from `first` (the
+            // innermost waiting slot). The inner end keeps its margin; the outer end is
+            // whichever is further, the slots' own margin or far enough out to be off
+            // screen. `OFF_SCREEN` covers the band's half-width and the slab's corner
+            // radius, so the rounded end is over the edge rather than just touching it.
+            const OFF_SCREEN = BAND_HALF + LANE_SLAB_R;
+            const inner = -LANE.margin;
+            let outer = span + LANE.margin;
+            // Distance along `out` at which the lane's centreline crosses the frame edge.
+            // Guarded: a channel leaving straight up or down would never cross it, and a
+            // side channel always does (its `out` is within 15 degrees of horizontal on
+            // every shipped shape).
+            if (Math.abs(out.x) > 1e-3) {
+                const toEdge = (Math.sign(out.x) * this.edgeX - first.x) / out.x;
+                outer = Math.max(outer, toEdge + OFF_SCREEN);
+            }
+            const slabW = outer - inner;
+            // Turned to follow the lane, so a tilted channel's slab tilts with it rather
+            // than sticking out square.
+            const mid = new Vec3(
+                first.x + out.x * (inner + outer) / 2,
+                first.y + out.y * (inner + outer) / 2,
+                0,
+            );
             const angle = Math.atan2(out.y, out.x) * 180 / Math.PI;
 
-            const shadow = makeShadowSlab(`lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, 0.2, 34);
+            const shadow = makeShadowSlab(
+                `lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, LANE_SLAB_R, 34,
+            );
             shadow.setPosition(mid.x, mid.y - BAND_DROP, BAND_Z - 0.06);
             shadow.setRotationFromEuler(0, 0, angle);
             parent.addChild(shadow);
 
             // Same white as the ring and as deep, so a channel reads as the track running
             // off to the side.
-            const slab = makeSlab(`lane-${channel.side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
+            const slab = makeSlab(
+                `lane-${channel.side}`, slabW, BAND_HALF * 2, 0.06, BAND, LANE_SLAB_R,
+            );
             slab.setPosition(mid.x, mid.y, BAND_Z);
             slab.setRotationFromEuler(0, 0, angle);
             parent.addChild(slab);

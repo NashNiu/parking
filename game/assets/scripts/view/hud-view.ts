@@ -26,15 +26,30 @@ const PILL_H = 88;
 const PILL_MARGIN = 0.03;
 
 /**
- * The level-title pill: the passenger pill's mirror image in the OPPOSITE top corner, same
- * height, same margin, narrower only because its text is shorter.
+ * The level-title pill: same height and margin as the passenger pill, narrower only because
+ * its text is shorter. CENTRED at the top, with the counter dropped one row below it on the
+ * left.
  *
- * The corner is the point. This started as bare centred type, which the ring's own
- * passengers stood up into and made unreadable; a plate fixed the type and moved the problem
- * -- the plate then covered the passengers instead. Centre-top belongs to the track, which
- * is as wide as the board and reaches within a plate's height of the top edge. The two
- * corners above the track's rounded ends are the only places up here that are reliably
- * empty, and the counter already had one of them.
+ * It was in the top-right corner, and the reason it was there has expired. Centre-top used
+ * to belong to the track: the ring reached within a plate's height of the top edge, so bare
+ * centred type had passengers standing up through it and a plate over it covered the
+ * passengers instead. The board has since been reframed twice -- the lot went portrait, and
+ * the track was pushed up to clear a parking bay deep enough for a bus -- and the top band
+ * is now this: the ring's topmost figure sits 1.67 board units below the top of the frame,
+ * which is 8.3% of the screen height, and this plate takes about 6% of it. It clears.
+ *
+ * Those are FRACTIONS on purpose. The canvas's own size in design units is a project
+ * setting this file does not read (`canvasSize` asks the Canvas at runtime), so every
+ * clearance here is worked out as a share of the screen rather than in pixels -- the pill
+ * sizes are fixed design units and the margin is a fraction of the width, so the band they
+ * occupy moves with the design resolution and a pixel claim would be fiction.
+ *
+ * Which is also why the counter drops only HALF a row. Sideways it is safe: the ring's path
+ * spans at most +/-1.85 and its figures +/-1.96, while this pill's right edge lands near
+ * -1.96 -- they touch at best. But a full row down puts the plate's bottom at roughly 12.5%
+ * of the height against the ring's 8.3%, so the touch would be a real overlap over the
+ * ring's leftmost top row. Half a row lands at about 10%, above the 10.3% where that row's
+ * heads actually start.
  */
 const TITLE_PILL_W = 190;
 const TITLE_PILL_H = PILL_H;
@@ -102,8 +117,15 @@ export class HudView {
         // which is what puts them where the reference art has them rather than jammed
         // against the top edge.
         const line = h / 2 - margin - PILL_H / 2;
-        this.levelLabel = this.buildTitlePill(canvas, w / 2 - margin - TITLE_PILL_W / 2, line);
-        this.progressLabel = this.buildPassengerPill(canvas, w, h, margin);
+        this.levelLabel = this.buildTitlePill(canvas, 0, line);
+        // Dropped half its own height plus a margin -- clear of the status bar it used to
+        // share, and no further. A FULL row lower was tried on paper and rejected: see
+        // TITLE_PILL_W for the arithmetic, but the short version is that the ring's top
+        // rows start 8.3% of the screen height down and a full row puts this plate's
+        // bottom edge past that.
+        this.progressLabel = this.buildPassengerPill(
+            canvas, w, margin, line - PILL_H / 2 - margin,
+        );
         this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
         this.bannerLabel.color = TITLE_INK;
         this.bannerLabel.isBold = true;
@@ -120,8 +142,8 @@ export class HudView {
     }
 
     /**
-     * The level title on its own rounded plate, in the top-RIGHT corner (see TITLE_PILL_W
-     * for why it is not centred). 42px, not the counter's 52: at three digits a bolder
+     * The level title on its own rounded plate, centred at the top (see TITLE_PILL_W for
+     * what makes the centre safe). 42px, not the counter's 52: at three digits a bolder
      * setting would run past the plate's edge.
      */
     private buildTitlePill(canvas: Node, x: number, line: number): Label {
@@ -135,14 +157,14 @@ export class HudView {
     }
 
     /**
-     * The remaining-passenger readout: a white rounded pill in the top-left corner
-     * holding a huddle of passenger dots, a small caption, and a big count. It replaces
-     * a bare centred line of text, which read as debug output rather than a HUD.
+     * The remaining-passenger readout: a white rounded pill on the left, one row under the
+     * title, holding a huddle of passenger dots, a small caption, and a big count. It
+     * replaces a bare centred line of text, which read as debug output rather than a HUD.
      */
-    private buildPassengerPill(canvas: Node, w: number, h: number, margin: number): Label {
+    private buildPassengerPill(canvas: Node, w: number, margin: number, y: number): Label {
         const pill = roundedSprite('PaxPill', PILL_W, PILL_H, PILL_BG);
         canvas.addChild(pill);
-        pill.setPosition(-w / 2 + margin + PILL_W / 2, h / 2 - margin - PILL_H / 2, 0);
+        pill.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
 
         // Three dots in a huddle is all the passenger icon that survives at this size —
         // a drawn figure would just be a smudge.
