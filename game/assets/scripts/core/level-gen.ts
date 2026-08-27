@@ -19,20 +19,32 @@ const UNLOCKED = 4;
 const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
 
 /**
- * The lot, in board units -- one unit is the pitch the old 9x6 grid used, so the
- * camera framing and the view's board scale are untouched by this milestone.
+ * The lot, in board units.
  *
- * 36 cars drawn from CAP_MIX would cover 26.7 of these 54 square units on paper. The ten
- * shipped levels actually carry 24.4, or 45%, because the packer's own success filter
- * reshapes the mix -- an attempt heavy in big bodies is likelier to fail to settle, so
- * what survives skews small: 238 small cars over 360 against the 198 CAP_MIX predicts.
- * Either number is a comfortable target for random rotated rectangles. The old grid's
- * "88% occupied" counted CELLS CLAIMED, and the difference between that and this is
- * exactly the ring of side air a square cell left around an oblong car.
+ * 7 x 8, PORTRAIT, and the shape is the whole point: it is what the cars are drawn at.
+ * The board is framed by its WIDTH (see `viewFrame` in GameController), so a phone's
+ * spare height is only worth anything to a lot that is willing to use it. Measured on a
+ * 1170x2532 phone, against the 9 x 6 this replaces: the cars draw 31% bigger and the
+ * blank band above and below the board falls from 42% of the screen to 23%. The area is
+ * all but identical (56 square units against 54), so the density the numbers below were
+ * tuned against carries over -- this is a re-proportioning, not a bigger car park.
  *
- * If the camera framing changes, this changes with it: see LOT_HALF_W in GameController.
+ * The cost lands on the editor preview window, whose 0.79 aspect makes this lot
+ * HEIGHT-bound: cars draw 25% smaller there than they did, and the slab is widened past
+ * what they need. Set the preview to a phone resolution and the two agree again. A squat
+ * window is no longer a fair picture of the game.
+ *
+ * 36 cars drawn from CAP_MIX would cover 26.7 of these 56 square units on paper; the
+ * shipped levels carry rather less, because the packer's own success filter reshapes the
+ * mix -- an attempt heavy in big bodies is likelier to fail to settle, so what survives
+ * skews small. Either number is a comfortable target for random rotated rectangles. The
+ * old grid's "88% occupied" counted CELLS CLAIMED, and the difference between that and
+ * this is exactly the ring of side air a square cell left around an oblong car.
+ *
+ * Both dimensions have to clear the longest body (CAP_BOX.big at 1.949) with room for it
+ * to turn, which 7 does with 3.6x over.
  */
-export const LOT: Lot = { w: 9, h: 6 };
+export const LOT: Lot = { w: 7, h: 8 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -97,7 +109,7 @@ export interface GenParams {
  * Cars per level, the same on EVERY level: the lot is meant to read as a full car park, and
  * a count that ramped with the level id left the early ones looking like an empty one
  * (level 1 once placed 6 cars, covering 15% of the lot -- an empty car park). At 36 cars
- * the bodies cover just under half the lot's 54 square units, and with the clearance band
+ * the bodies cover just under half the lot's 56 square units, and with the clearance band
  * each one owes its neighbours the packer is working at about 55%: full, with the loose
  * board a player needs to see a way into it.
  *

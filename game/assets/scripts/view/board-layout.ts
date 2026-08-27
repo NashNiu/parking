@@ -10,9 +10,12 @@ import { Cap, CAP_BOX, CAR_SCALE } from '../core/index';
  * size in world units. Neither exists any more -- a car's size is its body, and its
  * position is already a position.
  *
- * `scale` is world units per board unit. One board unit is the pitch the old 9x6 grid used,
- * which is why the camera framing and the lot slab survive this milestone untouched --
- * `toWorld` lands a car on the same world point `cellCenter` gave its equivalent cell.
+ * `scale` is world units per board unit -- no longer a fixed number: `buildBoard` sizes it
+ * from the lot's own dimensions against the frame the screen's shape leaves (see
+ * `viewFrame`), so one board unit is worth 0.99 world units on a phone and 0.57 in a squat
+ * editor preview window. It began life as the pitch of the old 9x6 grid, which is why
+ * `toWorld` once landed a car on the same world point `cellCenter` gave its equivalent
+ * cell; that coincidence is spent, and nothing depends on it.
  * `carSize` is the part that deliberately does NOT agree: it answers with the body's size
  * rather than the cell's, which is the whole reason this class exists.
  */

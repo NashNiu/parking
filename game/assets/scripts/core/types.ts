@@ -65,8 +65,8 @@ export const CAP_BOX: Record<Cap, Box> = {
 
 /**
  * One factor on every car's size. The release valve for packing density: 36 cars drawn from
- * CAP_MIX would cover 49.5% of a 9x6 lot on paper, and the ten shipped levels come out at
- * 45% (41.7% to 50.0% level by level, since each car's capacity is an independent draw).
+ * CAP_MIX would cover 47.7% of the 7x8 lot on paper, and the ten shipped levels come out at
+ * 45.8% (38.1% to 53.5% level by level, since each car's capacity is an independent draw).
  * Random rotated rectangles handle that with room to spare, so it starts at 1. Turn it down
  * only if `pack` cannot seat all 36.
  */
