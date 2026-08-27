@@ -12,7 +12,7 @@ import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { ParkingView } from './parking-view';
-import { TrackView } from './track-view';
+import { TrackView, trackReach } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
@@ -75,21 +75,6 @@ const ROAD_Y = 0.3;
 const ROAD_H = 0.9;
 const RING_OFF = 0.62;
 
-/**
- * The box the lot and its ring road have to live in, straight off the camera frame
- * (±4.90 across, ±6.21 down — see CAMERA_DIST). RING_LOW is the lowest a lane centreline
- * can sit with its outer edge still on screen, and LOT_HALF_W is what is left across once
- * a lane and its offset are taken off each side. A taller grid therefore takes a SMALLER
- * cell rather than hanging off the bottom, which is what a 6-row level used to do: its
- * ring reached y = -7.96.
- *
- * The lot slab is then drawn LOT_HALF_W wide whatever the grid needs, so it reaches the
- * edge of the view on both sides and the cars sit centred on it. The cell can't grow to
- * match: 6 rows in a 4.5-unit-tall budget is what fixes it, and only a taller view (a real
- * phone, rather than this squat preview window) changes that.
- */
-const RING_LOW = -5.76;
-const LOT_HALF_W = 3.83;
 const CELL_MAX = 1.4;
 /**
  * Bare board between one grid cell and the next. The visible gap between two cars nose to
@@ -130,18 +115,21 @@ const DRIVE_SPEED = 9;
 const STALL_FILL_W = 0.8;
 const STALL_FILL_H = 1.02;
 
-/**
- * Where the camera sits, in board units. CAMERA_Y is the midpoint of everything drawn
- * (circuit top to bottom ring lane) so the margins come out even.
- */
-const CAMERA_Y = 0;
 const CAMERA_DIST = 15;
+
+/**
+ * Aspect of the editor preview window, and the only thing every framing constant in this
+ * file was ever chosen against. Used solely as the assumption when the real window has not
+ * reported a size yet -- see `viewFrame`.
+ */
+const PREVIEW_ASPECT = 0.79;
 
 /**
  * The LEAST the camera shows vertically: exactly what a 45-degree vertical fov showed at
  * CAMERA_DIST on the board plane, which is why every framing constant derived from that
- * perspective frame -- RING_LOW, LOT_HALF_W, the +/-4.90 by +/-6.21 box -- stays true
- * verbatim. On a viewport too narrow to hold the board it is not enough; see `fitCamera`.
+ * perspective frame. It is the FLOOR the fit starts from, not the final value: on a
+ * viewport too narrow to hold the board it is not enough, and on one much taller than the
+ * board the layout spends the difference. See `viewFrame` and `fitCamera`.
  */
 const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
 
@@ -248,11 +236,20 @@ export class GameController extends Component {
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
     /**
-     * Half the world width that MUST be on screen for this level: the outer reach of its
-     * widest feeder channel, or the lot's cars, whichever is further out. Measured per
-     * level rather than assumed -- see `setupBoard`.
+     * Half the world box that MUST be on screen, for the board AS BUILT -- not for the
+     * level, and not from a constant. `buildBoard` measures it off what it actually laid
+     * out, and `fitCamera` zooms to whichever of the two the screen's shape makes binding.
+     *
+     * Measured rather than assumed because the wrong direction is silent: a box too small
+     * crops (which is what shipped to the first phone), and a box too large just pads.
      */
-    private contentHalfW = LOT_HALF_W;
+    private needHalfW: number = LANE.edgeLimit;
+    private needHalfH = VIEW_HALF_H;
+    /**
+     * Board y the camera is centred on: the midpoint of everything drawn. Was a constant 0,
+     * which is the midpoint of nothing in particular -- see `buildBoard`.
+     */
+    private camY = 0;
     /** Aspect the camera was last fitted to, so `update` only refits when it changes. */
     private fitAspect = 0;
     private layout: BoardLayout | null = null;
@@ -495,19 +492,33 @@ export class GameController extends Component {
         // centred here fills that band with a little margin at each end.
         const PARKING_Y = 1.4;
 
+        // The box the lot and its ring road have to live in. These were CONSTANTS
+        // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
+        // of the editor preview window -- and a phone's frame is neither of those numbers.
+        // It is +/-4.67 by +/-10.11, narrower AND much taller, so the pair were wrong in
+        // both directions at once: the ring road's outer kerb landed at 4.90 in a 4.67-wide
+        // view (clipped, on every phone), while 4.5 units of vertical budget went unused
+        // because the lot was still being sized against a 6.21 half-height.
+        //
+        // `ringLow` is the lowest a ring lane's CENTRELINE can sit with its outer edge still
+        // on screen; `lotHalfW` is what is left across once a lane and its offset come off
+        // each side. Same two roles as the constants, read off the real frame.
+        const frame = this.viewFrame();
+        const ringLow = -(frame.halfH - ROAD_H / 2);
+        const lotHalfW = frame.halfW - RING_OFF - ROAD_H / 2;
         // The lot hangs exactly one lane below the top road, so the road stays put and the
         // lot moves with the grid's size. The cell takes whichever budget is tighter — the
         // rows against the height left under the stalls, or the columns against the width —
         // and the slab is then widened to the full frame.
         const cell = Math.min(
             CELL_MAX,
-            (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / level.lot.h - CELL_GAP,
-            (2 * LOT_HALF_W - 0.3) / level.lot.w - CELL_GAP,
+            (ROAD_Y - 2 * RING_OFF - ringLow - 0.3) / level.lot.h - CELL_GAP,
+            (2 * lotHalfW - 0.3) / level.lot.w - CELL_GAP,
         );
         const scale = cell + CELL_GAP;
         this.boardScale = scale;
         const lotH = lotHeight(level.lot.h, scale);
-        const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * LOT_HALF_W);
+        const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * lotHalfW);
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
             top: ROAD_Y,
@@ -536,24 +547,39 @@ export class GameController extends Component {
         const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
         const path = new TrackPath(shape);
 
-        // How wide the board has to be on screen, for `fitCamera`.
+        // Frame the camera on what was actually drawn.
         //
-        // LANE.edgeLimit, not this level's own measured channel reach. It is the bound core
-        // already states and `validateTrack` already enforces -- every legal level's channels
+        // ACROSS: LANE.edgeLimit, not this level's own measured channel reach. It is the
+        // bound core states and `validateTrack` enforces -- every legal level's channels
         // stay inside it -- so it is the same number for every level, which is the point.
-        // The shipped levels' own reaches run 3.39 to 4.36, because their lookaheads differ
-        // (that being a difficulty knob), and fitting each exactly would zoom the board to
-        // somewhere between 66% and 85% PER LEVEL. The lot is an identical 9 x 6 in all ten,
-        // so watching it change size from one level to the next would read as a bug -- this
-        // repo has already had that complaint once, about parked cars.
+        // The shipped levels' own reaches run 1.83 to 2.51 with today's lookaheads, and
+        // fitting each exactly would zoom the board by a different amount PER LEVEL. The lot
+        // is the same size in all ten, so watching it change from one level to the next
+        // would read as a bug -- this repo has already had that complaint once, about parked
+        // cars. The lot's own ring road is maxed in anyway, so a wider lot zooms out rather
+        // than clipping.
         //
-        // The lot's cars are the other candidate and sit well inside it (3.39 against 4.67),
-        // but they are maxed in anyway, so a future wider lot zooms out instead of clipping.
-        this.contentHalfW = Math.max(LANE.edgeLimit, (level.lot.w / 2) * scale);
-        // Invalidate the cached aspect: `fitCamera` short-circuits on aspect alone, and a
-        // level whose lot is wider than the last one's needs a refit at the same aspect.
-        // Fit straight away too, so a level's first frame is already framed rather than
-        // being one frame late.
+        // Counter-intuitive and measured, so it does not get re-litigated: fitting to the
+        // real 2.51 rather than 4.67 makes the cars SMALLER, not bigger. The ring road costs
+        // a fixed 1.07 of WORLD width per side, so zooming in makes it eat a larger share of
+        // the screen -- the lot went from 82% of the width to 75%, and the cars with it.
+        //
+        // DOWN: the drawn ring's top -- its path, plus a block across the centreline, plus a
+        // figure standing up the screen from its feet (see `trackReach`; the figures lie IN
+        // the board plane, so that last 0.55 is real and easy to miss) -- down to the ring
+        // road's outer kerb. The camera then centres on the MIDPOINT of that, where it used
+        // to sit at a constant y = 0. The two are 1.3 units apart, which at phone zoom is
+        // 130 px of margin taken off one end of the screen and handed to the other.
+        const reach = trackReach(path);
+        const contentTop = LOOP_Y + reach.top;
+        const contentBottom = this.ring.bottom - ROAD_H / 2;
+        this.camY = (contentTop + contentBottom) / 2;
+        this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2 + RING_OFF + ROAD_H / 2);
+        this.needHalfH = Math.max(VIEW_HALF_H, (contentTop - contentBottom) / 2);
+        // Invalidate the cached aspect: `fitCamera` short-circuits on aspect alone, and the
+        // board it has to hold -- and the y it has to look at -- have both just changed. Fit
+        // straight away too, so a level's first frame is already framed rather than being
+        // one frame late.
         this.fitAspect = 0;
         this.fitCamera();
 
@@ -598,15 +624,13 @@ export class GameController extends Component {
             return;
         }
         this.cam = camNode.getComponent(Camera);
-        // Straight on, down the board's normal, showing VIEW_HALF_H (6.21) above and below
-        // the board centre -- which takes the circuit's top edge (5.48) and the bottom ring
-        // lane (-6.15) and still leaves 0.7 at the top for the HUD. Across, it shows 4.90;
-        // the outermost waiting rows sit at 4.65.
+        // Straight on, down the board's normal. Where along y it looks is `buildBoard`'s
+        // to say (see `camY`) and it has not run yet, so this is the placeholder framing the
+        // first frame is drawn with.
         //
         // (The tilted 2.5D framing this replaces was pos (0, 5, 12), lookAt (0, -0.3, 0),
         // and needs BOARD_TILT back at 52 to make sense.)
-        camNode.setPosition(new Vec3(0, CAMERA_Y, CAMERA_DIST));
-        camNode.lookAt(new Vec3(0, CAMERA_Y, 0));
+        this.placeCamera(camNode);
         if (this.cam) {
             // ORTHOGRAPHIC, and this is load-bearing rather than a matter of taste: the
             // gameplay is strictly 2D and core reasons about each car's FOOTPRINT on the
@@ -648,24 +672,36 @@ export class GameController extends Component {
     }
 
     /**
-     * Zoom out far enough that the whole board is on screen, whatever shape the screen is.
+     * The visible box in board units at the CURRENT screen shape, half-width by half-height.
      *
-     * The vertical half-view is `VIEW_HALF_H` and the horizontal follows from the aspect
-     * (that is how an orthographic camera works, and how the perspective camera before it
-     * worked too -- its fovAxis was VERTICAL). So a narrow viewport shows LESS across, and
-     * every framing constant in this file was chosen against the roughly 0.79-aspect editor
-     * preview window. A portrait phone is 0.46: 2.87 across where the board needs 4.67.
+     * An orthographic camera fixes its vertical half-view and lets the horizontal follow the
+     * aspect (which is how the perspective camera before it worked too -- its fovAxis was
+     * VERTICAL). So a narrow viewport shows LESS across: the 0.79-aspect editor preview
+     * window is 4.90 across, a 0.46 portrait phone only 2.87, and the board needs 4.67.
+     * `fitCamera` buys that back by raising orthoHeight, and the frame that comes out is
+     * what the board then has to be laid out into -- hence this, rather than the constants
+     * `buildBoard` used to use, which only ever described the preview window.
      *
-     * Raising orthoHeight is the whole fix. It costs nothing on a viewport already wide
-     * enough -- the preview keeps the exact framing it had, a 4:3 tablet gives up 0.3% --
-     * and on a 1170x2532 phone it steps back to 61% of that scale. That number sounds worse
-     * than it is: what the player sees is the fraction of the SCREEN the board fills, and
-     * the lot lands on 73% of the width there, against the 69% the preview shows today. All
-     * the slack goes vertical, which is where a phone has room to spare and where the notch
-     * and the home bar want it anyway.
+     * Costs nothing on a viewport already wide enough: the preview keeps the framing it had
+     * to within a rounding error, a 4:3 tablet gives up 0.3%.
+     */
+    private viewFrame(): { halfW: number; halfH: number } {
+        const size = screen.windowSize;
+        const raw = size.width / Math.max(1, size.height);
+        // Zero or NaN only happens before the window has a size. Assume the preview's own
+        // shape rather than dividing by it; `update` refits the moment a real one arrives.
+        const aspect = Number.isFinite(raw) && raw > 0 ? raw : PREVIEW_ASPECT;
+        const halfH = Math.max(VIEW_HALF_H, LANE.edgeLimit / aspect);
+        return { halfW: halfH * aspect, halfH };
+    }
+
+    /**
+     * Zoom out far enough that the whole board is on screen, whatever shape the screen is,
+     * and look at the middle of it.
      *
-     * Nothing else moves: no constant here, no core geometry, no level data. The board is
-     * laid out exactly as before and the camera simply steps back.
+     * Fits to `needHalfW`/`needHalfH` -- what the board as BUILT requires -- not to the
+     * frame `viewFrame` offered. The two agree at the aspect the board was laid out for; a
+     * later resize can only make the camera step further back, never crop what is drawn.
      */
     private fitCamera(): void {
         if (!this.cam) return;
@@ -674,7 +710,14 @@ export class GameController extends Component {
         if (!Number.isFinite(aspect) || aspect <= 0) return;
         if (Math.abs(aspect - this.fitAspect) < 1e-4) return;
         this.fitAspect = aspect;
-        this.cam.orthoHeight = Math.max(VIEW_HALF_H, this.contentHalfW / aspect);
+        this.cam.orthoHeight = Math.max(this.needHalfH, this.needHalfW / aspect);
+        this.placeCamera(this.cam.node);
+    }
+
+    /** Point the camera straight down the board's normal at `camY`. */
+    private placeCamera(camNode: Node): void {
+        camNode.setPosition(new Vec3(0, this.camY, CAMERA_DIST));
+        camNode.lookAt(new Vec3(0, this.camY, 0));
     }
 
     update(dt: number): void {
