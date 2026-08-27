@@ -552,12 +552,12 @@ export class GameController extends Component {
         // ACROSS: LANE.edgeLimit, not this level's own measured channel reach. It is the
         // bound core states and `validateTrack` enforces -- every legal level's channels
         // stay inside it -- so it is the same number for every level, which is the point.
-        // The shipped levels' own reaches run 1.83 to 2.51 with today's lookaheads, and
-        // fitting each exactly would zoom the board by a different amount PER LEVEL. The lot
-        // is the same size in all ten, so watching it change from one level to the next
-        // would read as a bug -- this repo has already had that complaint once, about parked
-        // cars. The lot's own ring road is maxed in anyway, so a wider lot zooms out rather
-        // than clipping.
+        // The shipped levels' own reaches run 3.08 to 4.36 (their lookaheads differ, that
+        // being a difficulty knob), and fitting each exactly would zoom the board by a
+        // different amount PER LEVEL. The lot is the same size in all ten, so watching it
+        // change from one level to the next would read as a bug -- this repo has already had
+        // that complaint once, about parked cars. The lot's own ring road is maxed in anyway,
+        // so a wider lot zooms out rather than clipping.
         //
         // Counter-intuitive and measured, so it does not get re-litigated: fitting to the
         // real 2.51 rather than 4.67 makes the cars SMALLER, not bigger. The ring road costs
