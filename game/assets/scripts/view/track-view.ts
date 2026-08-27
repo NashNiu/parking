@@ -384,10 +384,21 @@ export class TrackView {
      * looked like it ended there. A lane that leaves the screen reads as a queue that
      * continues off it, which is the truth: level 1 has 744 more passengers to come.
      *
-     * Only the slab is extended. No figures are drawn beyond `lookahead`, because a
-     * waiting figure's COLOUR is information the player plans against -- inventing the
-     * ones past the lookahead would either show colours that are not next, or hand out
-     * lookahead the level did not grant, and lookahead is a difficulty knob.
+     * THE ROWS GO WITH IT. The queue continues out along the lane at the same pitch until
+     * a row's centre is past the frame edge, so the last one is cut off by the screen
+     * rather than by an arbitrary count -- which is what a queue arriving from off screen
+     * looks like. The colours are the real ones: `Channel.queue` already holds the whole
+     * remaining list for that channel, and `updateLanes` walks whatever rows exist, so
+     * this needs nothing from core.
+     *
+     * What it costs, and it is worth knowing rather than discovering: `lookahead` is a
+     * PURE DISPLAY LIMIT -- core never reads it, `step()` shifts the queue regardless --
+     * so it was the whole of the difficulty knob, and drawing to the edge maxes that knob
+     * out on every level. The shipped levels go from 5 rows to 7 (level 1) and from 3 to 9
+     * (level 10), and their authored 3/4/5 lookaheads stop being visible as a difference.
+     * If the ramp is wanted back, the honest lever is to keep drawing the crowd but stop
+     * committing its colours past `lookahead` -- desaturate those rows -- rather than to
+     * shorten the lane again.
      */
     private buildLanes(parent: Node): void {
         for (const channel of this.channels) {
@@ -448,7 +459,16 @@ export class TrackView {
             this.laneClusters[channel.side] = [];
             this.laneFigures[channel.side] = [];
             this.laneHome[channel.side] = [];
-            for (let i = 0; i < channel.lookahead; i++) {
+            // As many rows as the lane can carry before it leaves the screen, never fewer
+            // than the level asked for. `+ 2` so the run does not stop just short: one row
+            // straddling the edge and one fully past it, which is what makes the queue read
+            // as continuing rather than as ending in a neat last group.
+            let rows = channel.lookahead;
+            if (Math.abs(out.x) > 1e-3) {
+                const atEdge = (Math.sign(out.x) * this.edgeX - first.x) / out.x / LANE_STEP;
+                rows = Math.max(rows, Math.floor(atEdge) + 2);
+            }
+            for (let i = 0; i < rows; i++) {
                 const n = makeRow(`wait-${channel.side}-${i}`);
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
@@ -525,8 +545,11 @@ export class TrackView {
     /**
      * Draw the head of each channel. The channel that is not feeding yet has a GREY FLOOR
      * (see BAND_IDLE), so "this one feeds next" is readable without a tutorial while every
-     * waiting passenger still shows its true colour. Only the head `channel.lookahead` are
-     * drawn; the rest are implied.
+     * waiting passenger still shows its true colour. How MANY are drawn is `buildLanes`'
+     * business -- as many as fit before the lane leaves the screen -- and this walks
+     * whatever rows it made, switching off the tail once the queue is shorter than the
+     * lane is long. That is also what makes the end of a level look right: the crowd
+     * thins from the back as the queue runs out.
      */
     private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
         // The live channel is the first one still holding rows: drain order, not screen
