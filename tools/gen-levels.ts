@@ -17,6 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generateLevel, levelParams, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
+import { isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
@@ -61,17 +62,26 @@ for (let id = 1; id <= count; id++) {
 
     const target = Math.round(want.blockedRatio * want.cars);
     const onTarget = Math.abs(got.blocked - target) <= BLOCKED_TOLERANCE && got.rounds >= want.minRounds;
+    // Played, not inferred. `hard` means the one-line rule ("keep the stalls all different")
+    // loses; `fair` means a policy a player could actually arrive at wins. A level below the
+    // colour floor cannot be hard whatever the generator does, and prints `teach` instead of
+    // failing -- that is a curve decision, not a generation miss. See core/play-sim.ts.
+    const v = isHardButFair(level);
+    const play = want.colors <= 4 ? 'teach'
+        : v.hard && v.fair ? `hard  (careless ${Math.round(v.carelessLoss * 100)}%)`
+        : v.hard ? 'NO WAY THROUGH'
+        : 'FREE: the one-line rule wins';
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)}`
-        + `  ${onTarget ? 'on target' : 'NEAREST MISS'}`,
+        + `  ${(onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${count - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 

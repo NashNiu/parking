@@ -1,6 +1,7 @@
 import { generateLevel, levelParams, LOT, BLOCKED_TOLERANCE } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
+import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, LevelData } from '../../game/assets/scripts/core/types';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -142,6 +143,25 @@ test('a later level is measurably harder than the first, at the same size', () =
   expect(last.cars).toBe(first.cars);
   expect(last.colors).toBeGreaterThan(first.colors);
   expect(last.score).toBeGreaterThan(first.score);
+});
+
+test('every level above the colour floor beats the one-line rule, and stays winnable', () => {
+  // The contract of the painting search, and the reason it exists. "Keep the four stalls
+  // all different colours" used to win all ten shipped levels -- a rule a player states in
+  // one sentence, against a generator that was painting colours round-robin over the
+  // leaving order and so handing that rule over by construction.
+  //
+  // Both halves are needed. Hard without fair is a level with no way through; fair without
+  // hard is the level that plays itself. Below the floor neither is assertable: a bay that
+  // covers every colour cannot jam, so at UNLOCKED open stalls a level of that many colours
+  // or fewer is won by the one-line rule whatever the generator does. Those ids are teaching
+  // levels and this asserts nothing about them -- see levelParams.
+  for (const id of IDS) {
+    if (levelParams(id).colors <= 4) continue;
+    const verdict = isHardButFair(levelFor(id));
+    expect({ id, ...verdict, carelessLoss: undefined })
+      .toEqual({ id, hard: true, fair: true, carelessLoss: undefined });
+  }
 });
 
 test('the curve actually sets the blocked-car count, within its stated tolerance', () => {
