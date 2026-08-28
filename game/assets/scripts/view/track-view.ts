@@ -215,7 +215,12 @@ export class TrackView {
     /** loopRoot; needed to turn board-local path points into world positions. */
     private readonly root: Node;
     private readonly cy: number;
-    private readonly tick: number;
+    /**
+     * Seconds a rotation takes, which is also the tick the controller steps the core on --
+     * every animation in here is exactly one tick long so the drawing lands where the data
+     * already is. NOT readonly: the speed button changes it (see `setTick`).
+     */
+    private tick: number;
     /** Path parameters where the band opens up: the boarding gap and each entry. */
     private gapTs: number[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
@@ -512,6 +517,19 @@ export class TrackView {
     }
 
     /** Reflects ring contents (color/visibility) and advances the flow phase one step. */
+    /**
+     * Retime every animation in here, for the speed button.
+     *
+     * Takes effect on the NEXT tick rather than reaching into the tweens already running.
+     * A rotation cut short mid-flight would snap the ring forward, and one stretched would
+     * still be moving when the core had already stepped past it -- and the whole reason
+     * every duration here equals the tick is that the drawing must land where the data is.
+     * One tick of the old timing after the tap is invisible; a snap is not.
+     */
+    setTick(tick: number): void {
+        this.tick = tick;
+    }
+
     update(ring: (PaxGroup | null)[], channels: Channel[]): void {
         for (let i = 0; i < this.clusters.length; i++) {
             const group = ring[i];

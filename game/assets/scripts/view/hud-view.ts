@@ -118,6 +118,32 @@ const TOAST_HOLD = 1.5;
 const TOAST_BG = new Color(26, 32, 50, 236);
 const TOAST_INK = new Color(255, 255, 255, 255);
 
+/**
+ * The carousel-speed button: a round plate on the LEFT EDGE at the canvas centre, reading
+ * x1 or x2.
+ *
+ * That position is chosen, not spare. The canvas centre is the empty band between the
+ * parking bay and the lot -- the same band the toast uses, and for the same reason -- and the
+ * left edge of it is the one place a permanent control can sit without covering a stall, a
+ * car, or a waiting passenger. It is also where the reference art the player asked for puts
+ * it, which is worth something on its own: a speed control belongs where players already
+ * look for one.
+ *
+ * Round and coloured, where every other plate here is a rounded rectangle in white or dark
+ * navy. Those are READOUTS -- they tell you something and cannot be pressed. This is the only
+ * thing on the HUD that can be, so it does not get to look like them.
+ *
+ * SPEED_PAD widens the tap target past the drawn circle. A thumb aimed at a 92-unit button
+ * lands off its edge often enough to matter, and there is nothing behind this one to hit by
+ * accident -- the band is empty, and `handleTap` answers the button before it casts a ray at
+ * the board at all.
+ */
+const SPEED_D = 92;
+const SPEED_PAD = 14;
+const SPEED_BG = new Color(74, 144, 226);
+const SPEED_RIM = new Color(255, 255, 255, 235);
+const SPEED_INK = new Color(255, 255, 255);
+
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
 const CHIP_H = 58;
@@ -149,6 +175,8 @@ export class HudView {
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
     private toastTitle: Label | null = null;
+    private speedNode: Node;
+    private speedLabel: Label;
 
     constructor(canvas: Node) {
         this.canvas = canvas;
@@ -169,6 +197,9 @@ export class HudView {
         this.progressLabel = this.buildPassengerPill(
             canvas, w, margin, line - PILL_H / 2 - margin,
         );
+        const speed = this.buildSpeedButton(canvas, -w / 2 + margin + SPEED_D / 2);
+        this.speedNode = speed.node;
+        this.speedLabel = speed.label;
         this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
         this.bannerLabel.color = TITLE_INK;
         this.bannerLabel.isBold = true;
@@ -314,6 +345,51 @@ export class HudView {
         this.toastTitle.isBold = true;
         pill.active = false;
         this.toast = pill;
+    }
+
+    /**
+     * The speed button: a white disc with a coloured one inside it, so it reads as a raised
+     * button against either a light board or a dark one, and the digit on top.
+     */
+    private buildSpeedButton(canvas: Node, x: number): { node: Node; label: Label } {
+        const rim = dotSprite('SpeedButton', SPEED_D, SPEED_RIM);
+        canvas.addChild(rim);
+        rim.setPosition(x, 0, 0);
+        const face = dotSprite('face', SPEED_D - 10, SPEED_BG);
+        rim.addChild(face);
+        const label = makeLabel(face, 'speed', 40, 0);
+        label.color = SPEED_INK;
+        label.isBold = true;
+        // Set here rather than left to the first `setSpeed`: an unset Label draws the string
+        // 'label', and the seat chips have already been caught doing exactly that once.
+        label.string = 'x1';
+        return { node: rim, label };
+    }
+
+    /** Show the multiplier the carousel is running at. */
+    setSpeed(multiplier: number): void {
+        this.speedLabel.string = `x${multiplier}`;
+        // A press the player can see, on the thing they pressed. Absolute, not relative:
+        // hammering the button restarts this rather than compounding it.
+        Tween.stopAllByTarget(this.speedNode);
+        this.speedNode.setScale(0.82, 0.82, 1);
+        tween(this.speedNode).to(0.14, { scale: Vec3.ONE }, { easing: 'backOut' }).start();
+    }
+
+    /**
+     * Whether `ui` -- a tap converted into the UI camera's space, which is what the seat
+     * chips are already positioned in -- landed on the speed button.
+     *
+     * Squared distance against a squared radius: a circle's hit test, matching what is
+     * drawn. A box test on a round button accepts the corners, and the corners of this one
+     * hang over the lot.
+     */
+    hitsSpeed(ui: Vec3): boolean {
+        const p = this.speedNode.worldPosition;
+        const r = SPEED_D / 2 + SPEED_PAD;
+        const dx = ui.x - p.x;
+        const dy = ui.y - p.y;
+        return dx * dx + dy * dy <= r * r;
     }
 
     setLevel(id: number): void {

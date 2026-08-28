@@ -306,7 +306,29 @@ export class GameController extends Component {
     // (passengers not vanishing) was flying the same figure the track itself draws, one
     // per seat taken, staggered by BOARD_STAGGER.
     private readonly TICK = 0.34;
+    /**
+     * What the speed button multiplies the carousel by: 1 or 2. It divides `TICK` rather
+     * than multiplying anything, so one number moves and every duration derived from it
+     * follows -- the ring's rotation, the lane slides, a new row's entry, and the boarding
+     * flights.
+     *
+     * The boarding flights have to come along, and that is not decoration. A row of four
+     * takes 0.52s to fly (see boardingDuration), already longer than one 0.34 tick, and the
+     * departure of the car it fills is DEFERRED by that long so the flights are not torn
+     * down mid-air. At half a tick and unscaled flights that deferral spans three ticks --
+     * long enough for the core to hand the same stall to another car, which is exactly the
+     * failure BOARD_STAGGER's docblock was written about.
+     *
+     * Kept across levels: it is a preference, not a property of a level, and a player who
+     * chose x2 does not want to choose it again ten times.
+     */
+    private speed = 1;
     private parked = new Map<number, ParkedCar>();
+
+    /** Seconds per loop step at the current speed. */
+    private get tick(): number {
+        return this.TICK / this.speed;
+    }
 
     start() {
         this.sfx = new SfxManager(this.node);
@@ -651,7 +673,7 @@ export class GameController extends Component {
             // `feeds`, so the two layers can't disagree about how many channels there
             // are or where each one joins (see Channel in core/loop-system.ts).
             loop.channels,
-            LOOP_Y, this.TICK,
+            LOOP_Y, this.tick,
             // What the camera shows across, so the lanes can run off the edge of it
             // rather than stopping short. `frame.halfW`, not LANE.edgeLimit: on a
             // viewport wider than the board needs the two differ by a quarter of a unit,
@@ -807,8 +829,8 @@ export class GameController extends Component {
             return;
         }
         this.tickAcc += dt;
-        while (this.tickAcc >= this.TICK) {
-            this.tickAcc -= this.TICK;
+        while (this.tickAcc >= this.tick) {
+            this.tickAcc -= this.tick;
             const res = this.core.stepLoop();
             const lp = this.core.loop;
             this.loopView?.update(lp.ring, lp.channels);
@@ -823,7 +845,10 @@ export class GameController extends Component {
                     // chip they are about to land on and drive the car out from under
                     // them. Wait for the flights this tick actually started to land.
                     const ids = res.departedCarIds;
-                    this.scheduleOnce(() => this.onDeparted(ids), boardingDuration(res.boardedSlots.length));
+                    this.scheduleOnce(
+                        () => this.onDeparted(ids),
+                        boardingDuration(res.boardedSlots.length) / this.speed,
+                    );
                 } else {
                     // No boarding this tick (e.g. a zero-capacity car parked already
                     // full), so there is no flight to wait for — depart at once.
@@ -1070,8 +1095,8 @@ export class GameController extends Component {
                 (start.x + end.x) / 2, Math.max(start.y, end.y) + 1.2, (start.z + end.z) / 2,
             );
             tween({ t: 0 })
-                .delay(i * BOARD_STAGGER)
-                .to(BOARD_FLIGHT_TIME, { t: 1 }, {
+                .delay(i * BOARD_STAGGER / this.speed)
+                .to(BOARD_FLIGHT_TIME / this.speed, { t: 1 }, {
                     onUpdate: (target?: { t: number }) => {
                         // The tween targets a plain object, so a restart mid-flight won't
                         // stop it — bail if the passenger node was already destroyed.
@@ -1269,6 +1294,22 @@ export class GameController extends Component {
             this.switchTo(next ?? this.levelName);
             return;
         }
+        // The speed button, before the board is consulted at all -- and before the `busy`
+        // guard, deliberately. `busy` exists to stop a second car being sent while one is
+        // pulling out of the lot; it has nothing to say about how fast the carousel turns,
+        // and a control that goes dead for a second every time you tap a car reads as
+        // broken.
+        //
+        // AFTER the level-over branch, though, which returns before reaching this: once the
+        // banner is up every tap advances or replays, and that is the more useful thing a tap
+        // can do there. The button is inert on that screen by construction.
+        if (this.uiCam && this.hud) {
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            if (this.hud.hitsSpeed(ui)) {
+                this.toggleSpeed();
+                return;
+            }
+        }
         if (!this.core || !this.gridView || !this.parkingView || !this.cam || !this.gridRoot) return;
         if (this.busy) return;
 
@@ -1390,6 +1431,23 @@ export class GameController extends Component {
                 this.syncSeatCounts();
             },
         });
+    }
+
+    /**
+     * Flip the carousel between x1 and x2.
+     *
+     * `tickAcc` is deliberately left alone. It holds the fraction of a tick already elapsed,
+     * and that fraction is just as valid against the new interval -- clearing it would swallow
+     * up to a tick of progress, and at x2 the leftover can be larger than the new tick, in
+     * which case the very next frame steps twice and catches up by itself. Which is right:
+     * the player asked for faster.
+     */
+    private toggleSpeed(): void {
+        this.speed = this.speed === 1 ? 2 : 1;
+        this.hud?.setSpeed(this.speed);
+        this.loopView?.setTick(this.tick);
+        this.sfx?.play('tap');
+        vibrate('light');
     }
 
     /**
