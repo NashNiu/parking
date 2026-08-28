@@ -15,9 +15,16 @@ export interface ParkedCar {
    */
   ready: boolean;
   /**
-   * Arrival order, ascending. Assigned by `park` from a counter that never resets while
-   * the bay lives, so it is a total order over every car that has ever parked -- unlike
-   * the slot index, which is REUSED the moment a car departs.
+   * Arrival order, ascending, from a counter that never resets while the bay lives -- so it
+   * is a total order over every car that has ever parked, unlike the slot index, which is
+   * REUSED the moment a car departs.
+   *
+   * Handed out by `park` and then AGAIN by `setReady` on every false-to-true edge, and the
+   * second one is what counts wherever a view is driving cars in. Arrival is the event that
+   * matters: a car cannot take a passenger before it is in the stall, so ordering the queue
+   * by the tap instead lets a car that is still on the road outrank one that has already
+   * landed and started filling. Core-only callers never touch `ready`, so for them `park`'s
+   * number stands and nothing changes.
    *
    * `findMatchingSlot` picks by this, and the difference is not cosmetic. See the note
    * there for the state it fixes.
@@ -92,9 +99,16 @@ export class ParkingSystem {
    * already 12 passengers in. Two half-full cars of the same colour is also a worse
    * puzzle, because neither one is close to leaving.
    *
-   * A car still driving in (`ready` false) is skipped rather than waited for -- it has
-   * not arrived yet, so it has no claim on being first. It regains its place, ahead of
-   * anything newer, the moment the view lands it.
+   * A car still driving in (`ready` false) is skipped rather than waited for -- it has not
+   * arrived yet, so it has no claim on being first. And when it does land it joins the queue
+   * at the BACK, not at the place its tap would have earnt it: `setReady` hands out a new
+   * `seq` on arrival for exactly that reason. Letting it jump ahead of a car that had already
+   * landed and started filling is how the abandoned-part-filled-car state came back after
+   * this note was first written.
+   *
+   * Together those two rules give the invariant the bay is really judged on: AT MOST ONE
+   * PART-FILLED CAR PER COLOUR. A row splitting across two cars is the one exception, and it
+   * settles within the tick -- the car it fills departs in the same `removeFull`.
    */
   findMatchingSlot(color: string): number {
     let best = -1;
@@ -111,10 +125,25 @@ export class ParkingSystem {
    * Mark whether the car in `slotIndex` can take passengers yet (see ParkedCar.ready).
    * Silently ignores an empty or out-of-range slot: an arrival animation can land after
    * its car has gone, and that is not the view's mistake to crash on.
+   *
+   * BECOMING ready takes a fresh `seq`, so the queue is ordered by when cars ARRIVED. It
+   * used to be ordered by when they were tapped, which is what `park` hands out -- and the
+   * two orders disagree. The drive is a route walked at a constant speed, and its length
+   * depends on where the car stood in the lot and which stall it is heading for, so tapping
+   * A and then B routinely lands B first. B would then take a row, A would land and outrank
+   * it on a number it earnt by being tapped first, and B was stranded part-filled: the
+   * "two same-coloured cars, neither close to leaving" state, reached down a different road
+   * than the slot-index bug this replaced but ending in exactly the same place.
+   *
+   * Only on the FALSE-to-TRUE edge. A second call on a car already ready must not move it
+   * to the back of the queue -- that would abandon it mid-fill, which is the state all of
+   * this exists to prevent.
    */
   setReady(slotIndex: number, ready: boolean): void {
     const p = this.parked[slotIndex];
-    if (p) p.ready = ready;
+    if (!p) return;
+    if (ready && !p.ready) p.seq = this.nextSeq++;
+    p.ready = ready;
   }
 
   board(slotIndex: number): 'boarded' | 'full' {

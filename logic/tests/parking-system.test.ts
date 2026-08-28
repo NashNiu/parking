@@ -56,6 +56,67 @@ test('a slot marked not-ready is skipped by findMatchingSlot', () => {
   expect(p.findMatchingSlot('red')).toBe(slot);
 });
 
+test('a car that lands SECOND cannot outrank one that landed first', () => {
+  // The state the player reported twice: two cars of one colour on the bay, both part
+  // filled, neither close to leaving. `seq` used to be handed out by `park`, i.e. at the
+  // TAP -- but a car cannot take passengers until it has driven in, and the two orders
+  // disagree. The drive is a route at a constant speed, and its length depends on where
+  // the car started in the lot and which stall it is heading for, so tapping A then B can
+  // easily land B first.
+  //
+  // What that cost: B lands, takes a row, then A lands and outranks it on a seq it earnt
+  // by being TAPPED first -- stranding B exactly as picking by slot index used to. So the
+  // number is handed out on arrival instead, and this is the test that says so.
+  const p = new ParkingSystem(4, 2);
+  const a = p.park(car({ id: 1, color: 'red', cap: 'small' }));
+  p.setReady(a, false);
+  const b = p.park(car({ id: 2, color: 'red', cap: 'small' }));
+  p.setReady(b, false);
+
+  p.setReady(b, true);                          // B's drive was shorter
+  expect(p.findMatchingSlot('red')).toBe(b);
+  p.board(b);
+
+  p.setReady(a, true);                          // A lands afterwards
+  expect(p.findMatchingSlot('red')).toBe(b);    // and does NOT take over
+});
+
+test('a part-filled car keeps its place through a redundant setReady', () => {
+  // Arrival hands out the number, so it must happen ONCE. A second setReady(true) on a
+  // car already ready would otherwise move it to the back of the queue -- and abandon it
+  // mid-fill, which is the very state this is all guarding against.
+  const p = new ParkingSystem(4, 2);
+  const a = p.park(car({ id: 1, color: 'red', cap: 'small' }));
+  const b = p.park(car({ id: 2, color: 'red', cap: 'small' }));
+  p.board(a);
+  p.setReady(a, true);
+  expect(p.findMatchingSlot('red')).toBe(a);
+  expect(b).toBe(1);
+});
+
+test('three cars of one colour fill strictly in landing order, never two at once', () => {
+  // The invariant the player is actually reporting on: at most ONE part-filled car of a
+  // colour on the bay at a time. Three cars tapped 0, 1, 2 and landing 2, 1, 0 -- the worst
+  // case, and a plausible one, since a car heading for a near stall from near the lot's exit
+  // beats one crossing the whole lot.
+  const p = new ParkingSystem(4, 3);
+  const slots = [0, 1, 2].map((i) => p.park(car({ id: i + 1, color: 'red', cap: 'small' })));
+  for (const s of slots) p.setReady(s, false);
+  const landing = [slots[2], slots[1], slots[0]];
+  for (const s of landing) p.setReady(s, true);
+
+  // 48 seats over three small cars, boarded one at a time. After every single passenger,
+  // no more than one car may be part-filled.
+  for (let n = 0; n < 48; n++) {
+    const slot = p.findMatchingSlot('red');
+    expect(slot).toBe(landing[Math.floor(n / 16)]);
+    p.board(slot);
+    const partial = p.parked.filter((c) => c && c.filled > 0 && c.filled < c.capacity);
+    expect(partial.length).toBeLessThanOrEqual(1);
+    p.removeFull();
+  }
+});
+
 test('setReady on an empty slot is a no-op rather than a throw', () => {
   // An arrival can land after its car already departed on a restart, so the view can
   // legitimately mark a slot that is no longer occupied.
