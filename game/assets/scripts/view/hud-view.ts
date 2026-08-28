@@ -96,26 +96,27 @@ const TITLE_PILL_W = 190;
 const TITLE_PILL_H = PILL_H;
 
 /**
- * The toast: one line of what happened and one of what to do about it. It sits at the
- * canvas centre, which on this board is the empty band between the parking bay and the lot
- * -- close enough to the bay to belong to it, and over nothing it would hide.
+ * The toast: ONE line, saying what happened. It sits at the canvas centre, which on this
+ * board is the empty band between the parking bay and the lot -- close enough to the bay to
+ * belong to it, and over nothing it would hide.
  *
- * Dark and translucent, where the two corner pills are opaque white. That is the difference
- * between them said in the styling: the pills are always there and always true, so they get
- * to look built in; a toast is neither, and a scrim the board shows through reads as
- * something passing before it has moved at all. It also stops a third white plate from
- * competing with the two that are permanent.
+ * It used to carry a second, smaller line explaining what to do about it, and that line is
+ * gone. A toast is read in the gap between deciding to tap and seeing nothing happen; at 22
+ * against a 36 the second line was not read in that gap, and it cost the first line the size
+ * that would have made it land. One line at 56 says the same thing in the time available.
  *
- * The title keeps nearly full alpha and the second line takes less. Translucency is for the
- * plate; type that the board shows through is type nobody reads, and the whole point of the
- * second line is that a new player reads it.
+ * Dark, where the two corner pills are opaque white. That is the difference between them
+ * said in the styling: the pills are always there and always true, so they get to look built
+ * in; a toast is neither, and a third white plate would compete with the two that are
+ * permanent. Nearly opaque, though -- it was 188 and it sits over the lot, which is the
+ * busiest thing on the screen, so the board showing through was costing it exactly the
+ * legibility it exists for.
  */
-const TOAST_W = 320;
-const TOAST_H = 104;
-const TOAST_HOLD = 1.1;
-const TOAST_BG = new Color(26, 32, 50, 188);
-const TOAST_INK = new Color(255, 255, 255, 244);
-const TOAST_SUB = new Color(226, 232, 245, 196);
+const TOAST_W = 340;
+const TOAST_H = 108;
+const TOAST_HOLD = 1.5;
+const TOAST_BG = new Color(26, 32, 50, 236);
+const TOAST_INK = new Color(255, 255, 255, 255);
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -148,7 +149,6 @@ export class HudView {
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
     private toastTitle: Label | null = null;
-    private toastSub: Label | null = null;
 
     constructor(canvas: Node) {
         this.canvas = canvas;
@@ -275,15 +275,14 @@ export class HudView {
      * hammering a refused tap restarts one toast instead of stacking a pile of them --
      * which is also why every tween on the pill is stopped before the next one starts.
      *
-     * `sub` carries what to DO. A toast that only names the problem ("the bay is full")
-     * leaves a new player stuck, because the thing they have not worked out yet is that a
-     * car leaves by itself once its seats fill.
+     * One line, and it names the problem. What to DO about it is on the board -- a car
+     * leaves by itself once its seats fill, and the next locked stall wears the button that
+     * opens it -- so the toast's whole job is to be read, not to teach.
      */
-    showToast(title: string, sub: string): void {
+    showToast(title: string): void {
         if (!this.toast) this.buildToast();
         const pill = this.toast!;
         this.toastTitle!.string = title;
-        this.toastSub!.string = sub;
         Tween.stopAllByTarget(pill);
         Tween.stopAllByTarget(this.toastFade!);
         pill.active = true;
@@ -307,11 +306,12 @@ export class HudView {
         // UIOpacity multiplies into the colours above rather than replacing them, so the
         // fade-out starts from the plate's 188 and the type's own alpha, not from 255.
         this.toastFade = pill.addComponent(UIOpacity);
-        this.toastTitle = makeLabel(pill, 'ToastTitle', 36, 20);
+        // Centred, because there is nothing else on the plate to make room for. 56 sets four
+        // CJK glyphs at about 224 wide inside a 340 plate -- the same share of its plate the
+        // title pill's 42 takes of its 190, so the toast reads as the same HUD, only louder.
+        this.toastTitle = makeLabel(pill, 'ToastTitle', 56, 0);
         this.toastTitle.color = TOAST_INK;
         this.toastTitle.isBold = true;
-        this.toastSub = makeLabel(pill, 'ToastSub', 22, -24);
-        this.toastSub.color = TOAST_SUB;
         pill.active = false;
         this.toast = pill;
     }

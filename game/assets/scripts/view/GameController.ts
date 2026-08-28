@@ -1460,7 +1460,7 @@ export class GameController extends Component {
             const body = e.node.getChildByName('body');
             if (body) squash(body);
         }
-        this.hud?.showToast('车位已满', '等车坐满后会自动开走');
+        this.hud?.showToast('车位已满');
         this.scheduleOnce(() => { this.busy = false; }, 0.2);
     }
 
