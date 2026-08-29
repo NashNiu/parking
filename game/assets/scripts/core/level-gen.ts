@@ -22,7 +22,14 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
 /**
  * The lot, in board units.
  *
- * 7 x 8, PORTRAIT, and the shape is the whole point: it is what the cars are drawn at.
+ * 8 x 8. Square, and the width is a MEASURED fit rather than a round number: the view sizes
+ * one board unit from whichever budget is tighter, and on a phone that is the HEIGHT (1.032
+ * against 1.0325 across), so widening the lot costs the cars nothing. At 8 the car area comes
+ * out 8.416 wide against a slab of 8.720 -- the difference is exactly the slab's own 0.3
+ * border. At 7 the cars filled 7.364 of that same slab and left 0.37 of bare asphalt down
+ * each side, which is what "the lot is not full" looked like.
+ *
+ * It was 7 x 8, PORTRAIT, and the shape was the whole point: it is what the cars are drawn at.
  * The board is framed by its WIDTH (see `viewFrame` in GameController), so a phone's
  * spare height is only worth anything to a lot that is willing to use it. Measured on a
  * 1170x2532 phone, against the 9 x 6 this replaces: the cars draw 31% bigger and the
@@ -43,9 +50,9 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * this is exactly the ring of side air a square cell left around an oblong car.
  *
  * Both dimensions have to clear the longest body (CAP_BOX.big at 1.949) with room for it
- * to turn, which 7 does with 3.6x over.
+ * to turn, which 8 does with 4.1x over.
  */
-export const LOT: Lot = { w: 7, h: 8 };
+export const LOT: Lot = { w: 8, h: 8 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -114,15 +121,23 @@ export interface GenParams {
  * each one owes its neighbours the packer is working at about 55%: full, with the loose
  * board a player needs to see a way into it.
  *
- * 36 rather than more because the last few cars cost the most. Random rotated rectangles
- * stop separating reliably somewhere past this, and an attempt that cannot separate them
- * is a wasted attempt (see `pack`), so the count stops being flat. Denser is also a
- * worse-looking lot -- with no gaps left, nothing reads as a route.
+ * 46, up from 36, and the lot grew from 56 square units to 64 at the same time -- so this is
+ * a real densening (0.72 cars per unit against 0.64), not just a bigger lot carrying the same
+ * traffic. Both halves were asked for together, and one without the other is worse than
+ * neither: more cars in the old lot stops packing, a wider lot at the old count reads emptier
+ * than before.
  *
- * Passengers are the other ceiling: 36 cars run 670-770 of them, which at GROUP_SIZE (8) a
- * tick is about 90 ticks of boarding, half a minute. The generator's tests hold it to 900.
+ * The count is still bounded by the packer, not by taste. The last few cars cost the most --
+ * random rotated rectangles stop separating reliably somewhere past this, and an attempt that
+ * cannot separate them is a wasted attempt (see `pack`). The gate is the generator's own test
+ * that every car asked for is actually placed; if this number is raised until that fails, it
+ * has been raised too far.
+ *
+ * Passengers are the other ceiling, and it moved: 46 cars run around 900 of them, which at
+ * GROUP_SIZE a tick is about 225 ticks. That used to be 76 seconds of boarding and is now 38,
+ * because TICK halved when the carousel sped up. The test's budget was raised to match.
  */
-const CARS_PER_LEVEL = 36;
+const CARS_PER_LEVEL = 46;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.

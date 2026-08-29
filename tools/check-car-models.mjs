@@ -136,7 +136,12 @@ const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
 const VIEW_HALF_Y = Math.max(VIEW_HALF_H, EDGE_LIMIT / REF_ASPECT);
 const VIEW_HALF_X = VIEW_HALF_Y * REF_ASPECT;
 const RING_LOW = -(VIEW_HALF_Y - ROAD_H / 2);
-const LOT_HALF_W = VIEW_HALF_X - RING_OFF - ROAD_H / 2;
+// RING_OFF / 2, matching `buildBoard`. This read `- RING_OFF - ROAD_H / 2` -- the formula
+// from before the side lanes were allowed off screen, two widenings ago -- and so reported a
+// pitch of 0.8625 where the board actually draws 1.052. The verdict never depended on it (the
+// shortfall cancels every common factor, see the header), which is exactly how it went stale
+// unnoticed: a number nothing checks is a number that drifts.
+const LOT_HALF_W = VIEW_HALF_X - RING_OFF / 2;
 const PITCH = Math.min(
     CELL_MAX,
     (ROAD_Y - 2 * RING_OFF - RING_LOW - 0.3) / LOT.h - CELL_GAP,

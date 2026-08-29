@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0829-3';
+const BUILD_TAG = 'build 0829-4';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -614,7 +614,12 @@ export class GameController extends Component {
         // cars 2.5% bigger on top of that.
         const frame = this.viewFrame();
         const ringLow = -(frame.halfH - ROAD_H / 2);
-        const lotHalfW = frame.halfW - RING_OFF;
+        // HALF the offset, not all of it. The side lanes carry no traffic (see the note
+        // above), so what they owe the layout is a hint of kerb, not a whole lane: at
+        // RING_OFF/2 their centreline sits 0.31 off screen and about 0.14 of inner kerb is
+        // still drawn. That buys the lot 0.62 of world width -- 87% of the screen to 93% --
+        // and it is width the CARS get, because `LOT` is widened to match (see level-gen).
+        const lotHalfW = frame.halfW - RING_OFF / 2;
         // The lot hangs exactly one lane below the top road, so the road stays put and the
         // lot moves with the grid's size. The cell takes whichever budget is tighter — the
         // rows against the height left under the stalls, or the columns against the width —
@@ -729,7 +734,13 @@ export class GameController extends Component {
         this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
         this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
         const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
-        this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2 + RING_OFF);
+        // The SLAB has to be on screen; the ring road around it does not. Reserving
+        // `lotW / 2 + RING_OFF` here would undo the widening above entirely: a wider slab
+        // would push this past LANE.edgeLimit, the camera would zoom out to fit a side lane
+        // that is deliberately half off screen, and every car would come out SMALLER -- the
+        // exact trap the README records under "narrowing the fit makes cars smaller", run
+        // backwards. The side lanes are decoration; the lot is the game.
+        this.needHalfW = Math.max(LANE.edgeLimit, lotW / 2);
         this.needHalfH = Math.max(
             VIEW_HALF_H, (this.contentTop - this.contentBottom) / (2 * usable),
         );
