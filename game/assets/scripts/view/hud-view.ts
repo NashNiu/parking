@@ -148,6 +148,20 @@ const SPEED_BG = new Color(74, 144, 226);
 const SPEED_RIM = new Color(255, 255, 255, 235);
 const SPEED_INK = new Color(255, 255, 255);
 
+/**
+ * The build tag: a small, deliberately dim line in the bottom-left corner.
+ *
+ * A DEVELOPMENT AID, and it exists because two rounds of debugging were spent on a question
+ * nothing on screen could answer: is the phone running the build I just made? Nothing else in
+ * the HUD can settle it -- the level number is the same in every build, and so, as it turned
+ * out, is the passenger count (the old two-colour level 1 and the new four-colour one both
+ * read 744). A stale package is invisible, so it gets mistaken for a bug in the new code.
+ *
+ * Dim on purpose: legible if you go looking, ignorable otherwise. To drop it before release,
+ * delete `setBuildTag` and its one call.
+ */
+const TAG_INK = new Color(90, 100, 125, 130);
+
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
 const CHIP_H = 58;
@@ -375,18 +389,36 @@ export class HudView {
     }
 
     /**
-     * Put the button just outside the carousel's bottom-left corner, given that corner
-     * already projected into this canvas's space (`GameController.placeSpeedButton` does the
+     * Stamp the build tag into the bottom-left corner. See TAG_INK for why this exists.
+     */
+    setBuildTag(tag: string): void {
+        const { w, h } = canvasSize(this.canvas);
+        const margin = w * PILL_MARGIN;
+        const label = makeLabel(
+            this.canvas, 'BuildTag', 22,
+            -h / 2 + safeInsets().bottom * h + margin,
+            -w / 2 + margin,
+        );
+        label.color = TAG_INK;
+        label.horizontalAlign = Label.HorizontalAlign.LEFT;
+        label.string = tag;
+    }
+
+    /**
+     * Put the button beside the carousel's lower-left flank, given that point already
+     * projected into this canvas's space (`GameController.placeSpeedButton` does the
      * projecting -- it is the side that holds both cameras).
      *
-     * Up and to the left by its own radius plus the gap, so the button's bottom-right corner
-     * is what nearly touches the track: it ends up entirely left of the track's left edge AND
-     * entirely above its lowest row, which is the one placement that cannot overlap a
-     * passenger whatever shape the track is.
+     * SIDEWAYS ONLY. The caller hands over a point already at the right height: the middle of
+     * the empty band down the track's left side, measured between the track's lowest row and
+     * the feeder channel above it. This used to offset upward from the track's bottom-LEFT
+     * CORNER by a fixed number of design units, and that corner is a bad place to measure
+     * from -- it sits BAND_GAP (0.16 units) above the parking bay, so every placement derived
+     * from it starts out crowding the bay and a fixed nudge in design units cannot reliably
+     * escape it. Centring in a measured band does, on any screen.
      */
     placeSpeed(ui: Vec3): void {
-        const off = SPEED_D / 2 + SPEED_GAP;
-        this.speedNode.setWorldPosition(ui.x - off, ui.y + off, ui.z);
+        this.speedNode.setWorldPosition(ui.x - (SPEED_D / 2 + SPEED_GAP), ui.y, ui.z);
     }
 
     /** Show the multiplier the carousel is running at. */

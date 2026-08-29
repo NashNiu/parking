@@ -137,6 +137,29 @@ export function trackReach(
 }
 
 /**
+ * How low the LEFT-hand feeder channel's rows hang, path-relative -- the floor of the empty
+ * band down the left of the carousel, which is where the speed button lives.
+ *
+ * Channels enter at the track's vertical middle (measured: y 0 on rect/hex/oval, -0.027 on
+ * trap), and their rows straddle that by half a block, so this comes out near -0.41 and the
+ * band below it is 1.25 units tall on every shipped level -- ample for a button 0.68 across.
+ *
+ * Capped at 0 so the band can never reach above the track's own centreline. Without the cap,
+ * a level fed only from the right has no left channel at all, the band becomes the whole left
+ * side, and a button centred in it climbs to the carousel's MIDDLE left -- not the bottom-left
+ * corner that was asked for.
+ */
+export function leftLaneFloor(path: TrackPath, capacity: number, channels: Channel[]): number {
+    const p = { x: 0, y: 0 };
+    let floor = 0;
+    for (const channel of channels) {
+        path.pointAt(channel.entry / capacity, p);
+        if (p.x < 0) floor = Math.min(floor, p.y - blockSpan(GROUP_SIZE) / 2);
+    }
+    return floor;
+}
+
+/**
  * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy) and
  * the along-path step between its ranks. The along-path direction is (dy, -dx): for the
  * ring that is the way the cells travel (the outward normal of a clockwise walk is the

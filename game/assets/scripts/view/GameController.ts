@@ -12,7 +12,7 @@ import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
-import { TrackView, trackReach } from './track-view';
+import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment, setupAntiAliasing } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
@@ -22,6 +22,18 @@ import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
 
 const { ccclass, property } = _decorator;
+
+/**
+ * Which build this is. Bumped by hand with every change worth checking on a device, and
+ * printed both to the console and into the HUD's bottom-left corner.
+ *
+ * Hand-maintained because nothing in the pipeline can do it: the Cocos build stamps nothing
+ * into the code, and every automatic candidate (level data, passenger counts) turned out to
+ * be identical across the very builds that needed telling apart. A number that is wrong when
+ * I forget to bump it is still worth more than no number at all -- it can only ever say a
+ * package is OLDER than expected, never newer, so the failure is safe.
+ */
+const BUILD_TAG = 'build 0829-1';
 
 /**
  * Delay between the boarding flights of one block. Small enough that the block is clearly
@@ -353,11 +365,13 @@ export class GameController extends Component {
     }
 
     start() {
+        console.log(`[Game] ${BUILD_TAG}`);
         this.sfx = new SfxManager(this.node);
         this.setupCamera();
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
+            this.hud.setBuildTag(BUILD_TAG);
             this.uiCam = canvas.getComponentInChildren(Camera);
         } else {
             console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
@@ -637,10 +651,20 @@ export class GameController extends Component {
         const bandBottom = ROAD_Y + ROAD_H / 2 + BAND_GAP;
         const PARKING_Y = bandBottom + bay.h / 2;
         const LOOP_Y = bandBottom + bay.h + BAND_GAP - reach.bottom;
-        // The carousel's bottom-left corner, for the speed button to hang off. `reach`
-        // already includes the width of a row of figures on every side, so this is the
-        // corner of what is DRAWN, not of the bare path.
-        this.speedAnchor = new Vec3(reach.left, LOOP_Y + reach.bottom, 0);
+        // Where the speed button hangs: beside the carousel's lower-left flank, centred in
+        // the empty band between the track's lowest row and the feeder channel that crosses
+        // above it. Measured, not nudged -- 1.25 units tall on every shipped level, against a
+        // button 0.68 across.
+        //
+        // The obvious anchor, the bounding box's bottom-left CORNER, is the one place on that
+        // flank with no room: `LOOP_Y` is defined to put the track's lowest row exactly
+        // BAND_GAP (0.16) above the parking bay, so that corner IS the bay's top edge. A
+        // button hung off it crowds the bay however it is nudged, which is what shipped and
+        // what the player reported.
+        const laneFloor = leftLaneFloor(path, level.loop.capacity, loop.channels);
+        this.speedAnchor = new Vec3(
+            reach.left, LOOP_Y + (reach.bottom + laneFloor) / 2, 0,
+        );
 
         // Frame the camera on what was actually drawn.
         //
