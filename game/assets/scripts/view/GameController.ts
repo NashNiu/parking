@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0829-2';
+const BUILD_TAG = 'build 0829-3';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -46,10 +46,10 @@ const BUILD_TAG = 'build 0829-2';
  * the same positions, angles and capacities, and the same 744 passengers. ONLY the colour
  * strings differ, which is exactly why nothing already on screen could tell them apart.
  */
-function levelStamp(level: LevelData): string {
+function levelStamp(level: LevelData, uuid: string): string {
     const colors = new Set(level.lot.cars.map((c) => c.color));
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
-    return `L${level.id} ${colors.size}c ${pax}p ${Array.from(colors).join('/')}`;
+    return `L${level.id} ${colors.size}c ${pax}p ${Array.from(colors).join('/')} #${uuid.slice(0, 8)}`;
 }
 
 /**
@@ -503,8 +503,17 @@ export class GameController extends Component {
             this.busy = false;
             this.tickAcc = 0;
             this.loading = false;
-            this.hud?.setBuildTag(`${BUILD_TAG} · ${levelStamp(level)}`);
-            console.log(`[Game] level '${name}' started, state=${this.core.getState()}, ${levelStamp(level)}`);
+            // The asset's uuid, alongside what the asset CONTAINS. The build in this tree
+            // holds level 1 as uuid 3ce84b91 with four colours and has no two-colour level in
+            // it at all, yet a phone running this exact code bundle reported two. Those two
+            // facts cannot both describe one package, and the uuid says which of them to
+            // stop trusting: the same uuid with different contents means the bytes that
+            // reached the device are not the bytes that were built, and no change to this
+            // code can fix that. A different uuid means the package holds an asset this tree
+            // does not, and the search moves back to the build.
+            const stamp = levelStamp(level, asset.uuid);
+            this.hud?.setBuildTag(`${BUILD_TAG} · ${stamp}`);
+            console.log(`[Game] level '${name}' started, state=${this.core.getState()}, ${stamp}`);
             if (this.core.getState() !== 'playing') this.logStartupDiagnosis(level);
         });
     }
