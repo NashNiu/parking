@@ -107,18 +107,33 @@ const LANE_SLAB_R = 0.2;
  *
  * Only the top gets the figure height; the bottom edge of a row is its feet.
  */
-export function trackReach(path: TrackPath): { top: number; bottom: number } {
+export function trackReach(
+    path: TrackPath,
+): { top: number; bottom: number; left: number; right: number } {
     const SAMPLES = 240;
     const p = { x: 0, y: 0 };
     let top = -Infinity;
     let bottom = Infinity;
+    let left = Infinity;
+    let right = -Infinity;
     for (let i = 0; i < SAMPLES; i++) {
         path.pointAt(i / SAMPLES, p);
         if (p.y > top) top = p.y;
         if (p.y < bottom) bottom = p.y;
+        if (p.x < left) left = p.x;
+        if (p.x > right) right = p.x;
     }
     const across = blockSpan(GROUP_SIZE) / 2;
-    return { top: top + across + PAX_HEIGHT, bottom: bottom - across };
+    // `across` on all four sides -- a row straddles the centreline wherever it sits on the
+    // path. PAX_HEIGHT only on top, because a figure stands UP the board plane from its feet
+    // (see pax-figure), so it reaches further up than the row's own half-width but no further
+    // to either side.
+    return {
+        top: top + across + PAX_HEIGHT,
+        bottom: bottom - across,
+        left: left - across,
+        right: right + across,
+    };
 }
 
 /**

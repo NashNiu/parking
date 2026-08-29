@@ -119,27 +119,31 @@ const TOAST_BG = new Color(26, 32, 50, 236);
 const TOAST_INK = new Color(255, 255, 255, 255);
 
 /**
- * The carousel-speed button: a round plate on the LEFT EDGE at the canvas centre, reading
- * x1 or x2.
+ * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
+ * reading x1 or x2.
  *
- * That position is chosen, not spare. The canvas centre is the empty band between the
- * parking bay and the lot -- the same band the toast uses, and for the same reason -- and the
- * left edge of it is the one place a permanent control can sit without covering a stall, a
- * car, or a waiting passenger. It is also where the reference art the player asked for puts
- * it, which is worth something on its own: a speed control belongs where players already
- * look for one.
+ * It belongs to the carousel, so it is placed off the carousel -- `placeSpeed` takes the
+ * track's own bounding box, projected out of the board and into this canvas, rather than a
+ * fixed corner of the screen. A control parked in the screen's top-left says nothing about
+ * what it controls; one tucked into the track's corner says it without a caption. The
+ * position also survives a reframe: the board is fitted to the viewport (see `fitCamera`),
+ * and a fixed HUD corner drifts away from the thing it belongs to as soon as the aspect
+ * changes.
  *
  * Round and coloured, where every other plate here is a rounded rectangle in white or dark
  * navy. Those are READOUTS -- they tell you something and cannot be pressed. This is the only
  * thing on the HUD that can be, so it does not get to look like them.
  *
  * SPEED_PAD widens the tap target past the drawn circle. A thumb aimed at a 92-unit button
- * lands off its edge often enough to matter, and there is nothing behind this one to hit by
- * accident -- the band is empty, and `handleTap` answers the button before it casts a ray at
- * the board at all.
+ * lands off its edge often enough to matter, and `handleTap` answers this before it casts a
+ * ray at the board at all, so a generous target costs nothing.
+ *
+ * SPEED_GAP is how far clear of the track's corner it sits, measured from the button's own
+ * edge -- so the two never touch however the board is framed.
  */
 const SPEED_D = 92;
 const SPEED_PAD = 14;
+const SPEED_GAP = 10;
 const SPEED_BG = new Color(74, 144, 226);
 const SPEED_RIM = new Color(255, 255, 255, 235);
 const SPEED_INK = new Color(255, 255, 255);
@@ -197,6 +201,10 @@ export class HudView {
         this.progressLabel = this.buildPassengerPill(
             canvas, w, margin, line - PILL_H / 2 - margin,
         );
+        // A fallback spot only. `placeSpeed` moves it onto the carousel's corner as soon as
+        // the board is framed, which happens in the same frame the board is built -- but a
+        // HUD with no board behind it (a failed level load) should still put it somewhere
+        // sane rather than at the canvas origin, under everything.
         const speed = this.buildSpeedButton(canvas, -w / 2 + margin + SPEED_D / 2);
         this.speedNode = speed.node;
         this.speedLabel = speed.label;
@@ -364,6 +372,21 @@ export class HudView {
         // 'label', and the seat chips have already been caught doing exactly that once.
         label.string = 'x1';
         return { node: rim, label };
+    }
+
+    /**
+     * Put the button just outside the carousel's bottom-left corner, given that corner
+     * already projected into this canvas's space (`GameController.placeSpeedButton` does the
+     * projecting -- it is the side that holds both cameras).
+     *
+     * Up and to the left by its own radius plus the gap, so the button's bottom-right corner
+     * is what nearly touches the track: it ends up entirely left of the track's left edge AND
+     * entirely above its lowest row, which is the one placement that cannot overlap a
+     * passenger whatever shape the track is.
+     */
+    placeSpeed(ui: Vec3): void {
+        const off = SPEED_D / 2 + SPEED_GAP;
+        this.speedNode.setWorldPosition(ui.x - off, ui.y + off, ui.z);
     }
 
     /** Show the multiplier the carousel is running at. */

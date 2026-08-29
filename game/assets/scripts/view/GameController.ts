@@ -14,7 +14,7 @@ import { GridView } from './grid-view';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach } from './track-view';
 import { HudView } from './hud-view';
-import { setupEnvironment } from './environment';
+import { setupEnvironment, setupAntiAliasing } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { preloadCarModels } from './car-builder';
@@ -27,15 +27,20 @@ const { ccclass, property } = _decorator;
  * Delay between the boarding flights of one block. Small enough that the block is clearly
  * one event, large enough that eight people read as eight rather than one blob.
  *
- * 0.04 rather than the 0.07 it was at four-to-a-block: the whole flight takes
+ * What actually pins it is a RATIO, not a duration. The whole flight takes
  * boardingDuration(), and the departure of the car that just filled waits for it (see the
- * tick loop). At 0.07 a block of eight would hold the car in its stall for 0.89s — nearly
- * three ticks, long enough for the core to hand that same stall to another car.
+ * tick loop) -- so what matters is how many ticks that wait spans. A row of four spans about
+ * 1.5 of them; push it near three and the core has time to hand the same stall to another
+ * car while the view still holds the old one, and two view entries share a slot.
+ *
+ * So when TICK halved, these halved with it: 0.04 -> 0.02 and 0.40 -> 0.20 keeps
+ * boardingDuration(4)/TICK at 1.53, exactly what it was before the carousel sped up. The
+ * speed button divides all three by the same number again, for the same reason.
  */
-const BOARD_STAGGER = 0.04;
+const BOARD_STAGGER = 0.02;
 
 /** How long one boarding figure's flight arc takes — shared with `playBoarding`'s tween. */
-const BOARD_FLIGHT_TIME = 0.4;
+const BOARD_FLIGHT_TIME = 0.2;
 
 /**
  * How long a row of `count` boarding flights takes from the first figure leaving to the
@@ -300,12 +305,23 @@ export class GameController extends Component {
     private ended = false;
     private loading = false;
     private tickAcc = 0;
-    // Seconds per loop step: one slot of ring rotation, and one row's worth of boarding
-    // per TICK. Raised from 0.18 to slow the carousel further after the first preview.
-    // The carousel runs continuous motion without a beat; what fixed boarding reading
-    // (passengers not vanishing) was flying the same figure the track itself draws, one
-    // per seat taken, staggered by BOARD_STAGGER.
-    private readonly TICK = 0.34;
+    /**
+     * Seconds per loop step: one slot of ring rotation, and one row's worth of boarding.
+     *
+     * 0.17, down from 0.34 -- the carousel at its old x1 was half as fast as it wanted to be,
+     * so the whole scale doubled rather than the button's multiplier growing. x1 is now what
+     * used to take a tap to reach, and x2 is twice that again.
+     *
+     * It had been raised to 0.34 from 0.18 after the first preview, on the theory that the
+     * carousel was hard to read. It was not the speed: what fixed boarding reading
+     * (passengers appearing to vanish) was flying the same figure the track itself draws, one
+     * per seat taken, staggered by BOARD_STAGGER. With that in, the slow tick was only slow.
+     *
+     * BOARD_STAGGER and BOARD_FLIGHT_TIME halved along with it -- see their note; the ratio
+     * between a boarding flight and a tick is load-bearing and a bare speed-up would have
+     * broken it.
+     */
+    private readonly TICK = 0.17;
     /**
      * What the speed button multiplies the carousel by: 1 or 2. It divides `TICK` rather
      * than multiplying anything, so one number moves and every duration derived from it
@@ -323,6 +339,12 @@ export class GameController extends Component {
      * chose x2 does not want to choose it again ten times.
      */
     private speed = 1;
+    /**
+     * The carousel's bottom-left corner in BOARD space -- where the speed button hangs.
+     * Kept rather than recomputed because it is the same point every frame of a level, and
+     * has to be re-projected whenever the camera reframes.
+     */
+    private speedAnchor: Vec3 | null = null;
     private parked = new Map<number, ParkedCar>();
 
     /** Seconds per loop step at the current speed. */
@@ -577,6 +599,7 @@ export class GameController extends Component {
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
+        setupAntiAliasing(this.cam);
         setupBackground(this.boardRoot);
         setupStage(this.boardRoot, lotW, lotH, GRID_Y);
         setupRoads(this.boardRoot, this.ring, ROAD_H);
@@ -614,6 +637,10 @@ export class GameController extends Component {
         const bandBottom = ROAD_Y + ROAD_H / 2 + BAND_GAP;
         const PARKING_Y = bandBottom + bay.h / 2;
         const LOOP_Y = bandBottom + bay.h + BAND_GAP - reach.bottom;
+        // The carousel's bottom-left corner, for the speed button to hang off. `reach`
+        // already includes the width of a row of figures on every side, so this is the
+        // corner of what is DRAWN, not of the bare path.
+        this.speedAnchor = new Vec3(reach.left, LOOP_Y + reach.bottom, 0);
 
         // Frame the camera on what was actually drawn.
         //
@@ -806,6 +833,22 @@ export class GameController extends Component {
         const top = this.padTop * view + Math.max(0, surplus) / 2;
         this.camY = this.contentTop + top - oh;
         this.placeCamera(this.cam.node);
+        // After the camera moves, never before: the button is placed by projecting a board
+        // point through it. This is also what places it in the first place -- `buildBoard`
+        // clears `fitAspect`, so the call it makes always runs this far.
+        this.placeSpeedButton();
+    }
+
+    /**
+     * Hang the speed button off the carousel's bottom-left corner: a board point, projected
+     * through the game camera into the UI camera's space -- the same two-step the seat chips
+     * take (see `positionChip`), because it is the same problem.
+     */
+    private placeSpeedButton(): void {
+        if (!this.cam || !this.uiCam || !this.boardRoot || !this.hud || !this.speedAnchor) return;
+        const world = Vec3.transformMat4(new Vec3(), this.speedAnchor, this.boardRoot.worldMatrix);
+        const screen = this.cam.worldToScreen(world, new Vec3());
+        this.hud.placeSpeed(this.uiCam.screenToWorld(screen, new Vec3()));
     }
 
     /** Point the camera straight down the board's normal at `camY`. */

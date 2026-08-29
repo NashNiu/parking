@@ -1,4 +1,4 @@
-import { Node, DirectionalLight, Color, director } from 'cc';
+import { Node, DirectionalLight, Color, director, Camera, postProcess } from 'cc';
 
 /**
  * Adds cartoon lighting attached to the scene.
@@ -48,5 +48,59 @@ export function setupEnvironment(root: Node): void {
     // ShadowMap disabled (see note above) — fake blob shadows are used instead.
     if (globals && globals.shadows) {
         globals.shadows.enabled = false;
+    }
+}
+
+/**
+ * Turn on FXAA for the board camera.
+ *
+ * The board had NO anti-aliasing of any kind, and the reason was two switches in the engine
+ * module config rather than a missing setting: `custom-pipeline-post-process` was off, which
+ * is where FXAA lives, and `gfx-webgl2` was off, which is what MSAA on a render target would
+ * need. Thirty-six cars parked at thirty-six different angles is close to the worst case for
+ * that -- every body edge is a diagonal, and a diagonal with no AA is a staircase. It reads
+ * as the models having been sharpened.
+ *
+ * FXAA rather than MSAA on purpose: it is a fullscreen shader pass, so it works on the WebGL
+ * 1 backend this project builds for, and enabling the WebGL 2 backend to get MSAA would swap
+ * the graphics backend under a build that is only just working on device.
+ *
+ * ONLY the board camera. FXAA smooths high-contrast edges, and the highest-contrast edges on
+ * this screen are the HUD's type -- running it over the UI camera would soften every label to
+ * buy nothing, since 2D sprites and text have no jagged diagonals to fix.
+ *
+ * Guarded, in the same shape and for the same reason as `tryStandard` in materials.ts: turning
+ * a camera's post-process on makes it render offscreen first, and if that fails on some device
+ * the failure is a black screen, not a warning. On any throw the camera is put back exactly as
+ * it was, which is the state that has been shipping.
+ */
+export function setupAntiAliasing(camera: Camera | null): void {
+    if (!camera) return;
+    const scene = director.getScene();
+    if (!scene) return;
+    // Idempotent by name, like KeyLight above: `setupEnvironment` runs again on every level.
+    const existing = scene.getChildByName('PostProcess');
+    if (existing) {
+        const pp = existing.getComponent(postProcess.PostProcess);
+        if (pp) {
+            camera.postProcess = pp;
+            camera.usePostProcess = true;
+        }
+        return;
+    }
+    try {
+        const node = new Node('PostProcess');
+        const pp = node.addComponent(postProcess.PostProcess);
+        // By registered name: the FXAA component is `cc.FXAA` in the engine but is not
+        // exported from the `postProcess` namespace, so there is no class to hand to the
+        // typed overload.
+        node.addComponent('cc.FXAA');
+        scene.addChild(node);
+        camera.postProcess = pp;
+        camera.usePostProcess = true;
+    } catch (e) {
+        console.warn('[environment] FXAA unavailable, rendering without anti-aliasing', e);
+        camera.usePostProcess = false;
+        camera.postProcess = null;
     }
 }
