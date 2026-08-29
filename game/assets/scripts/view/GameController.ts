@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0829-4';
+const BUILD_TAG = 'build 0829-5';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -314,6 +314,24 @@ export class GameController extends Component {
      * number `gridStep` held and the arithmetic that reads it is unchanged.
      */
     private boardScale = 1;
+    /**
+     * The x a car DRIVES at down the side of the lot, which is no longer the side lane's own
+     * centreline.
+     *
+     * The ring road is drawn around the slab, and the slab now reaches 93% of the screen --
+     * so the side lane's centreline sits at 4.98 against a frame half-width of 4.67, and a
+     * car on it showed 0.016 of its 0.652-wide body. It was not "mostly hidden", it was gone.
+     *
+     * There is no corridor that satisfies everything: the parked cars reach 4.208 and the
+     * frame ends at 4.67, which is 0.462 of room for a body 0.652 across. So the choice is
+     * between a car that is partly off screen and one that passes over the outermost parked
+     * cars, and a car driving OUT of a car park passing close to the parked ones is the
+     * normal-looking half of that pair. Fully visible wins.
+     *
+     * Measured from the biggest body rather than each car's own, so every car takes the same
+     * line -- cars of three sizes each on their own lane would read as three roads.
+     */
+    private driveSideX = 0;
 
     /**
      * Cars still driving to a stall. `busy` only locks taps for the first leg, so the
@@ -633,6 +651,13 @@ export class GameController extends Component {
         this.boardScale = scale;
         const lotH = lotHeight(level.lot.h, scale);
         const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * lotHalfW);
+        // Pulled in off the side lane by half the widest body plus a hair, so the whole car
+        // is inside the frame while it drives. See `driveSideX`.
+        const EDGE_PAD = 0.06;
+        this.driveSideX = Math.min(
+            lotW / 2 + RING_OFF,
+            frame.halfW - (CAP_BOX.big.wid * CAR_SCALE * scale) / 2 - EDGE_PAD,
+        );
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
             top: ROAD_Y,
@@ -1128,25 +1153,31 @@ export class GameController extends Component {
         const d = headingVec(angle);
         // Distance to each lane it is actually heading toward; Infinity when it is not
         // travelling that way at all, so `Math.min` ignores it.
+        // Against `driveSideX`, the line the car will actually take, not the drawn lane.
+        // Measuring to the lane and then routing to the inset would drive the car out to
+        // 4.98 and fold it back to 4.28 -- a visible jog, and half of it off screen.
         const tx = Math.abs(d.x) < 1e-6
-            ? Infinity : ((d.x > 0 ? r.right : r.left) - from.x) / d.x;
+            ? Infinity : ((d.x > 0 ? 1 : -1) * this.driveSideX - from.x) / d.x;
         const ty = Math.abs(d.y) < 1e-6
             ? Infinity : ((d.y > 0 ? r.top : r.bottom) - from.y) / d.y;
         // Clamped at zero: a car somehow already past a lane would otherwise be sent back.
         const t = Math.max(0, Math.min(tx, ty));
         const out = new Vec3(from.x + d.x * t, from.y + d.y * t, z);
         const wp: Vec3[] = [out];
+        // `driveSideX`, not `r.left`/`r.right`: the drawn lane is off screen, the car must
+        // not be. The bottom lane needs no such treatment -- it sits at -9.66 in a frame that
+        // reaches -10.95, so a car on it is drawn whole.
         if (ty <= tx) {
             if (d.y > 0) {
                 wp.push(new Vec3(out.x, r.top, z));
             } else {
-                const side = out.x < 0 ? r.left : r.right;
+                const side = (out.x < 0 ? -1 : 1) * this.driveSideX;
                 wp.push(new Vec3(out.x, r.bottom, z));
                 wp.push(new Vec3(side, r.bottom, z));
                 wp.push(new Vec3(side, r.top, z));
             }
         } else {
-            const side = d.x < 0 ? r.left : r.right;
+            const side = (d.x < 0 ? -1 : 1) * this.driveSideX;
             wp.push(new Vec3(side, out.y, z));
             wp.push(new Vec3(side, r.top, z));
         }
@@ -1405,6 +1436,22 @@ export class GameController extends Component {
 
     private handleTap(screenX: number, screenY: number): void {
         if (this.loading) return; // ignore taps while a level is (re)loading
+        // The level picker, before anything else -- including the level-over branch, so a
+        // finished level can be left for another one rather than only replayed or advanced.
+        // A development aid; see PICK_LEVELS in hud-view.
+        if (this.uiCam && this.hud) {
+            const pick = this.hud.hitsLevel(
+                this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3()),
+            );
+            if (pick > 0) {
+                // Tapping the level you are already on does nothing, rather than
+                // restarting it: the row is under your thumb all game, and a stray tap that
+                // wipes the board would be a worse bug than the one this is here to debug.
+                const want = `level-${pick}`;
+                if (want !== this.levelName) this.switchTo(want);
+                return;
+            }
+        }
         if (this.ended) {
             // Won and another level exists → advance. Deadlocked, or the series has
             // run out → replay the same level.

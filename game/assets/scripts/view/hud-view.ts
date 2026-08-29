@@ -1,4 +1,4 @@
-import { Node, Label, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
+import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import { roundedSprite, dotSprite } from './ui-shapes';
 
 declare const wx: any;
@@ -162,6 +162,30 @@ const SPEED_INK = new Color(255, 255, 255);
  */
 const TAG_INK = new Color(90, 100, 125, 130);
 
+/**
+ * The level picker: a row of numbered chips along the bottom, tapped to jump straight to a
+ * level.
+ *
+ * A DEVELOPMENT AID, like the build tag above it, and it goes out the same way -- delete
+ * `buildLevelPicker`, `hitsLevel`, and the two calls. It is here because checking a change
+ * on level 7 otherwise means playing six levels first, on a phone, once per build.
+ *
+ * Dim, and the current level lit: the row is a readout as much as a control, so where you
+ * are should be visible without tapping anything.
+ *
+ * It sits in the strip of ring road BELOW the lot, and the size is what keeps it there. The
+ * chips answer taps before the board is raycast, so one overlapping a car would jump levels
+ * where the player meant to send that car out. At 64 across the hit circle's top edge lands
+ * at board y -9.06 against a lowest car body of -8.886 -- 0.17 of clearance. At 76 it was
+ * 0.08, which is not a margin, it is a coincidence.
+ */
+const PICK_LEVELS = 10;
+const PICK_D = 64;
+const PICK_PITCH = 88;
+const PICK_BG = new Color(120, 132, 158, 120);
+const PICK_ON = new Color(74, 144, 226, 235);
+const PICK_INK = new Color(255, 255, 255, 220);
+
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
 const CHIP_H = 58;
@@ -194,6 +218,7 @@ export class HudView {
     private toastFade: UIOpacity | null = null;
     private toastTitle: Label | null = null;
     private buildTag: Label | null = null;
+    private pickNodes: Node[] = [];
     private speedNode: Node;
     private speedLabel: Label;
 
@@ -223,6 +248,10 @@ export class HudView {
         const speed = this.buildSpeedButton(canvas, -w / 2 + margin + SPEED_D / 2);
         this.speedNode = speed.node;
         this.speedLabel = speed.label;
+        this.buildLevelPicker(
+            canvas,
+            -h / 2 + safeInsets().bottom * h + margin + 22 + PICK_D / 2 + 10,
+        );
         this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
         this.bannerLabel.color = TITLE_INK;
         this.bannerLabel.isBold = true;
@@ -389,6 +418,35 @@ export class HudView {
         return { node: rim, label };
     }
 
+    /** See PICK_LEVELS for why this exists and how to remove it. */
+    private buildLevelPicker(canvas: Node, y: number): void {
+        for (let i = 0; i < PICK_LEVELS; i++) {
+            const chip = dotSprite(`pick-${i + 1}`, PICK_D, PICK_BG);
+            canvas.addChild(chip);
+            chip.setPosition((i - (PICK_LEVELS - 1) / 2) * PICK_PITCH, y, 0);
+            const label = makeLabel(chip, 'n', 30, 0);
+            label.color = PICK_INK;
+            label.isBold = true;
+            label.string = `${i + 1}`;
+            this.pickNodes.push(chip);
+        }
+    }
+
+    /**
+     * Which level chip `ui` landed on, 1-based, or -1 for none. Same circular test and the
+     * same UI-space point as `hitsSpeed`.
+     */
+    hitsLevel(ui: Vec3): number {
+        const r = PICK_D / 2 + 8;
+        for (let i = 0; i < this.pickNodes.length; i++) {
+            const p = this.pickNodes[i].worldPosition;
+            const dx = ui.x - p.x;
+            const dy = ui.y - p.y;
+            if (dx * dx + dy * dy <= r * r) return i + 1;
+        }
+        return -1;
+    }
+
     /**
      * Stamp the build tag into the bottom-left corner. See TAG_INK for why this exists.
      *
@@ -466,6 +524,10 @@ export class HudView {
         // No spaces around the number: the title has a plate to fit inside, and at three
         // digits the spaced form runs past its edge.
         this.levelLabel.string = `第${id}关`;
+        for (let i = 0; i < this.pickNodes.length; i++) {
+            const sprite = this.pickNodes[i].getComponent(Sprite);
+            if (sprite) sprite.color = i + 1 === id ? PICK_ON : PICK_BG;
+        }
     }
 
     setProgress(remaining: number): void {
