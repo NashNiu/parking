@@ -33,7 +33,24 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0829-1';
+const BUILD_TAG = 'build 0829-2';
+
+/**
+ * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
+ * tag. It answers a question two rounds of debugging could not: the phone showed a level 1
+ * painted in two colours while the build tag said the code was current, and the two
+ * explanations -- old JSON in the package, or new JSON drawn wrong -- look identical on
+ * screen. They stop looking identical the moment the data says how many colours it holds.
+ *
+ * Level 1's two versions are otherwise indistinguishable: byte-for-byte the same 36 cars at
+ * the same positions, angles and capacities, and the same 744 passengers. ONLY the colour
+ * strings differ, which is exactly why nothing already on screen could tell them apart.
+ */
+function levelStamp(level: LevelData): string {
+    const colors = new Set(level.lot.cars.map((c) => c.color));
+    const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
+    return `L${level.id} ${colors.size}c ${pax}p ${Array.from(colors).join('/')}`;
+}
 
 /**
  * Delay between the boarding flights of one block. Small enough that the block is clearly
@@ -486,7 +503,8 @@ export class GameController extends Component {
             this.busy = false;
             this.tickAcc = 0;
             this.loading = false;
-            console.log(`[Game] level '${name}' started, state=${this.core.getState()}`);
+            this.hud?.setBuildTag(`${BUILD_TAG} · ${levelStamp(level)}`);
+            console.log(`[Game] level '${name}' started, state=${this.core.getState()}, ${levelStamp(level)}`);
             if (this.core.getState() !== 'playing') this.logStartupDiagnosis(level);
         });
     }

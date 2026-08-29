@@ -193,6 +193,7 @@ export class HudView {
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
     private toastTitle: Label | null = null;
+    private buildTag: Label | null = null;
     private speedNode: Node;
     private speedLabel: Label;
 
@@ -390,18 +391,32 @@ export class HudView {
 
     /**
      * Stamp the build tag into the bottom-left corner. See TAG_INK for why this exists.
+     *
+     * Built on first call and updated after that, because the caller stamps it twice: once
+     * at startup with the build alone, and again once a level has loaded, with a fingerprint
+     * of the data that actually arrived.
+     *
+     * The label's anchor is moved to its left edge. `makeLabel` leaves it centred, which
+     * shipped a tag half off the left of the screen -- it read `ild 0829-1`, having lost the
+     * word `build`. A left-aligned STRING inside a centre-anchored box is still centred; the
+     * anchor is the thing that had to move.
      */
     setBuildTag(tag: string): void {
-        const { w, h } = canvasSize(this.canvas);
-        const margin = w * PILL_MARGIN;
-        const label = makeLabel(
-            this.canvas, 'BuildTag', 22,
-            -h / 2 + safeInsets().bottom * h + margin,
-            -w / 2 + margin,
-        );
-        label.color = TAG_INK;
-        label.horizontalAlign = Label.HorizontalAlign.LEFT;
-        label.string = tag;
+        if (!this.buildTag) {
+            const { w, h } = canvasSize(this.canvas);
+            const margin = w * PILL_MARGIN;
+            const label = makeLabel(
+                this.canvas, 'BuildTag', 22,
+                -h / 2 + safeInsets().bottom * h + margin,
+                -w / 2 + margin,
+            );
+            label.color = TAG_INK;
+            label.horizontalAlign = Label.HorizontalAlign.LEFT;
+            const tf = label.node.getComponent(UITransform);
+            if (tf) tf.setAnchorPoint(0, 0.5);
+            this.buildTag = label;
+        }
+        this.buildTag.string = tag;
     }
 
     /**
