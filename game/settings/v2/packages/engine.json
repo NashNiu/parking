@@ -197,6 +197,7 @@
           "audio",
           "base",
           "custom-pipeline",
+          "custom-pipeline-post-process",
           "gfx-webgl",
           "intersection-2d",
           "light-probe",

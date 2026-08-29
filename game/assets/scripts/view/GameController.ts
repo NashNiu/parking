@@ -833,16 +833,27 @@ export class GameController extends Component {
         const top = this.padTop * view + Math.max(0, surplus) / 2;
         this.camY = this.contentTop + top - oh;
         this.placeCamera(this.cam.node);
-        // After the camera moves, never before: the button is placed by projecting a board
-        // point through it. This is also what places it in the first place -- `buildBoard`
-        // clears `fitAspect`, so the call it makes always runs this far.
-        this.placeSpeedButton();
     }
 
     /**
      * Hang the speed button off the carousel's bottom-left corner: a board point, projected
      * through the game camera into the UI camera's space -- the same two-step the seat chips
      * take (see `positionChip`), because it is the same problem.
+     *
+     * EVERY FRAME, not once when the board is built, and that is the fix for a real bug: the
+     * button landed on the parking bay on level 1 and in the right place on every level
+     * after it. `worldToScreen` reads the camera's view-projection matrix, which the renderer
+     * refreshes once a frame -- so a projection taken in the same frame `placeCamera` moved
+     * the camera uses the matrix from BEFORE the move. On the first board that move is the
+     * jump from the placeholder framing to the real one, which is large; on a level switch
+     * the camera barely moves, which is why only level 1 looked wrong.
+     *
+     * Measured, and this is what ruled out the obvious suspect: the anchor is identical on
+     * all four track shapes (y 3.671 on every one, x within 0.24 board units), so the shape
+     * was never what differed. Only the projection was.
+     *
+     * Cheap enough to do unconditionally: one matrix transform and two camera projections,
+     * against a tick loop that repositions the whole ring.
      */
     private placeSpeedButton(): void {
         if (!this.cam || !this.uiCam || !this.boardRoot || !this.hud || !this.speedAnchor) return;
@@ -859,8 +870,10 @@ export class GameController extends Component {
 
     update(dt: number): void {
         // Before the guards: the window can be resized while the level is over, or between
-        // levels, and a stale zoom would be visible either way.
+        // levels, and a stale zoom would be visible either way. Same for the speed button,
+        // which hangs off a board point and so moves with the framing.
         this.fitCamera();
+        this.placeSpeedButton();
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
         // level (nothing left to fill the parked cars, nothing left that can move).
