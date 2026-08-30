@@ -145,6 +145,22 @@ export class GameCore {
       && !this.canFill();
   }
 
+  /**
+   * The player was shown the one move left on the board and turned it down. The level is
+   * over, and this is the ONLY way a level ends on a position that still had a legal move
+   * in it.
+   *
+   * Deliberately gated on `needsUnlock` rather than trusting the caller: a level must not
+   * be endable from a position the player could still have played out, and the view asking
+   * twice (a double tap on the prompt's close button, say) must be idempotent rather than
+   * able to kill a level that has since started moving again.
+   */
+  declineUnlock(): boolean {
+    if (!this.needsUnlock()) return false;
+    this.state = 'deadlock';
+    return true;
+  }
+
   private isDeadlocked(): boolean {
     // A LOCKABLE stall counts as room. The player can open one for free (`unlockSlot`), so
     // a bay that is full but not fully unlocked still has a legal move in it -- calling

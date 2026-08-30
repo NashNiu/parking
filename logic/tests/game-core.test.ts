@@ -258,3 +258,24 @@ test('a bay that can still fill is not waiting on an unlock', () => {
   expect(core.parking.hasFreeSlot()).toBe(true);
   expect(core.needsUnlock()).toBe(false);
 });
+
+test('declining the unlock is what ends a level that still had a move in it', () => {
+  const core = new GameCore(deadlockLevel());
+  core.tapCar(1);
+  core.tapCar(2);
+  core.stepLoop();
+  expect(core.needsUnlock()).toBe(true);
+  expect(core.declineUnlock()).toBe(true);
+  expect(core.getState()).toBe('deadlock');
+  // Idempotent: a second answer to a question that is no longer being asked does nothing.
+  expect(core.declineUnlock()).toBe(false);
+});
+
+test('declineUnlock refuses on a position that is still moving', () => {
+  // The view could ask late -- a car can land between the prompt going up and the tap
+  // landing -- and a level must not be endable from a position the player could play on.
+  const core = new GameCore(soloLevel());
+  expect(core.needsUnlock()).toBe(false);
+  expect(core.declineUnlock()).toBe(false);
+  expect(core.getState()).toBe('playing');
+});

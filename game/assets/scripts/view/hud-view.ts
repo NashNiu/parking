@@ -119,6 +119,33 @@ const TOAST_BG = new Color(26, 32, 50, 236);
 const TOAST_INK = new Color(255, 255, 255, 255);
 
 /**
+ * The "open a stall or lose" prompt: the one MODAL thing on this HUD.
+ *
+ * Everything else here either reports (the pills, the toast) or can be ignored (the speed
+ * button). This asks a question the level cannot go on without an answer to -- the bay is
+ * full, nothing on it can board, and opening a stall is the only move left -- so it takes
+ * the screen, dims the board behind it, and swallows every tap that is not one of its two
+ * buttons. Answering it with the close button ENDS the level (`GameCore.declineUnlock`),
+ * which is the only way a level ends on a position that still had a move in it.
+ *
+ * A dark scrim rather than a light one: the board underneath is pale, and the panel is
+ * white. The panel is 520 of a 720-wide canvas, so it clears the level pills either side.
+ */
+const PROMPT_W = 520;
+const PROMPT_H = 380;
+const PROMPT_BG = new Color(250, 251, 255, 255);
+const PROMPT_INK = new Color(38, 46, 68, 255);
+const PROMPT_SUB = new Color(108, 120, 148, 255);
+const SCRIM = new Color(12, 16, 28, 170);
+/** The primary action. Green, and the only saturated thing on the panel. */
+const PROMPT_BTN_W = 380;
+const PROMPT_BTN_H = 108;
+const PROMPT_BTN = new Color(76, 190, 96, 255);
+/** The way out, drawn as a plain disc in the panel's top-right corner. */
+const PROMPT_X_D = 72;
+const PROMPT_X_BG = new Color(226, 231, 242, 255);
+
+/**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
  * reading x1 or x2.
  *
@@ -218,6 +245,10 @@ export class HudView {
     private toastFade: UIOpacity | null = null;
     private toastTitle: Label | null = null;
     private buildTag: Label | null = null;
+    /** The unlock prompt's scrim, its two hit targets, and whether it is up. */
+    private prompt: Node | null = null;
+    private promptBtn: Node | null = null;
+    private promptClose: Node | null = null;
     private pickNodes: Node[] = [];
     private speedNode: Node;
     private speedLabel: Label;
@@ -416,6 +447,95 @@ export class HudView {
         // 'label', and the seat chips have already been caught doing exactly that once.
         label.string = 'x1';
         return { node: rim, label };
+    }
+
+    /**
+     * Raise the "open a stall or lose" prompt. Idempotent -- the controller asks on every
+     * tick the condition holds, not only on the edge.
+     */
+    showUnlockPrompt(): void {
+        if (!this.prompt) this.buildUnlockPrompt();
+        const scrim = this.prompt!;
+        if (scrim.active) return;
+        scrim.active = true;
+        // To the front, past every seat chip: chips are appended as cars park, so they are
+        // later siblings than anything built in the constructor. Same reason as the banner.
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        const panel = scrim.children[0];
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.86, 0.86, 1);
+        tween(panel)
+            .to(0.14, { scale: new Vec3(1.03, 1.03, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: Vec3.ONE })
+            .start();
+    }
+
+    /** Take the prompt down. Safe before it has ever been built. */
+    hideUnlockPrompt(): void {
+        if (this.prompt) this.prompt.active = false;
+    }
+
+    /** Whether the prompt is up, i.e. whether it owns the next tap. */
+    promptOpen(): boolean {
+        return !!this.prompt && this.prompt.active;
+    }
+
+    /**
+     * Which of the prompt's two answers `ui` landed on, or null for the panel and the
+     * scrim -- a tap that hits neither button is SWALLOWED, not passed through, because
+     * closing this by tapping the board would be the same as choosing to lose.
+     */
+    hitsUnlockPrompt(ui: Vec3): 'unlock' | 'close' | null {
+        if (!this.promptOpen()) return null;
+        const c = this.promptClose!.worldPosition;
+        const r = PROMPT_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
+        const b = this.promptBtn!.worldPosition;
+        if (Math.abs(ui.x - b.x) <= PROMPT_BTN_W / 2 + 8
+            && Math.abs(ui.y - b.y) <= PROMPT_BTN_H / 2 + 8) return 'unlock';
+        return null;
+    }
+
+    private buildUnlockPrompt(): void {
+        const { w, h } = canvasSize(this.canvas);
+        // The scrim is the modal: it covers the canvas, so nothing behind it can be seen to
+        // be tappable. Sized generously past the canvas so a wider viewport cannot show a
+        // strip of live board down either side.
+        const scrim = roundedSprite('UnlockScrim', w * 2, h * 2, SCRIM);
+        this.canvas.addChild(scrim);
+        scrim.setPosition(0, 0, 0);
+
+        const panel = roundedSprite('UnlockPanel', PROMPT_W, PROMPT_H, PROMPT_BG);
+        scrim.addChild(panel);
+
+        const title = makeLabel(panel, 'PromptTitle', 52, 96);
+        title.color = PROMPT_INK;
+        title.isBold = true;
+        title.string = '车位堵住了';
+
+        const sub = makeLabel(panel, 'PromptSub', 30, 30);
+        sub.color = PROMPT_SUB;
+        sub.string = '解锁一个车位才能继续';
+
+        const btn = roundedSprite('PromptBtn', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN);
+        panel.addChild(btn);
+        btn.setPosition(0, -80, 0);
+        const btnLabel = makeLabel(btn, 'PromptBtnLabel', 46, 0);
+        btnLabel.isBold = true;
+        btnLabel.string = '解锁车位';
+
+        const close = dotSprite('PromptClose', PROMPT_X_D, PROMPT_X_BG);
+        panel.addChild(close);
+        close.setPosition(PROMPT_W / 2 - 12, PROMPT_H / 2 - 12, 0);
+        const x = makeLabel(close, 'PromptCloseLabel', 44, 2);
+        x.color = PROMPT_SUB;
+        x.isBold = true;
+        x.string = '×';
+
+        scrim.active = false;
+        this.prompt = scrim;
+        this.promptBtn = btn;
+        this.promptClose = close;
     }
 
     /** See PICK_LEVELS for why this exists and how to remove it. */

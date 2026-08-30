@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0830-2';
+const BUILD_TAG = 'build 0830-3';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -387,8 +387,6 @@ export class GameController extends Component {
      * to cover when a drive was one short hop.
      */
     private arriving = 0;
-    /** Whether the "open a stall" cue is up; see `syncUnlockUrge`. */
-    private urging = false;
     /**
      * Degrees the board leans back. Zero means the camera looks straight down the board's
      * normal — a flat, straight-on view, which is what the art is designed for. It was 52
@@ -566,12 +564,10 @@ export class GameController extends Component {
             this.hud?.setLevel(level.id);
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.hud?.hideBanner();
+            this.hud?.hideUnlockPrompt();
             this.ended = false;
             this.busy = false;
             this.arriving = 0;
-            // The new bay's padlock is not beating; say so, or the first tick of a level
-            // that needs the cue will see `urging` already true and skip it.
-            this.urging = false;
             this.tickAcc = 0;
             this.loading = false;
             // The asset's uuid, alongside what the asset CONTAINS. The build in this tree
@@ -1060,27 +1056,26 @@ export class GameController extends Component {
     }
 
     /**
-     * Say so when the only move left on the board is to open a stall.
+     * Put the "open a stall or lose" question to the player when the board reaches the one
+     * state that needs it (`GameCore.needsUnlock`): every open stall taken, nothing on the
+     * bay able to board, and a stall still lockable.
      *
-     * `GameCore.needsUnlock` is the condition; this is the telling. It is NOT a loss and
-     * must not be drawn as one -- the level carries on the moment a stall opens -- but until
-     * this existed the board just went quiet: the carousel keeps turning, `remainingCount`
-     * stops moving, and nothing on screen changes. The human read that as the game failing
-     * to notice a loss, which is exactly how it looks.
+     * The prompt is where the level's outcome is decided -- open one and play carries on,
+     * close it and the level is over (`declineUnlock`, answered in `handleTap`). Before it
+     * existed the board simply went quiet here: the carousel kept turning, `remainingCount`
+     * never moved again, and nothing said why. Measured, a player who holds their unlocks
+     * reaches this state in 59 of 80 runs over the ten levels.
      *
      * On the tick, not the frame: the answer only changes when the loop steps or a car
      * lands, and `reachableColors` walks the whole ring to work it out.
      *
      * Held off while a car is still driving in. Core parks on tap, so the bay is already
-     * full during the drive, and that car may be the one that can board -- reading the
-     * condition then flickers the toast on and straight back off.
+     * full during the drive, and that car may be the one that can board -- asking then puts
+     * the question up and takes it straight back down.
      */
     private syncUnlockUrge(): void {
-        const want = !!this.core?.needsUnlock() && !this.busy && this.arriving === 0;
-        if (want === this.urging) return;
-        this.urging = want;
-        this.parkingView?.urgeUnlock(want);
-        if (want) this.hud?.showToast('解锁车位');
+        if (!this.core?.needsUnlock() || this.busy || this.arriving > 0) return;
+        this.hud?.showUnlockPrompt();
     }
 
     private onDeparted(ids: number[]): void {
@@ -1554,6 +1549,24 @@ export class GameController extends Component {
 
     private handleTap(screenX: number, screenY: number): void {
         if (this.loading) return; // ignore taps while a level is (re)loading
+        // The unlock prompt owns every tap while it is up -- see `showUnlockPrompt`. Before
+        // the level picker too: this is a question with a losing answer, and being able to
+        // duck it by tapping something else would make it optional, which it is not.
+        if (this.uiCam && this.hud?.promptOpen()) {
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            const hit = this.hud.hitsUnlockPrompt(ui);
+            if (hit === 'unlock') {
+                this.hud.hideUnlockPrompt();
+                this.unlockNextSlot();
+            } else if (hit === 'close') {
+                this.hud.hideUnlockPrompt();
+                // Core decides, not the view: `declineUnlock` re-checks the position and
+                // refuses if it has started moving again. `update` picks up the state
+                // change and raises the banner.
+                this.core?.declineUnlock();
+            }
+            return;   // anything else on this screen is swallowed
+        }
         // The level picker, before anything else -- including the level-over branch, so a
         // finished level can be left for another one rather than only replayed or advanced.
         // A development aid; see PICK_LEVELS in hud-view.

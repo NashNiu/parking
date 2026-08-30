@@ -156,9 +156,6 @@ const CUE_H = 0.20;
 const CUE_Y = -0.30;
 const CUE = new Color(255, 255, 255, 255);
 
-/** The beat `urgeUnlock` puts on the padlock: how big it swells, and how long each way. */
-const URGE_SCALE = 1.18;
-const URGE_TIME = 0.42;
 
 export class ParkingView {
     private positions: Vec3[] = [];
@@ -173,8 +170,6 @@ export class ParkingView {
      * subtree rather than a hunt through `parent`'s children by name.
      */
     private stalls: Node[] = [];
-    /** Whether the padlock is currently beating; see `urgeUnlock`. */
-    private urging = false;
     /** How many stalls are open. Grows with `openSlot`; see `nextLocked`. */
     private open: number;
 
@@ -234,9 +229,7 @@ export class ParkingView {
         const g = this.g;
         const root = this.stalls[i];
         if (!root || !root.isValid) return;
-        // Stop first: `urgeUnlock` leaves a repeating tween on the padlock, and a repeating
-        // tween on a destroyed node keeps writing to it.
-        for (const child of root.children.slice()) { Tween.stopAllByTarget(child); child.destroy(); }
+        for (const child of root.children.slice()) child.destroy();
         const pos = this.positions[i];
         const locked = i >= this.open;
 
@@ -326,49 +319,12 @@ export class ParkingView {
     }
 
     /**
-     * Beat the next locked stall's padlock while the board is waiting on an unlock, and
-     * stop when it no longer is (see `GameCore.needsUnlock`).
-     *
-     * The padlock already carries a play triangle saying "this is the one a tap opens", but
-     * that is an affordance, not an alarm: it looks the same when the bay is working fine as
-     * it does when opening a stall is the only move left on the board. Measured, that second
-     * state is where a player who holds their unlocks ends 59 runs out of 80 -- everything
-     * still turning, nothing ever changing -- and it was reported as the game failing to
-     * notice a loss. So it gets a beat of its own.
-     *
-     * Idempotent, because the caller asks every tick. The tween is stopped and the glyph put
-     * back to its resting scale on the way out; `drawStall` also stops it, since a redraw
-     * destroys the node underneath it.
-     */
-    urgeUnlock(on: boolean): void {
-        if (on === this.urging) return;
-        this.urging = on;
-        const i = this.nextLocked();
-        const lock = i < 0 ? null : this.stalls[i]?.getChildByName(`lock-${i}`);
-        if (!lock || !lock.isValid) return;
-        Tween.stopAllByTarget(lock);
-        if (!on) { lock.setScale(this.g, this.g, this.g); return; }
-        const big = this.g * URGE_SCALE;
-        tween(lock)
-            .repeatForever(
-                tween(lock)
-                    .to(URGE_TIME, { scale: new Vec3(big, big, big) }, { easing: 'sineOut' })
-                    .to(URGE_TIME, { scale: new Vec3(this.g, this.g, this.g) },
-                        { easing: 'sineIn' }),
-            )
-            .start();
-    }
-
-    /**
      * Redraw stall `index` as open, and move the play triangle to the next locked one.
      * `index` is what ParkingSystem.unlock returned, so the two counts cannot drift.
      */
     openSlot(index: number): void {
         if (index < 0 || index >= this.slots || index < this.open) return;
         this.open = index + 1;
-        // The beat belonged to the padlock that just came off. Whether the NEXT one should
-        // beat is the controller's call again, next tick.
-        this.urging = false;
         this.drawStall(index);
         if (this.open < this.slots) this.drawStall(this.open);
     }
