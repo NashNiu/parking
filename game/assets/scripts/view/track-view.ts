@@ -64,12 +64,25 @@ const PAX_HEIGHT = 0.55;
  * instead of 24-28. Depth can, and it is free -- the camera is ORTHOGRAPHIC and the board is
  * untilted (BOARD_TILT 0), so z moves nothing on screen. It only decides who is in front.
  *
- * 1.6 is the smallest value that separates EVERY overlapping cross-cell pair on all five
- * shapes by a figure's own thickness (0.22, the head): the closest such pair stands 0.14 of
- * board apart in y, and 0.22/0.14 = 1.6. At 1.2 four pairs still interpenetrate on three of
- * the shapes. The ring ends up 5.8 units deep, against a camera 15 away.
+ * 2.1 is the smallest value that separates every overlapping cross-cell pair on all five
+ * shapes THROUGH A WHOLE ROTATION. Sizing it at one phase is not enough and cost a round:
+ * 1.6 clears every pair in a still frame, but the ring turns, and swept over a full cell
+ * pitch the closest overlapping pair closes to 0.106 of board in y rather than the 0.14 a
+ * still frame shows -- so 714 of 98690 overlapping pairs still had less than a head (0.22)
+ * of depth between them at some point in the turn. That is a defect you can only see while
+ * it MOVES, which is exactly how it was reported. At 2.1 the count is zero.
+ *
+ * A second slope for the four figures WITHIN a row was measured and rejected. On the ring's
+ * flanks a row lies across the screen and its four heads overlap by design, all at the same
+ * depth; a per-seat ladder would separate them. But it trades against this one: at 2.1 with
+ * a seat ladder of 0.8, cross-cell interpenetration goes from 0 back up to 283, while
+ * same-row overlaps only fall from 19458 to 17481. Different colours smearing is the defect;
+ * one colour merging into its own silhouette is the design (see BLOCK in core). Do not
+ * spend the first to buy the second.
+ *
+ * The ring ends up 6.5 units deep, against a camera 15 away.
  */
-const PAX_DEPTH = 1.6;
+const PAX_DEPTH = 2.1;
 
 /**
  * Ring-figure arm swing, driven by the ring's own phase (`repositionAll`) rather than

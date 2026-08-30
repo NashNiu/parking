@@ -131,19 +131,31 @@ const TOAST_INK = new Color(255, 255, 255, 255);
  * A dark scrim rather than a light one: the board underneath is pale, and the panel is
  * white. The panel is 520 of a 720-wide canvas, so it clears the level pills either side.
  */
-const PROMPT_W = 520;
-const PROMPT_H = 380;
-const PROMPT_BG = new Color(250, 251, 255, 255);
-const PROMPT_INK = new Color(38, 46, 68, 255);
-const PROMPT_SUB = new Color(108, 120, 148, 255);
-const SCRIM = new Color(12, 16, 28, 170);
-/** The primary action. Green, and the only saturated thing on the panel. */
-const PROMPT_BTN_W = 380;
-const PROMPT_BTN_H = 108;
-const PROMPT_BTN = new Color(76, 190, 96, 255);
-/** The way out, drawn as a plain disc in the panel's top-right corner. */
-const PROMPT_X_D = 72;
-const PROMPT_X_BG = new Color(226, 231, 242, 255);
+const PROMPT_W = 560;
+const PROMPT_H = 430;
+const PROMPT_R = 44;
+const PROMPT_BG = new Color(252, 253, 255, 255);
+/** The panel's own drop shadow: a second plate behind it, offset down. */
+const PROMPT_SHADOW = new Color(8, 12, 24, 90);
+const PROMPT_SHADOW_DROP = 10;
+const PROMPT_INK = new Color(34, 42, 64, 255);
+const PROMPT_SUB = new Color(122, 133, 160, 255);
+const SCRIM = new Color(10, 14, 26, 178);
+/**
+ * The primary action: a green key drawn as two plates, the darker one peeking out below the
+ * lighter, which is what makes a flat rectangle read as something with a top face to press.
+ * The same trick as the padlock's rim on the board.
+ */
+const PROMPT_BTN_W = 400;
+const PROMPT_BTN_H = 112;
+const PROMPT_BTN_R = 38;
+const PROMPT_BTN = new Color(86, 199, 104, 255);
+const PROMPT_BTN_BASE = new Color(56, 156, 76, 255);
+const PROMPT_BTN_LIFT = 8;
+/** The way out: a plain disc tucked into the panel's top-right corner. */
+const PROMPT_X_D = 76;
+const PROMPT_X_BG = new Color(232, 236, 246, 255);
+const PROMPT_X_INK = new Color(122, 133, 160, 255);
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -498,37 +510,66 @@ export class HudView {
 
     private buildUnlockPrompt(): void {
         const { w, h } = canvasSize(this.canvas);
-        // The scrim is the modal: it covers the canvas, so nothing behind it can be seen to
-        // be tappable. Sized generously past the canvas so a wider viewport cannot show a
-        // strip of live board down either side.
-        const scrim = roundedSprite('UnlockScrim', w * 2, h * 2, SCRIM);
+        // The scrim IS the modal: it covers the canvas, so nothing behind it can be seen to
+        // be tappable. Sized well past the canvas so a wider viewport cannot show a strip of
+        // live board down either side.
+        const scrim = roundedSprite('UnlockScrim', w * 2, h * 2, SCRIM, 2);
         this.canvas.addChild(scrim);
         scrim.setPosition(0, 0, 0);
 
-        const panel = roundedSprite('UnlockPanel', PROMPT_W, PROMPT_H, PROMPT_BG);
+        // Panel and its shadow under one node, so `showUnlockPrompt` scales them together.
+        const panel = new Node('UnlockPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
         scrim.addChild(panel);
 
-        const title = makeLabel(panel, 'PromptTitle', 52, 96);
+        const shadow = roundedSprite('shadow', PROMPT_W, PROMPT_H, PROMPT_SHADOW, PROMPT_R);
+        panel.addChild(shadow);
+        shadow.setPosition(0, -PROMPT_SHADOW_DROP, 0);
+
+        const plate = roundedSprite('plate', PROMPT_W, PROMPT_H, PROMPT_BG, PROMPT_R);
+        panel.addChild(plate);
+
+        const title = makeLabel(plate, 'PromptTitle', 54, 116);
         title.color = PROMPT_INK;
         title.isBold = true;
         title.string = '车位堵住了';
 
-        const sub = makeLabel(panel, 'PromptSub', 30, 30);
+        const sub = makeLabel(plate, 'PromptSub', 30, 52);
         sub.color = PROMPT_SUB;
         sub.string = '解锁一个车位才能继续';
 
-        const btn = roundedSprite('PromptBtn', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN);
-        panel.addChild(btn);
-        btn.setPosition(0, -80, 0);
-        const btnLabel = makeLabel(btn, 'PromptBtnLabel', 46, 0);
+        // A hairline between the message and the choice, so the panel reads as two parts
+        // rather than four stacked things.
+        const rule = roundedSprite('rule', PROMPT_W - 96, 2, PROMPT_X_BG, 1);
+        plate.addChild(rule);
+        rule.setPosition(0, 8, 0);
+
+        const btn = new Node('PromptBtn');
+        btn.layer = Layers.Enum.UI_2D;
+        btn.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
+        plate.addChild(btn);
+        btn.setPosition(0, -92, 0);
+        const base = roundedSprite(
+            'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
+        );
+        btn.addChild(base);
+        base.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const face = roundedSprite(
+            'face', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN, PROMPT_BTN_R,
+        );
+        btn.addChild(face);
+        const btnLabel = makeLabel(face, 'PromptBtnLabel', 46, 0);
         btnLabel.isBold = true;
         btnLabel.string = '解锁车位';
 
         const close = dotSprite('PromptClose', PROMPT_X_D, PROMPT_X_BG);
-        panel.addChild(close);
-        close.setPosition(PROMPT_W / 2 - 12, PROMPT_H / 2 - 12, 0);
-        const x = makeLabel(close, 'PromptCloseLabel', 44, 2);
-        x.color = PROMPT_SUB;
+        plate.addChild(close);
+        // Inside the corner now that the corner is real -- with the old stretched-ellipse
+        // panel there was no corner to sit in and it floated off the edge.
+        close.setPosition(PROMPT_W / 2 - PROMPT_R - 6, PROMPT_H / 2 - PROMPT_R - 6, 0);
+        const x = makeLabel(close, 'PromptCloseLabel', 46, 2);
+        x.color = PROMPT_X_INK;
         x.isBold = true;
         x.string = '×';
 

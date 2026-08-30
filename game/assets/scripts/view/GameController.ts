@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0830-3';
+const BUILD_TAG = 'build 0830-4';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
