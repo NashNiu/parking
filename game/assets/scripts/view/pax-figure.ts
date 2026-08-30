@@ -1,4 +1,4 @@
-import { Node, Color, Mesh, MeshRenderer, primitives, utils } from 'cc';
+import { Node, Color, Material, Mesh, MeshRenderer, primitives, utils } from 'cc';
 import { instancedLitMaterial } from './materials';
 
 /**
@@ -178,8 +178,34 @@ function armMesh(): Mesh {
  * runs for every visible ring figure every frame, gets its two arm nodes from one
  * allocation-free WeakMap lookup.
  */
-interface Parts { body: Node; head: Node; armL: Node; armR: Node }
+interface Parts {
+    /** Every renderer the figure has, so `recolorPaxFigure` never calls `getComponent`. */
+    renderers: MeshRenderer[];
+    /** Null unless SHOW_HIDDEN_PARTS: there are no arms to swing on a crowd figure. */
+    armL: Node | null;
+    armR: Node | null;
+    /** The material last applied, so an unchanged colour costs nothing. */
+    mat: Material | null;
+}
 const registry = new WeakMap<Node, Parts>();
+
+/**
+ * Whether to build the body and the two arms at all.
+ *
+ * FALSE, and this is exact rather than an approximation. The figure stands up out of the
+ * board (see `buildPaxFigure`), so the camera looks straight down its own axis, and every
+ * part below the head hides behind the head: the body's widest radius is 0.095 and the arms,
+ * hanging straight back with no swing left to move them (see track-view), reach 0.07 + 0.03
+ * = 0.10 from the axis -- both inside the head's 0.11. Not a pixel of them can be drawn.
+ *
+ * What it buys is the frame rate the human reported missing on a real device. Four renderers
+ * per passenger on a 28-cell ring is 448 of them, plus the channels; one is 112. Cocos walks
+ * every renderer in the scene each frame whether or not it contributes a pixel.
+ *
+ * Flip it back to true together with the camera tilt that would make the crowd people again.
+ * Nothing else has to change: the arms keep their nodes and `setArmSwing` keeps working.
+ */
+const SHOW_HIDDEN_PARTS = false;
 
 /**
  * Build one passenger figure `height` units tall. Returns the root node with its own
@@ -220,36 +246,38 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     // call -- and reusing this one object still leaves every part's (mesh, colour)
     // pair instanced across the whole crowd, per `instancedLitMaterial`'s own cache.
     const mat = instancedLitMaterial(color);
+    const renderers: MeshRenderer[] = [];
 
-    const body = new Node('body');
-    body.setPosition(0, BODY_HEIGHT / 2, 0);
-    const bodyMr = body.addComponent(MeshRenderer);
-    bodyMr.mesh = bodyMesh();
-    bodyMr.material = mat;
-    fit.addChild(body);
+    const add = (node: Node, mesh: Mesh): MeshRenderer => {
+        const mr = node.addComponent(MeshRenderer);
+        mr.mesh = mesh;
+        mr.material = mat;
+        fit.addChild(node);
+        renderers.push(mr);
+        return mr;
+    };
 
     const head = new Node('head');
     head.setPosition(0, BODY_HEIGHT + HEAD_RADIUS, 0);
-    const headMr = head.addComponent(MeshRenderer);
-    headMr.mesh = headMesh();
-    headMr.material = mat;
-    fit.addChild(head);
+    add(head, headMesh());
 
-    const armL = new Node('arm-L');
-    armL.setPosition(-SHOULDER_X, SHOULDER_Y, 0);
-    const armLMr = armL.addComponent(MeshRenderer);
-    armLMr.mesh = armMesh();
-    armLMr.material = mat;
-    fit.addChild(armL);
+    let armL: Node | null = null;
+    let armR: Node | null = null;
+    if (SHOW_HIDDEN_PARTS) {
+        const body = new Node('body');
+        body.setPosition(0, BODY_HEIGHT / 2, 0);
+        add(body, bodyMesh());
 
-    const armR = new Node('arm-R');
-    armR.setPosition(SHOULDER_X, SHOULDER_Y, 0);
-    const armRMr = armR.addComponent(MeshRenderer);
-    armRMr.mesh = armMesh();
-    armRMr.material = mat;
-    fit.addChild(armR);
+        armL = new Node('arm-L');
+        armL.setPosition(-SHOULDER_X, SHOULDER_Y, 0);
+        add(armL, armMesh());
 
-    registry.set(root, { body, head, armL, armR });
+        armR = new Node('arm-R');
+        armR.setPosition(SHOULDER_X, SHOULDER_Y, 0);
+        add(armR, armMesh());
+    }
+
+    registry.set(root, { renderers, armL, armR, mat });
     return root;
 }
 
@@ -265,14 +293,13 @@ export function recolorPaxFigure(root: Node, color: Color, shade: (c: Color) => 
     const parts = registry.get(root);
     if (!parts) return;
     const mat = instancedLitMaterial(shade(color));
-    const bodyMr = parts.body.getComponent(MeshRenderer);
-    if (bodyMr) bodyMr.material = mat;
-    const headMr = parts.head.getComponent(MeshRenderer);
-    if (headMr) headMr.material = mat;
-    const armLMr = parts.armL.getComponent(MeshRenderer);
-    if (armLMr) armLMr.material = mat;
-    const armRMr = parts.armR.getComponent(MeshRenderer);
-    if (armRMr) armRMr.material = mat;
+    // Materials are cached per colour (see `instancedLitMaterial`), so this is an identity
+    // test, and it is worth having: the ring repaints every figure on every tick, six times
+    // a second, and assigning a renderer's material is not free. Most of those repaints ask
+    // for the colour that is already there.
+    if (mat === parts.mat) return;
+    parts.mat = mat;
+    for (const mr of parts.renderers) mr.material = mat;
 }
 
 /**
@@ -285,7 +312,7 @@ export function recolorPaxFigure(root: Node, color: Color, shade: (c: Color) => 
  */
 export function setArmSwing(root: Node, degrees: number): void {
     const parts = registry.get(root);
-    if (!parts) return;
+    if (!parts || !parts.armL || !parts.armR) return;   // no arms built; see SHOW_HIDDEN_PARTS
     parts.armL.setRotationFromEuler(degrees, 0, 0);
     parts.armR.setRotationFromEuler(-degrees, 0, 0);
 }

@@ -2,7 +2,7 @@ import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
-import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
+import { buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
     BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
     PaxGroup, TrackPath,
@@ -59,16 +59,23 @@ const PAX_HEIGHT = 0.55;
 const PAX_DEPTH = 2.1;
 
 /**
- * Ring-figure arm swing, driven by the ring's own phase (`repositionAll`) rather than
- * a separate accumulator, so it advances with the ring's motion and stops when the
- * ring stops. `phaseHolder.p` sweeps a narrow range every tick (from -1/capacity up to
- * 0, see `update()`), so SWING_PHASE_SCALE blows that back up into a useful sweep of
- * the sine argument. SWING_STAGGER offsets each figure by its own mixed row/seat
- * index so a whole ring doesn't swing in lockstep like a marching toy.
+ * NO per-frame arm swing on the ring, and that is a deletion worth explaining twice over.
+ *
+ * It is invisible. The figures stand up out of the board now (see `buildPaxFigure`), so an
+ * arm swinging about the figure's own X axis moves its hand in a plane the camera looks
+ * straight down -- and the hand, at 0.118 from the axis at full swing, sits behind a head of
+ * radius 0.11. There is nothing to see.
+ *
+ * And it was the single most expensive thing on the frame. It wrote two node rotations per
+ * shown figure per frame, which on a 28-cell ring is 224 transform writes on LEAF renderer
+ * nodes -- against the 28 the whole ring costs now. That, with `layoutRow` moving off the
+ * per-frame path (see `aimRow`), took the ring from about 364 transform writes a frame to
+ * 56; the human reported the ring on a real device as "not passengers moving, more like
+ * colours switching", which is what a ring that cannot hold its frame rate looks like.
+ *
+ * `setArmSwing` is still there in pax-figure.ts, unused. It costs nothing to keep and it is
+ * what a tilted camera would want back.
  */
-const SWING_AMPLITUDE_DEG = 22;
-const SWING_PHASE_SCALE = 40;
-const SWING_STAGGER = 0.7;
 
 /** Identity shade — the active/undimmed case for `paintPassenger`. */
 const NO_SHADE = (c: Color): Color => c;
@@ -169,28 +176,35 @@ export function leftLaneFloor(path: TrackPath, capacity: number, channels: Chann
 }
 
 /**
- * Lay a cell's figures out around its origin, given the unit ACROSS direction (dx, dy) and
- * the along-path step between its ranks. The along-path direction is (dy, -dx): for the
- * ring that is the way the cells travel (the outward normal of a clockwise walk is the
- * tangent turned a quarter left), and for a channel, whose across is the lane turned a
- * quarter, it is the outward direction -- so the rearmost rank of a waiting block is the
- * one further from the track, which is what a queue looks like.
+ * Lay a row's figures out in the ROW'S OWN frame, once: across the row along +X, and the
+ * ranks behind along -Y. `aimRow` then turns the whole row to point that +X wherever the
+ * path's normal points, which reproduces exactly what this used to compute per figure per
+ * frame -- and costs one transform write instead of GROUP_SIZE of them.
  *
- * Called every frame for ring cells, because their across direction is the path normal and
- * turns as they travel; once at build time for the lanes, whose direction is fixed.
+ * For a ring cell +X ends up along the outward normal and -Y along the way the cells
+ * travel; for a channel, whose across is the lane turned a quarter, -Y is the direction
+ * away from the track, so the rearmost rank of a waiting block is the one furthest out,
+ * which is what a queue looks like.
  */
-function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
-    const ax = dy, ay = -dx;
+function layoutRow(figures: Node[], rankStep: number): void {
     for (let i = 0; i < figures.length; i++) {
         const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
-        const oy = o.across * dy + o.along * ay;
-        // Depth from the figure's own y within the row, so the ramp holds INSIDE a row too.
-        // It has to: where the path runs horizontally the four abreast stack up the screen
-        // 0.20 apart, each 0.55 tall, and the same overlap appears within one group as
-        // between two. The row node carries the depth of its own y (see `depthAt`), and
-        // these compose because a row is never rotated.
-        figures[i].setPosition(o.across * dx + o.along * ax, oy, -oy * PAX_DEPTH);
+        figures[i].setPosition(o.across, -o.along, 0);
     }
+}
+
+/**
+ * Turn a row so its across-direction points along the unit vector (dx, dy).
+ *
+ * About the board normal, which is the axis the figures THEMSELVES stand along now (see
+ * `buildPaxFigure`) -- so this spins each passenger about its own axis and is invisible on
+ * them, while moving them exactly where `layoutRow` used to place them one at a time. While
+ * the figures lay flat in the board plane this was impossible: rotating the row tipped them
+ * over, which is why the row carried fixed children and paid for four `setPosition` calls
+ * every frame. Standing the crowd up is what bought this.
+ */
+function aimRow(row: Node, dx: number, dy: number): void {
+    row.setRotationFromEuler(0, 0, Math.atan2(dy, dx) * 180 / Math.PI);
 }
 
 /**
@@ -207,10 +221,13 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
 }
 
 /**
- * A row node holding GROUP_SIZE passenger figures as children. The row's own transform
- * is the group's position on the track; the children carry the across-the-track offsets,
- * which `layoutRow` sets. The row is never rotated — the figures stand along the board's
- * +Y and face +Z, and spinning the row about the board normal would tip them over.
+ * A row node holding GROUP_SIZE passenger figures as children. The row's transform is the
+ * group's position AND its heading on the track (`aimRow`); the children carry fixed
+ * across-the-row offsets that `layoutRow` sets once.
+ *
+ * The row used not to be rotated at all, because the figures lay in the board plane and
+ * spinning the row would have tipped them over. They stand up out of it now, so the row is
+ * free to turn -- see `aimRow`.
  */
 function makeRow(name: string): Node {
     const row = new Node(name);
@@ -340,9 +357,15 @@ export class TrackView {
     }
 
     /**
-     * Depth for a row (or a lone figure) whose feet are at board-local `y`. See PAX_DEPTH:
-     * lower on the board means nearer the camera, so the crowd occludes rather than
-     * interpenetrates. Zero at the top of the track and positive everywhere else.
+     * Depth for a ROW whose centreline sits at board-local `y`. See PAX_DEPTH: lower on the
+     * board means nearer the camera, so the crowd occludes rather than interpenetrates. Zero
+     * at the top of the track and positive everywhere else.
+     *
+     * One depth for the whole row, not one per figure. A per-figure term was tried and is
+     * gone: it forced the row's children to be repositioned every frame, which is what
+     * `aimRow` exists to avoid, and it bought nothing -- a row is one colour, so its own
+     * figures merging is the design (see BLOCK in core), and the pairs that matter are the
+     * ones from DIFFERENT rows, which this separates.
      */
     private depthAt(y: number): number {
         return (this.feetTop - y) * PAX_DEPTH;
@@ -546,7 +569,8 @@ export class TrackView {
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
-                layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
+                layoutRow(figures, LANE_RANK_STEP);
+                aimRow(n, across.x, across.y);
                 // NO yaw any more, and this is not an omission. Figures stand UP out of
                 // the board now (see `buildPaxFigure`), so a figure's own axis points at
                 // the camera and its facing is not a thing the player can see -- what a
@@ -706,23 +730,12 @@ export class TrackView {
             const t = (i / this.capacity + phase) % 1;
             const p = this.point(t, REPOSITION_SCRATCH);
             cluster.setPosition(p.x, p.y, this.depthAt(p.y));
-            // The row runs across the track, so its spread turns with the path. Rows
-            // that are hidden this tick are skipped — nothing to lay out, and it keeps
-            // the per-frame cost at the rows actually on screen.
+            // The row runs across the track, so its heading turns with the path. Rows hidden
+            // this tick are skipped -- nothing to aim, and it keeps the per-frame cost at the
+            // rows actually on screen.
             if (!cluster.active) continue;
             const n = this.normal(t, NORMAL_SCRATCH);
-            const figures = this.rowFigures[i];
-            layoutRow(figures, n.x, n.y, BLOCK.rankStep);
-            // The ring is moving and the channels are not — that contrast is what
-            // tells a player which one is which — so only ring figures swing, driven
-            // by the same phase that already moves them, and only the ones actually
-            // shown this tick (paintRow toggles `active` per seat).
-            for (let j = 0; j < figures.length; j++) {
-                if (!figures[j].active) continue;
-                const mixed = i * GROUP_SIZE + j;
-                const swing = Math.sin(phase * SWING_PHASE_SCALE + mixed * SWING_STAGGER) * SWING_AMPLITUDE_DEG;
-                setArmSwing(figures[j], swing);
-            }
+            aimRow(cluster, n.x, n.y);
         }
     }
 
@@ -751,10 +764,18 @@ export class TrackView {
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
         // was standing on rather than a point on the centreline.
         const o = blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
-        const fy = local.y + o.across * n.y - o.along * n.x;
         // Its depth too, or the flight starts at z = 0 while the figure it replaces was
         // several units nearer -- which reads as the passenger jumping backwards on takeoff.
-        local.set(local.x + o.across * n.x + o.along * n.y, fy, this.depthAt(fy));
+        // The ROW's depth: a row carries one z for all four of its figures (see `depthAt`),
+        // and this has to leave from the same place the drawing put it.
+        // `rowZ` first, and off the centreline y -- reading `local.y` inside the `set` call
+        // would be reading it before the assignment only by luck of argument evaluation.
+        const rowZ = this.depthAt(local.y);
+        local.set(
+            local.x + o.across * n.x + o.along * n.y,
+            local.y + o.across * n.y - o.along * n.x,
+            rowZ,
+        );
         const out = new Vec3();
         Vec3.transformMat4(out, local, this.root.worldMatrix);
         return out;
@@ -794,7 +815,8 @@ export class TrackView {
         const figures = flier.children.slice();
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
-        layoutRow(figures, n.x, n.y, BLOCK.rankStep);
+        layoutRow(figures, BLOCK.rankStep);
+        aimRow(flier, n.x, n.y);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
         this.root.addChild(flier);
