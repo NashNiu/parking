@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0829-5';
+const BUILD_TAG = 'build 0830-1';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -136,8 +136,55 @@ const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_SPEED = 8;
 
-/** Speed a car drives from the lot to its stall, a touch brisker than a departure. */
-const DRIVE_SPEED = 9;
+/**
+ * Speed a car drives from the lot to its stall, a touch brisker than a departure.
+ *
+ * The FLOOR, not the whole story -- see `driveSpeedFor`. At a flat 9 the arrival took a
+ * median of 2.14s and up to 3.93s across the ten shipped levels (1840 car/stall routes),
+ * and 57% of them ran over two seconds. That is 12 to 23 carousel ticks of watching a car
+ * drive, which is the wait the human reported.
+ */
+const DRIVE_SPEED = 14;
+
+/**
+ * The driving part of an arrival is squeezed toward this many seconds, and no car drives
+ * more than `DRIVE_SPEED_MAX_MULT` times the base to get there.
+ *
+ * A route's length is set by where the car happened to be parked and which stall it drew,
+ * so at a single speed the wait varies by a factor of five -- and the long ones are the ones
+ * that read as broken. Scaling per ROUTE (not per leg -- see `driveRoute`) collapses that:
+ * measured over the same 1840 routes, min 0.84->0.53s, median 2.14->1.30s, max 3.93->1.76s.
+ * The multiplier cap is what keeps the far cars looking like cars: uncapped, the longest
+ * route wants 28 units a second against a base of 14.
+ */
+const DRIVE_TIME_MAX = 0.9;
+const DRIVE_SPEED_MAX_MULT = 1.6;
+
+/**
+ * The pause a car holds at each corner of an ARRIVAL, shorter than a departure's
+ * EXIT_TURN_TIME. A departure is one turn the player is watching; an arrival can have five,
+ * and five held beats is a third of a second of a car standing still on a route the player
+ * is waiting out.
+ */
+const ARRIVE_TURN_TIME = 0.1;
+
+/**
+ * How far toward the camera a car rides while it is out on the ring road, in board units.
+ *
+ * The side lanes run at `driveSideX` = 4.28 while the outermost parked cars reach 4.19, so a
+ * car driving down the side overlaps them by 0.23 of its 0.65 width -- and there is no lane
+ * position that avoids it: the frame ends at 4.67, leaving 0.48 of room. (Backing the
+ * lane out to the drawn 4.98 puts 0.016 of the car on screen; that was the previous state.)
+ * Since the overlap is forced, this decides how it READS: at the same z the two bodies
+ * intersect, which is the same interpenetration the crowd had; lifted clear of any roof, the
+ * moving car passes cleanly IN FRONT, like a road nearer the viewer. Orthographic camera, so
+ * this costs nothing on screen -- it only settles who occludes whom.
+ *
+ * Applied from the moment the car leaves the lot. The exit leg is clear ground by
+ * construction (core only allows a tap whose corridor is empty), so nothing is being driven
+ * over on the way out.
+ */
+const DRIVE_LIFT = 1.2;
 
 /**
  * How much of its stall a parked car may fill, across and along -- the ceiling `stallScale`
@@ -1087,8 +1134,11 @@ export class GameController extends Component {
             /** Fires as the car starts its last turn, i.e. once, on the final approach. */
             finalApproach?: () => void;
             done?: () => void;
+            /** Held beat at each corner. Departures use EXIT_TURN_TIME, arrivals less. */
+            turnTime?: number;
         } = {},
     ): void {
+        const turnTime = opts.turnTime ?? EXIT_TURN_TIME;
         const body = node.getChildByName('body');
         let heading = body ? body.eulerAngles.z : 0;
         let prev = node.position.clone();
@@ -1106,8 +1156,8 @@ export class GameController extends Component {
             const target = wp.clone();
             const last = i === waypoints.length - 1;
             if (last && opts.finalApproach) seq.call(opts.finalApproach);
-            seq.call(() => this.turnBody(body, from, to, EXIT_TURN_TIME))
-                .delay(EXIT_TURN_TIME)
+            seq.call(() => this.turnBody(body, from, to, turnTime))
+                .delay(turnTime)
                 .to(dist / speed, { position: target }, { easing: last ? 'sineOut' : 'sineInOut' });
             if (legs === 0 && opts.firstLegDone) seq.call(opts.firstLegDone);
             prev = target;
@@ -1149,7 +1199,12 @@ export class GameController extends Component {
      */
     private routeToSlot(from: Vec3, angle: number, slotX: number, parkY: number): Vec3[] {
         const r = this.ring;
-        const z = from.z;
+        // Every waypoint but the last rides at `z`, out in front of the parked cars (see
+        // DRIVE_LIFT); the final one, into the stall, comes back down to the board so the
+        // car parks among its neighbours rather than hovering over them. The lift and the
+        // drop each happen along a leg, which is invisible under an orthographic camera.
+        const z = from.z + DRIVE_LIFT;
+        const parkZ = from.z;
         const d = headingVec(angle);
         // Distance to each lane it is actually heading toward; Infinity when it is not
         // travelling that way at all, so `Math.min` ignores it.
@@ -1182,8 +1237,40 @@ export class GameController extends Component {
             wp.push(new Vec3(side, r.top, z));
         }
         wp.push(new Vec3(slotX, r.top, z));
-        wp.push(new Vec3(slotX, parkY, z));
+        wp.push(new Vec3(slotX, parkY, parkZ));
         return wp;
+    }
+
+    /**
+     * How fast to drive `route`, and how long its last leg then takes.
+     *
+     * One speed for the WHOLE route, not one per leg -- `driveRoute`'s note explains why a
+     * per-leg duration reads as the car changing power at every corner, and that still
+     * holds. What changes here is that a LONG route is driven faster, so the wait does not
+     * scale with how unlucky the car's position was. Ground distance only: the ride is
+     * lifted (DRIVE_LIFT) and dropped again, and neither is visible under an ortho camera,
+     * so neither should be paid for in time.
+     *
+     * The last leg's duration comes back with it because `finalApproach`'s stall-refit tween
+     * has to last exactly that long -- at 0.28 flat it used to match, and at these speeds
+     * the hop into the stall is a fraction of it, which would leave a car resizing after it
+     * had parked.
+     */
+    private driveTiming(from: Vec3, route: Vec3[]): { speed: number; lastLeg: number } {
+        let len = 0;
+        let last = 0;
+        let prev = from;
+        for (const wp of route) {
+            const d = Math.hypot(wp.x - prev.x, wp.y - prev.y);
+            if (d >= 1e-3) last = d;
+            len += d;
+            prev = wp;
+        }
+        const speed = Math.min(
+            DRIVE_SPEED * DRIVE_SPEED_MAX_MULT,
+            Math.max(DRIVE_SPEED, len / DRIVE_TIME_MAX),
+        );
+        return { speed, lastLeg: last / speed };
     }
 
     /**
@@ -1560,19 +1647,23 @@ export class GameController extends Component {
         this.core!.parking.setReady(slotIndex, false);
         this.sfx?.play('drive');
         dustBurst(this.boardRoot!, start.clone());
-        this.driveRoute(node, route, DRIVE_SPEED, {
+        const { speed, lastLeg } = this.driveTiming(start, route);
+        this.driveRoute(node, route, speed, {
+            turnTime: ARRIVE_TURN_TIME,
             // Release the tap lock once the car is out of the lot rather than when it
             // parks: a lap of the ring road takes over a second, and locking taps for all
             // of it makes the board feel dead. The core parked the car on tap already, so
             // a second tap mid-drive is safe.
             firstLegDone: () => { this.busy = false; },
-            // Refit to the stall on the final approach - the turn plus the hop up off the
-            // lane, which is about as long as this tween. Doing it on the way OUT of the
-            // lot (as an earlier version did) changes the car's size right beside its
-            // siblings, which reads as a glitch rather than as parking.
+            // Refit to the stall on the final approach - over exactly the turn plus the hop
+            // up off the lane, which `driveTiming` hands back because the hop's length now
+            // depends on the speed this route drew. Doing it on the way OUT of the lot (as
+            // an earlier version did) changes the car's size right beside its siblings,
+            // which reads as a glitch rather than as parking.
             finalApproach: () => {
                 tween(node)
-                    .to(0.28, { scale: new Vec3(parkScale, parkScale, parkScale) },
+                    .to(ARRIVE_TURN_TIME + lastLeg,
+                        { scale: new Vec3(parkScale, parkScale, parkScale) },
                         { easing: 'sineOut' })
                     .start();
             },

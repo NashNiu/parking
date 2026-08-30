@@ -46,6 +46,32 @@ const BAND_DROP = 0.07;
 const PAX_HEIGHT = 0.55;
 
 /**
+ * How much depth (+Z, toward the camera) a figure gains for every board unit it stands
+ * BELOW the top of the crowd -- so the lower a figure's feet, the nearer it is drawn, the
+ * way a crowd standing on a floor reads.
+ *
+ * Without it the figures are all at z = 0 and INTERPENETRATE, which is what a player sees
+ * as two groups smeared into each other. The cause is a mismatch core cannot see: a figure
+ * lies IN the board plane and is 0.55 tall (see `trackReach`), but `minRowGap` -- the check
+ * `capacityOptions` gates a ring length on -- models it as a 0.22 DOT at its feet. Rows are
+ * 0.33-0.38 apart, so a body reaches a row and a half past the point that was checked.
+ * Measured across the five shapes at their shipped capacities, 96-134 pairs of figures from
+ * DIFFERENT cells overlap on screen, the worst by 40-53% of a whole figure's area, and the
+ * checked gap (0.226-0.272) clears its 0.22 floor in every one of those cases. The check is
+ * not wrong about what it measures; it measures the wrong solid.
+ *
+ * Spacing cannot fix it: clearing a 0.55 body needs rows 0.55 apart, which is a ring of ~16
+ * instead of 24-28. Depth can, and it is free -- the camera is ORTHOGRAPHIC and the board is
+ * untilted (BOARD_TILT 0), so z moves nothing on screen. It only decides who is in front.
+ *
+ * 1.6 is the smallest value that separates EVERY overlapping cross-cell pair on all five
+ * shapes by a figure's own thickness (0.22, the head): the closest such pair stands 0.14 of
+ * board apart in y, and 0.22/0.14 = 1.6. At 1.2 four pairs still interpenetrate on three of
+ * the shapes. The ring ends up 5.8 units deep, against a camera 15 away.
+ */
+const PAX_DEPTH = 1.6;
+
+/**
  * Ring-figure arm swing, driven by the ring's own phase (`repositionAll`) rather than
  * a separate accumulator, so it advances with the ring's motion and stops when the
  * ring stops. `phaseHolder.p` sweeps a narrow range every tick (from -1/capacity up to
@@ -174,7 +200,13 @@ function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): v
     const ax = dy, ay = -dx;
     for (let i = 0; i < figures.length; i++) {
         const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
-        figures[i].setPosition(o.across * dx + o.along * ax, o.across * dy + o.along * ay, 0);
+        const oy = o.across * dy + o.along * ay;
+        // Depth from the figure's own y within the row, so the ramp holds INSIDE a row too.
+        // It has to: where the path runs horizontally the four abreast stack up the screen
+        // 0.20 apart, each 0.55 tall, and the same overlap appears within one group as
+        // between two. The row node carries the depth of its own y (see `depthAt`), and
+        // these compose because a row is never rotated.
+        figures[i].setPosition(o.across * dx + o.along * ax, oy, -oy * PAX_DEPTH);
     }
 }
 
@@ -254,6 +286,13 @@ export class TrackView {
     private readonly root: Node;
     private readonly cy: number;
     /**
+     * Board-local y of the HIGHEST feet on the track -- the zero of the depth ramp, so no
+     * figure is ever pushed to a negative z and behind the band it stands on (BAND_Z).
+     * `trackReach().top` adds a figure's height on top of the highest feet, which is exactly
+     * what has to come back off.
+     */
+    private readonly feetTop: number;
+    /**
      * Seconds a rotation takes, which is also the tick the controller steps the core on --
      * every animation in here is exactly one tick long so the drawing lands where the data
      * already is. NOT readonly: the speed button changes it (see `setTick`).
@@ -301,6 +340,7 @@ export class TrackView {
         this.channels = channels;
         this.root = parent;
         this.cy = y;
+        this.feetTop = y + trackReach(path).top - PAX_HEIGHT;
         this.tick = tick;
         this.gapTs = [
             boardIndex / capacity,
@@ -316,6 +356,15 @@ export class TrackView {
         const p = this.path.pointAt(t, this._pt);
         out.set(p.x, this.cy + p.y, 0);
         return out;
+    }
+
+    /**
+     * Depth for a row (or a lone figure) whose feet are at board-local `y`. See PAX_DEPTH:
+     * lower on the board means nearer the camera, so the crowd occludes rather than
+     * interpenetrates. Zero at the top of the track and positive everywhere else.
+     */
+    private depthAt(y: number): number {
+        return (this.feetTop - y) * PAX_DEPTH;
     }
 
     /** Board-local outward normal at t: the core path's normal, unit length, in the x/y plane. */
@@ -400,7 +449,7 @@ export class TrackView {
             this.rowFigures.push(cluster.children.slice());
             const t = i / this.capacity;
             const p = this.point(t);
-            cluster.setPosition(p.x, p.y, 0);
+            cluster.setPosition(p.x, p.y, this.depthAt(p.y));
             cluster.active = false;
             parent.addChild(cluster);
             this.clusters.push(cluster);
@@ -545,7 +594,8 @@ export class TrackView {
                 const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 this.laneFigures[channel.side].push(figures);
-                n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
+                const ly = first.y + out.y * LANE_STEP * i;
+                n.setPosition(first.x + out.x * LANE_STEP * i, ly, this.depthAt(ly));
                 n.active = false;
                 parent.addChild(n);
                 this.laneClusters[channel.side].push(n);
@@ -673,7 +723,10 @@ export class TrackView {
             if (!n.isValid || !n.active) continue;
             const home = this.laneHome[active.side][i];
             Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
-            n.setPosition(home.x + out.x * LANE_STEP, home.y + out.y * LANE_STEP, home.z);
+            // Depth from the SLID y, not `home.z`: a tilted channel slides partly up the
+            // board, and a row whose y moved has to take the depth that goes with it.
+            const sy = home.y + out.y * LANE_STEP;
+            n.setPosition(home.x + out.x * LANE_STEP, sy, this.depthAt(sy));
             tween(n).to(this.tick, { position: home.clone() }).start();
         }
     }
@@ -686,7 +739,7 @@ export class TrackView {
             if (!cluster || !cluster.isValid) continue;
             const t = (i / this.capacity + phase) % 1;
             const p = this.point(t, REPOSITION_SCRATCH);
-            cluster.setPosition(p.x, p.y, 0);
+            cluster.setPosition(p.x, p.y, this.depthAt(p.y));
             // The row runs across the track, so its spread turns with the path. Rows
             // that are hidden this tick are skipped — nothing to lay out, and it keeps
             // the per-frame cost at the rows actually on screen.
@@ -732,11 +785,10 @@ export class TrackView {
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
         // was standing on rather than a point on the centreline.
         const o = blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
-        local.set(
-            local.x + o.across * n.x + o.along * n.y,
-            local.y + o.across * n.y - o.along * n.x,
-            0,
-        );
+        const fy = local.y + o.across * n.y - o.along * n.x;
+        // Its depth too, or the flight starts at z = 0 while the figure it replaces was
+        // several units nearer -- which reads as the passenger jumping backwards on takeoff.
+        local.set(local.x + o.across * n.x + o.along * n.y, fy, this.depthAt(fy));
         const out = new Vec3();
         Vec3.transformMat4(out, local, this.root.worldMatrix);
         return out;
@@ -781,8 +833,12 @@ export class TrackView {
         flier.setPosition(from);
         this.root.addChild(flier);
         this.pendingFlier[side] = flier;
+        // The resting spot AND its depth: the flier hands over to the real row at the end,
+        // and a hand-off between two different depths shows as a pop in who occludes whom.
+        const rest = this.point(index / this.capacity);
+        rest.z = this.depthAt(rest.y);
         tween(flier)
-            .to(this.tick, { position: this.point(index / this.capacity) })
+            .to(this.tick, { position: rest })
             .call(() => {
                 // Only re-activate the slot if this flier is still the pending one
                 // for this side -- if not, a newer playEntry already stopped and
