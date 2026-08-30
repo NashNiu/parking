@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0830-4';
+const BUILD_TAG = 'build 0830-5';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -789,10 +789,11 @@ export class GameController extends Component {
         // a fixed 1.07 of WORLD width per side, so zooming in makes it eat a larger share of
         // the screen -- the lot went from 82% of the width to 75%, and the cars with it.
         //
-        // DOWN: the drawn ring's top -- its path, plus a block across the centreline, plus a
-        // figure standing up the screen from its feet (see `trackReach`; the figures lie IN
-        // the board plane, so that last 0.55 is real and easy to miss) -- down to the ring
-        // road's outer kerb. The camera then centres on the MIDPOINT of that, where it used
+        // DOWN: the drawn ring's top -- its path plus a block across the centreline (see
+        // `trackReach`) -- down to the ring road's outer kerb. It used to carry a third
+        // term, a whole figure height standing up the screen from its feet, and that term
+        // is gone: the figures stand UP out of the board now, so their 0.55 runs toward the
+        // camera and buys the framing 0.55 back. The camera then centres on the MIDPOINT of that, where it used
         // to sit at a constant y = 0. The two are 1.3 units apart, which at phone zoom is
         // 130 px of margin taken off one end of the screen and handed to the other.
         this.contentTop = LOOP_Y + reach.top;

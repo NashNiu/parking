@@ -17,16 +17,6 @@ const LANE_STEP = LANE.step;
 const LANE_START = LANE.start;
 
 /**
- * How far a waiting figure turns, in degrees, from facing straight along the lane
- * toward facing the track. Measured against the running game (see `buildLanes`):
- * the geometrically "full" turn is 90, but at 90 the figure is in pure profile, its
- * face isn't visible, and the two channels' profiles are nearly indistinguishable at
- * this zoom. 45 keeps the face visible while the body still reads as angled toward
- * the track.
- */
-const FACE_TURN = 45;
-
-/**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
  * lifts it off the ground. White on a light ground is a weak edge on its own; the shadow
  * is what actually makes the ribbon and the two channels read as raised.
@@ -50,37 +40,21 @@ const PAX_HEIGHT = 0.55;
  * BELOW the top of the crowd -- so the lower a figure's feet, the nearer it is drawn, the
  * way a crowd standing on a floor reads.
  *
- * Without it the figures are all at z = 0 and INTERPENETRATE, which is what a player sees
- * as two groups smeared into each other. The cause is a mismatch core cannot see: a figure
- * lies IN the board plane and is 0.55 tall (see `trackReach`), but `minRowGap` -- the check
- * `capacityOptions` gates a ring length on -- models it as a 0.22 DOT at its feet. Rows are
- * 0.33-0.38 apart, so a body reaches a row and a half past the point that was checked.
- * Measured across the five shapes at their shipped capacities, 96-134 pairs of figures from
- * DIFFERENT cells overlap on screen, the worst by 40-53% of a whole figure's area, and the
- * checked gap (0.226-0.272) clears its 0.22 floor in every one of those cases. The check is
- * not wrong about what it measures; it measures the wrong solid.
+ * Belt and braces now, where it used to be the whole defence. While the figures lay IN the
+ * board plane they were 0.22 across and 0.55 tall, so each one covered most of whoever was
+ * behind it: swept over a full rotation of the five shipped shapes, figures from different
+ * cells overlapped on screen 98690 times, the worst hiding 60% of a body, and only depth
+ * could keep the colours apart. Standing them up (see `buildPaxFigure`) cut that to 5836
+ * overlaps with a worst case of 5% -- two heads grazing at the rim, which is the `clearance`
+ * floor `capacityOptions` already enforces, met with equality on the tightest corners.
  *
- * Spacing cannot fix it: clearing a 0.55 body needs rows 0.55 apart, which is a ring of ~16
- * instead of 24-28. Depth can, and it is free -- the camera is ORTHOGRAPHIC and the board is
- * untilted (BOARD_TILT 0), so z moves nothing on screen. It only decides who is in front.
- *
- * 2.1 is the smallest value that separates every overlapping cross-cell pair on all five
- * shapes THROUGH A WHOLE ROTATION. Sizing it at one phase is not enough and cost a round:
- * 1.6 clears every pair in a still frame, but the ring turns, and swept over a full cell
- * pitch the closest overlapping pair closes to 0.106 of board in y rather than the 0.14 a
- * still frame shows -- so 714 of 98690 overlapping pairs still had less than a head (0.22)
- * of depth between them at some point in the turn. That is a defect you can only see while
- * it MOVES, which is exactly how it was reported. At 2.1 the count is zero.
- *
- * A second slope for the four figures WITHIN a row was measured and rejected. On the ring's
- * flanks a row lies across the screen and its four heads overlap by design, all at the same
- * depth; a per-seat ladder would separate them. But it trades against this one: at 2.1 with
- * a seat ladder of 0.8, cross-cell interpenetration goes from 0 back up to 283, while
- * same-row overlaps only fall from 19458 to 17481. Different colours smearing is the defect;
- * one colour merging into its own silhouette is the design (see BLOCK in core). Do not
- * spend the first to buy the second.
- *
- * The ring ends up 6.5 units deep, against a camera 15 away.
+ * What is left for this to do is those grazes. Two figures standing up are 0.55 long toward
+ * the camera, so a pair whose footprints touch would intersect down their whole length at
+ * the same depth; the ramp puts one cleanly in front. 2.1 is kept from when it was load
+ * bearing, and it was worth measuring properly: 1.6 cleared every pair in a STILL frame and
+ * still left 714 of them thinner than a head at some point in the turn, because the closest
+ * overlapping pair closes to 0.106 of board in y as the ring moves rather than the 0.14 a
+ * still frame shows. Calibrate a moving geometry over its motion, not over one frame.
  */
 const PAX_DEPTH = 2.1;
 
@@ -134,17 +108,15 @@ const LANE_SLAB_R = 0.2;
  * How far the drawn ring reaches above and below its own origin, in board units.
  *
  * The camera frames the board off this (see `buildBoard`), so it has to be MEASURED rather
- * than taken as the path's own extent. Two things stick out past the path:
+ * than taken as the path's own extent. One thing sticks out past the path: half a block
+ * across the centreline (`blockSpan / 2` = 0.41 at GROUP_SIZE 4), which is already a shade
+ * wider than the white band it rides on -- see BLOCK in core.
  *
- *  - half a block across the centreline (`blockSpan / 2` = 0.46 at GROUP_SIZE 8), which is
- *    already a shade wider than the white band it rides on -- see BLOCK in core.
- *  - a whole `PAX_HEIGHT` above that, and this is the one that surprises: the figures lie
- *    IN the board plane along +Y (`pax-figure.ts` builds body and head up the local Y),
- *    they do not stand up out of it. Under the orthographic camera a passenger's head is
- *    therefore a full 0.55 above the row its feet are in -- the tallest thing on the board
- *    by a wide margin, and 0.55 of framing budget that reading the path alone misses.
- *
- * Only the top gets the figure height; the bottom edge of a row is its feet.
+ * It used to be two. The figures LAY IN the board plane and reached a whole PAX_HEIGHT
+ * (0.55) up the screen from their feet, which made a passenger's head the tallest thing on
+ * the board by a wide margin. They stand UP out of the plane now (see `buildPaxFigure`), so
+ * that 0.55 goes toward the camera instead of up the screen and costs the framing nothing.
+ * All four sides are the same number again.
  */
 export function trackReach(
     path: TrackPath,
@@ -164,11 +136,9 @@ export function trackReach(
     }
     const across = blockSpan(GROUP_SIZE) / 2;
     // `across` on all four sides -- a row straddles the centreline wherever it sits on the
-    // path. PAX_HEIGHT only on top, because a figure stands UP the board plane from its feet
-    // (see pax-figure), so it reaches further up than the row's own half-width but no further
-    // to either side.
+    // path, and a figure seen end-on is no taller on screen than it is wide.
     return {
-        top: top + across + PAX_HEIGHT,
+        top: top + across,
         bottom: bottom - across,
         left: left - across,
         right: right + across,
@@ -301,8 +271,6 @@ export class TrackView {
     /**
      * Board-local y of the HIGHEST feet on the track -- the zero of the depth ramp, so no
      * figure is ever pushed to a negative z and behind the band it stands on (BAND_Z).
-     * `trackReach().top` adds a figure's height on top of the highest feet, which is exactly
-     * what has to come back off.
      */
     private readonly feetTop: number;
     /**
@@ -353,7 +321,7 @@ export class TrackView {
         this.channels = channels;
         this.root = parent;
         this.cy = y;
-        this.feetTop = y + trackReach(path).top - PAX_HEIGHT;
+        this.feetTop = y + trackReach(path).top;
         this.tick = tick;
         this.gapTs = [
             boardIndex / capacity,
@@ -579,33 +547,18 @@ export class TrackView {
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
                 layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
-                // Face the track, not the camera: yaw is per figure (not on the row node,
-                // whose children carry the across-the-lane offsets `layoutRow` just set,
-                // and rotating the parent would swing those out of the board plane) and
-                // about Y only (about Z would tip them over, per makeRow's docstring).
+                // NO yaw any more, and this is not an omission. Figures stand UP out of
+                // the board now (see `buildPaxFigure`), so a figure's own axis points at
+                // the camera and its facing is not a thing the player can see -- what a
+                // yaw WOULD do is swing the head, which sits 0.55 along that axis, out
+                // sideways: at the old FACE_TURN of 45 degrees, 0.39 of board away from
+                // the feet it is supposed to stand on. That is a layout bug, not a turn.
                 //
-                // Base orientation is camera-facing: a figure with no yaw of its own —
-                // like every ring figure — faces +Z, out of the board toward the
-                // camera (pax-figure.ts derives this from the geometry it places, not
-                // from an authored convention). This yaw turns a figure away from that
-                // base, toward the track, following the standard convention
-                // +Z = (sin(yaw), 0, cos(yaw)); facing inward means the yaw's sign is
-                // opposite to `out.x`'s, which is what the expression below does. The
-                // magnitude is FACE_TURN (45), not a full 90, because 90 puts the
-                // figure in pure profile — with no face on the new figure either, that
-                // still means the shoulders/arms, and the two channels' silhouettes
-                // are nearly indistinguishable at this zoom.
-                //
-                // This sign was previously justified by comparing a lane figure against
-                // a ring figure "known" to face the camera — but under the old GLB
-                // model that ring figure did NOT face the camera; every ring passenger
-                // was in profile for the whole project (see git history on this file
-                // predating pax-figure.ts). That the sign below still came out right
-                // was luck, not a validated derivation. If this ever needs to change,
-                // measure it again on screen — do not re-derive it on paper; multiple
-                // paper derivations before this one were wrong.
-                const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
-                for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
+                // What is deleted here is a hard-won sign. It read `out.x > 0 ? -FACE_TURN
+                // : FACE_TURN`, and its own note recorded that the derivation which
+                // justified it had been wrong and the sign had come out right by luck. If
+                // the camera is ever tilted and the crowd becomes people again, measure it
+                // on screen; do not re-derive it on paper, as several rounds did.
                 this.laneFigures[channel.side].push(figures);
                 const ly = first.y + out.y * LANE_STEP * i;
                 n.setPosition(first.x + out.x * LANE_STEP * i, ly, this.depthAt(ly));

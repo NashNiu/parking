@@ -33,6 +33,12 @@ import { instancedLitMaterial } from './materials';
  * No face: no eyes, no mouth. The human explicitly did not ask for one, and a face
  * would make the figure's orientation legible enough to matter -- which is the
  * problem the four earlier rounds were spent on.
+ *
+ * All of the above describes the geometry as BUILT. What is DRAWN is a quarter turn
+ * away: `buildPaxFigure` stands the figure up out of the board plane, so under the
+ * straight-on orthographic camera every passenger reads as a ball -- see the note on
+ * that turn. The facing convention still holds inside the figure's own frame, which
+ * is what `setArmSwing` rotates in, and it is what a tilted camera would show again.
  */
 
 // Every size below is a FRACTION of the `height` argument, not an absolute unit: the
@@ -186,6 +192,26 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     const root = new Node(name);
     const fit = new Node('fit');
     fit.setScale(height, height, height);
+    // STAND IT UP, out of the board plane, rather than lay it flat IN the plane.
+    //
+    // The figure is built along its own +Y (feet at 0, head on top); this quarter turn about
+    // X sends that +Y along the board's +Z, i.e. straight at the camera. Under the
+    // orthographic straight-on camera you then see the head from directly above -- and since
+    // the head is the widest part by design (0.22 across, against a 0.19 body and arms that
+    // tuck inside 0.115 of the axis: see HEAD_RADIUS), the head hides the whole rest of the
+    // figure. What is drawn is a coloured ball.
+    //
+    // That is what a crowd on the ring has to be. Lying in the plane, a figure is 0.22 across
+    // and 0.55 TALL, so it covers most of whoever is behind it -- swept over a whole rotation
+    // of the five shipped ring shapes, figures from different cells overlapped on screen
+    // 98690 times, the worst of them hiding 60% of a body. Standing up, the same crowd
+    // overlaps 5836 times and the worst is a 5% graze. It also makes core's own check true:
+    // `minRowGap` has always measured a passenger as a 0.22 dot at its feet, and a ball seen
+    // end-on IS that dot -- see PAX_DEPTH in track-view for what that mismatch used to cost.
+    //
+    // The figure itself is untouched, which is the point of doing it this way rather than
+    // replacing it with a sphere: tilt the camera and the crowd is people again.
+    fit.setRotationFromEuler(90, 0, 0);
     root.addChild(fit);
 
     // One colour, one material, shared by all four parts of this figure: the head and
