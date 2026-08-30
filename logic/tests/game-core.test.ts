@@ -220,3 +220,41 @@ test('unlockSlot refuses once every slot is open', () => {
   expect(core.unlockSlot()).toBe(2);
   expect(core.unlockSlot()).toBe(-1);
 });
+
+test('needsUnlock names the state where opening a stall is the only move left', () => {
+  // The same position as "a full bay with a locked slot left is not a deadlock", asked the
+  // other way round. Core is right that it is not over -- and the player, watching a board
+  // where nothing changes, cannot tell the difference. This is what the view says so.
+  const core = new GameCore(deadlockLevel());
+  expect(core.needsUnlock()).toBe(false);   // slots free, nothing to say
+  expect(core.tapCar(1).ok).toBe(true);
+  expect(core.tapCar(2).ok).toBe(true);
+  core.stepLoop();
+  expect(core.getState()).toBe('playing');
+  expect(core.needsUnlock()).toBe(true);
+  // Opening one answers it, and the cue comes down.
+  expect(core.unlockSlot()).toBeGreaterThanOrEqual(0);
+  expect(core.needsUnlock()).toBe(false);
+});
+
+test('needsUnlock is false once the bay is beyond saving, so the banner speaks instead', () => {
+  // Deadlock and "waiting on an unlock" are the same jam with and without a stall to open,
+  // and they must never both be true: one asks the player to act, the other says it is over.
+  const core = new GameCore(deadlockLevel());
+  core.tapCar(1);
+  core.tapCar(2);
+  core.unlockSlot();
+  core.tapCar(3);
+  core.stepLoop();
+  expect(core.getState()).toBe('deadlock');
+  expect(core.needsUnlock()).toBe(false);
+});
+
+test('a bay that can still fill is not waiting on an unlock', () => {
+  // Full bay, no locked stall in the way of anything -- but the ring still carries the
+  // colour parked, so the level is moving on its own and has nothing to ask for.
+  const core = new GameCore(soloLevel());
+  expect(core.tapCar(1).ok).toBe(true);
+  expect(core.parking.hasFreeSlot()).toBe(true);
+  expect(core.needsUnlock()).toBe(false);
+});

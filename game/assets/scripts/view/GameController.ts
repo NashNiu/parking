@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0830-1';
+const BUILD_TAG = 'build 0830-2';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -387,6 +387,8 @@ export class GameController extends Component {
      * to cover when a drive was one short hop.
      */
     private arriving = 0;
+    /** Whether the "open a stall" cue is up; see `syncUnlockUrge`. */
+    private urging = false;
     /**
      * Degrees the board leans back. Zero means the camera looks straight down the board's
      * normal — a flat, straight-on view, which is what the art is designed for. It was 52
@@ -566,6 +568,10 @@ export class GameController extends Component {
             this.hud?.hideBanner();
             this.ended = false;
             this.busy = false;
+            this.arriving = 0;
+            // The new bay's padlock is not beating; say so, or the first tick of a level
+            // that needs the cue will see `urging` already true and skip it.
+            this.urging = false;
             this.tickAcc = 0;
             this.loading = false;
             // The asset's uuid, alongside what the asset CONTAINS. The build in this tree
@@ -1049,7 +1055,32 @@ export class GameController extends Component {
                 this.onEnd(this.core.getState());
                 break;
             }
+            this.syncUnlockUrge();
         }
+    }
+
+    /**
+     * Say so when the only move left on the board is to open a stall.
+     *
+     * `GameCore.needsUnlock` is the condition; this is the telling. It is NOT a loss and
+     * must not be drawn as one -- the level carries on the moment a stall opens -- but until
+     * this existed the board just went quiet: the carousel keeps turning, `remainingCount`
+     * stops moving, and nothing on screen changes. The human read that as the game failing
+     * to notice a loss, which is exactly how it looks.
+     *
+     * On the tick, not the frame: the answer only changes when the loop steps or a car
+     * lands, and `reachableColors` walks the whole ring to work it out.
+     *
+     * Held off while a car is still driving in. Core parks on tap, so the bay is already
+     * full during the drive, and that car may be the one that can board -- reading the
+     * condition then flickers the toast on and straight back off.
+     */
+    private syncUnlockUrge(): void {
+        const want = !!this.core?.needsUnlock() && !this.busy && this.arriving === 0;
+        if (want === this.urging) return;
+        this.urging = want;
+        this.parkingView?.urgeUnlock(want);
+        if (want) this.hud?.showToast('解锁车位');
     }
 
     private onDeparted(ids: number[]): void {

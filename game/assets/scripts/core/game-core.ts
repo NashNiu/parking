@@ -109,6 +109,42 @@ export class GameCore {
     return this.loop.reachableColors().has(color);
   }
 
+  /**
+   * Can any car on the bay still take a passenger? Only colours that can still REACH the
+   * gap count -- a car whose colour is stranded behind a full ring will never fill, however
+   * many of its passengers are still in the level.
+   */
+  private canFill(): boolean {
+    return this.parking.parked.some(
+      (p) => p !== null && p.filled < p.capacity && this.hasRemainingColor(p.color),
+    );
+  }
+
+  /**
+   * The board has stopped moving and the ONLY legal move left is to open a stall.
+   *
+   * Not a deadlock -- opening a stall is a real move, and the level goes on afterwards --
+   * but from the player's chair the two look identical, and that is a defect worth naming.
+   * The bay is full, nothing on it can board, so no ring cell is ever emptied, so no queued
+   * passenger can enter and the ring's contents are frozen (see `reachableColors`). The
+   * carousel keeps turning and `remainingCount` never changes again.
+   *
+   * Measured over the ten shipped levels, a player who holds on to their unlocks reaches
+   * exactly this state in 59 of 80 runs -- 8 of 8 on level 6 -- and the game used to say
+   * nothing at all about it. The human reported it as "it has already failed and the game
+   * has not noticed". It had not failed; it had gone quiet.
+   *
+   * Shares `canFill` with `isDeadlocked` on purpose: this state is what a deadlock is minus
+   * the lockable stalls, so the two must not be able to disagree about what "nothing can
+   * board" means.
+   */
+  needsUnlock(): boolean {
+    return this.state === 'playing'
+      && !this.parking.hasFreeSlot()
+      && this.parking.canUnlock()
+      && !this.canFill();
+  }
+
   private isDeadlocked(): boolean {
     // A LOCKABLE stall counts as room. The player can open one for free (`unlockSlot`), so
     // a bay that is full but not fully unlocked still has a legal move in it -- calling
@@ -119,10 +155,6 @@ export class GameCore {
     const room = this.parking.hasFreeSlot() || this.parking.canUnlock();
     const canBringOut = room && this.lot.movableCarIds().length > 0;
     if (canBringOut) return false;
-    const canFillSomething = this.parking.parked.some(
-      (p) => p !== null && p.filled < p.capacity && this.hasRemainingColor(p.color),
-    );
-    if (canFillSomething) return false;
-    return true;
+    return !this.canFill();
   }
 }
