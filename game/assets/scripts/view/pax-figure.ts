@@ -33,12 +33,6 @@ import { instancedLitMaterial } from './materials';
  * No face: no eyes, no mouth. The human explicitly did not ask for one, and a face
  * would make the figure's orientation legible enough to matter -- which is the
  * problem the four earlier rounds were spent on.
- *
- * All of the above describes the geometry as BUILT. What is DRAWN is a quarter turn
- * away: `buildPaxFigure` stands the figure up out of the board plane, so under the
- * straight-on orthographic camera every passenger reads as a ball -- see the note on
- * that turn. The facing convention still holds inside the figure's own frame, which
- * is what `setArmSwing` rotates in, and it is what a tilted camera would show again.
  */
 
 // Every size below is a FRACTION of the `height` argument, not an absolute unit: the
@@ -179,33 +173,13 @@ function armMesh(): Mesh {
  * allocation-free WeakMap lookup.
  */
 interface Parts {
-    /** Every renderer the figure has, so `recolorPaxFigure` never calls `getComponent`. */
+    body: Node; head: Node; armL: Node; armR: Node;
+    /** Every renderer, cached at build time so `recolorPaxFigure` never calls `getComponent`. */
     renderers: MeshRenderer[];
-    /** Null unless SHOW_HIDDEN_PARTS: there are no arms to swing on a crowd figure. */
-    armL: Node | null;
-    armR: Node | null;
     /** The material last applied, so an unchanged colour costs nothing. */
     mat: Material | null;
 }
 const registry = new WeakMap<Node, Parts>();
-
-/**
- * Whether to build the body and the two arms at all.
- *
- * FALSE, and this is exact rather than an approximation. The figure stands up out of the
- * board (see `buildPaxFigure`), so the camera looks straight down its own axis, and every
- * part below the head hides behind the head: the body's widest radius is 0.095 and the arms,
- * hanging straight back with no swing left to move them (see track-view), reach 0.07 + 0.03
- * = 0.10 from the axis -- both inside the head's 0.11. Not a pixel of them can be drawn.
- *
- * What it buys is the frame rate the human reported missing on a real device. Four renderers
- * per passenger on a 28-cell ring is 448 of them, plus the channels; one is 112. Cocos walks
- * every renderer in the scene each frame whether or not it contributes a pixel.
- *
- * Flip it back to true together with the camera tilt that would make the crowd people again.
- * Nothing else has to change: the arms keep their nodes and `setArmSwing` keeps working.
- */
-const SHOW_HIDDEN_PARTS = false;
 
 /**
  * Build one passenger figure `height` units tall. Returns the root node with its own
@@ -218,26 +192,6 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     const root = new Node(name);
     const fit = new Node('fit');
     fit.setScale(height, height, height);
-    // STAND IT UP, out of the board plane, rather than lay it flat IN the plane.
-    //
-    // The figure is built along its own +Y (feet at 0, head on top); this quarter turn about
-    // X sends that +Y along the board's +Z, i.e. straight at the camera. Under the
-    // orthographic straight-on camera you then see the head from directly above -- and since
-    // the head is the widest part by design (0.22 across, against a 0.19 body and arms that
-    // tuck inside 0.115 of the axis: see HEAD_RADIUS), the head hides the whole rest of the
-    // figure. What is drawn is a coloured ball.
-    //
-    // That is what a crowd on the ring has to be. Lying in the plane, a figure is 0.22 across
-    // and 0.55 TALL, so it covers most of whoever is behind it -- swept over a whole rotation
-    // of the five shipped ring shapes, figures from different cells overlapped on screen
-    // 98690 times, the worst of them hiding 60% of a body. Standing up, the same crowd
-    // overlaps 5836 times and the worst is a 5% graze. It also makes core's own check true:
-    // `minRowGap` has always measured a passenger as a 0.22 dot at its feet, and a ball seen
-    // end-on IS that dot -- see PAX_DEPTH in track-view for what that mismatch used to cost.
-    //
-    // The figure itself is untouched, which is the point of doing it this way rather than
-    // replacing it with a sphere: tilt the camera and the crowd is people again.
-    fit.setRotationFromEuler(90, 0, 0);
     root.addChild(fit);
 
     // One colour, one material, shared by all four parts of this figure: the head and
@@ -246,38 +200,40 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     // call -- and reusing this one object still leaves every part's (mesh, colour)
     // pair instanced across the whole crowd, per `instancedLitMaterial`'s own cache.
     const mat = instancedLitMaterial(color);
-    const renderers: MeshRenderer[] = [];
 
-    const add = (node: Node, mesh: Mesh): MeshRenderer => {
-        const mr = node.addComponent(MeshRenderer);
-        mr.mesh = mesh;
-        mr.material = mat;
-        fit.addChild(node);
-        renderers.push(mr);
-        return mr;
-    };
+    const body = new Node('body');
+    body.setPosition(0, BODY_HEIGHT / 2, 0);
+    const bodyMr = body.addComponent(MeshRenderer);
+    bodyMr.mesh = bodyMesh();
+    bodyMr.material = mat;
+    fit.addChild(body);
 
     const head = new Node('head');
     head.setPosition(0, BODY_HEIGHT + HEAD_RADIUS, 0);
-    add(head, headMesh());
+    const headMr = head.addComponent(MeshRenderer);
+    headMr.mesh = headMesh();
+    headMr.material = mat;
+    fit.addChild(head);
 
-    let armL: Node | null = null;
-    let armR: Node | null = null;
-    if (SHOW_HIDDEN_PARTS) {
-        const body = new Node('body');
-        body.setPosition(0, BODY_HEIGHT / 2, 0);
-        add(body, bodyMesh());
+    const armL = new Node('arm-L');
+    armL.setPosition(-SHOULDER_X, SHOULDER_Y, 0);
+    const armLMr = armL.addComponent(MeshRenderer);
+    armLMr.mesh = armMesh();
+    armLMr.material = mat;
+    fit.addChild(armL);
 
-        armL = new Node('arm-L');
-        armL.setPosition(-SHOULDER_X, SHOULDER_Y, 0);
-        add(armL, armMesh());
+    const armR = new Node('arm-R');
+    armR.setPosition(SHOULDER_X, SHOULDER_Y, 0);
+    const armRMr = armR.addComponent(MeshRenderer);
+    armRMr.mesh = armMesh();
+    armRMr.material = mat;
+    fit.addChild(armR);
 
-        armR = new Node('arm-R');
-        armR.setPosition(SHOULDER_X, SHOULDER_Y, 0);
-        add(armR, armMesh());
-    }
-
-    registry.set(root, { renderers, armL, armR, mat });
+    registry.set(root, {
+        body, head, armL, armR,
+        renderers: [bodyMr, headMr, armLMr, armRMr],
+        mat,
+    });
     return root;
 }
 
@@ -293,10 +249,12 @@ export function recolorPaxFigure(root: Node, color: Color, shade: (c: Color) => 
     const parts = registry.get(root);
     if (!parts) return;
     const mat = instancedLitMaterial(shade(color));
-    // Materials are cached per colour (see `instancedLitMaterial`), so this is an identity
-    // test, and it is worth having: the ring repaints every figure on every tick, six times
-    // a second, and assigning a renderer's material is not free. Most of those repaints ask
-    // for the colour that is already there.
+    // An identity test, and a load-bearing one. Materials are cached per colour (see
+    // `instancedLitMaterial`), and the ring repaints EVERY figure on EVERY tick -- six times
+    // a second, 112 figures, four renderers each -- while most of those repaints ask for the
+    // colour that is already there. Assigning a renderer's material is not free, and this
+    // spike once a tick is the shape of a stutter. The renderers are cached with the parts
+    // for the same reason: `getComponent` four times per figure per tick bought nothing.
     if (mat === parts.mat) return;
     parts.mat = mat;
     for (const mr of parts.renderers) mr.material = mat;
@@ -312,7 +270,7 @@ export function recolorPaxFigure(root: Node, color: Color, shade: (c: Color) => 
  */
 export function setArmSwing(root: Node, degrees: number): void {
     const parts = registry.get(root);
-    if (!parts || !parts.armL || !parts.armR) return;   // no arms built; see SHOW_HIDDEN_PARTS
+    if (!parts) return;
     parts.armL.setRotationFromEuler(degrees, 0, 0);
     parts.armR.setRotationFromEuler(-degrees, 0, 0);
 }
