@@ -29,7 +29,7 @@
 //   COCOS_CREATOR=<path to CocosCreator.exe>
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -76,29 +76,31 @@ function findWx() {
 }
 
 /**
- * Run a command through to completion, streaming its output.
- *
- * `tolerate` is for steps whose failure is not a failure: closing a project in a devtools
- * that is not running exits non-zero, and that is the state we wanted anyway.
+ * Run a command through to completion, streaming its output. Returns its exit status, or
+ * null if it could not start.
  */
-function run(label, exe, argv, { tolerate = false } = {}) {
-    console.log(`\n[preview] ${label}\n  ${exe} ${argv.join(' ')}`);
-    if (DRY) return true;
+function run(label, exe, argv) {
+    console.log('');
+    console.log(`[preview] ${label}`);
+    console.log(`  ${exe} ${argv.join(' ')}`);
+    if (DRY) return 0;
     const r = spawnSync(exe, argv, { stdio: 'inherit', shell: false });
     if (r.error) {
-        if (tolerate) return true;
         console.error(`[preview] ${label} could not start: ${r.error.message}`);
-        return false;
+        return null;
     }
-    if (r.status !== 0) {
-        if (tolerate) {
-            console.log(`[preview] ${label} exited ${r.status} -- ignoring, see the note above`);
-            return true;
-        }
-        console.error(`[preview] ${label} failed (exit ${r.status})`);
-        return false;
+    return r.status;
+}
+
+/** The newest mtime anywhere under `dir`, in ms, or 0 if the directory is missing. */
+function newestMtime(dir) {
+    if (!existsSync(dir)) return 0;
+    let newest = 0;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, entry.name);
+        newest = Math.max(newest, entry.isDirectory() ? newestMtime(p) : statSync(p).mtimeMs);
     }
-    return true;
+    return newest;
 }
 
 const wx = findWx();
@@ -118,18 +120,42 @@ if (!NO_BUILD && !creator) {
 if (creator) console.log(`[preview] creator      : ${creator}`);
 
 // 1. Off the folder. This is the step the whole script exists for -- see the note at the top.
-//    Tolerated: a devtools that is not running has already satisfied it.
-if (!run('closing the project in the devtools', wx, ['close', '--project', BUILD],
-         { tolerate: true })) process.exit(1);
+//    Its exit status is ignored on purpose: a devtools that is not running exits non-zero
+//    and has already satisfied what we wanted.
+run('closing the project in the devtools', wx, ['close', '--project', BUILD]);
 
 // 2. Build, with nothing watching the folder.
+//
+//    JUDGED BY ITS OUTPUT, NOT BY ITS EXIT CODE, and that is not laziness. Creator's CLI is
+//    an Electron app that exits non-zero on a perfectly ordinary quit -- observed: exit 36
+//    on a build whose own log said `build Task (wechatgame) Finished in (12 s)` and which
+//    had just rewritten game.js, game.json and first-screen.js. Gating on the status
+//    reported a working build as a failure and sent the human off to close a GUI that was
+//    already closed. So: did the folder come out coherent, and was it written just now?
 if (creator) {
-    const ok = run('building wechatgame', creator,
-                   ['--project', GAME, '--build', 'platform=wechatgame']);
-    if (!ok) {
-        console.error('[preview] The build step needs Creator\'s GUI CLOSED on this project.');
-        console.error('          Close it and re-run, or build in the GUI and use --no-build.');
+    const startedAt = Date.now();
+    const status = run('building wechatgame', creator,
+                       ['--project', GAME, '--build', 'platform=wechatgame']);
+    if (status === null) process.exit(1);
+    const wrote = newestMtime(BUILD);
+    const coherent = existsSync(join(BUILD, 'game.js')) && existsSync(join(BUILD, 'game.json'));
+    if (!coherent) {
+        console.error('');
+        console.error(`[preview] the build produced no usable output in ${BUILD}`);
+        console.error(`          (creator exited ${status}; its log is above)`);
         process.exit(1);
+    }
+    // A second of slack: mtimes and Date.now() do not have to agree to the millisecond.
+    if (!DRY && wrote < startedAt - 1000) {
+        console.log('');
+        console.log('[preview] NOTE: nothing in the build folder was rewritten');
+        console.log(`          (newest file ${new Date(wrote).toLocaleString()})`);
+        console.log(`          Creator may have skipped an unchanged build. Check the build`);
+        console.log(`          tag on screen against what you expect.`);
+    } else if (status !== 0) {
+        console.log('');
+        console.log(`[preview] creator exited ${status}, which it does on a normal quit --`);
+        console.log(`          the output is fresh, so the build is good.`);
     }
 }
 
@@ -137,7 +163,15 @@ if (creator) {
 const qr = AS_IMAGE
     ? ['--qr-format', 'image', '--qr-output', join(REPO, '.tmp', 'preview-qr.png')]
     : ['--qr-format', 'terminal'];
-if (!run('generating the preview QR', wx, ['preview', '--project', BUILD, ...qr])) process.exit(1);
+const previewStatus = run('generating the preview QR', wx, ['preview', '--project', BUILD, ...qr]);
+if (previewStatus === null) process.exit(1);
+if (previewStatus !== 0) {
+    console.error('');
+    console.error(`[preview] the devtools CLI exited ${previewStatus} -- read its message above.`);
+    console.error('          If it is ENOENT on a file, something was watching the folder');
+    console.error('          during the build; see the note at the top of this file.');
+    process.exit(1);
+}
 
 if (AS_IMAGE) console.log(`\n[preview] QR written to ${join(REPO, '.tmp', 'preview-qr.png')}`);
 console.log('\n[preview] done. Scan it. No cache to clear -- see the note at the top of this file.');

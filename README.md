@@ -77,6 +77,8 @@ npm run preview:nobuild    # 跳过构建(已经在 Creator 界面里点过构�
 
 真正起作用的只有**顺序**:开了 MD5 缓存的 Cocos 是先写原名、再改名成带哈希的,而开发者工具的文件监听(`wxfilewatcher.exe`)在项目打开期间会把**两个名字都**排进编译队列 —— 改名前那个在打包时早就不存在了。所以脚本做的就是 `close` → 构建 → `preview`,让 Cocos 写文件的时候没人在盯着那个目录。
 
+**别用退出码判断构建成不成功。** Creator 的 CLI 是个 Electron 应用,正常退出也会给非零码 —— 实测 **exit 36**,而它自己的日志写着 `build Task (wechatgame) Finished in (12 s)`、`game.js`/`game.json` 也刚刚重写过。脚本因此**看产物**:目录是否自洽、文件是不是刚写的。
+
 `npm run preview` 会自己起一个 Creator 实例来构建,所以它要求 **Creator 界面在这个项目上是关着的**。想留着界面改场景,就在界面里点构建、然后跑 `npm run preview:nobuild` —— 开发者工具那一侧照样由脚本处理。
 
 两个工具的路径自动探测,探不到用环境变量顶:`WX_DEVTOOLS_CLI`(cli.bat)、`COCOS_CREATOR`(CocosCreator.exe)。`--dry-run` 只打印要执行的命令,`--image` 把二维码写成 PNG 而不是画在终端里。
