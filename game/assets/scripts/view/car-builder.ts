@@ -3,7 +3,7 @@ import {
     Vec3, Mat4, utils, primitives,
 } from 'cc';
 import { Cap } from '../core/index';
-import { litMaterial, readMainColor } from './materials';
+import { instancedLitMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
@@ -119,19 +119,38 @@ function scaleColor(c: Color, f: number): Color {
 }
 
 /**
- * Recolor the car body by REPLACING the paint/glass material slots with our own
- * opaque litMaterial (the same builtin-standard material the balls use — proven to
- * render its color reliably). We don't mutate the imported glTF materials: on these
- * models `mainColor` overrides didn't reliably reach the albedo, and the glass is
- * semi-transparent (so tinting it left the canopy dark from the top-down camera).
- * Replacing the slot guarantees a solid, correctly-colored body. Paint → `color`;
- * glass canopy → a slightly darker tint (a hint of "window" while still clearly the
- * car's color). Lamps/trim/tires/hubs keep their authored materials.
- * litMaterial is builtin-standard, so the emissive tap/flash feedback still works.
+ * Give every material slot on the car an INSTANCED material of the right colour.
+ *
+ * Two jobs in one pass, and the second is why it touches slots it does not recolour.
+ *
+ * RECOLOURING. The paint slot takes `color` and the glass canopy a slightly darker tint --
+ * a hint of window while still clearly the car's colour. The imported glTF materials are
+ * replaced rather than mutated: on these models `mainColor` overrides did not reliably
+ * reach the albedo, and the authored glass is semi-transparent, so tinting it left the
+ * canopy dark under a top-down camera. Replacing the slot guarantees a solid body.
+ *
+ * INSTANCING, which is a frame-rate fix measured on a device. Each model is 9 primitives,
+ * so 9 MeshRenderers, and a level holds 46 cars: about 414 draw calls for the lot alone,
+ * against roughly 600 in the whole scene. At 18fps -- 55ms a frame -- that is about what
+ * 600 mobile draw calls cost, and the cars were the bulk of it. 46 copies of the same 9
+ * meshes is the textbook instancing case, and it only works if the material is instanced
+ * TOO, so the five roles nobody recolours (trim, lamps, taillamps, tyres, hubs) have to be
+ * swapped as well or they keep a non-instanced draw each.
+ *
+ * Swapping them costs nothing, and that is a fact about these particular models rather
+ * than an assumption: all three GLBs carry ZERO textures and ZERO images, and all seven
+ * materials are a flat baseColorFactor. There is no authored detail for a flat lit material
+ * of the same colour to lose. Re-check that if the models are ever re-exported with a
+ * texture -- `readMainColor` would silently flatten it away.
+ *
+ * `instancedLitMaterial` is builtin-standard, so the emissive flash still works. It is
+ * shared per colour, so flashing one car flashes every car of that colour -- already true
+ * before this change, and the one surviving caller (the deadlock highlight) wants all of
+ * them anyway.
  */
 function recolorCar(model: Node, color: Color): void {
-    const paintMat = litMaterial(color);
-    const glassMat = litMaterial(scaleColor(color, 0.72));
+    const paintMat = instancedLitMaterial(color);
+    const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
         const mats = mr.sharedMaterials;
         for (let i = 0; i < mats.length; i++) {
@@ -139,6 +158,10 @@ function recolorCar(model: Node, color: Color): void {
             if (!m) continue;
             if (matchesRole(m, 'paint')) mr.setMaterial(paintMat, i);
             else if (matchesRole(m, 'glass')) mr.setMaterial(glassMat, i);
+            // Every other role keeps its own colour and gains instancing. White when the
+            // material has no readable `mainColor`, which is what glTF means by a missing
+            // baseColorFactor -- `trim` on these models is exactly that.
+            else mr.setMaterial(instancedLitMaterial(readMainColor(m) ?? Color.WHITE), i);
         }
     }
 }
@@ -148,7 +171,7 @@ function fallbackBox(body: Node, len: number, wid: number, color: Color): void {
     const box = new Node('box');
     const mr = box.addComponent(MeshRenderer);
     mr.mesh = utils.createMesh(primitives.box({ width: len * 0.9, height: wid * 0.9, length: 0.5 }));
-    mr.material = litMaterial(color);
+    mr.material = instancedLitMaterial(color);
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.ON;
     box.setPosition(0, 0, 0.25); // rest on the board plane, not straddling it
     body.addChild(box);
