@@ -29,13 +29,14 @@
 //   COCOS_CREATOR=<path to CocosCreator.exe>
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GAME = join(REPO, 'game');
 const BUILD = join(GAME, 'build', 'wechatgame');
+const BUILD_LOGS = join(GAME, 'temp', 'builder', 'log');
 
 const args = new Set(process.argv.slice(2));
 const NO_BUILD = args.has('--no-build');
@@ -103,6 +104,49 @@ function newestMtime(dir) {
     return newest;
 }
 
+/**
+ * Newest `wechatgame*.log` Creator wrote for this project, by mtime, or null.
+ *
+ * Creator names them by wall-clock minute, so mtime is the only ordering that survives a
+ * build that straddles a minute boundary.
+ */
+function newestBuildLog() {
+    if (!existsSync(BUILD_LOGS)) return null;
+    let best = null, bestAt = 0;
+    for (const entry of readdirSync(BUILD_LOGS, { withFileTypes: true })) {
+        if (!entry.isFile() || !/^wechatgame.*\.log$/i.test(entry.name)) continue;
+        const path = join(BUILD_LOGS, entry.name);
+        const at = statSync(path).mtimeMs;
+        if (at > bestAt) { best = path; bestAt = at; }
+    }
+    return best ? { path: best, at: bestAt } : null;
+}
+
+/**
+ * Lines in a build log that mean A SCRIPT CLASS WENT MISSING, deduplicated.
+ *
+ * THIS IS THE CHECK THE FOLDER CANNOT DO. When the build serializes a scene it looks the
+ * component's class up in the EDITOR's compiled chunks, and on a cold project open those
+ * chunks are still being written -- the log says `... is not in module cache!` right before
+ * it gives up. Creator does not fail the build over it: it writes `_components: [null]` into
+ * the scene, finishes every other task, and produces a folder that is complete, fresh and
+ * coherent by every test this script used to apply. The game then boots to a BLANK SCREEN
+ * and says only `Error 3817 ... Arguments: GameController, 0` -- engine-speak for "the
+ * component at index 0 was corrupt, so I removed it".
+ *
+ * Measured: 1 of 9 builds on 2026-08-31. It is a race, so it will pass most of the time and
+ * fail without a source change, which is exactly why it has to be read out of the log rather
+ * than reasoned about.
+ */
+function missingClassErrors(logPath) {
+    const text = readFileSync(logPath, 'utf8');
+    const hits = new Set();
+    for (const line of text.split(/\r?\n/)) {
+        if (/is missing or invalid|Missing class:/.test(line)) hits.add(line.trim());
+    }
+    return [...hits];
+}
+
 const wx = findWx();
 if (!wx) {
     console.error('[preview] WeChat devtools CLI not found. Set WX_DEVTOOLS_CLI to its cli.bat.');
@@ -132,19 +176,32 @@ run('closing the project in the devtools', wx, ['close', '--project', BUILD]);
 //    had just rewritten game.js, game.json and first-screen.js. Gating on the status
 //    reported a working build as a failure and sent the human off to close a GUI that was
 //    already closed. So: did the folder come out coherent, and was it written just now?
-if (creator) {
+/**
+ * One build attempt. Returns 'ok', 'no-output', or 'lost-a-class'.
+ *
+ * JUDGED BY ITS OUTPUT AND ITS LOG, NOT BY ITS EXIT CODE, and that is not laziness.
+ * Creator's CLI is an Electron app that exits non-zero on a perfectly ordinary quit --
+ * observed: exit 36 on a build whose own log said `build Task (wechatgame) Finished in
+ * (12 s)` and which had just rewritten game.js, game.json and first-screen.js. Gating on the
+ * status reported a working build as a failure and sent the human off to close a GUI that
+ * was already closed. So: did the folder come out coherent, was it written just now, and did
+ * the log stay quiet about the scripts?
+ */
+function buildOnce() {
     const startedAt = Date.now();
     const status = run('building wechatgame', creator,
                        ['--project', GAME, '--build', 'platform=wechatgame']);
     if (status === null) process.exit(1);
-    const wrote = newestMtime(BUILD);
+
     const coherent = existsSync(join(BUILD, 'game.js')) && existsSync(join(BUILD, 'game.json'));
     if (!coherent) {
         console.error('');
         console.error(`[preview] the build produced no usable output in ${BUILD}`);
         console.error(`          (creator exited ${status}; its log is above)`);
-        process.exit(1);
+        return 'no-output';
     }
+
+    const wrote = newestMtime(BUILD);
     // A second of slack: mtimes and Date.now() do not have to agree to the millisecond.
     if (!DRY && wrote < startedAt - 1000) {
         console.log('');
@@ -155,7 +212,46 @@ if (creator) {
     } else if (status !== 0) {
         console.log('');
         console.log(`[preview] creator exited ${status}, which it does on a normal quit --`);
-        console.log(`          the output is fresh, so the build is good.`);
+        console.log(`          the output is fresh, so the folder is good.`);
+    }
+
+    if (DRY) return 'ok';
+    const log = newestBuildLog();
+    if (!log || log.at < startedAt - 1000) {
+        console.log('');
+        console.log(`[preview] NOTE: no build log newer than this run under ${BUILD_LOGS},`);
+        console.log(`          so the script check below could not run.`);
+        return 'ok';
+    }
+    const lost = missingClassErrors(log.path);
+    if (!lost.length) return 'ok';
+    console.error('');
+    console.error('[preview] THIS BUILD LOST A SCRIPT CLASS. The folder looks fine and the game');
+    console.error('          would boot to a blank screen -- see the note on missingClassErrors.');
+    for (const line of lost) console.error(`          ${line}`);
+    console.error(`          (from ${log.path})`);
+    return 'lost-a-class';
+}
+
+if (creator) {
+    let outcome = buildOnce();
+    // Retry ONCE, and only for the race. The first attempt leaves the editor's compiled
+    // chunks on disk, so the second one finds the class cache warm -- a real mechanism, not
+    // a superstition. A folder with no output at all is not a race and gets no retry.
+    if (outcome === 'lost-a-class') {
+        console.log('');
+        console.log('[preview] retrying once -- the first build warmed the class cache.');
+        outcome = buildOnce();
+    }
+    if (outcome !== 'ok') {
+        console.error('');
+        console.error('[preview] NOT handing this build to the devtools.');
+        if (outcome === 'lost-a-class') {
+            console.error('          Two builds in a row lost the class, so this is not the race:');
+            console.error('          open the project in Creator and look for a script that fails');
+            console.error('          to compile.');
+        }
+        process.exit(1);
     }
 }
 
