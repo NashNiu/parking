@@ -118,11 +118,38 @@ const SHOULDER_X = BODY_RADIUS_TOP - ARM_RADIUS * 0.5;
  */
 const WIDEST_EXTENT_AT_PAX_HEIGHT = Math.max(2 * HEAD_RADIUS, 2 * (SHOULDER_X + ARM_RADIUS)) * 0.55;
 
-// Mesh segment counts. Low, on purpose: these parts are a handful of pixels across at
-// this game's zoom, and every figure in the crowd shares the one cached mesh per
-// part, so this vertex count is paid once for the whole crowd, not once per figure.
-const SPHERE_SEGMENTS = 8;
-const CAPSULE_SIDES = 8;
+/*
+ * Mesh segment counts, PER PART, because the parts are nothing like the same size on screen.
+ *
+ * The crowd shares one cached mesh, so this is uploaded once -- but sharing a mesh does NOT
+ * make the triangles free. The figures are instanced, and an instanced draw runs the vertex
+ * shader once per instance: 256 figures on a filled ring and its channels means this count
+ * is rasterised 256 times EVERY FRAME. At the shipped 8/8/8 that was 464 triangles a figure
+ * and about 119k on the frame. So these are a frame-rate knob, and the earlier note here
+ * ("paid once for the whole crowd") was true of memory and wrong about the frame.
+ *
+ * Sized to what each part actually spans on a phone, where a whole figure is about 40px:
+ *
+ * - HEAD_SEGMENTS is the one the eye can see. The head is the widest part and it is a
+ *   silhouette on the ring's edge, so it keeps the most: 6 costs 2*6*6 = 72 triangles.
+ * - BODY_SIDES 6: the torso is the visible mass but only ~7px wide, and it is only ever seen
+ *   from the front on a fixed camera, so its facets never catch a rim light.
+ * - ARM_SIDES 4: an arm is ARM_RADIUS 0.03 against a 0.55 figure -- about 2px. A square
+ *   cross-section is not distinguishable from a round one at that width, and the two arms
+ *   together were HALF the figure's triangles before this.
+ *
+ * 464 -> 268 triangles a figure, so about 119k -> 69k on a filled ring.
+ *
+ * CAPSULE_HEIGHT_SEGMENTS STAYS AT 8, and it is not an oversight -- 8 is the FLOOR here.
+ * The engine splits it between the two hemisphere caps and the torso in proportion to their
+ * share of the height, with Math.floor: the arm's cap is 0.03 of a 0.40 length, so it gets
+ * floor(hs * 0.136) rings, which is 0 for any hs below 8. At 0 the generator computes
+ * `lat * PI / bottomSegments / 2` -- 0/0 -- and pushes NaN vertices, and emits no cap
+ * indices at all, leaving the arms as open tubes. Cheap-looking knob, silent breakage.
+ */
+const HEAD_SEGMENTS = 6;
+const BODY_SIDES = 6;
+const ARM_SIDES = 4;
 const CAPSULE_HEIGHT_SEGMENTS = 8;
 
 /**
@@ -197,11 +224,11 @@ let figureMeshCache: Mesh | null = null;
  */
 function figureMesh(): Mesh {
     if (figureMeshCache) return figureMeshCache;
-    const head = primitives.sphere(HEAD_RADIUS, { segments: SPHERE_SEGMENTS });
+    const head = primitives.sphere(HEAD_RADIUS, { segments: HEAD_SEGMENTS });
     const body = primitives.capsule(BODY_RADIUS_TOP, BODY_RADIUS_BOTTOM, BODY_HEIGHT,
-        { sides: CAPSULE_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
+        { sides: BODY_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
     const arm = primitives.capsule(ARM_RADIUS, ARM_RADIUS, ARM_LENGTH,
-        { sides: CAPSULE_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
+        { sides: ARM_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
     const armPositions = Array.from(arm.positions as number[]);
     for (let i = 1; i < armPositions.length; i += 3) armPositions[i] -= ARM_LENGTH / 2;
     const shoulderArm = { ...arm, positions: armPositions };

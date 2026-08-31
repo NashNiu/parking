@@ -296,6 +296,21 @@ const BAND_IDLE = new Color(211, 217, 231);
  */
 export class TrackView {
     private readonly path: TrackPath;
+    /**
+     * One walking-in row per side, reused for every entry (see `flierRow`), together with
+     * its four figure nodes so the layout does not re-walk `children` every tick.
+     *
+     * `flierCycleId` replaces the node-identity test the old per-tick row allowed: with a
+     * pooled node, "is this still my flier?" has to be a number. `flierOwns` is the ring
+     * slot a side has hidden, so an interrupted cycle can put its slot back -- the old code
+     * did not need this because the interrupting cycle always hid the same slot, which stops
+     * being true the moment two entries in flight can share one row.
+     */
+    private readonly flierRows: Record<FeedSide, Node | null> = { far: null, near: null };
+    private flierFigures: Record<FeedSide, Node[]> = { far: [], near: [] };
+    private readonly flierCycleId: Record<FeedSide, number> = { far: 0, near: 0 };
+    private readonly flierOwns: Record<FeedSide, number | null> = { far: null, near: null };
+
     private readonly capacity: number;
     private readonly boardIndex: number;
     /**
@@ -339,9 +354,6 @@ export class TrackView {
 
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
-
-    /** The in-flight entry flier for each side, if any (see `playEntry`). */
-    private pendingFlier: Record<FeedSide, Node | null> = { far: null, near: null };
 
     /** Scratch for `point`/`normal`'s core-side sample; core's `Pt`, not a `Vec3`. */
     private readonly _pt = { x: 0, y: 0 };
@@ -407,6 +419,18 @@ export class TrackView {
     destroy(): void {
         this.phaseTween?.stop();
         this.phaseTween = null;
+        // The pooled entry rows are children of the board and die with it, but the
+        // references would outlive them -- and `flierRow` hands back whatever it holds.
+        // It re-checks isValid, so this is belt and braces; the cycle counters are not,
+        // since a stale one would let a dead callback re-show a slot on the next level.
+        for (const side of ['far', 'near'] as FeedSide[]) {
+            const row = this.flierRows[side];
+            if (row) Tween.stopAllByTarget(row);
+            this.flierRows[side] = null;
+            this.flierFigures[side] = [];
+            this.flierCycleId[side]++;
+            this.flierOwns[side] = null;
+        }
     }
 
     /**
@@ -826,27 +850,32 @@ export class TrackView {
         // The flier's tween and the tick are both exactly `this.tick` long, and
         // `tickAcc`'s leftover usually fires the next tick a frame before this one
         // lands -- so a second hole can reach this entrance while the previous
-        // flier is still in flight. Stop and drop it now so its completion callback
-        // (below) can't re-show `slot` after this cycle has already hidden it again.
-        const stale = this.pendingFlier[side];
-        if (stale) {
-            Tween.stopAllByTarget(stale);
-            if (stale.isValid) stale.destroy();
-            this.pendingFlier[side] = null;
+        // flier is still in flight. Take it over rather than replace it: the row is
+        // POOLED (see `flierRow`), so there is one node per side and the newer cycle
+        // simply stops the tween on it and starts its own. `flierCycleId` is what tells
+        // the two apart now that node identity cannot -- see the callback below.
+        const flier = this.flierRow(side);
+        Tween.stopAllByTarget(flier);
+        const cycle = ++this.flierCycleId[side];
+        const owned = this.flierOwns[side];
+        if (owned !== null && owned !== index) {
+            // The cycle we are interrupting had hidden a DIFFERENT slot. Put it back,
+            // or it stays invisible for the rest of the level.
+            const prev = this.clusters[owned];
+            if (prev && prev.isValid) prev.active = true;
         }
+        this.flierOwns[side] = index;
 
         slot.active = false;
         // A whole row walks in, laid out the way it will rest once it joins the track,
         // so the hand-off to the real row at the end is invisible.
-        const flier = makeRow('pax-enter');
-        const figures = flier.children.slice();
+        const figures = this.flierFigures[side];
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
         layoutRow(figures, n.x, n.y, BLOCK.rankStep);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
-        this.root.addChild(flier);
-        this.pendingFlier[side] = flier;
+        flier.active = true;
         // The resting spot AND its depth: the flier hands over to the real row at the end,
         // and a hand-off between two different depths shows as a pop in who occludes whom.
         const rest = this.point(index / this.capacity);
@@ -854,15 +883,43 @@ export class TrackView {
         tween(flier)
             .to(this.tick, { position: rest })
             .call(() => {
-                // Only re-activate the slot if this flier is still the pending one
-                // for this side -- if not, a newer playEntry already stopped and
-                // destroyed it (see above), and that newer cycle owns `slot` now.
-                if (this.pendingFlier[side] === flier) {
-                    this.pendingFlier[side] = null;
-                    if (slot.isValid) slot.active = true;
-                }
-                if (flier.isValid) flier.destroy();
+                // Only hand `slot` back if this cycle is still the current one: a newer
+                // playEntry may have taken the pooled row over (see above), and that
+                // cycle owns the slot -- and the row -- now.
+                if (this.flierCycleId[side] !== cycle) return;
+                this.flierOwns[side] = null;
+                if (slot.isValid) slot.active = true;
+                if (flier.isValid) flier.active = false;
             })
             .start();
+    }
+
+    /**
+     * The pooled walking-in row for one side, built on first use.
+     *
+     * It used to be a fresh `makeRow` every tick, destroyed when it landed: four Nodes and
+     * four MeshRenderers created and torn down per tick per feeding channel. A MeshRenderer
+     * is not a cheap object -- it brings up a scene Model, a sub-model and its descriptor
+     * sets -- and the cost lands in one lump inside a single frame, which is the shape of a
+     * stutter rather than a lower average.
+     *
+     * That is also why DOUBLE SPEED felt worse than half the frame rate would explain: the
+     * per-frame work is unchanged by the speed button, but this ran once per TICK, so 2x
+     * doubled it. Measured on device: 40fps at 1x, 30fps at 2x, on a filled ring.
+     *
+     * Two rows for the whole level now, hidden between entries. `playBoarding` in
+     * GameController still spawns its fliers per boarding and could get the same treatment;
+     * it is left alone because boarding needs a matching car at the gap, so unlike this it
+     * does not fire every tick.
+     */
+    private flierRow(side: FeedSide): Node {
+        let row = this.flierRows[side];
+        if (row && row.isValid) return row;
+        row = makeRow(`pax-enter-${side}`);
+        row.active = false;
+        this.root.addChild(row);
+        this.flierRows[side] = row;
+        this.flierFigures[side] = row.children.slice();
+        return row;
     }
 }
