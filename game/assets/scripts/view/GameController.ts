@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0831-2';
+const BUILD_TAG = 'build 0831-3';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -388,6 +388,19 @@ export class GameController extends Component {
      */
     private arriving = 0;
     /**
+     * The build tag without its frame-rate suffix, and a one-second frame counter.
+     *
+     * On screen because "it stutters on the phone and not in the simulator" is a claim about
+     * a number nobody can read. Twice now the ring has been reported as choppy on a device
+     * and the answer has had to be inferred from what the code does per frame rather than
+     * from what the device manages -- and the last inference was right about one cause (a
+     * strobing arm swing) while the frame rate itself stayed a guess. A dev aid, alongside
+     * the tag and the level picker, and it goes when they go.
+     */
+    private tagText = '';
+    private fpsFrames = 0;
+    private fpsClock = 0;
+    /**
      * Degrees the board leans back. Zero means the camera looks straight down the board's
      * normal — a flat, straight-on view, which is what the art is designed for. It was 52
      * for a 2.5D three-quarter look; the trade is that at zero the cars only ever show
@@ -453,7 +466,8 @@ export class GameController extends Component {
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
-            this.hud.setBuildTag(BUILD_TAG);
+            this.tagText = BUILD_TAG;
+            this.hud.setBuildTag(this.tagText);
             this.uiCam = canvas.getComponentInChildren(Camera);
         } else {
             console.warn('[Game] Canvas not found — HUD disabled. Create a Canvas node named "Canvas".');
@@ -579,7 +593,8 @@ export class GameController extends Component {
             // code can fix that. A different uuid means the package holds an asset this tree
             // does not, and the search moves back to the build.
             const stamp = levelStamp(level, asset.uuid);
-            this.hud?.setBuildTag(`${BUILD_TAG} · ${stamp}`);
+            this.tagText = `${BUILD_TAG} · ${stamp}`;
+            this.hud?.setBuildTag(this.tagText);
             console.log(`[Game] level '${name}' started, state=${this.core.getState()}, ${stamp}`);
             if (this.core.getState() !== 'playing') this.logStartupDiagnosis(level);
         });
@@ -1010,6 +1025,7 @@ export class GameController extends Component {
         // which hangs off a board point and so moves with the framing.
         this.fitCamera();
         this.placeSpeedButton();
+        this.tickFps(dt);
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
         // level (nothing left to fill the parked cars, nothing left that can move).
@@ -1053,6 +1069,29 @@ export class GameController extends Component {
             }
             this.syncUnlockUrge();
         }
+    }
+
+    /**
+     * Stamp the measured frame rate next to the build tag, once a second.
+     *
+     * On screen because "it stutters on the phone and not in the simulator" is a claim about
+     * a number nobody can read. Twice now the ring has been reported as choppy on a device
+     * and the answer had to be inferred from what the code does per frame rather than from
+     * what the device manages -- and the last inference was right about one cause (an arm
+     * swing that strobed) while the frame rate itself stayed a guess.
+     *
+     * Counted before `update`'s guards, so it keeps running while a level is over or between
+     * levels: a frame rate that only reads during play cannot tell you what a load or a
+     * banner costs. A dev aid, alongside the tag and the level picker, and it goes with them.
+     */
+    private tickFps(dt: number): void {
+        this.fpsFrames++;
+        this.fpsClock += dt;
+        if (this.fpsClock < 1) return;
+        const fps = Math.round(this.fpsFrames / this.fpsClock);
+        this.fpsFrames = 0;
+        this.fpsClock = 0;
+        if (this.tagText) this.hud?.setBuildTag(`${this.tagText} · ${fps}fps`);
     }
 
     /**

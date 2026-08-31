@@ -94,15 +94,28 @@ const PAX_HEIGHT = 0.55;
 const PAX_DEPTH = 2.1;
 
 /**
- * Ring-figure arm swing, driven by the ring's own phase (`repositionAll`) rather than
- * a separate accumulator, so it advances with the ring's motion and stops when the
- * ring stops. `phaseHolder.p` sweeps a narrow range every tick (from -1/capacity up to
- * 0, see `update()`), so SWING_PHASE_SCALE blows that back up into a useful sweep of
- * the sine argument. SWING_STAGGER offsets each figure by its own mixed row/seat
- * index so a whole ring doesn't swing in lockstep like a marching toy.
+ * Ring-figure arm swing, driven by how far the ring has TRAVELLED -- a number that only ever
+ * goes up -- rather than by `phaseHolder.p`.
+ *
+ * That distinction is a bug fix, not a refactor. `phaseHolder.p` is a SAWTOOTH: every tick it
+ * is reset to -1/capacity and tweened to 0 (see `update`, and the note there on why the reset
+ * is absolute). Feeding it to a sine meant every arm swept SWING_RATE radians of the sine
+ * argument over the tick and then jumped BACK by the same amount at the tick boundary -- a
+ * discontinuity of up to the full amplitude, 44 degrees, on every shown figure at once, 5.9
+ * times a second. 112 figures strobing in step is not a crowd walking; the human reported the
+ * ring on a device as making them dizzy, and the simulator hid it because more intermediate
+ * frames make the sweep visible and the snap a smaller share of what you see.
+ *
+ * `travel` is the tick count plus the fraction of the current tick, so it is continuous
+ * across the boundary the sawtooth broke. SWING_RATE is radians of sine argument per CELL of
+ * travel, which is what SWING_PHASE_SCALE was trying to be: at 1.4286 a full swing cycle
+ * takes 4.4 cells, about three quarters of a second, which is a walking cadence.
+ *
+ * SWING_STAGGER offsets each figure by its own mixed row/seat index so a whole ring doesn't
+ * swing in lockstep like a marching toy.
  */
 const SWING_AMPLITUDE_DEG = 22;
-const SWING_PHASE_SCALE = 40;
+const SWING_RATE = 1.4286;
 const SWING_STAGGER = 0.7;
 
 /** Identity shade — the active/undimmed case for `paintPassenger`. */
@@ -335,6 +348,11 @@ export class TrackView {
     private laneSlabs: Record<FeedSide, Node | null> = { far: null, near: null };
     private lastLen: Record<FeedSide, number> = { far: -1, near: -1 };
 
+    /**
+     * Cells the ring has travelled, whole part only: `repositionAll` adds the fraction of the
+     * tick in flight. Monotonic, which is the point -- see SWING_RATE.
+     */
+    private travelTicks = 0;
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
@@ -659,6 +677,7 @@ export class TrackView {
         // dragging the whole ring backwards until the passenger the core boards was
         // drawn short of the boarding gap, toward the right side, while the fly still
         // departed from the gap. Resetting absolutely discards the shortfall instead.
+        this.travelTicks++;
         this.phaseTween?.stop();
         this.phaseHolder.p = -1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
@@ -755,6 +774,8 @@ export class TrackView {
 
     private repositionAll(): void {
         const phase = this.phaseHolder.p % 1;
+        // Continuous across the tick boundary, where `phase` is not: see SWING_RATE.
+        const travel = this.travelTicks + (phase + 1 / this.capacity) * this.capacity;
         for (let i = 0; i < this.clusters.length; i++) {
             const cluster = this.clusters[i];
             // Guard against a tween tick landing after the board was destroyed on restart.
@@ -770,13 +791,13 @@ export class TrackView {
             const figures = this.rowFigures[i];
             layoutRow(figures, n.x, n.y, BLOCK.rankStep);
             // The ring is moving and the channels are not — that contrast is what
-            // tells a player which one is which — so only ring figures swing, driven
-            // by the same phase that already moves them, and only the ones actually
-            // shown this tick (paintRow toggles `active` per seat).
+            // tells a player which one is which — so only ring figures swing, and only the
+            // ones actually shown this tick (paintRow toggles `active` per seat).
             for (let j = 0; j < figures.length; j++) {
                 if (!figures[j].active) continue;
                 const mixed = i * GROUP_SIZE + j;
-                const swing = Math.sin(phase * SWING_PHASE_SCALE + mixed * SWING_STAGGER) * SWING_AMPLITUDE_DEG;
+                const swing = Math.sin(travel * SWING_RATE + mixed * SWING_STAGGER)
+                    * SWING_AMPLITUDE_DEG;
                 setArmSwing(figures[j], swing);
             }
         }
