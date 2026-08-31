@@ -221,19 +221,26 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
 }
 
 /**
- * A row node holding GROUP_SIZE passenger figures as children. The row's transform is the
- * group's position AND its heading on the track (`aimRow`); the children carry fixed
- * across-the-row offsets that `layoutRow` sets once.
+ * A row node holding GROUP_SIZE passenger figures as children, ALREADY SPREAD OUT. The row's
+ * transform is the group's position and its heading on the track (`aimRow`); the children
+ * carry fixed across-the-row offsets.
+ *
+ * `layoutRow` is called from here and nowhere else, and that is deliberate. It used to run
+ * every frame from `repositionAll`, and when it moved off the per-frame path the one-time
+ * call was simply never added: every ring row was built with its four figures stacked at the
+ * origin, so a group of four drew as ONE ball. The human found it immediately. A row cannot
+ * be in existence un-spread now, because the only way to make one does both.
  *
  * The row used not to be rotated at all, because the figures lay in the board plane and
  * spinning the row would have tipped them over. They stand up out of it now, so the row is
  * free to turn -- see `aimRow`.
  */
-function makeRow(name: string): Node {
+function makeRow(name: string, rankStep: number): Node {
     const row = new Node(name);
     for (let i = 0; i < GROUP_SIZE; i++) {
         row.addChild(makePassenger(`${name}-${i}`, Color.WHITE));
     }
+    layoutRow(row.children, rankStep);
     return row;
 }
 
@@ -449,7 +456,7 @@ export class TrackView {
 
     private buildClusters(parent: Node): void {
         for (let i = 0; i < this.capacity; i++) {
-            const cluster = makeRow(`pax-row-${i}`);
+            const cluster = makeRow(`pax-row-${i}`, BLOCK.rankStep);
             this.rowFigures.push(cluster.children.slice());
             const t = i / this.capacity;
             const p = this.point(t);
@@ -565,11 +572,10 @@ export class TrackView {
                 rows = Math.max(rows, Math.floor(atEdge) + 2);
             }
             for (let i = 0; i < rows; i++) {
-                const n = makeRow(`wait-${channel.side}-${i}`);
+                const n = makeRow(`wait-${channel.side}-${i}`, LANE_RANK_STEP);
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
-                layoutRow(figures, LANE_RANK_STEP);
                 aimRow(n, across.x, across.y);
                 // NO yaw any more, and this is not an omission. Figures stand UP out of
                 // the board now (see `buildPaxFigure`), so a figure's own axis points at
@@ -811,11 +817,10 @@ export class TrackView {
         slot.active = false;
         // A whole row walks in, laid out the way it will rest once it joins the track,
         // so the hand-off to the real row at the end is invisible.
-        const flier = makeRow('pax-enter');
+        const flier = makeRow('pax-enter', BLOCK.rankStep);
         const figures = flier.children.slice();
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
-        layoutRow(figures, BLOCK.rankStep);
         aimRow(flier, n.x, n.y);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
