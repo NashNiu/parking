@@ -12,7 +12,17 @@ import { FeedSide, GROUP_SIZE } from './types';
 export const LANE = Object.freeze({
     bandHalf: 0.38,
     start: 0.52,
-    step: 0.34,
+    // EXPERIMENT (seam 0). 0.34 is the shipped value: it leaves a bare band of 0.12 between
+    // one waiting group and the next, deliberately matched to the ring's seam so the two
+    // halves of the track read alike. 0.22 IS blockLength, so the band is zero and a channel
+    // becomes one unbroken belt of figures. Revert by putting 0.34 back, together with the
+    // ten levels' `capacity`/`boardIndex`.
+    //
+    // It also changes how MANY groups fit: at 0.22 the lookahead that still lands inside
+    // LANE.edgeLimit goes from 5 to 7 on rect and 7 to 10 on the circle, so `npm run gen`
+    // would hand the player more visible groups as well as denser ones. The shipped levels
+    // keep their lookahead of 5 because this experiment does not regenerate them.
+    step: 0.22,
     margin: 0.25,
     edgeLimit: 4.67,
 });
