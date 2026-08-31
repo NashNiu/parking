@@ -14,7 +14,7 @@ import { GridView } from './grid-view';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
-import { setupEnvironment, setupAntiAliasing } from './environment';
+import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { preloadCarModels } from './car-builder';
@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0831-4';
+const BUILD_TAG = 'build 0831-5';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -738,7 +738,16 @@ export class GameController extends Component {
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
-        setupAntiAliasing(this.cam);
+        // NO `setupAntiAliasing(this.cam)`. It hangs a PostProcess component off the board
+        // camera, and post-process is a FULL-SCREEN PASS -- on a phone at 1170x2532 that is
+        // 3.0M pixels read and written again, every frame, on top of the scene. It went in to
+        // answer a jagged-edges report and was flagged then as needing a device check it
+        // never got; the device now measures 8fps against the simulator's 49, and this is the
+        // most expensive thing in the frame that buys the least.
+        //
+        // One line to put back if the jaggies matter more than the frame rate. The engine
+        // module (`custom-pipeline-post-process` in settings/v2/packages/engine.json) is
+        // still compiled in, so restoring it needs nothing but this call.
         setupBackground(this.boardRoot);
         setupStage(this.boardRoot, lotW, lotH, GRID_Y);
         setupRoads(this.boardRoot, this.ring, ROAD_H);

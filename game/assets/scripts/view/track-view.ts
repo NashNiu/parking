@@ -2,7 +2,7 @@ import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
-import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
+import { buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
     BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
     PaxGroup, TrackPath,
@@ -94,29 +94,18 @@ const PAX_HEIGHT = 0.55;
 const PAX_DEPTH = 2.1;
 
 /**
- * Ring-figure arm swing, driven by how far the ring has TRAVELLED -- a number that only ever
- * goes up -- rather than by `phaseHolder.p`.
+ * There is no arm swing any more, and the arms are baked into the figure's one mesh (see
+ * ARM_POSE_DEG in pax-figure). It was the most expensive thing on the frame -- two node
+ * rotations per shown figure, so 224 writes on leaf renderer nodes at 28 cells and 384 at
+ * 48 -- and it needed its own node per arm, which is what kept a passenger at four
+ * renderers instead of one. The device was measured at 8fps against the simulator's 49.
  *
- * That distinction is a bug fix, not a refactor. `phaseHolder.p` is a SAWTOOTH: every tick it
- * is reset to -1/capacity and tweened to 0 (see `update`, and the note there on why the reset
- * is absolute). Feeding it to a sine meant every arm swept SWING_RATE radians of the sine
- * argument over the tick and then jumped BACK by the same amount at the tick boundary -- a
- * discontinuity of up to the full amplitude, 44 degrees, on every shown figure at once, 5.9
- * times a second. 112 figures strobing in step is not a crowd walking; the human reported the
- * ring on a device as making them dizzy, and the simulator hid it because more intermediate
- * frames make the sweep visible and the snap a smaller share of what you see.
- *
- * `travel` is the tick count plus the fraction of the current tick, so it is continuous
- * across the boundary the sawtooth broke. SWING_RATE is radians of sine argument per CELL of
- * travel, which is what SWING_PHASE_SCALE was trying to be: at 1.4286 a full swing cycle
- * takes 4.4 cells, about three quarters of a second, which is a walking cadence.
- *
- * SWING_STAGGER offsets each figure by its own mixed row/seat index so a whole ring doesn't
- * swing in lockstep like a marching toy.
+ * It had also been strobing rather than swinging, which is a separate bug worth not
+ * repeating: it was driven by `phaseHolder.p`, a SAWTOOTH reset every tick, so every arm
+ * swept and then snapped back 5.9 times a second -- a mean of 18 degrees and up to 29, on
+ * every figure at once. That fix (drive it from monotonic travel, not from the phase) is
+ * recorded in the README, and it is the fix to start from if the swing ever comes back.
  */
-const SWING_AMPLITUDE_DEG = 22;
-const SWING_RATE = 1.4286;
-const SWING_STAGGER = 0.7;
 
 /** Identity shade — the active/undimmed case for `paintPassenger`. */
 const NO_SHADE = (c: Color): Color => c;
@@ -348,11 +337,6 @@ export class TrackView {
     private laneSlabs: Record<FeedSide, Node | null> = { far: null, near: null };
     private lastLen: Record<FeedSide, number> = { far: -1, near: -1 };
 
-    /**
-     * Cells the ring has travelled, whole part only: `repositionAll` adds the fraction of the
-     * tick in flight. Monotonic, which is the point -- see SWING_RATE.
-     */
-    private travelTicks = 0;
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
@@ -677,7 +661,6 @@ export class TrackView {
         // dragging the whole ring backwards until the passenger the core boards was
         // drawn short of the boarding gap, toward the right side, while the fly still
         // departed from the gap. Resetting absolutely discards the shortfall instead.
-        this.travelTicks++;
         this.phaseTween?.stop();
         this.phaseHolder.p = -1 / this.capacity;
         this.phaseTween = tween(this.phaseHolder)
@@ -774,8 +757,6 @@ export class TrackView {
 
     private repositionAll(): void {
         const phase = this.phaseHolder.p % 1;
-        // Continuous across the tick boundary, where `phase` is not: see SWING_RATE.
-        const travel = this.travelTicks + (phase + 1 / this.capacity) * this.capacity;
         for (let i = 0; i < this.clusters.length; i++) {
             const cluster = this.clusters[i];
             // Guard against a tween tick landing after the board was destroyed on restart.
@@ -790,16 +771,6 @@ export class TrackView {
             const n = this.normal(t, NORMAL_SCRATCH);
             const figures = this.rowFigures[i];
             layoutRow(figures, n.x, n.y, BLOCK.rankStep);
-            // The ring is moving and the channels are not — that contrast is what
-            // tells a player which one is which — so only ring figures swing, and only the
-            // ones actually shown this tick (paintRow toggles `active` per seat).
-            for (let j = 0; j < figures.length; j++) {
-                if (!figures[j].active) continue;
-                const mixed = i * GROUP_SIZE + j;
-                const swing = Math.sin(travel * SWING_RATE + mixed * SWING_STAGGER)
-                    * SWING_AMPLITUDE_DEG;
-                setArmSwing(figures[j], swing);
-            }
         }
     }
 

@@ -1,5 +1,6 @@
 import { Node, Color, Material, Mesh, MeshRenderer, primitives, utils } from 'cc';
 import { instancedLitMaterial } from './materials';
+import { mergeParts, MeshPart } from './slabs';
 
 /**
  * Procedural passenger figure: a large round head sitting on a small tapered body, and
@@ -124,58 +125,103 @@ const SPHERE_SEGMENTS = 8;
 const CAPSULE_SIDES = 8;
 const CAPSULE_HEIGHT_SEGMENTS = 8;
 
-let headMeshCache: Mesh | null = null;
-/** The head: a sphere, centred on its own origin by the primitive. */
-function headMesh(): Mesh {
-    if (headMeshCache) return headMeshCache;
-    const g = primitives.sphere(HEAD_RADIUS, { segments: SPHERE_SEGMENTS });
-    headMeshCache = utils.createMesh({ positions: g.positions, normals: g.normals, uvs: g.uvs, indices: g.indices });
-    return headMeshCache;
-}
-
-let bodyMeshCache: Mesh | null = null;
 /**
- * The body: a tapered capsule, centred on its own origin by the primitive (spans
- * [-BODY_HEIGHT/2, +BODY_HEIGHT/2]). The body NODE's position -- half its height --
- * is what lifts it to stand on the ground; see buildPaxFigure.
+ * How far each arm is held from vertical, in degrees, and in OPPOSITE directions.
+ *
+ * A pose, not an animation. The whole figure is one baked mesh now (see `figureMesh`), so
+ * the arms cannot move -- and holding them at a fixed mid-stride angle, one forward and one
+ * back, is what keeps the silhouette from reading as a person standing to attention. The
+ * swing it replaces cost more per frame than everything else on the ring put together, and
+ * it had been strobing anyway; see the SWING note in the README.
  */
-function bodyMesh(): Mesh {
-    if (bodyMeshCache) return bodyMeshCache;
-    const g = primitives.capsule(BODY_RADIUS_TOP, BODY_RADIUS_BOTTOM, BODY_HEIGHT,
-        { sides: CAPSULE_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
-    bodyMeshCache = utils.createMesh({ positions: g.positions, normals: g.normals, uvs: g.uvs, indices: g.indices });
-    return bodyMeshCache;
-}
+const ARM_POSE_DEG = 14;
 
-let armMeshCache: Mesh | null = null;
 /**
- * One arm: a thin capsule. The primitive centres it on its own origin, spanning
- * [-ARM_LENGTH/2, +ARM_LENGTH/2] -- but the arm's NODE origin has to be the shoulder,
- * since that is what `setArmSwing` rotates about, so the geometry is shifted down by
- * half its length here, once, to span [-ARM_LENGTH, 0] instead: shoulder at the
- * node's own y = 0, hand hanging below it.
+ * One part's geometry, rotated about X and then moved into place, ready to merge.
+ *
+ * Normals are rotated but NOT translated, which is the whole reason this is not a four-line
+ * loop: translating a normal stops it being a direction, and the lighting then goes wrong in
+ * a way that is easy to ship and hard to see.
  */
-function armMesh(): Mesh {
-    if (armMeshCache) return armMeshCache;
-    const g = primitives.capsule(ARM_RADIUS, ARM_RADIUS, ARM_LENGTH,
+function placed(
+    g: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] },
+    deg: number, tx: number, ty: number, tz: number,
+): MeshPart {
+    const rad = deg * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    const positions = new Array<number>(g.positions.length);
+    for (let i = 0; i < g.positions.length; i += 3) {
+        const y = g.positions[i + 1], z = g.positions[i + 2];
+        positions[i] = g.positions[i] + tx;
+        positions[i + 1] = y * cos - z * sin + ty;
+        positions[i + 2] = y * sin + z * cos + tz;
+    }
+    let normals: number[] | undefined;
+    if (g.normals) {
+        normals = new Array<number>(g.normals.length);
+        for (let i = 0; i < g.normals.length; i += 3) {
+            const y = g.normals[i + 1], z = g.normals[i + 2];
+            normals[i] = g.normals[i];
+            normals[i + 1] = y * cos - z * sin;
+            normals[i + 2] = y * sin + z * cos;
+        }
+    }
+    return {
+        positions,
+        normals,
+        uvs: g.uvs ? Array.from(g.uvs) : undefined,
+        indices: g.indices ? Array.from(g.indices) : undefined,
+    };
+}
+
+let figureMeshCache: Mesh | null = null;
+/**
+ * The WHOLE figure -- head, body and both arms -- as ONE mesh, built once and shared by
+ * every passenger in the game.
+ *
+ * A frame-rate fix, and the measurement is what forced it: the device reported 8fps against
+ * the simulator's 49 while a passenger was four MeshRenderers on four nodes. Four times 192
+ * figures on the ring, plus the feeder channels, is over a thousand models for the engine to
+ * walk, cull and pack instance buffers for on every frame, and that walk is JS. One mesh per
+ * figure divides it by four for exactly the same pixels -- the parts share a colour, so they
+ * always shared a material, so a renderer per part never expressed anything.
+ *
+ * The price is that the arms are baked (see ARM_POSE_DEG): a limb that moves needs its own
+ * node, hence its own renderer. To animate them again, split the arms back out and pay two
+ * more renderers per figure.
+ *
+ * The part nodes' offsets are folded in here instead. The body's origin is its own middle,
+ * so it is lifted half its height; the head sits on top of it; and each arm is shifted down
+ * half its length first so its SHOULDER is at its origin, which is what the pose rotates
+ * about.
+ */
+function figureMesh(): Mesh {
+    if (figureMeshCache) return figureMeshCache;
+    const head = primitives.sphere(HEAD_RADIUS, { segments: SPHERE_SEGMENTS });
+    const body = primitives.capsule(BODY_RADIUS_TOP, BODY_RADIUS_BOTTOM, BODY_HEIGHT,
         { sides: CAPSULE_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
-    const positions = g.positions.slice();
-    for (let i = 1; i < positions.length; i += 3) positions[i] -= ARM_LENGTH / 2;
-    armMeshCache = utils.createMesh({ positions, normals: g.normals, uvs: g.uvs, indices: g.indices });
-    return armMeshCache;
+    const arm = primitives.capsule(ARM_RADIUS, ARM_RADIUS, ARM_LENGTH,
+        { sides: CAPSULE_SIDES, heightSegments: CAPSULE_HEIGHT_SEGMENTS });
+    const armPositions = Array.from(arm.positions as number[]);
+    for (let i = 1; i < armPositions.length; i += 3) armPositions[i] -= ARM_LENGTH / 2;
+    const shoulderArm = { ...arm, positions: armPositions };
+
+    figureMeshCache = mergeParts([
+        placed(body, 0, 0, BODY_HEIGHT / 2, 0),
+        placed(head, 0, 0, BODY_HEIGHT + HEAD_RADIUS, 0),
+        placed(shoulderArm, ARM_POSE_DEG, -SHOULDER_X, SHOULDER_Y, 0),
+        placed(shoulderArm, -ARM_POSE_DEG, SHOULDER_X, SHOULDER_Y, 0),
+    ]);
+    return figureMeshCache;
 }
 
 /**
- * The four part-nodes of one figure, keyed by its root. `recolorPaxFigure` and
- * `setArmSwing` read this instead of walking the hierarchy or matching on node names,
- * so neither has to trust a naming convention every call -- and `setArmSwing`, which
- * runs for every visible ring figure every frame, gets its two arm nodes from one
- * allocation-free WeakMap lookup.
+ * One figure's renderer and the material on it, keyed by its root, so `recolorPaxFigure`
+ * neither walks the hierarchy nor calls `getComponent`. There is one of each now: the whole
+ * figure is a single baked mesh (see `figureMesh`).
  */
 interface Parts {
-    body: Node; head: Node; armL: Node; armR: Node;
-    /** Every renderer, cached at build time so `recolorPaxFigure` never calls `getComponent`. */
-    renderers: MeshRenderer[];
+    renderer: MeshRenderer;
     /** The material last applied, so an unchanged colour costs nothing. */
     mat: Material | null;
 }
@@ -194,46 +240,18 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     fit.setScale(height, height, height);
     root.addChild(fit);
 
-    // One colour, one material, shared by all four parts of this figure: the head and
-    // arms no longer carry a separate skin tone (revision 2 dropped SKIN entirely), so
-    // there is nothing left to buy by giving them their own `instancedLitMaterial`
-    // call -- and reusing this one object still leaves every part's (mesh, colour)
-    // pair instanced across the whole crowd, per `instancedLitMaterial`'s own cache.
+    // One colour for the whole figure, so one material -- which is also why the four parts
+    // could be merged into one mesh with nothing lost; see `figureMesh`.
     const mat = instancedLitMaterial(color);
+    const mr = fit.addComponent(MeshRenderer);
+    mr.mesh = figureMesh();
+    mr.material = mat;
+    // Nothing here casts a shadow: `setupEnvironment` turns the shadow map off and the board
+    // paints blob shadows instead. Saying so per renderer keeps the crowd out of any shadow
+    // pass a future pipeline change might switch back on.
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
 
-    const body = new Node('body');
-    body.setPosition(0, BODY_HEIGHT / 2, 0);
-    const bodyMr = body.addComponent(MeshRenderer);
-    bodyMr.mesh = bodyMesh();
-    bodyMr.material = mat;
-    fit.addChild(body);
-
-    const head = new Node('head');
-    head.setPosition(0, BODY_HEIGHT + HEAD_RADIUS, 0);
-    const headMr = head.addComponent(MeshRenderer);
-    headMr.mesh = headMesh();
-    headMr.material = mat;
-    fit.addChild(head);
-
-    const armL = new Node('arm-L');
-    armL.setPosition(-SHOULDER_X, SHOULDER_Y, 0);
-    const armLMr = armL.addComponent(MeshRenderer);
-    armLMr.mesh = armMesh();
-    armLMr.material = mat;
-    fit.addChild(armL);
-
-    const armR = new Node('arm-R');
-    armR.setPosition(SHOULDER_X, SHOULDER_Y, 0);
-    const armRMr = armR.addComponent(MeshRenderer);
-    armRMr.mesh = armMesh();
-    armRMr.material = mat;
-    fit.addChild(armR);
-
-    registry.set(root, {
-        body, head, armL, armR,
-        renderers: [bodyMr, headMr, armLMr, armRMr],
-        mat,
-    });
+    registry.set(root, { renderer: mr, mat });
     return root;
 }
 
@@ -251,26 +269,9 @@ export function recolorPaxFigure(root: Node, color: Color, shade: (c: Color) => 
     const mat = instancedLitMaterial(shade(color));
     // An identity test, and a load-bearing one. Materials are cached per colour (see
     // `instancedLitMaterial`), and the ring repaints EVERY figure on EVERY tick -- six times
-    // a second, 112 figures, four renderers each -- while most of those repaints ask for the
-    // colour that is already there. Assigning a renderer's material is not free, and this
-    // spike once a tick is the shape of a stutter. The renderers are cached with the parts
-    // for the same reason: `getComponent` four times per figure per tick bought nothing.
+    // a second -- while most of those repaints ask for the colour already on it. Assigning a
+    // renderer's material is not free, and a spike once a tick is the shape of a stutter.
     if (mat === parts.mat) return;
     parts.mat = mat;
-    for (const mr of parts.renderers) mr.material = mat;
-}
-
-/**
- * Swing the two arms to +degrees and -degrees about the figure's local X axis --
- * opposite phase, one forward as the other goes back, like a walking gait. Cheap and
- * allocation free: the arm nodes come from one WeakMap lookup (no getChildByName /
- * getChildByPath walk), and `Node.setRotationFromEuler` writes straight into the
- * node's own quaternion rather than building a new one -- this runs for every visible
- * ring figure every frame.
- */
-export function setArmSwing(root: Node, degrees: number): void {
-    const parts = registry.get(root);
-    if (!parts) return;
-    parts.armL.setRotationFromEuler(degrees, 0, 0);
-    parts.armR.setRotationFromEuler(-degrees, 0, 0);
+    parts.renderer.material = mat;
 }
