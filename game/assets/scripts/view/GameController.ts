@@ -33,7 +33,7 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0831-3';
+const BUILD_TAG = 'build 0831-4';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -49,7 +49,11 @@ const BUILD_TAG = 'build 0831-3';
 function levelStamp(level: LevelData, uuid: string): string {
     const colors = new Set(level.lot.cars.map((c) => c.color));
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
-    return `L${level.id} ${colors.size}c ${pax}p ${Array.from(colors).join('/')} #${uuid.slice(0, 8)}`;
+    // The ring length is in here because it is currently the thing being experimented with:
+    // level 1 is hand-set to 48 cells so the rows sit against each other with no seam, and
+    // "did the device get that level" is otherwise not a question the screen can answer.
+    return `L${level.id} ${colors.size}c ${pax}p ${level.loop.capacity}r `
+        + `${Array.from(colors).join('/')} #${uuid.slice(0, 8)}`;
 }
 
 /**
