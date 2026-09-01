@@ -3,6 +3,7 @@ import { Cap } from '../core/index';
 import { vertexColorMaterial } from './materials';
 import { carMesh } from './car-mesh';
 import { blobShadow } from './blob-shadow';
+import { KEY_LIGHT_PITCH_DEG } from './environment';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -11,16 +12,42 @@ import { blobShadow } from './blob-shadow';
 export type { Cap };
 
 /**
- * Contact shadow, parented to `body` and sized to the car's ACTUAL body
- * (`len` along body X, `wid` along body Y) so the heading rotates it with the
- * car — a car pointing up gets a tall narrow shadow, not a wide flat one. Sits
- * centered under the car: in board space the key light travels almost straight
- * into the board (-Z), so there's no meaningful lateral shadow offset to fake.
- * z = -0.06 puts it between the lot surface (-0.10) and the car's lowest plate (0).
+ * How high off the board the car is meant to READ as being, in world units.
+ *
+ * Not how tall it is -- under this camera the car has no visible height at all, and the mesh is
+ * barely a tenth of a unit thick. This is the number the drop shadow is computed from, so it is
+ * the only place the car's apparent height is stated.
+ *
+ * Deliberately small. The shadow offset it produces is about 0.05 world units, or 0.066 board
+ * units, and CLEARANCE between parked cars is 0.04 -- so a bigger lift starts laying this car's
+ * shadow across its neighbour's paint, and the shadow draws in the transparent pass, i.e. ON TOP
+ * of that neighbour. Turn it up and check a dense lot, not a sparse one.
  */
-function addShadow(body: Node, len: number, wid: number): void {
+const SHADOW_LIFT = 0.035;
+
+/**
+ * Contact shadow, sized to the car's ACTUAL body (`len` along body X, `wid` along body Y) so the
+ * heading rotates it with the car — a car pointing up gets a tall narrow shadow, not a wide flat
+ * one. z = -0.06 puts it between the lot surface (-0.10) and the car's lowest plate (0).
+ *
+ * OFFSET IN BOARD SPACE, NOT BODY SPACE, and that distinction is the whole point. The offset is
+ * where the light throws the shadow, so it must be the same direction on screen for every car;
+ * the shadow node hangs off `body`, which carries the heading, so a plain local offset would
+ * SPIN with the car and put the shadow on the wrong side of every car not pointing +X. It is
+ * therefore rotated back by -angle here, which lands it in the same board direction whatever the
+ * heading. (It stays on `body` rather than moving to `root` so it still squashes with the car on
+ * a tap.)
+ *
+ * The direction itself comes from the key light rather than from taste: a point `h` above the
+ * board lands at -h * L.xy / L.z, and with the light at KEY_LIGHT_PITCH_DEG that is
+ * h * tan(55°) straight DOWN the screen, in -Y. Change the light's pitch and the shadows follow.
+ */
+function addShadow(body: Node, len: number, wid: number, angle: number): void {
     const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
-    shadow.setPosition(0, 0, -0.06);
+    const drop = SHADOW_LIFT * Math.tan(-KEY_LIGHT_PITCH_DEG * Math.PI / 180);
+    const a = angle * Math.PI / 180;
+    // R(-angle) applied to the board-space offset (0, -drop).
+    shadow.setPosition(-drop * Math.sin(a), -drop * Math.cos(a), -0.06);
     body.addChild(shadow);
 }
 
@@ -82,7 +109,7 @@ export function buildCar(
     plan.setScale(len, wid, 1);
     body.addChild(plan);
 
-    addShadow(body, len, wid);
+    addShadow(body, len, wid, angle);
 
     // The body carries the heading. The mesh's arrow points +X, which is the body's own
     // forward, so a spin of `angle` about the board normal puts both the car and the arrow

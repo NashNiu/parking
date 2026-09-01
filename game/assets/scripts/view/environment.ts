@@ -1,6 +1,18 @@
 import { Node, DirectionalLight, Color, director, Camera, postProcess } from 'cc';
 
 /**
+ * Pitch of the key light, in degrees, as a node euler-X.
+ *
+ * EXPORTED because two other things are now derived from it and must not be allowed to drift:
+ * the drop shadow's offset (`car-builder.ts`, which needs the direction the light travels) and
+ * the car roof's normal tilts (`car-mesh.ts`, which needs the screen-vertical component to be
+ * there at all). At -55 the light travels (0, -0.82, -0.57) in board space: mostly down the
+ * screen, partly into the board. Level it out toward the board normal and the cars go flat and
+ * lose their shadows, with nothing in the console to say why.
+ */
+export const KEY_LIGHT_PITCH_DEG = -55;
+
+/**
  * Adds cartoon lighting attached to the scene.
  *
  * The scene-level light + ambient setup is idempotent (guarded by a
@@ -34,7 +46,7 @@ export function setupEnvironment(root: Node): void {
     // left side-face, which catch different brightness and make two same-color cars
     // read as different shades. Straight-front-above keeps identical cars identical.
     // Applied every call (not just on creation) so a lingering KeyLight is corrected.
-    lightNode.setRotationFromEuler(-55, 0, 0);
+    lightNode.setRotationFromEuler(KEY_LIGHT_PITCH_DEG, 0, 0);
 
     // Neutral ambient fill so shadowed sides aren't crushed to black, while the key
     // light above does the shaping. Neutral (not blue) so reds stay red.
