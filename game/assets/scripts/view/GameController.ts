@@ -46,7 +46,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0901-3';
+const BUILD_TAG = 'build 0901-4';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -897,7 +897,9 @@ export class GameController extends Component {
             // and a lane that stopped at the bound would leave a visible gap.
             frame.halfW,
         );
-        this.loopView.update(loop.ring, loop.channels);
+        // `false`: nothing has stepped the loop yet, so the ring has not rotated and the
+        // cluster/slot offset must stay put (see TrackView.update).
+        this.loopView.update(loop.ring, loop.channels, false);
 
         const parkingRoot = new Node('ParkingRoot');
         this.boardRoot.addChild(parkingRoot);

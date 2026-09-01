@@ -342,11 +342,41 @@ export class TrackView {
      * its four figure nodes so the layout does not re-walk `children` every tick.
      *
      * `flierCycleId` replaces the node-identity test the old per-tick row allowed: with a
-     * pooled node, "is this still my flier?" has to be a number. `flierOwns` is the ring
-     * slot a side has hidden, so an interrupted cycle can put its slot back -- the old code
-     * did not need this because the interrupting cycle always hid the same slot, which stops
-     * being true the moment two entries in flight can share one row.
+     * pooled node, "is this still my flier?" has to be a number. `flierOwns` is the CLUSTER
+     * (not the ring slot -- see `ringOffset`) a side has hidden, so an interrupted cycle can
+     * put its own one back; the old code did not need it because the interrupting cycle
+     * always hid the same node, which stops being true once two entries share one row.
      */
+    /**
+     * How far cluster indices have drifted from ring slots: cluster `c` draws ring slot
+     * `(c + ringOffset) % capacity`.
+     *
+     * THIS IS THE FRAME-RATE FIX, and it is worth stating why the obvious mapping was the
+     * expensive one. `LoopSystem.step` rotates the ring by exactly +1 and MOVES the groups
+     * rather than rebuilding them, so with cluster c bound to slot c, every cluster holds a
+     * different colour every tick -- and a repaint is `MeshRenderer.material = ...`, which
+     * rebuilds the sub-model's passes and re-buckets it in the instancing buffer. Measured
+     * on device: 44 cells x 4 figures, about three quarters of them changing colour, cost
+     * 127 of the tick's 157 ms/s -- 21.5ms inside a single frame, six times a second.
+     *
+     * Advancing this offset with the ring instead means a cluster follows its own group, so
+     * its colour does not change at all. What changes per tick is only where it is DRAWN,
+     * and that was already recomputed every frame by `repositionAll`. Repaints drop to the
+     * two slots core actually touches: the one that empties at the gap and the one an
+     * entrance fills.
+     *
+     * Correctness does NOT rest on the +1 assumption -- `shownColor`/`shownCount` do. If the
+     * offset were ever wrong the comparison repaints, exactly as before; only the saving
+     * would be lost.
+     */
+    private ringOffset = 0;
+    /**
+     * What each cluster is currently showing, so a repaint only happens on a real change.
+     * Colour AND count, because a row loses figures one at a time as it boards.
+     */
+    private shownColor: (string | null)[] = [];
+    private shownCount: number[] = [];
+
     private readonly flierRows: Record<FeedSide, Node | null> = { far: null, near: null };
     private flierFigures: Record<FeedSide, Node[]> = { far: [], near: [] };
     private readonly flierCycleId: Record<FeedSide, number> = { far: 0, near: 0 };
@@ -707,16 +737,32 @@ export class TrackView {
         this.tick = tick;
     }
 
-    update(ring: (PaxGroup | null)[], channels: Channel[]): void {
-        for (let i = 0; i < this.clusters.length; i++) {
-            const group = ring[i];
-            const cluster = this.clusters[i];
-            if (group) {
-                cluster.active = true;
-                paintRow(this.rowFigures[i], colorOf(group.color), group.count, NO_SHADE);
-            } else {
+    /**
+     * Reflect the ring's contents and start the tick's rotation.
+     *
+     * `rotated` says whether core stepped the loop since the last call -- true for a tick,
+     * false for the initial paint, which shows a ring nobody has rotated yet. It only moves
+     * `ringOffset`; getting it wrong would cost the saving described there, not correctness.
+     */
+    update(ring: (PaxGroup | null)[], channels: Channel[], rotated = true): void {
+        if (rotated) this.ringOffset = (this.ringOffset + 1) % this.capacity;
+        for (let c = 0; c < this.clusters.length; c++) {
+            const group = ring[this.slotOf(c)];
+            const cluster = this.clusters[c];
+            if (!group) {
                 cluster.active = false;
+                this.shownColor[c] = null;
+                continue;
             }
+            cluster.active = true;
+            // The whole point of `ringOffset`: with the cluster following its own group this
+            // is false for all but the one or two cells core actually changed this tick.
+            if (this.shownColor[c] === group.color && this.shownCount[c] === group.count) {
+                continue;
+            }
+            this.shownColor[c] = group.color;
+            this.shownCount[c] = group.count;
+            paintRow(this.rowFigures[c], colorOf(group.color), group.count, NO_SHADE);
         }
 
         // Absolute, never relative. The resting phase is 0 by definition, so each tick
@@ -820,13 +866,23 @@ export class TrackView {
         }
     }
 
+    /** Ring slot that cluster `c` currently draws. */
+    private slotOf(c: number): number {
+        return (c + this.ringOffset) % this.capacity;
+    }
+
+    /** The cluster drawing ring slot `slot` -- the inverse of `slotOf`. */
+    private clusterOf(slot: number): number {
+        return (slot - this.ringOffset + this.capacity) % this.capacity;
+    }
+
     private repositionAll(): void {
         const phase = this.phaseHolder.p % 1;
         for (let i = 0; i < this.clusters.length; i++) {
             const cluster = this.clusters[i];
             // Guard against a tween tick landing after the board was destroyed on restart.
             if (!cluster || !cluster.isValid) continue;
-            const t = (i / this.capacity + phase) % 1;
+            const t = (this.slotOf(i) / this.capacity + phase) % 1;
             const p = this.point(t, REPOSITION_SCRATCH);
             cluster.setPosition(p.x, p.y, this.depthAt(p.y));
             // The row runs across the track, so its spread turns with the path. Rows
@@ -887,7 +943,9 @@ export class TrackView {
      */
     private playEntry(channel: Channel, group: PaxGroup): void {
         const { side, entry: index } = channel;
-        const slot = this.clusters[index];
+        // `entry` is a RING slot; the node drawing it is found through the offset.
+        const at = this.clusterOf(index);
+        const slot = this.clusters[at];
         const from = this.laneHome[side][0];
         if (!slot || !slot.isValid || !from) return;
 
@@ -902,13 +960,13 @@ export class TrackView {
         Tween.stopAllByTarget(flier);
         const cycle = ++this.flierCycleId[side];
         const owned = this.flierOwns[side];
-        if (owned !== null && owned !== index) {
+        if (owned !== null && owned !== at) {
             // The cycle we are interrupting had hidden a DIFFERENT slot. Put it back,
             // or it stays invisible for the rest of the level.
             const prev = this.clusters[owned];
             if (prev && prev.isValid) prev.active = true;
         }
-        this.flierOwns[side] = index;
+        this.flierOwns[side] = at;
 
         slot.active = false;
         // A whole row walks in, laid out the way it will rest once it joins the track,
