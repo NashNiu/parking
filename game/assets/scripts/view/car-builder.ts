@@ -1,10 +1,11 @@
 import {
-    Node, Color, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
+    Node, Color, Mesh, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
     Vec3, Mat4, utils, primitives,
 } from 'cc';
 import { Cap } from '../core/index';
 import { instancedLitMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
+import { mergeParts, roundedSlabPart, triPart, MeshPart } from './slabs';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -16,8 +17,9 @@ export type { Cap };
  * Real 3D car art (cartoon GLB models made in Claude Design), one per capacity.
  * These live under assets/resources/models and are loaded as prefabs. Each model
  * shares the same rig: a named `paint` material for the body (recolored per car),
- * plus glass/trim/lamp/taillamp/tire/hub (kept as authored). The roof direction
- * arrow is baked into the model (the white `trim` chevron), so we don't add one.
+ * plus glass/trim/lamp/taillamp/tire/hub (kept as authored). The model's own baked
+ * `roof_arrow` is switched OFF and replaced by `roofDecal` -- see the note there for why
+ * nothing else on the model can be seen from this camera either.
  */
 const MODEL_PATH: Record<Cap, string> = {
     small: 'models/car',
@@ -141,6 +143,93 @@ function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
 }
 
 /**
+ * THE CAMERA SEES THE ROOF AND ALMOST NOTHING ELSE, which is why the car is drawn on top of
+ * the model rather than tuned inside it.
+ *
+ * The camera is orthographic and looks at the board straight on, and the model is laid down
+ * with its roof toward it. Measured on car.glb, in model units with the roof at depth 1.63:
+ * the windshield sits at 1.37, the lamps at 0.85, the sill at 0.41 and the wheels at 0.43 --
+ * every one of them BEHIND the roof, showing only where it pokes past the roof's silhouette:
+ * 0.025 for the windshield, 0.03 for the sill, 0.09 for the bumpers and lamps, 0.28 for the
+ * wheels and 0.16 for the hubcaps. Those last two are the little white dashes along a car's
+ * flank -- a hubcap seen edge-on. Eight of the model's nine primitives are invisible.
+ *
+ * So no recolouring could ever make it read as a car: from here a car IS a flat coloured
+ * roof. What it needs is structure ON that roof, and that is what this draws -- a windscreen
+ * and a rear window in one dark mesh, and a direction arrow in one white one.
+ *
+ * The other two routes were considered and rejected. Tilting the model back to the 3/4 view
+ * it was built for would show the windscreen and the wheels, but the drawn car would stop
+ * matching core's footprint -- which is the whole reason the camera is orthographic (see the
+ * README note on that), and it would take picking and "is it blocked?" with it. Replacing
+ * the models needs art that does not exist yet.
+ *
+ * Proportions are FRACTIONS of the car, not fixed sizes, because the three caps differ in
+ * length by more than 2x and a fixed windscreen would swallow the small car.
+ */
+const WINDOW = new Color(46, 54, 70, 255);
+const ROOF_LIFT = 0.01;
+const WINDSCREEN = { x: 0.20, w: 0.17, h: 0.66 };
+const REAR_WINDOW = { x: -0.31, w: 0.13, h: 0.58 };
+const ROOF_ARROW = { x: -0.03, w: 0.20, h: 0.36 };
+const DECAL_D = 0.02;
+
+const windowMeshes = new Map<string, Mesh>();
+const arrowMeshes = new Map<string, Mesh>();
+
+function sizeKey(len: number, wid: number): string {
+    return `${len.toFixed(3)},${wid.toFixed(3)}`;
+}
+
+/** Cached per car size -- there are only three caps, so this builds at most three of each. */
+function cached(store: Map<string, Mesh>, len: number, wid: number, make: () => MeshPart[]): Mesh {
+    const k = sizeKey(len, wid);
+    const hit = store.get(k);
+    if (hit) return hit;
+    const mesh = mergeParts(make());
+    store.set(k, mesh);
+    return mesh;
+}
+
+/**
+ * Windscreen, rear window and direction arrow, laid flat on the roof.
+ *
+ * Two meshes and two shared materials rather than one, because the glass is a fixed dark and
+ * the arrow is white: one mesh could only carry one colour. Both are cached per size, so the
+ * whole lot costs a handful of draw calls no matter how many cars are on the board.
+ *
+ * The arrow points +X because that is where the car leaves: `buildCar` turns `body` by the
+ * car's heading and the model's length already runs along body X, so this agrees with the
+ * exit by construction, exactly as the baked arrow it replaces did.
+ */
+function roofDecal(body: Node, len: number, wid: number, hgt: number): void {
+    // Corner radius from each pane's OWN shorter side, never from the car: a fraction of the
+    // car can exceed half a pane's short side on the small cap, and a radius past half the
+    // side has no rounded rectangle to describe.
+    const pane = (f: { x: number; w: number; h: number }): MeshPart => {
+        const w = len * f.w, h = wid * f.h;
+        return roundedSlabPart(w, h, DECAL_D, Math.min(w, h) * 0.35, len * f.x, 0);
+    };
+    const glass = new Node('roof-glass');
+    const gm = glass.addComponent(MeshRenderer);
+    gm.mesh = cached(windowMeshes, len, wid, () => [pane(WINDSCREEN), pane(REAR_WINDOW)]);
+    gm.material = instancedLitMaterial(WINDOW);
+    gm.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+    glass.setPosition(0, 0, hgt + ROOF_LIFT);
+    body.addChild(glass);
+
+    const arrow = new Node('roof-arrow');
+    const am = arrow.addComponent(MeshRenderer);
+    am.mesh = cached(arrowMeshes, len, wid, () => [
+        triPart(len * ROOF_ARROW.w, wid * ROOF_ARROW.h, DECAL_D, len * ROOF_ARROW.x, 0),
+    ]);
+    am.material = instancedLitMaterial(Color.WHITE);
+    am.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+    arrow.setPosition(0, 0, hgt + ROOF_LIFT);
+    body.addChild(arrow);
+}
+
+/**
  * How much darker the sill and bumpers are than the body, and the white the arrow has to
  * itself.
  *
@@ -155,19 +244,6 @@ function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
  * always show; the question is only whether they show as the car or as something behind it.
  */
 const CHASSIS_SHADE = 0.88;
-const ARROW = new Color(255, 255, 255, 255);
-
-/**
- * How much bigger the roof arrow is drawn than the model ships it.
- *
- * The model already draws it small AND shrinks it: the plate is 0.9 x 0.76 with a node scale
- * of 0.88 x 0.72 on top, so it covers 0.79 x 0.55 of a roof 2.5 long. 1.3 was not enough to
- * see -- with the tray no longer white, the arrow became the only white thing on the car and
- * still read as a dot. Scaled in the plate's own plane only: its local Z is the thin axis
- * (the node is turned -90 about X, so local +Z points up out of the roof), and scaling that
- * would only make it thicker.
- */
-const ARROW_SCALE = 1.8;
 
 function scaleColor(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
@@ -210,7 +286,6 @@ function recolorCar(model: Node, color: Color): void {
     const paintMat = instancedLitMaterial(color);
     const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
     const chassisMat = instancedLitMaterial(scaleColor(color, CHASSIS_SHADE));
-    const arrowMat = instancedLitMaterial(ARROW);
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
         const role = trimRole(mr.node.name);
         const mats = mr.sharedMaterials;
@@ -220,7 +295,6 @@ function recolorCar(model: Node, color: Color): void {
             if (matchesRole(m, 'paint')) mr.setMaterial(paintMat, i);
             else if (matchesRole(m, 'glass')) mr.setMaterial(glassMat, i);
             else if (role === 'chassis') mr.setMaterial(chassisMat, i);
-            else if (role === 'arrow') mr.setMaterial(arrowMat, i);
             // Everything left keeps its own colour and gains instancing. The lamps, the
             // tyres and the hubs all carry a baseColorFactor, so `readMainColor` has
             // something to read and the fallback never fires for them.
@@ -249,12 +323,16 @@ function fallbackBox(body: Node, len: number, wid: number, color: Color): void {
  * into the board (-Z), so there's no meaningful lateral shadow offset to fake.
  * z = -0.06 puts it between the lot surface (-0.10) and the wheels (0).
  */
-/** Enlarge the roof arrow in its own plane. See ARROW_SCALE. */
-function growArrow(model: Node): void {
+/**
+ * Switch off the model's baked roof arrow, which `roofDecal` replaces.
+ *
+ * It is 0.9 x 0.76 with a node scale of 0.88 x 0.72 already on it, so it covers 0.79 x 0.55
+ * of a roof 2.5 long -- and scaling it up (1.3x, then 1.8x) never made it read. Left on, it
+ * would sit under the drawn arrow and fight it.
+ */
+function hideBakedArrow(model: Node): void {
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
-        if (trimRole(mr.node.name) !== 'arrow') continue;
-        const s = mr.node.scale;
-        mr.node.setScale(s.x * ARROW_SCALE, s.y * ARROW_SCALE, s.z);
+        if (trimRole(mr.node.name) === 'arrow') mr.node.active = false;
     }
 }
 
@@ -339,7 +417,8 @@ export function buildCar(
     body.addChild(lay);
 
     recolorCar(model, color);
-    growArrow(model);
+    hideBakedArrow(model);
+    roofDecal(body, drawnLen, drawnWid, hgt);
     addShadow(body, drawnLen, drawnWid);
 
     // The body carries the heading. After the Rx(90) lay-down the model's length runs along
