@@ -140,19 +140,34 @@ function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
     return null;
 }
 
-/** Dark slate for the sill and bumpers, and the white the arrow now has to itself. */
-const CHASSIS = new Color(58, 64, 76, 255);
+/**
+ * How much darker the sill and bumpers are than the body, and the white the arrow has to
+ * itself.
+ *
+ * A shade of the car's OWN colour, not a neutral. A dark slate was tried first and it just
+ * swapped one problem for the other: the tray stopped being white and started being black,
+ * because what reads as a tray is the CONTRAST, not the colour. At 0.88 the sill and bumpers
+ * are the same car, a touch darker where they sit lower -- so there is no second object for
+ * the eye to separate out, which is the only way the tray goes away.
+ *
+ * That the sill and bumpers stick out at all is the model's doing: the sill is 1.10 across
+ * against a 1.04 body, and the bumpers reach x = 1.36 against the body's 1.27. So they will
+ * always show; the question is only whether they show as the car or as something behind it.
+ */
+const CHASSIS_SHADE = 0.88;
 const ARROW = new Color(255, 255, 255, 255);
 
 /**
  * How much bigger the roof arrow is drawn than the model ships it.
  *
- * The plate is 0.9 x 0.76 on a roof 2.5 long, which at this camera height is a small mark;
- * contrast alone (see `trimRole`) makes it visible, and this makes it readable. Scaled in
- * the plate's own plane only -- it is thin along its local Z, and scaling that would push it
- * through the roof it sits on.
+ * The model already draws it small AND shrinks it: the plate is 0.9 x 0.76 with a node scale
+ * of 0.88 x 0.72 on top, so it covers 0.79 x 0.55 of a roof 2.5 long. 1.3 was not enough to
+ * see -- with the tray no longer white, the arrow became the only white thing on the car and
+ * still read as a dot. Scaled in the plate's own plane only: its local Z is the thin axis
+ * (the node is turned -90 about X, so local +Z points up out of the roof), and scaling that
+ * would only make it thicker.
  */
-const ARROW_SCALE = 1.3;
+const ARROW_SCALE = 1.8;
 
 function scaleColor(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
@@ -194,7 +209,7 @@ function scaleColor(c: Color, f: number): Color {
 function recolorCar(model: Node, color: Color): void {
     const paintMat = instancedLitMaterial(color);
     const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
-    const chassisMat = instancedLitMaterial(CHASSIS);
+    const chassisMat = instancedLitMaterial(scaleColor(color, CHASSIS_SHADE));
     const arrowMat = instancedLitMaterial(ARROW);
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
         const role = trimRole(mr.node.name);
