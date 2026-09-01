@@ -27,19 +27,18 @@ PPU, PAD, SS = 300, 0.13, 3
 
 
 def constants():
-    """Every `const NAME = <number>;` in car-mesh.ts, plus TAPER and TYRE."""
+    """Every `const NAME = <number>;` in car-mesh.ts, plus TYRE."""
     with open(MESH, encoding='utf-8') as f:
         t = f.read()
     nums = {n: float(v) for n, v in re.findall(r'^const ([A-Z][A-Z0-9_]*) = ([-0-9.]+);', t, re.M)}
-    block = re.search(r'const TAPER: readonly Pt\[\] = \[(.*?)\];', t, re.S)
-    if not block:
-        raise SystemExit(f'TAPER not found in {MESH} -- renamed?')
-    taper = [(float(x), float(y))
-             for x, y in re.findall(r'\[\s*([-0-9.]+),\s*([-0-9.]+)\s*\]', block.group(1))]
     tyre = re.search(r'const TYRE = new Color\((\d+), (\d+), (\d+)', t)
-    if not taper or not tyre:
-        raise SystemExit(f'could not read TAPER/TYRE out of {MESH}')
-    return nums, taper, tuple(int(g) for g in tyre.groups())
+    if not tyre:
+        raise SystemExit(f'could not read TYRE out of {MESH}')
+    missing = [k for k in ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT')
+               if k not in nums]
+    if missing:
+        raise SystemExit(f'{MESH} is missing {missing} -- renamed?')
+    return nums, tuple(int(g) for g in tyre.groups())
 
 
 def caps():
@@ -56,7 +55,7 @@ def caps():
     return out
 
 
-K, TAPER, TYRE = constants()
+K, TYRE = constants()
 CAPS = caps()
 
 
@@ -67,9 +66,6 @@ def lighten(c, t):
 def shade(c, f):
     return tuple(round(v * f) for v in c)
 
-
-def shrunk(along, across):
-    return [(x * along, y * across) for x, y in TAPER]
 
 
 def round_rect(cx, cy, w, h, r):
@@ -89,6 +85,9 @@ def round_rect(cx, cy, w, h, r):
     return pts
 
 
+def body_outline(along, across):
+    return round_rect(0, 0, K['BODY_ALONG'] * along, K['BODY_ACROSS'] * across, K['BODY_CORNER'])
+
 def arrow_pieces():
     hw, hh = K['ARROW_W'] / 2, K['ARROW_H'] / 2
     shaft = hh * K['ARROW_SHAFT']
@@ -101,17 +100,17 @@ def arrow_pieces():
 
 def plates():
     """The same stack as `plates()` in car-mesh.ts, bottom to top."""
-    out = [(shrunk(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']), shade(CAR, K['EDGE_SHADE']))]
+    out = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']), shade(CAR, K['EDGE_SHADE']))]
     for sx in (-1, 1):
         for sy in (-1, 1):
             out.append((round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
                                    K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), TYRE))
-    out.append((TAPER, CAR))
+    out.append((body_outline(1, 1), CAR))
     top = CAR
     for i in range(1, int(K['BEVEL']) + 1):
         t = i / K['BEVEL']
         top = lighten(CAR, K['BEVEL_LIFT'] * i)
-        out.append((shrunk(1 - K['BEVEL_SHORTEN'] * t, 1 - K['BEVEL_NARROW'] * t), top))
+        out.append((body_outline(1 - K['BEVEL_SHORTEN'] * t, 1 - K['BEVEL_NARROW'] * t), top))
     glass = shade(top, K['GLASS_KEEP'])
     out.append((round_rect(K['WINDSCREEN_X'], 0, K['WINDSCREEN_W'],
                            K['WINDSCREEN_H'], K['WINDOW_R']), glass))

@@ -12,14 +12,14 @@ import { Color, Mesh, primitives, utils } from 'cc';
  *
  * WHAT READS AS A CAR FROM DIRECTLY ABOVE, in the order the cues matter:
  *
- *   1. A TAPERED silhouette. A rounded rectangle has parallel sides and reads as a bar however
- *      it is shaded; an octagon whose nose is narrower than its waist reads as a vehicle. Three
- *      rounds of tuning a rounded-rectangle body failed on exactly this and no amount of
- *      shading fixed it.
- *   2. ONE hue. Dark rim, main colour, and a few progressively lighter steps -- all shades of
+ *   1. ONE hue. Dark rim, main colour, and a few progressively lighter steps -- all shades of
  *      the same paint. A second hue anywhere reads as a decal, not as form.
+ *   2. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
+ *      hard point off. See the note on BODY_CORNER -- this is the one thing here that was
+ *      settled against the offline render rather than by it.
  *   3. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
- *      before the arrow does.
+ *      before the arrow does. It wants to be SMALL and PALE: a dark panel at real size reads as
+ *      a hole punched in the roof, not as a window.
  *   4. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
  *      past its silhouette -- which is all a wheel is from above.
  *
@@ -47,11 +47,30 @@ import { Color, Mesh, primitives, utils } from 'cc';
 
 type Pt = readonly [number, number];
 
-/** The body outline: nose narrower than the waist, tail narrower again. Counter-clockwise. */
-const TAPER: readonly Pt[] = [
-    [-0.47, -0.37], [-0.36, -0.45], [0.29, -0.45], [0.47, -0.33],
-    [0.47, 0.33], [0.29, 0.45], [-0.36, 0.45], [-0.47, 0.37],
-];
+/** The body outline, as a fraction of the car. */
+const BODY_ALONG = 0.94;
+const BODY_ACROSS = 0.90;
+
+/**
+ * How much the body's four corners are rounded -- and the one number here that was settled
+ * ON A DEVICE rather than by the offline render.
+ *
+ * The body used to be an OCTAGON, its nose and tail narrower than its waist, and the reasoning
+ * for it was sound as far as it went: a rounded rectangle has parallel sides, and at the size
+ * the plan renderer draws it a taper is what stops the car reading as a bar. Three earlier
+ * rounds of tuning a rounded-rectangle body had failed on exactly that.
+ *
+ * It does not survive being shrunk to a phone. A car is about forty pixels long on screen, so
+ * the taper's slants are two or three pixels of diagonal on each corner -- too few to read as a
+ * shape, enough to make the outline mushy. Straight sides and ends with a small radius read
+ * crisper at that size, which is the size that counts. What actually carries the form at forty
+ * pixels turned out to be the shading and the glass, not the silhouette.
+ *
+ * So: do not "restore the taper" from the offline render alone. The render is still the only
+ * way to judge the shading, the glass and the arrow, but on the OUTLINE it disagreed with the
+ * device and the device won. If the corners are ever revisited, look at both.
+ */
+const BODY_CORNER = 0.10;
 
 /** The dark rim: the body outline grown a little, more across than along. */
 const EDGE_GROW_ALONG = 1.015;
@@ -73,17 +92,22 @@ const WHEEL_R = 0.35;
 const TYRE = new Color(25, 28, 34);
 
 /**
- * Glass: black at 42% over the plate beneath it, which is the topmost dome step. Composited
+ * Glass: black at 30% over the plate beneath it, which is the topmost dome step. Composited
  * here rather than blended by the GPU -- the result is identical for a flat opaque stack, and
  * it keeps the whole car on one opaque instanced material.
+ *
+ * Both the tint and the panel sizes came DOWN after seeing them on a device (42% black over
+ * panels a third larger). Scaled to a forty-pixel car, a dark panel that size stops reading as
+ * a window and starts reading as a hole punched through the roof -- and it was competing with
+ * the arrow, which is the one thing on the car that has to be read instantly.
  */
-const GLASS_KEEP = 0.58;
-const WINDSCREEN_X = 0.225;
-const WINDSCREEN_W = 0.115;
-const WINDSCREEN_H = 0.52;
-const REAR_WINDOW_X = -0.285;
-const REAR_WINDOW_W = 0.070;
-const REAR_WINDOW_H = 0.40;
+const GLASS_KEEP = 0.70;
+const WINDSCREEN_X = 0.230;
+const WINDSCREEN_W = 0.095;
+const WINDSCREEN_H = 0.42;
+const REAR_WINDOW_X = -0.288;
+const REAR_WINDOW_W = 0.058;
+const REAR_WINDOW_H = 0.32;
 const WINDOW_R = 0.30;
 
 /** The exit arrow, pointing +X (the body's own forward). */
@@ -126,11 +150,6 @@ function shade(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
 }
 
-/** `TAPER` scaled about its own centre. */
-function shrunk(along: number, across: number): Pt[] {
-    return TAPER.map(([x, y]) => [x * along, y * across] as Pt);
-}
-
 /**
  * A rounded rectangle as a counter-clockwise polygon. `r` is a fraction of the shape's shorter
  * side MEASURED AT REFERENCE_ASPECT, so the corner comes out circular once the node's stretch
@@ -154,6 +173,15 @@ function roundRect(cx: number, cy: number, w: number, h: number, r: number): Pt[
         }
     }
     return pts;
+}
+
+/**
+ * The body outline at a fraction of full size. The corner radius shrinks with it, because
+ * `roundRect` takes it as a fraction of the shape's own shorter side -- which is what keeps the
+ * dome steps looking like one curved roof rather than a stack of differently-rounded plates.
+ */
+function bodyOutline(along: number, across: number): Pt[] {
+    return roundRect(0, 0, BODY_ALONG * along, BODY_ACROSS * across, BODY_CORNER);
 }
 
 /** The arrow, as the two convex pieces it is made of: a shaft rectangle and a head triangle. */
@@ -197,7 +225,7 @@ class Plan {
  */
 function plates(color: Color): { pts: readonly Pt[]; c: Color }[] {
     const out: { pts: readonly Pt[]; c: Color }[] = [];
-    out.push({ pts: shrunk(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), c: shade(color, EDGE_SHADE) });
+    out.push({ pts: bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), c: shade(color, EDGE_SHADE) });
     for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
             out.push({
@@ -206,12 +234,12 @@ function plates(color: Color): { pts: readonly Pt[]; c: Color }[] {
             });
         }
     }
-    out.push({ pts: TAPER, c: color });
+    out.push({ pts: bodyOutline(1, 1), c: color });
     let top = color;
     for (let i = 1; i <= BEVEL; i++) {
         const t = i / BEVEL;
         top = lighten(color, BEVEL_LIFT * i);
-        out.push({ pts: shrunk(1 - BEVEL_SHORTEN * t, 1 - BEVEL_NARROW * t), c: top });
+        out.push({ pts: bodyOutline(1 - BEVEL_SHORTEN * t, 1 - BEVEL_NARROW * t), c: top });
     }
     const glass = shade(top, GLASS_KEEP);
     out.push({
