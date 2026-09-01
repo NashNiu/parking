@@ -46,7 +46,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0901-2';
+const BUILD_TAG = 'build 0901-3';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -417,9 +417,19 @@ export class GameController extends Component {
     private tagText = '';
     private fpsFrames = 0;
     private fpsClock = 0;
-    /** Milliseconds spent inside the tick body since the last readout, and the worst one. */
+    /**
+     * Milliseconds spent inside the tick body since the last readout, the worst single tick,
+     * and the same total split three ways.
+     *
+     * The split is the whole point now. The tick averages about 29ms against a 25ms frame
+     * budget and fires 5.9 times a second, so it is not an occasional spike -- every tick is
+     * a lump bigger than a frame. Knowing WHICH of the three costs it is decides what gets
+     * worked on, and there is no way to tell them apart from the outside.
+     */
     private tickMsSum = 0;
     private tickMsMax = 0;
+    private tickMsCore = 0;
+    private tickMsView = 0;
     /**
      * Degrees the board leans back. Zero means the camera looks straight down the board's
      * normal — a flat, straight-on view, which is what the art is designed for. It was 52
@@ -1070,8 +1080,12 @@ export class GameController extends Component {
             this.tickAcc -= this.tick;
             const tickStartedAt = nowMs();
             const res = this.core.stepLoop();
+            const afterCore = nowMs();
             const lp = this.core.loop;
             this.loopView?.update(lp.ring, lp.channels);
+            const afterView = nowMs();
+            this.tickMsCore += afterCore - tickStartedAt;
+            this.tickMsView += afterView - afterCore;
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.syncSeatCounts();
             if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedSlots);
@@ -1127,15 +1141,23 @@ export class GameController extends Component {
         // body runs inside a frame, so this is how much of every second the frame budget
         // never gets. Reported next to the worst single tick, because a 20ms lump inside one
         // frame is a visible hitch even when the average looks affordable.
-        const tickLoad = Math.round(this.tickMsSum / this.fpsClock);
+        const per = (ms: number): number => Math.round(ms / this.fpsClock);
+        const tickLoad = per(this.tickMsSum);
+        const core = per(this.tickMsCore);
+        const view = per(this.tickMsView);
+        // Whatever the tick body spends outside the two timed calls: the HUD, the seat
+        // counts, boarding and departure, the unlock check.
+        const rest = Math.max(0, tickLoad - core - view);
         const tickMax = Math.round(this.tickMsMax);
         this.fpsFrames = 0;
         this.fpsClock = 0;
         this.tickMsSum = 0;
         this.tickMsMax = 0;
+        this.tickMsCore = 0;
+        this.tickMsView = 0;
         if (this.tagText) {
-            this.hud?.setBuildTag(
-                `${this.tagText} · ${fps}fps · tick ${tickLoad}ms/s max ${tickMax}`);
+            this.hud?.setBuildTag(`${this.tagText} · ${fps}fps · tick${tickLoad}`
+                + ` c${core} v${view} r${rest} max${tickMax}`);
         }
     }
 
