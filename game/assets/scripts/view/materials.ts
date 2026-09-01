@@ -1,4 +1,4 @@
-import { Node, MeshRenderer, Material, Color, EffectAsset } from 'cc';
+import { Node, MeshRenderer, Material, Color, EffectAsset, Vec4 } from 'cc';
 
 const litCache = new Map<string, Material>();
 
@@ -51,23 +51,66 @@ export function litMaterial(color: Color): Material {
  * model's non-recolored roles) must normalize first. Returns null if the material
  * has no readable `mainColor`.
  */
-export function readMainColor(m: Material): Color | null {
-    // TRY SEVERAL NAMES, because `mainColor` alone does not reach an IMPORTED material.
-    // builtin-standard declares `mainColor` with `target: albedo`, and a material built by
-    // the glTF importer stores the value under the TARGET name -- so `getProperty('mainColor')`
-    // comes back undefined on every car material. That silently sent the lamps, taillamps,
-    // tyres and hubs down the white fallback in `recolorCar` for several builds, and it took
-    // a console warning to notice: the models carry a baseColorFactor for all four.
-    let v: { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number } | undefined;
-    for (const name of ['mainColor', 'albedo', 'diffuseColor', 'color']) {
-        v = m.getProperty(name) as typeof v;
-        if (v) break;
-    }
+type ColourLike = { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number };
+
+/** A property value as a Color, or null if it does not look like one. */
+function toColour(v: ColourLike | null | undefined): Color | null {
     if (!v) return null;
     const r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
     if (r == null || g == null || b == null) return null;
     const s = (r <= 1 && g <= 1 && b <= 1) ? 255 : 1;
     return new Color(Math.round(r * s), Math.round(g * s), Math.round(b * s), 255);
+}
+
+const _uni = new Vec4();
+
+/**
+ * The albedo a material will actually render with, or null if it cannot be read.
+ *
+ * TWO PLACES TO LOOK, because a material we built and a material the glTF importer built keep
+ * their colour in different places.
+ *
+ * 1. `getProperty` -- but that only reads EXPLICIT overrides (`Material._props`), which is
+ *    what our own `litMaterial` sets and, apparently, not where an imported car material's
+ *    baseColorFactor ends up: it returned null for every one of them. Several names are tried
+ *    because builtin-standard declares `mainColor` with `target: albedo`, so which key a
+ *    setter used depends on the setter.
+ * 2. The PASS's uniform, which is what the GPU will actually read. That is the truthful
+ *    source and it cannot be bypassed.
+ *
+ * A WHITE result from the pass is REJECTED rather than returned, and that is the important
+ * part: white is exactly what the effect defaults to, so a white uniform cannot be told apart
+ * from "nobody set anything". Returning it would replace an honest "I cannot read this" with a
+ * confident wrong answer -- and the caller's whole job is to notice.
+ */
+export function readMainColor(m: Material): Color | null {
+    for (const name of ['mainColor', 'albedo', 'diffuseColor', 'color']) {
+        const c = toColour(m.getProperty(name) as ColourLike);
+        if (c) return c;
+    }
+    const pass = m.passes?.[0];
+    if (!pass) return null;
+    for (const name of ['albedo', 'mainColor', 'diffuseColor']) {
+        const handle = pass.getHandle(name);
+        if (!handle) continue;
+        const c = toColour(pass.getUniform(handle, _uni));
+        if (!c) continue;
+        if (c.r === 255 && c.g === 255 && c.b === 255) continue;
+        return c;
+    }
+    return null;
+}
+
+/**
+ * Where `readMainColor` looked, for a warning that can be acted on.
+ *
+ * "I could not read the colour" is not enough to fix anything -- the colour is somewhere, and
+ * which reader to reach for depends on the effect and on what the material actually carries.
+ */
+export function describeMaterial(m: Material): string {
+    const props = (m as unknown as { _props?: Record<string, unknown>[] })._props;
+    const keys = props?.map((p) => Object.keys(p).join('|') || '-').join(' / ') ?? '(no _props)';
+    return `effect=${m.effectName} passes=${m.passes?.length ?? 0} props=[${keys}]`;
 }
 
 /** Unlit solid color (for UI-ish bits that must stay bright regardless of lighting). */

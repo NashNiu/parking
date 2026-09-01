@@ -49,7 +49,7 @@
       "name": "UnnamedMesh-11.mesh",
       "userData": {
         "gltfIndex": 11,
-        "triangleCount": 0
+        "triangleCount": 56
       },
       "ver": "1.1.1",
       "imported": true,
@@ -229,7 +229,7 @@
       "name": "UnnamedMesh-12.mesh",
       "userData": {
         "gltfIndex": 12,
-        "triangleCount": 0
+        "triangleCount": 48
       },
       "ver": "1.1.1",
       "imported": true,
@@ -247,7 +247,7 @@
       "name": "UnnamedMesh-13.mesh",
       "userData": {
         "gltfIndex": 13,
-        "triangleCount": 0
+        "triangleCount": 56
       },
       "ver": "1.1.1",
       "imported": true,
@@ -265,7 +265,7 @@
       "name": "UnnamedMesh-14.mesh",
       "userData": {
         "gltfIndex": 14,
-        "triangleCount": 0
+        "triangleCount": 48
       },
       "ver": "1.1.1",
       "imported": true,
@@ -319,6 +319,42 @@
       "name": "UnnamedMesh-17.mesh",
       "userData": {
         "gltfIndex": 17,
+        "triangleCount": 56
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "7bbe1": {
+      "importer": "gltf-mesh",
+      "uuid": "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@7bbe1",
+      "displayName": "",
+      "id": "7bbe1",
+      "name": "UnnamedMesh-18.mesh",
+      "userData": {
+        "gltfIndex": 18,
+        "triangleCount": 48
+      },
+      "ver": "1.1.1",
+      "imported": true,
+      "files": [
+        ".bin",
+        ".json"
+      ],
+      "subMetas": {}
+    },
+    "4c649": {
+      "importer": "gltf-mesh",
+      "uuid": "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@4c649",
+      "displayName": "",
+      "id": "4c649",
+      "name": "UnnamedMesh-19.mesh",
+      "userData": {
+        "gltfIndex": 19,
         "triangleCount": 0
       },
       "ver": "1.1.1",
@@ -377,38 +413,6 @@
       ],
       "subMetas": {}
     },
-    "0d800": {
-      "importer": "gltf-material",
-      "uuid": "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@0d800",
-      "displayName": "",
-      "id": "0d800",
-      "name": "lamp.material",
-      "userData": {
-        "gltfIndex": 3
-      },
-      "ver": "1.0.14",
-      "imported": true,
-      "files": [
-        ".json"
-      ],
-      "subMetas": {}
-    },
-    "1d66d": {
-      "importer": "gltf-material",
-      "uuid": "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@1d66d",
-      "displayName": "",
-      "id": "1d66d",
-      "name": "taillamp.material",
-      "userData": {
-        "gltfIndex": 4
-      },
-      "ver": "1.0.14",
-      "imported": true,
-      "files": [
-        ".json"
-      ],
-      "subMetas": {}
-    },
     "c13ff": {
       "importer": "gltf-material",
       "uuid": "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@c13ff",
@@ -416,7 +420,7 @@
       "id": "c13ff",
       "name": "tire.material",
       "userData": {
-        "gltfIndex": 5
+        "gltfIndex": 3
       },
       "ver": "1.0.14",
       "imported": true,
@@ -432,7 +436,7 @@
       "id": "2e82e",
       "name": "hub.material",
       "userData": {
-        "gltfIndex": 6
+        "gltfIndex": 4
       },
       "ver": "1.0.14",
       "imported": true,
@@ -497,7 +501,9 @@
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@4230d",
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@14e79",
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@b3b98",
-        "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@fb710"
+        "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@fb710",
+        "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@7bbe1",
+        "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@4c649"
       ],
       "skeletons": [],
       "textures": [],
@@ -505,8 +511,6 @@
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@cbbea",
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@56ce1",
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@ad0bb",
-        "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@0d800",
-        "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@1d66d",
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@c13ff",
         "0a5670d4-ef6b-4e90-a818-f9cf574eaf43@2e82e"
       ],

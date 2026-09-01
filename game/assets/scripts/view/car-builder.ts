@@ -3,7 +3,7 @@ import {
     Vec3, Mat4, utils, primitives,
 } from 'cc';
 import { Cap } from '../core/index';
-import { instancedLitMaterial, readMainColor } from './materials';
+import { describeMaterial, instancedLitMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
@@ -168,8 +168,10 @@ function warnNoColour(m: Material): void {
     const name = m.name || '(unnamed)';
     if (warnedMaterials.has(name)) return;
     warnedMaterials.add(name);
-    console.warn(`[car] material "${name}" has no readable mainColor, so it is drawn WHITE.`
-        + ' Give it an explicit baseColorFactor in the model.');
+    // Say WHERE it looked, not only that it failed: the colour is somewhere, and which reader
+    // to reach for depends on the effect and on what the material actually carries.
+    console.warn(`[car] material "${name}" has no readable colour, so it is drawn WHITE.`
+        + ` ${describeMaterial(m)}`);
 }
 
 /**
