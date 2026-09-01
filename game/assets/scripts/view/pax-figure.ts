@@ -261,6 +261,48 @@ const registry = new WeakMap<Node, Parts>();
  * same contract the old GLB-backed builder offered. Faces +Z at identity rotation
  * (see the module doc comment above for why).
  */
+let dotMeshCache: Mesh | null = null;
+/**
+ * A ball sitting ON the ground rather than centred on it: one unit across, so the caller's
+ * `size` IS its diameter in board units, with its bottom at y = 0 like a figure's feet.
+ *
+ * Six segments, the same as a head, which makes it 72 triangles -- about a quarter of what
+ * one figure costs and a twenty-seventh of what a row of four does.
+ */
+function dotMesh(): Mesh {
+    if (dotMeshCache) return dotMeshCache;
+    const ball = primitives.sphere(0.5, { segments: HEAD_SEGMENTS });
+    dotMeshCache = mergeParts([placed(ball, 0, 0, 0.5, 0)]);
+    return dotMeshCache;
+}
+
+/**
+ * EXPERIMENT (see ROW_AS_DOT in track-view.ts). One ball standing in for a whole group of
+ * four, so the ring and the channels draw 54 of these instead of 256 figures.
+ *
+ * It is here to MEASURE, not to ship: a row of four is a number the player has to read off
+ * the ring, and one ball does not carry it -- the same objection that retired the
+ * stand-the-figure-up experiment. What it answers is how much of the frame the crowd is
+ * worth at all, which decides whether there is anything left to win here.
+ *
+ * Shares the registry with `buildPaxFigure`, so `recolorPaxFigure` works on it unchanged.
+ */
+export function buildPaxDot(name: string, color: Color, size: number): Node {
+    const root = new Node(name);
+    const fit = new Node('fit');
+    fit.setScale(size, size, size);
+    root.addChild(fit);
+
+    const mat = instancedLitMaterial(color);
+    const mr = fit.addComponent(MeshRenderer);
+    mr.mesh = dotMesh();
+    mr.material = mat;
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+
+    registry.set(root, { renderer: mr, mat });
+    return root;
+}
+
 export function buildPaxFigure(name: string, color: Color, height: number): Node {
     const root = new Node(name);
     const fit = new Node('fit');

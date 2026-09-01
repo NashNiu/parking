@@ -2,7 +2,7 @@ import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
-import { buildPaxFigure, recolorPaxFigure } from './pax-figure';
+import { buildPaxDot, buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
     BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
     PaxGroup, TrackPath,
@@ -43,6 +43,28 @@ const BAND_DROP = 0.07;
  * lengths are legal (see validateTrack), so this does not change independently of
  * the track's geometry budget.
  */
+/**
+ * EXPERIMENT: draw each group as ONE dot instead of four figures.
+ *
+ * A measurement, not a proposal. It has already been settled that a group has to read as
+ * FOUR -- that is what retired the stand-them-up experiment -- so this is not a candidate to
+ * ship. What it buys is the answer to "how much of the frame is the crowd?": it takes the
+ * ring and the channels from 256 figures at 268 triangles each down to 54 dots at 72, about
+ * 69k triangles to 3.9k, and the per-frame node writes in `repositionAll` from 220 to 55.
+ *
+ * If the frame rate barely moves, the crowd is not what is costing the frame and the search
+ * moves elsewhere. If it jumps, the honest options are fewer GROUPS (a shorter ring) rather
+ * than fewer people per group.
+ *
+ * The dot is BLOCK.figure across, which is also blockLength -- so at seam 0 the dots just
+ * touch, and a ring of dots is exactly as long as the ring of rows it replaces.
+ *
+ * Set to false to get the crowd back. Boarding still flies real figures: `spawnPassenger` is
+ * untouched, both because the flight has to read and because it is not on this measurement.
+ */
+const ROW_AS_DOT = true;
+const OFFSET_SCRATCH_ZERO = { across: 0, along: 0 };
+
 const PAX_HEIGHT = 0.55;
 
 /**
@@ -221,6 +243,8 @@ export function leftLaneFloor(path: TrackPath, capacity: number, channels: Chann
  * turns as they travel; once at build time for the lanes, whose direction is fixed.
  */
 function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
+    // A row drawn as one thing sits on its own centre -- there is no block to spread out.
+    if (figures.length === 1) { figures[0].setPosition(0, 0, 0); return; }
     const ax = dy, ay = -dx;
     for (let i = 0; i < figures.length; i++) {
         const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
@@ -255,6 +279,10 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
  */
 function makeRow(name: string): Node {
     const row = new Node(name);
+    if (ROW_AS_DOT) {
+        row.addChild(buildPaxDot(`${name}-0`, Color.WHITE, BLOCK.figure));
+        return row;
+    }
     for (let i = 0; i < GROUP_SIZE; i++) {
         row.addChild(makePassenger(`${name}-${i}`, Color.WHITE));
     }
@@ -821,8 +849,11 @@ export class TrackView {
         const local = this.point(t, new Vec3());
         const n = this.normal(t);
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
-        // was standing on rather than a point on the centreline.
-        const o = blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
+        // was standing on rather than a point on the centreline -- unless the group is drawn
+        // as one dot (ROW_AS_DOT), in which case the centreline IS where it stood.
+        const o = ROW_AS_DOT
+            ? OFFSET_SCRATCH_ZERO
+            : blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
         const fy = local.y + o.across * n.y - o.along * n.x;
         // Its depth too, or the flight starts at z = 0 while the figure it replaces was
         // several units nearer -- which reads as the passenger jumping backwards on takeoff.
