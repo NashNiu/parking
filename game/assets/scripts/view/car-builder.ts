@@ -236,15 +236,74 @@ function lighten(c: Color, t: number): Color {
  * Lighter as it rises, which reads as a cabin catching the light from a camera directly
  * overhead. Going darker instead reads as grime.
  */
+/**
+ * How the car is coloured, plate by plate, and why some plates are also SHRUNK.
+ *
+ * All of this was worked out by rendering the models' top-down plan offline -- real triangles,
+ * depth-sorted, with these very colours applied -- and looking at it, after four rounds of
+ * guessing from phone screenshots got it wrong every time. The renderer lives in
+ * `.tmp/plan2.py`; rebuild it before touching these numbers, because the only thing that
+ * matters here is what the plan looks like and nothing else in the project can show that.
+ *
+ * WHAT THE PLAN SHOWED. `paint` covers three stacked plates -- body, cabin, roof -- so one
+ * colour for all three threw away the model's layering and left a flat bar; they are shaded
+ * apart now, lighter as they rise, which under a camera directly overhead reads as a cabin
+ * catching the light (darker reads as grime). `trim` is near-white in the model, and on the
+ * bumpers and sills, which ring the whole car, that drew a white halo -- the same thing that
+ * read as a "tray" on the previous models -- so those take a dark shade of the body instead,
+ * while the arrow keeps the white and has it to itself.
+ *
+ * `glass` is NOT tinted any more. It used to be replaced with a 0.72 shade of the body, which
+ * made the windows read as a slightly darker stripe of the same car; the model's own glass is
+ * a blue-grey (95, 107, 128) and reads as glass. The old note warned that the authored glass
+ * is semi-transparent and went dark when tinted -- that does not apply here, because
+ * `instancedLitMaterial` is opaque whatever colour goes in.
+ *
+ * THE SHRINK is the one thing here that fights the model. The windscreen and rear window are
+ * raked panels that sit UNDER the roof and cabin plates in plan, so from this camera they were
+ * 0% visible -- measured. Narrowing those two plates uncovers them fore and aft; taking a
+ * little off their width uncovers the side windows too. The arrow comes down with them because
+ * at full size it is 0.84 x 0.52 on a body 2.0 x 0.9 and swamps everything else.
+ *
+ * A re-export with a shorter roof would make the shrink unnecessary, and that is the better
+ * home for it. Until then these are the numbers, and the plan renderer is how to judge a
+ * change to them.
+ */
 const CABIN_LIFT = 0.14;
 const ROOF_LIFT_COLOUR = 0.28;
+const CHASSIS_SHADE = 0.62;
+const PLATE_SHRINK: Record<string, { along: number; across: number }> = {
+    cabin: { along: 0.62, across: 0.92 },
+    roof: { along: 0.55, across: 0.92 },
+    arrow: { along: 0.62, across: 1 },
+};
 
-function paintRole(nodeName: string): 'cabin' | 'roof' | null {
+type Plate = 'cabin' | 'roof' | 'arrow' | 'chassis' | null;
+
+/**
+ * Which plate a node is, by name. It has to be by name: the model gives body, cabin and roof
+ * ONE material, and the bumpers, sills and roof arrow another.
+ */
+function plateOf(nodeName: string): Plate {
     const n = nodeName.toLowerCase();
-    if (n.includes('roof') && !n.includes('arrow')) return 'roof';
+    if (n.includes('arrow')) return 'arrow';
+    if (n.includes('roof')) return 'roof';
     if (n.includes('cabin')) return 'cabin';
+    if (n.includes('bumper') || n.includes('sill')) return 'chassis';
     return null;
 }
+
+/** Narrow the plates that hide the glass, and the arrow with them. See PLATE_SHRINK. */
+function fitPlates(model: Node): void {
+    for (const mr of model.getComponentsInChildren(MeshRenderer)) {
+        const plate = plateOf(mr.node.name);
+        const f = plate ? PLATE_SHRINK[plate] : undefined;
+        if (!f) continue;
+        const sc = mr.node.scale;
+        mr.node.setScale(sc.x * f.along, sc.y, sc.z * f.across);
+    }
+}
+
 
 /**
  * Give every material slot on the car an INSTANCED material of the right colour.
@@ -281,28 +340,27 @@ function paintRole(nodeName: string): 'cabin' | 'roof' | null {
  * them anyway.
  */
 function recolorCar(model: Node, color: Color): void {
-    const paintMat = instancedLitMaterial(color);
-    const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
+    const bodyMat = instancedLitMaterial(color);
     const cabinMat = instancedLitMaterial(lighten(color, CABIN_LIFT));
     const roofMat = instancedLitMaterial(lighten(color, ROOF_LIFT_COLOUR));
+    const chassisMat = instancedLitMaterial(scaleColor(color, CHASSIS_SHADE));
+    const arrowMat = instancedLitMaterial(Color.WHITE);
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
-        const plate = paintRole(mr.node.name);
+        const plate = plateOf(mr.node.name);
         const mats = mr.sharedMaterials;
         for (let i = 0; i < mats.length; i++) {
             const m = mats[i];
             if (!m) continue;
             if (matchesRole(m, 'paint')) {
-                // Same material, three plates: see `paintRole`.
                 mr.setMaterial(plate === 'roof' ? roofMat
-                    : plate === 'cabin' ? cabinMat : paintMat, i);
-            }
-            else if (matchesRole(m, 'glass')) mr.setMaterial(glassMat, i);
-            else {
-                // Every other role keeps the colour the model gave it, and gains instancing.
-                // The sill, the bumpers and the roof arrow used to be forced here -- the sill
-                // to a shade of the body so it stopped reading as a tray, the arrow to white
-                // and 1.8x its size so it could be seen at all. None of that is needed now:
-                // the models are authored for this camera, so what they say is what we draw.
+                    : plate === 'cabin' ? cabinMat : bodyMat, i);
+            } else if (plate === 'arrow') {
+                mr.setMaterial(arrowMat, i);
+            } else if (plate === 'chassis') {
+                mr.setMaterial(chassisMat, i);
+            } else {
+                // Glass, tyres and hubs keep the colour the model gave them, and gain
+                // instancing. `readMainColor` finds it in `albedoScale` -- see the note there.
                 const own = readMainColor(m);
                 if (!own) warnNoColour(m);
                 mr.setMaterial(instancedLitMaterial(own ?? Color.WHITE), i);
@@ -416,6 +474,7 @@ export function buildCar(
     // whose name is empty and whose colour is this car's, so an audit run afterwards can never
     // recognise it and reports every model as having no `paint`. It did exactly that.
     auditPaint(model, cap);
+    fitPlates(model);
     recolorCar(model, color);
     addShadow(body, drawnLen, drawnWid);
 
