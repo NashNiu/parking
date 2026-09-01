@@ -114,6 +114,46 @@ function matchesRole(m: Material, role: 'paint' | 'glass'): boolean {
     return Math.abs(c.r - t.r) + Math.abs(c.g - t.g) + Math.abs(c.b - t.b) < 90;
 }
 
+/**
+ * Which of `trim`'s jobs a node is doing, by name -- and it has to be by name, because the
+ * model gives all of them ONE material.
+ *
+ * `trim` is the only material in bus/car/truck.glb with **no `baseColorFactor`**, and glTF
+ * says that means white. Three nodes share it: `sill`, a 2.0 x 1.1 flat slab lying under the
+ * whole car; `bumper_front`/`bumper_rear`; and `roof_arrow`, the plate that says which way
+ * the car leaves. All three therefore came out white, which is one bug wearing two faces:
+ *
+ * - the sill is wider than the painted body (1.10 against 1.04), so a white tray showed all
+ *   round the car and read as a BACKGROUND behind it rather than as part of it;
+ * - and the arrow, being the same white, had nothing to stand out against.
+ *
+ * So the fix is not to recolour `trim` but to stop treating it as one thing. The sill and
+ * bumpers take a dark neutral, which in this flat art reads as a stroke around the car and
+ * lets the body read as one object; the arrow keeps the white and becomes the ONLY white on
+ * the car, which is what makes it legible. Node names come straight from the glTF and Cocos
+ * keeps them (`sill`, `roof_arrow`, ...), so this is as stable as the model itself.
+ */
+function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
+    const n = nodeName.toLowerCase();
+    if (n.includes('arrow')) return 'arrow';
+    if (n.includes('sill') || n.includes('bumper')) return 'chassis';
+    return null;
+}
+
+/** Dark slate for the sill and bumpers, and the white the arrow now has to itself. */
+const CHASSIS = new Color(58, 64, 76, 255);
+const ARROW = new Color(255, 255, 255, 255);
+
+/**
+ * How much bigger the roof arrow is drawn than the model ships it.
+ *
+ * The plate is 0.9 x 0.76 on a roof 2.5 long, which at this camera height is a small mark;
+ * contrast alone (see `trimRole`) makes it visible, and this makes it readable. Scaled in
+ * the plate's own plane only -- it is thin along its local Z, and scaling that would push it
+ * through the roof it sits on.
+ */
+const ARROW_SCALE = 1.3;
+
 function scaleColor(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
 }
@@ -138,10 +178,13 @@ function scaleColor(c: Color, f: number): Color {
  * swapped as well or they keep a non-instanced draw each.
  *
  * Swapping them costs nothing, and that is a fact about these particular models rather
- * than an assumption: all three GLBs carry ZERO textures and ZERO images, and all seven
+ * than an assumption: all three GLBs carry ZERO textures and ZERO images, and their
  * materials are a flat baseColorFactor. There is no authored detail for a flat lit material
  * of the same colour to lose. Re-check that if the models are ever re-exported with a
  * texture -- `readMainColor` would silently flatten it away.
+ *
+ * SIX of the seven materials carry a baseColorFactor. The seventh, `trim`, does not, and
+ * that one needs `trimRole` rather than a colour read -- see the note there.
  *
  * `instancedLitMaterial` is builtin-standard, so the emissive flash still works. It is
  * shared per colour, so flashing one car flashes every car of that colour -- already true
@@ -151,16 +194,21 @@ function scaleColor(c: Color, f: number): Color {
 function recolorCar(model: Node, color: Color): void {
     const paintMat = instancedLitMaterial(color);
     const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
+    const chassisMat = instancedLitMaterial(CHASSIS);
+    const arrowMat = instancedLitMaterial(ARROW);
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
+        const role = trimRole(mr.node.name);
         const mats = mr.sharedMaterials;
         for (let i = 0; i < mats.length; i++) {
             const m = mats[i];
             if (!m) continue;
             if (matchesRole(m, 'paint')) mr.setMaterial(paintMat, i);
             else if (matchesRole(m, 'glass')) mr.setMaterial(glassMat, i);
-            // Every other role keeps its own colour and gains instancing. White when the
-            // material has no readable `mainColor`, which is what glTF means by a missing
-            // baseColorFactor -- `trim` on these models is exactly that.
+            else if (role === 'chassis') mr.setMaterial(chassisMat, i);
+            else if (role === 'arrow') mr.setMaterial(arrowMat, i);
+            // Everything left keeps its own colour and gains instancing. The lamps, the
+            // tyres and the hubs all carry a baseColorFactor, so `readMainColor` has
+            // something to read and the fallback never fires for them.
             else mr.setMaterial(instancedLitMaterial(readMainColor(m) ?? Color.WHITE), i);
         }
     }
@@ -186,6 +234,15 @@ function fallbackBox(body: Node, len: number, wid: number, color: Color): void {
  * into the board (-Z), so there's no meaningful lateral shadow offset to fake.
  * z = -0.06 puts it between the lot surface (-0.10) and the wheels (0).
  */
+/** Enlarge the roof arrow in its own plane. See ARROW_SCALE. */
+function growArrow(model: Node): void {
+    for (const mr of model.getComponentsInChildren(MeshRenderer)) {
+        if (trimRole(mr.node.name) !== 'arrow') continue;
+        const s = mr.node.scale;
+        mr.node.setScale(s.x * ARROW_SCALE, s.y * ARROW_SCALE, s.z);
+    }
+}
+
 function addShadow(body: Node, len: number, wid: number): void {
     const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
     shadow.setPosition(0, 0, -0.06);
@@ -267,6 +324,7 @@ export function buildCar(
     body.addChild(lay);
 
     recolorCar(model, color);
+    growArrow(model);
     addShadow(body, drawnLen, drawnWid);
 
     // The body carries the heading. After the Rx(90) lay-down the model's length runs along
