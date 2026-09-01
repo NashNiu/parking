@@ -1,4 +1,4 @@
-import { Node, MeshRenderer, Material, Color, EffectAsset, Vec4 } from 'cc';
+import { Node, MeshRenderer, Material, Color, EffectAsset } from 'cc';
 
 const litCache = new Map<string, Material>();
 
@@ -41,102 +41,6 @@ export function litMaterial(color: Color): Material {
     const mat = tryStandard(color) ?? unlitMaterial(color);
     litCache.set(k, mat);
     return mat;
-}
-
-/**
- * Read a material's albedo as 0-255 RGB, tolerating a 0-1 (linear/Vec4) return.
- * Imported glTF materials answer `mainColor` in either range depending on how the
- * property was authored, so callers that compare against a known 0-255 reference
- * (car-builder's role detection) or rebuild a `litMaterial` from it (the passenger
- * model's non-recolored roles) must normalize first. Returns null if the material
- * has no readable `mainColor`.
- */
-type ColourLike = { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number };
-
-/** Linear 0..1 to sRGB 0..1, the transfer function Cocos applies to a `linear: true` property. */
-function toSrgb(c: number): number {
-    return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
-}
-
-/**
- * A property value as a Color, or null if it does not look like one.
- *
- * `linear` says the value is in LINEAR space and has to be converted. It matters because the
- * colour makes a round trip: what comes out of here goes straight into `instancedLitMaterial`,
- * which sets `mainColor` -- and `mainColor` is declared `linear: true`, so the engine converts
- * sRGB back to linear on the way in. Read a linear value, hand it over as if it were sRGB, and
- * every part comes out darker than the model says. On the hub that is 149 against 202.
- */
-function toColour(v: ColourLike | null | undefined, linear: boolean): Color | null {
-    if (!v) return null;
-    let r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
-    if (r == null || g == null || b == null) return null;
-    // A Color arrives as 0..255, a Vec3/Vec4 as 0..1.
-    if (r > 1 || g > 1 || b > 1) { r /= 255; g /= 255; b /= 255; }
-    if (linear) { r = toSrgb(r); g = toSrgb(g); b = toSrgb(b); }
-    return new Color(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255), 255);
-}
-
-const _uni = new Vec4();
-
-/**
- * The albedo a material will actually render with, or null if it cannot be read.
- *
- * WHERE AN IMPORTED MATERIAL KEEPS ITS COLOUR, which took a console diagnostic to find and is
- * not where anyone would look first. The car materials report:
- *
- *     effect=builtin-standard passes=6 props=[metallic|roughness|occlusion|albedoScale] x6
- *
- * No `albedo` and no `mainColor` anywhere -- the glTF importer writes baseColorFactor into
- * **`albedoScale`**, the Vec3 that multiplies albedo, and leaves `albedo` itself at its white
- * default. So `getProperty('mainColor')` and `getProperty('albedo')` both return null on every
- * car material, which is what sent the tyres, hubs and trim down the WHITE fallback for
- * several builds. `albedoScale` is a linear multiplier, so it needs converting; see `toColour`.
- *
- * Our OWN materials keep their colour in `mainColor` as an sRGB Color, so that is tried first
- * and is not converted.
- *
- * The pass uniform is the last resort -- it is what the GPU actually reads, so nothing can hide
- * from it -- and a WHITE result from it is REJECTED rather than returned: white is exactly the
- * effect default, so a white uniform cannot be told apart from "nobody set anything". Returning
- * it would replace an honest "I cannot read this" with a confident wrong answer, and noticing is
- * the caller's whole job. Note `passes=6`, so the loop cannot assume pass 0 carries albedo.
- */
-export function readMainColor(m: Material): Color | null {
-    // Ours: sRGB, as set.
-    for (const name of ['mainColor', 'color']) {
-        const c = toColour(m.getProperty(name) as ColourLike, false);
-        if (c) return c;
-    }
-    // Imported: linear.
-    for (const name of ['albedoScale', 'albedo', 'diffuseColor']) {
-        const c = toColour(m.getProperty(name) as ColourLike, true);
-        if (c) return c;
-    }
-    const passes = m.passes ?? [];
-    for (const pass of passes) {
-        for (const name of ['albedoScale', 'albedo', 'mainColor']) {
-            const handle = pass.getHandle(name);
-            if (!handle) continue;
-            const c = toColour(pass.getUniform(handle, _uni), true);
-            if (!c) continue;
-            if (c.r === 255 && c.g === 255 && c.b === 255) continue;
-            return c;
-        }
-    }
-    return null;
-}
-
-/**
- * Where `readMainColor` looked, for a warning that can be acted on.
- *
- * "I could not read the colour" is not enough to fix anything -- the colour is somewhere, and
- * which reader to reach for depends on the effect and on what the material actually carries.
- */
-export function describeMaterial(m: Material): string {
-    const props = (m as unknown as { _props?: Record<string, unknown>[] })._props;
-    const keys = props?.map((p) => Object.keys(p).join('|') || '-').join(' / ') ?? '(no _props)';
-    return `effect=${m.effectName} passes=${m.passes?.length ?? 0} props=[${keys}]`;
 }
 
 /** Unlit solid color (for UI-ish bits that must stay bright regardless of lighting). */
@@ -258,5 +162,57 @@ export function instancedLitMaterial(color: Color): Material {
     }
     const result = mat ?? litMaterial(color);
     instancedCache.set(k, result);
+    return result;
+}
+
+const vertexColorCache = new Map<string, Material>();
+
+/**
+ * Lit, instanced, and taking its albedo from the MESH's vertex colours rather than from a
+ * uniform. `mainColor` stays white: builtin-standard computes `albedo *= v_color` under
+ * `USE_VERTEX_COLOR`, so white lets the baked colours through untouched.
+ *
+ * This is what the drawn car is painted with (see `car-mesh.ts`). A car needs a white arrow,
+ * near-black tyres and eight shades of its own paint in one object; as materials that is eleven
+ * renderers per car and nothing batching, and as vertex colours it is one renderer per car.
+ *
+ * KEYED BY COLOUR even though the material itself does not depend on it, and that is
+ * deliberate. `setEmissive` mutates a material in place, so every car sharing a material
+ * flashes together -- one material for the whole lot would flash all forty-six cars on a
+ * refused tap. Keyed per colour, the flash reaches the cars of one colour, exactly as it did
+ * when the body was painted with `instancedLitMaterial`. Draw calls are unaffected: the mesh
+ * is already per-colour, so instancing was never going to merge two colours anyway.
+ *
+ * Same zero-pass guard as the others: if builtin-standard builds no passes here, fall back to
+ * the plain lit material for the colour. That fallback loses the vertex colours -- the car
+ * comes out one flat shade -- so it warns rather than degrading in silence.
+ */
+export function vertexColorMaterial(color: Color): Material {
+    const k = key(color);
+    const hit = vertexColorCache.get(k);
+    if (hit) return hit;
+    let mat: Material | null = null;
+    const eff = EffectAsset.get('builtin-standard');
+    if (eff) {
+        const m = new Material();
+        try {
+            m.initialize({
+                effectAsset: eff,
+                defines: { USE_INSTANCING: true, USE_VERTEX_COLOR: true },
+            });
+            if (m.passes && m.passes.length > 0) {
+                m.setProperty('mainColor', Color.WHITE);
+                mat = m;
+            }
+        } catch {
+            mat = null;
+        }
+    }
+    if (!mat) {
+        console.warn(`[materials] vertex colours unavailable for ${k}; cars of this colour will`
+            + ' be drawn as one flat shade');
+    }
+    const result = mat ?? litMaterial(color);
+    vertexColorCache.set(k, result);
     return result;
 }

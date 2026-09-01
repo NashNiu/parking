@@ -17,7 +17,6 @@ import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
-import { preloadCarModels } from './car-builder';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
 
@@ -46,7 +45,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0901-14';
+const BUILD_TAG = 'build 0901-15';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -248,11 +247,14 @@ const DEBUG_FOOTPRINTS = false;
 /**
  * Seconds a startup preload gets before the game goes on without it.
  *
- * Both preloads already degrade gracefully when an asset ERRORS -- litMaterial falls back
- * to flat shading, buildCar falls back to a plain coloured box. Neither degraded when a
- * load simply never called back, and a real device has failure modes the editor never
- * shows, so the whole game sat on the splash screen forever with nothing logged. A
- * deadline is what makes those existing fallbacks reachable.
+ * The preload already degrades gracefully when the effect ERRORS -- litMaterial falls back
+ * to flat shading. It did not degrade when a load simply never called back, and a real
+ * device has failure modes the editor never shows, so the whole game sat on the splash
+ * screen forever with nothing logged. A deadline is what makes that existing fallback
+ * reachable.
+ *
+ * There used to be a second step here, preloading the three car GLBs; the drawn car needs
+ * no assets, so it is gone.
  *
  * Generous on purpose: a phone on a slow connection fetching the package is doing real
  * work, and cutting it off early would trade a hang for a permanently ugly board.
@@ -511,16 +513,15 @@ export class GameController extends Component {
         // Preload builtin-standard so lit materials get real lighting; it lives in
         // the `internal` bundle but isn't preloaded unless something already uses it.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
-        // Then preload the car GLB models (buildCar is synchronous and needs the
-        // prefab resident) before loading the level. Passengers are procedural
-        // (pax-figure.ts) and need no preload of their own.
         //
-        // Each step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
+        // This is the ONLY preload left. Cars and passengers are both drawn from code now
+        // (`car-mesh.ts`, `pax-figure.ts`), so there is no model to have resident before the
+        // first synchronous build -- which also means one fewer way to hang on the splash.
+        //
+        // The step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
         // back used to strand the game on the splash screen with nothing logged.
         this.withDeadline('builtin-standard preload', (d) => this.preloadLitEffect(d), () => {
-            this.withDeadline('car model preload', (d) => preloadCarModels(d), () => {
-                this.loadLevel(this.levelName);
-            });
+            this.loadLevel(this.levelName);
         });
     }
 
@@ -937,8 +938,8 @@ export class GameController extends Component {
         if (this.cam) {
             // ORTHOGRAPHIC, and this is load-bearing rather than a matter of taste: the
             // gameplay is strictly 2D and core reasons about each car's FOOTPRINT on the
-            // board plane, but a car is drawn STANDING on that plane, its roof `hgt` closer
-            // to the camera (see `buildCar`). A perspective camera scales that roof by
+            // board plane, but a car used to be drawn STANDING on that plane, its roof `hgt`
+            // closer to the camera. A perspective camera scales that roof by
             // d/(d-hgt) about its own axis and shoves it radially outward -- and the lot is
             // centred at y = -2.73 while the axis is at y = 0, so the whole lot is off-axis
             // and the bottom of it is ~5 units out. Measured over the ten shipped levels the
