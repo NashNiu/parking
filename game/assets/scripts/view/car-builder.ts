@@ -359,8 +359,11 @@ export function buildCar(
     lay.addChild(model);
     body.addChild(lay);
 
-    recolorCar(model, color);
+    // BEFORE recolorCar, not after: recolorCar replaces the paint slot with a fresh material
+    // whose name is empty and whose colour is this car's, so an audit run afterwards can never
+    // recognise it and reports every model as having no `paint`. It did exactly that.
     auditPaint(model, cap);
+    recolorCar(model, color);
     addShadow(body, drawnLen, drawnWid);
 
     // The body carries the heading. After the Rx(90) lay-down the model's length runs along

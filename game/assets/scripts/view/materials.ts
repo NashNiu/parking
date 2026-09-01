@@ -52,8 +52,17 @@ export function litMaterial(color: Color): Material {
  * has no readable `mainColor`.
  */
 export function readMainColor(m: Material): Color | null {
-    const v = m.getProperty('mainColor') as
-        { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number } | undefined;
+    // TRY SEVERAL NAMES, because `mainColor` alone does not reach an IMPORTED material.
+    // builtin-standard declares `mainColor` with `target: albedo`, and a material built by
+    // the glTF importer stores the value under the TARGET name -- so `getProperty('mainColor')`
+    // comes back undefined on every car material. That silently sent the lamps, taillamps,
+    // tyres and hubs down the white fallback in `recolorCar` for several builds, and it took
+    // a console warning to notice: the models carry a baseColorFactor for all four.
+    let v: { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number } | undefined;
+    for (const name of ['mainColor', 'albedo', 'diffuseColor', 'color']) {
+        v = m.getProperty(name) as typeof v;
+        if (v) break;
+    }
     if (!v) return null;
     const r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
     if (r == null || g == null || b == null) return null;
