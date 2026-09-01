@@ -58,7 +58,8 @@ def numbers(path, needed):
 
 def constants():
     needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT', 'CORNER_SEGMENTS',
-              'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW', 'DOME_LIFT',
+              'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW',
+              'SKIRT_DROP', 'SKIRT_SHADE',
               'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R', 'GLASS_KEEP', 'WINDOW_R',
               'WINDSCREEN_X', 'WINDSCREEN_W', 'WINDSCREEN_H',
               'REAR_WINDOW_X', 'REAR_WINDOW_W', 'REAR_WINDOW_H',
@@ -171,6 +172,12 @@ def arrow_pieces():
     ]
 
 
+def skirt():
+    """The side wall: the body silhouette in a dark shade, drawn half a step DOWN the screen."""
+    return (body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
+            shade(CAR, K['SKIRT_SHADE']))
+
+
 def design():
     """The same three groups as `design()` in car-mesh.ts: under the roof, the roof, over it."""
     under = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
@@ -182,7 +189,7 @@ def design():
     rings = [{
         'pts': body_outline(1 - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
                             1 - K['DOME_NARROW'] * at),
-        'c': lighten(CAR, K['DOME_LIFT'] * at),
+        'c': CAR,       # nothing is lightened -- the crown is exactly the palette colour
         'tilt': tilt,
     } for at, tilt in PROFILE]
     glass = shade(rings[-1]['c'], K['GLASS_KEEP'])
@@ -285,7 +292,12 @@ def render(out_path):
                       min(1.0, n / (SS * SS)))
 
     under, rings, over = design()
-    drop = K['SHADOW_LIFT'] * math.tan(math.radians(-K['KEY_LIGHT_PITCH_DEG']))
+    wall_pts, wall_col = skirt()
+    throw = K['SHADOW_LIFT'] * math.tan(math.radians(-K['KEY_LIGHT_PITCH_DEG']))
+    # Half of SKIRT_DROP, in the same width-fractions everything else here is measured in: the
+    # top face goes up by it and the side wall down by it, so the two together span the footprint
+    # rather than one of them hanging a whole step off it.
+    lift = K['SKIRT_DROP'] / 2
     y0 = 0.0
     for (name, ln, wd), ch in zip(CAPS, Hs):
         cx0, cy0 = W / 2 * PPU, (y0 + ch / 2) * PPU
@@ -298,13 +310,18 @@ def render(out_path):
             # is a mirror of the device.
             return [(cx0 + x * ln * PPU, cy0 - y * wd * PPU) for x, y in pts]
 
-        # The drop shadow, offset in BOARD space -- down the screen, by the light's throw. Every
-        # car here is at zero heading, so board -Y is just -Y; on the board `addShadow` rotates
-        # the same board-space offset back through each car's own heading.
-        fill(to_px(ellipse(0, -drop / wd, 0.94, 1.08)), (0, 0, 0), SHADOW_ALPHA)
+        # Everything below is offset in BOARD space -- down the screen, where the light throws
+        # things. Every car here is at zero heading, so board -Y is just -Y; on the board
+        # `boardToLocal` rotates the same board-space offsets back through each car's heading.
+        def raise_(pts, dy):
+            return [(x, y + dy) for x, y in pts]
+
+        # The shadow is thrown from the top face, which is already `lift` up.
+        fill(to_px(ellipse(0, lift - throw / wd, 0.94, 1.08)), (0, 0, 0), SHADOW_ALPHA)
+        fill(to_px(raise_(wall_pts, -lift)), wall_col)                       # the side wall
 
         for pts, col in under:
-            fill(to_px(pts), col)
+            fill(to_px(raise_(pts, lift)), col)
 
         # The roof: each ring's vertices lit from their own tilted normal, then interpolated
         # across the bands between them. Bands and crown together tile the roof exactly, so they
@@ -314,7 +331,7 @@ def render(out_path):
         for ring in rings:
             lean = math.sin(math.radians(ring['tilt']))
             up = math.cos(math.radians(ring['tilt']))
-            shaded.append((to_px(ring['pts']),
+            shaded.append((to_px(raise_(ring['pts'], lift)),
                            [lit(ring['c'], (o[0] * lean, o[1] * lean, up), ln, wd)
                             for o in outwards(ring['pts'])]))
         for i in range(len(shaded) - 1):
@@ -330,7 +347,7 @@ def render(out_path):
         roof.composite()
 
         for pts, col in over:
-            fill(to_px(pts), lit(col, (0, 0, 1), ln, wd))
+            fill(to_px(raise_(pts, lift)), lit(col, (0, 0, 1), ln, wd))
         print(f'{name}: {ln} x {wd}')
         y0 += ch
 
@@ -347,7 +364,7 @@ def render(out_path):
     print(f'wrote {w}x{h} -> {out_path}')
     print(f'{len(under)} under + {len(rings)} roof rings + {len(over)} over, from {MESH}')
     print(f'light {tuple(round(v, 3) for v in LIGHT)}, ambient {AMBIENT}, '
-          f'shadow drop {drop:.3f} world units')
+          f'shadow throw {throw:.3f} world units, half-step {lift:.4f} of the car width')
 
 
 render(sys.argv[1] if len(sys.argv) > 1 else '.tmp/car-plan.png')

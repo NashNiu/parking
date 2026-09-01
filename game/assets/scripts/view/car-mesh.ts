@@ -12,16 +12,18 @@ import { Color, Mesh, primitives, utils } from 'cc';
  *
  * WHAT READS AS A CAR FROM DIRECTLY ABOVE, in the order the cues matter:
  *
- *   1. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- this is the whole depth
- *      cue, and the one thing here that is NOT baked.
- *   2. ONE hue. Dark rim, main colour, and whatever the light does to it. A second hue anywhere
- *      reads as a decal, not as form.
- *   3. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
+ *   1. A SIDE WALL. See SKIRT_DROP -- a dark band along the down-screen edge is the only
+ *      thing that says the car has THICKNESS, as opposed to being a rounded flat sticker.
+ *      Shading alone does not do it; that was tried and reported back as "still too flat".
+ *   2. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- not baked, unlike the rest.
+ *   3. ONE hue. Side wall, dark rim, main colour, and whatever the light does to it. A second
+ *      hue anywhere reads as a decal, not as form.
+ *   4. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
  *      hard point off. See the note on BODY_CORNER.
- *   4. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
+ *   5. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
  *      before the arrow does. It wants to be SMALL and PALE: a dark panel at real size reads as
  *      a hole punched in the roof, not as a window.
- *   5. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
+ *   6. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
  *      past its silhouette -- which is all a wheel is from above.
  *
  * WHY THE DEPTH HAS TO COME FROM THE LIGHT AND NOT FROM BAKED SHADING. A highlight on one side
@@ -100,20 +102,51 @@ const EDGE_SHADE = 0.52;
  * 0.57, AMPLIFIES the tilt by roughly 1.8x on the way to world space: 20 degrees in mesh space
  * arrives as about 33, and past 35 it saturates. Judge these by the render, never by the number.
  *
- * DOME_LIFT is insurance, not design: a small SYMMETRIC lightening toward the crown, so that if
- * the real lighting ever under-delivers -- a changed key light, an exposure change -- the car
- * keeps some form instead of going completely flat. Symmetric, so it survives being rotated.
- * Keep it subtle; it is the fallback, not the effect.
+ * NOTHING IS LIGHTENED HERE, and that is deliberate. The crown is EXACTLY the colour handed in,
+ * so a car and a passenger of the same colour resolve to the same albedo -- verified rather than
+ * assumed: both go through builtin-standard with the same PBR parameters, and both convert sRGB
+ * with the same `x * x` (Cocos uses gamma 2.0 on the CPU for a `linear: true` property and the
+ * identical curve in the shader's `SRGBToLinear`). An earlier version lightened the crown a
+ * little as insurance against the lighting under-delivering; the side wall covers that now, and
+ * it is worth more to have the car's own colour be the palette's colour and nothing else.
  */
 const DOME_NARROW = 0.36;
 const DOME_RISE = 0.03;
-const DOME_LIFT = 0.03;
 const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
     { at: 0.00, tilt: 32 },
     { at: 0.34, tilt: 22 },
     { at: 0.66, tilt: 11 },
     { at: 1.00, tilt: 0 },
 ];
+
+/**
+ * THE SIDE WALL: the one cue that says the car has height, and the reason it is built the way
+ * it is.
+ *
+ * Under an orthographic camera pointed straight at the board, a wall parallel to the view has
+ * exactly zero screen area -- height is not merely hard to see here, it is geometrically absent.
+ * So the wall is a FAKE, in the flat-illustration sense: the body's silhouette drawn again in a
+ * dark shade of its own colour and offset down the screen, so a band of it shows below the car.
+ * That reads as thickness in a way shading never will, which is what "still too flat" was about
+ * after the roof was already being lit.
+ *
+ * IT CANNOT BE BAKED INTO THE MESH, for the same reason the highlight cannot: down-the-screen is
+ * a board direction, and the mesh rotates with the car. So it is a second node, offset in board
+ * space (see `boardToLocal` in car-builder.ts), sharing this colour's material.
+ *
+ * THE OFFSET IS SPLIT, HALF EACH WAY -- the body up-screen, the wall down-screen -- rather than
+ * dropping the wall a whole step. That halves the amount by which the drawn car exceeds the
+ * footprint core reasons about, to SKIRT_DROP/2 of the car's width, which works out at about
+ * 0.04 board units: the same size as CLEARANCE, and a tenth of what the old standing models were
+ * out by. Getting that wrong is not cosmetic -- a picture that lies about the footprint breaks
+ * blocked/clear, the size hierarchy and tap picking all at once, which is the whole argument for
+ * the orthographic camera (see the README). Grow SKIRT_DROP and that bound grows with it.
+ *
+ * A FRACTION OF THE CAR'S WIDTH, not a world distance, so the three caps stay proportional and
+ * go on sharing one mesh.
+ */
+const SKIRT_DROP = 0.105;
+const SKIRT_SHADE = 0.34;
 
 /** Wheels, at (±x, ±y), drawn under the body so only the overhang shows. */
 const WHEEL_X = 0.30;
@@ -336,7 +369,7 @@ function design(color: Color): { under: Flat[]; rings: Ring[]; over: Flat[] } {
     const rings: Ring[] = DOME_PROFILE.map(({ at, tilt }) => ({
         pts: bodyOutline(1 - DOME_NARROW * ACROSS_TO_ALONG * at, 1 - DOME_NARROW * at),
         z: base + DOME_RISE * at,
-        c: lighten(color, DOME_LIFT * at),
+        c: color,
         tilt,
     }));
 
@@ -348,6 +381,44 @@ function design(color: Color): { under: Flat[]; rings: Ring[]; over: Flat[] } {
         ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE }) as Flat),
     ];
     return { under, rings, over };
+}
+
+/** How far down-screen the side wall sits, as a fraction of the car's width. */
+export function skirtDrop(): number {
+    return SKIRT_DROP;
+}
+
+const skirtCache = new Map<string, Mesh>();
+
+/**
+ * The car's side wall, as its own mesh: the body silhouette in a dark shade of the body colour,
+ * facing straight up so it is lit the same however the car is turned. See SKIRT_DROP for why it
+ * is a separate mesh on a separate node rather than another plate in `carMesh`.
+ *
+ * Same unit box and the same material as the body, so it costs one more instanced draw per
+ * colour and nothing else.
+ */
+export function carSkirtMesh(color: Color): Mesh {
+    const key = colourKey(color);
+    const hit = skirtCache.get(key);
+    if (hit) return hit;
+    const plan = new Plan();
+    plan.addFlat(bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), 0, shade(color, SKIRT_SHADE));
+    const mesh = utils.createMesh({
+        positions: plan.positions,
+        normals: plan.normals,
+        colors: plan.colors,
+        indices: plan.indices,
+        minPos: { x: -0.5, y: -0.5, z: 0 },
+        maxPos: { x: 0.5, y: 0.5, z: 0 },
+        boundingRadius: Math.sqrt(0.5),
+    });
+    skirtCache.set(key, mesh);
+    return mesh;
+}
+
+function colourKey(c: Color): string {
+    return `${c.r},${c.g},${c.b}`;
 }
 
 const meshCache = new Map<string, Mesh>();
@@ -367,7 +438,7 @@ const meshCache = new Map<string, Mesh>();
  * engine's key light does the rest; see DOME_PROFILE.
  */
 export function carMesh(color: Color): Mesh {
-    const key = `${color.r},${color.g},${color.b}`;
+    const key = colourKey(color);
     const hit = meshCache.get(key);
     if (hit) return hit;
 
