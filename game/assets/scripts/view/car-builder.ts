@@ -210,6 +210,42 @@ function scaleColor(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
 }
 
+/** Move `c` a fraction `t` of the way to white. */
+function lighten(c: Color, t: number): Color {
+    const up = (v: number): number => Math.round(v + (255 - v) * t);
+    return new Color(up(c.r), up(c.g), up(c.b), 255);
+}
+
+/**
+ * `paint` covers THREE stacked plates -- body, cabin, roof -- and giving all three the same
+ * colour is what makes the car read as one flat bar.
+ *
+ * Measured on car.glb, by rasterising each part's plan footprint in depth order and counting
+ * the cells nothing above it covers (the camera is orthographic and looks straight down, so
+ * that IS what is on screen):
+ *
+ *     roof_arrow  22% of the car     windshield   0%   <- under the roof plate in plan
+ *     body        45%                rear_window  0%   <- same
+ *     cabin       14%                hubcaps      0%   <- under the wheels
+ *     roof         4%                glass slivers 5%, tyres 4%, trim 5%
+ *
+ * So 64% of the car is body + cabin + roof, and they were all one colour. The model DOES layer
+ * its plan -- the plates step in as they rise -- but a single material threw that away. Paint
+ * them apart and the layering shows for free: no re-export, no geometry, three lines.
+ *
+ * Lighter as it rises, which reads as a cabin catching the light from a camera directly
+ * overhead. Going darker instead reads as grime.
+ */
+const CABIN_LIFT = 0.14;
+const ROOF_LIFT_COLOUR = 0.28;
+
+function paintRole(nodeName: string): 'cabin' | 'roof' | null {
+    const n = nodeName.toLowerCase();
+    if (n.includes('roof') && !n.includes('arrow')) return 'roof';
+    if (n.includes('cabin')) return 'cabin';
+    return null;
+}
+
 /**
  * Give every material slot on the car an INSTANCED material of the right colour.
  *
@@ -247,12 +283,19 @@ function scaleColor(c: Color, f: number): Color {
 function recolorCar(model: Node, color: Color): void {
     const paintMat = instancedLitMaterial(color);
     const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
+    const cabinMat = instancedLitMaterial(lighten(color, CABIN_LIFT));
+    const roofMat = instancedLitMaterial(lighten(color, ROOF_LIFT_COLOUR));
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
+        const plate = paintRole(mr.node.name);
         const mats = mr.sharedMaterials;
         for (let i = 0; i < mats.length; i++) {
             const m = mats[i];
             if (!m) continue;
-            if (matchesRole(m, 'paint')) mr.setMaterial(paintMat, i);
+            if (matchesRole(m, 'paint')) {
+                // Same material, three plates: see `paintRole`.
+                mr.setMaterial(plate === 'roof' ? roofMat
+                    : plate === 'cabin' ? cabinMat : paintMat, i);
+            }
             else if (matchesRole(m, 'glass')) mr.setMaterial(glassMat, i);
             else {
                 // Every other role keeps the colour the model gave it, and gains instancing.
