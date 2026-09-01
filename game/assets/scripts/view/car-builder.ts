@@ -5,7 +5,7 @@ import {
 import { Cap } from '../core/index';
 import { instancedLitMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
-import { mergeParts, roundedSlabPart, triPart, MeshPart } from './slabs';
+import { mergeParts, triPart } from './slabs';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -167,64 +167,48 @@ function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
  * Proportions are FRACTIONS of the car, not fixed sizes, because the three caps differ in
  * length by more than 2x and a fixed windscreen would swallow the small car.
  */
-const WINDOW = new Color(46, 54, 70, 255);
 const ROOF_LIFT = 0.01;
-const WINDSCREEN = { x: 0.20, w: 0.17, h: 0.66 };
-const REAR_WINDOW = { x: -0.31, w: 0.13, h: 0.58 };
-const ROOF_ARROW = { x: -0.03, w: 0.20, h: 0.36 };
 const DECAL_D = 0.02;
+/**
+ * The arrow, as fractions of the car: how far forward of centre it sits, and how much of the
+ * length and width it takes. Fractions rather than sizes because the three caps differ in
+ * length by more than 2x, and one number would either lose the arrow on the truck or bury
+ * the small car under it.
+ */
+const ROOF_ARROW = { x: 0.04, w: 0.30, h: 0.48 };
 
-const windowMeshes = new Map<string, Mesh>();
 const arrowMeshes = new Map<string, Mesh>();
 
-function sizeKey(len: number, wid: number): string {
-    return `${len.toFixed(3)},${wid.toFixed(3)}`;
-}
-
-/** Cached per car size -- there are only three caps, so this builds at most three of each. */
-function cached(store: Map<string, Mesh>, len: number, wid: number, make: () => MeshPart[]): Mesh {
-    const k = sizeKey(len, wid);
-    const hit = store.get(k);
-    if (hit) return hit;
-    const mesh = mergeParts(make());
-    store.set(k, mesh);
-    return mesh;
-}
-
 /**
- * Windscreen, rear window and direction arrow, laid flat on the roof.
+ * The arrow on the roof, and nothing else on it.
  *
- * Two meshes and two shared materials rather than one, because the glass is a fixed dark and
- * the arrow is white: one mesh could only carry one colour. Both are cached per size, so the
- * whole lot costs a handful of draw calls no matter how many cars are on the board.
+ * Windows were drawn here too for one build and taken out: at 40px a car cannot carry three
+ * marks, and a windscreen plus a rear window plus an arrow read as two dark blocks with a
+ * triangle between them rather than as a car. What the roof has to say is which colour the
+ * car is and which way it leaves -- and the body already says the first.
  *
- * The arrow points +X because that is where the car leaves: `buildCar` turns `body` by the
- * car's heading and the model's length already runs along body X, so this agrees with the
- * exit by construction, exactly as the baked arrow it replaces did.
+ * One mesh cached per car size (there are only three caps) and one shared white material, so
+ * the whole board costs about one draw call for all the arrows on it.
+ *
+ * It points +X because that is where the car leaves: `buildCar` turns `body` by the car's
+ * heading and the model's length already runs along body X, so this agrees with the exit by
+ * construction, exactly as the baked arrow it replaces did.
  */
 function roofDecal(body: Node, len: number, wid: number, hgt: number): void {
-    // Corner radius from each pane's OWN shorter side, never from the car: a fraction of the
-    // car can exceed half a pane's short side on the small cap, and a radius past half the
-    // side has no rounded rectangle to describe.
-    const pane = (f: { x: number; w: number; h: number }): MeshPart => {
-        const w = len * f.w, h = wid * f.h;
-        return roundedSlabPart(w, h, DECAL_D, Math.min(w, h) * 0.35, len * f.x, 0);
-    };
-    const glass = new Node('roof-glass');
-    const gm = glass.addComponent(MeshRenderer);
-    gm.mesh = cached(windowMeshes, len, wid, () => [pane(WINDSCREEN), pane(REAR_WINDOW)]);
-    gm.material = instancedLitMaterial(WINDOW);
-    gm.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
-    glass.setPosition(0, 0, hgt + ROOF_LIFT);
-    body.addChild(glass);
-
+    const key = `${len.toFixed(3)},${wid.toFixed(3)}`;
+    let mesh = arrowMeshes.get(key);
+    if (!mesh) {
+        mesh = mergeParts([
+            triPart(len * ROOF_ARROW.w, wid * ROOF_ARROW.h, DECAL_D, len * ROOF_ARROW.x, 0),
+        ]);
+        arrowMeshes.set(key, mesh);
+    }
     const arrow = new Node('roof-arrow');
-    const am = arrow.addComponent(MeshRenderer);
-    am.mesh = cached(arrowMeshes, len, wid, () => [
-        triPart(len * ROOF_ARROW.w, wid * ROOF_ARROW.h, DECAL_D, len * ROOF_ARROW.x, 0),
-    ]);
-    am.material = instancedLitMaterial(Color.WHITE);
-    am.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+    const mr = arrow.addComponent(MeshRenderer);
+    mr.mesh = mesh;
+    mr.material = instancedLitMaterial(Color.WHITE);
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+    // Clear of the roof, which is at z = hgt in body space (`lay` centres the model there).
     arrow.setPosition(0, 0, hgt + ROOF_LIFT);
     body.addChild(arrow);
 }
