@@ -117,7 +117,15 @@ const PAINT_TEAL = { r: 8, g: 143, b: 184 };
 const GLASS_NAVY = { r: 8, g: 18, b: 38 };
 
 function matchesRole(m: Material, role: 'paint' | 'glass'): boolean {
-    if ((m.name || '').toLowerCase().includes(role)) return true;
+    // A NAMED material is decided by its name ALONE, and the colour test is only for one whose
+    // name was stripped. That is not tidiness -- the colour test collides now that
+    // `readMainColor` actually works. The tyre reads (25, 28, 34) against GLASS_NAVY's
+    // (8, 18, 38), a distance of 31 against a threshold of 90, so a named `tire` would be
+    // taken for glass and painted a dark shade of the car's colour instead of near-black. The
+    // threshold cannot be tightened out of it either: a dark tyre and dark glass are genuinely
+    // close, which is exactly why the name has to win.
+    const name = (m.name || '').toLowerCase();
+    if (name) return name.includes(role);
     const c = readMainColor(m);
     if (!c) return false;
     const t = role === 'paint' ? PAINT_TEAL : GLASS_NAVY;

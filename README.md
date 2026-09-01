@@ -153,7 +153,15 @@ npm start          # 起一个本地静态服务
 - **一个「完整、新鲜、看起来没问题」的构建,可以是坏的 —— 白屏 + `Error 3817` 就是它**。构建在序列化场景时要去 **编辑器已编译的 chunk** 里查组件的类;项目冷启动时那些 chunk 还在写,日志里紧挨着的一行是 `... is not in module cache!`。**Cocos 不会因此让构建失败** —— 它往场景里写 `_components: [null]`,把其余任务全部跑完,产出一个文件齐全、时间新鲜、`game.js`/`game.json` 都在的目录。游戏于是启动即白屏,而唯一的线索是 `Error 3817 ... Arguments: GameController, 0`,引擎的意思是「index 0 那个组件是坏的,我把它删了」。
   **判断依据只能是构建日志**(`game/temp/builder/log/wechatgame*.log`),找 `is missing or invalid` / `Missing class:`;目录本身查不出来。实测 2026-08-31 当天 **9 次构建里坏了 1 次**,源码一个字没动 —— 是竞态,所以它多数时候会过,而且会在你什么都没改的时候失败。`tools/preview.mjs` 现在读日志把关,并且**只重试一次**(第一次构建已经把编辑器的类缓存烘热,第二次大概率就对了);两次都丢类就不是竞态,去 Creator 里找编译不过的脚本。
   排错时的三个坐标:场景源文件里组件是 `{"__id__": N}`、`main.scene` 里那个节点的 `__type__` 是压缩 uuid(前 5 位与 `.meta` 的 uuid 相同),而**构建产物**里 `assets/main/import/**.json` 那个节点的 `_components` 会是 `[null]` —— 三者一对,结论就没有第二种解释。
-- **`readMainColor` 读不到「导入进来的」材质颜色 —— 只查 `mainColor` 是不够的**。`builtin-standard` 把 `mainColor` 声明为 `target: albedo`,而 glTF 导入器建出来的材质**把值存在 target 名下**,于是 `getProperty('mainColor')` 在每个车材质上都是 undefined。后果:`recolorCar` 里那条 `?? WHITE` 兜底把 **lamp / taillamp / tire / hub 全画成了白色**,而模型文件里这四个都写了 `baseColorFactor`。它从 `5464f30` 起就这样,几版都没人发现,直到加了控制台警告才看见 —— **这就是「加一句 warn」比再读一遍代码值钱的地方**。现在按 `mainColor` → `albedo` → `diffuseColor` → `color` 依次试。
+- **导入进来的材质,颜色存在 `albedoScale` 里,不在 `albedo` 也不在 `mainColor`**。这条是靠控制台诊断问出来的,光看代码永远猜不到 —— 车材质自报:
+  ```
+  effect=builtin-standard passes=6 props=[metallic|roughness|occlusion|albedoScale] ×6
+  ```
+  **一个 `albedo` 都没有。** glTF 导入器把 `baseColorFactor` 写进了 **`albedoScale`**(那个乘在 albedo 上的 Vec3),而 `albedo` 本身留在白色默认值 —— 所以 `getProperty('mainColor')` 和 `getProperty('albedo')` 在每个车材质上都是 null,轮胎/轮毂/`trim` 因此走了那条 `?? WHITE` 兜底,持续了好几版。
+  **`albedoScale` 是线性值,必须转 sRGB**:读出来的颜色会立刻喂回 `instancedLitMaterial`,而它设的 `mainColor` 声明了 `linear: true` —— 引擎会再把 sRGB 转成线性。拿线性值当 sRGB 交出去,每个零件都会比模型里暗一截,轮毂上是 **149 对 202**。
+  兜底顺序:我们自己的材质(`mainColor`,sRGB)→ 导入的(`albedoScale`/`albedo`,线性)→ **pass 的 uniform**(GPU 实际读的值,躲不过去,注意 `passes=6`,不能只看 pass 0)。**从 uniform 读到白色时拒绝返回、继续报警** —— 白色恰好是 effect 默认值,和「根本没人设过」在数据上无法区分,返回它等于把一句诚实的「读不出来」换成一个自信的错答案。
+- **`matchesRole` 里,有名字的材质只按名字判,颜色只是无名时的兜底**。`readMainColor` 修好之后颜色判定会**撞车**:轮胎读出来是 (25, 28, 34),而 `GLASS_NAVY` 是 (8, 18, 38) —— 距离 31,阈值 90,于是一个叫 `tire` 的材质会被认成玻璃、涂上车身色的暗调而不是近黑。**阈值也调不出来**:深色轮胎和深色玻璃本来就近,所以只能让名字赢。
+- **审计必须在 `recolorCar` 之前跑**。`recolorCar` 会把 paint 槽换成一个新材质,名字是空的、颜色是这辆车的 —— 所以之后再审计永远认不出它,会把**每个**模型都报成「没有 paint」。第一版就是这么误报的。
 - **审计必须在 `recolorCar` 之前跑**。`recolorCar` 会把 paint 槽换成一个新材质,名字是空的、颜色是这辆车的 —— 所以之后再审计永远认不出它,会把**每个**模型都报成「没有 paint」。第一版就是这么误报的。
 - **车模必须是为「正交俯视」做的 —— 这个机位下只存在平面轮廓,高度什么都不买**。要被看见的东西,**平面上必须比车顶更宽**:车轮宽出车身、车身肩线宽出车顶、车窗朝上。
   第一套模型是为 3/4 视角做的,于是**九个部件里八个在这里看不见**。实测(模型单位,车顶在 1.63):挡风玻璃在 1.37、车灯 0.85、门槛 0.41、车轮 0.43 —— 全在车顶后面,只在轮廓外露出一条边:挡风玻璃 0.025、门槛 0.03、保险杠和车灯 0.09、车轮 0.28、轮毂 0.16。**车身两侧那些白色小短线就是轮毂的侧边。** 中间为此绕过三版(白盘子 → 深灰盘子 → 车身色 + 自绘车顶箭头),全都是在补一个模型层面的问题。

@@ -53,13 +53,28 @@ export function litMaterial(color: Color): Material {
  */
 type ColourLike = { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number };
 
-/** A property value as a Color, or null if it does not look like one. */
-function toColour(v: ColourLike | null | undefined): Color | null {
+/** Linear 0..1 to sRGB 0..1, the transfer function Cocos applies to a `linear: true` property. */
+function toSrgb(c: number): number {
+    return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+}
+
+/**
+ * A property value as a Color, or null if it does not look like one.
+ *
+ * `linear` says the value is in LINEAR space and has to be converted. It matters because the
+ * colour makes a round trip: what comes out of here goes straight into `instancedLitMaterial`,
+ * which sets `mainColor` -- and `mainColor` is declared `linear: true`, so the engine converts
+ * sRGB back to linear on the way in. Read a linear value, hand it over as if it were sRGB, and
+ * every part comes out darker than the model says. On the hub that is 149 against 202.
+ */
+function toColour(v: ColourLike | null | undefined, linear: boolean): Color | null {
     if (!v) return null;
-    const r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
+    let r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
     if (r == null || g == null || b == null) return null;
-    const s = (r <= 1 && g <= 1 && b <= 1) ? 255 : 1;
-    return new Color(Math.round(r * s), Math.round(g * s), Math.round(b * s), 255);
+    // A Color arrives as 0..255, a Vec3/Vec4 as 0..1.
+    if (r > 1 || g > 1 || b > 1) { r /= 255; g /= 255; b /= 255; }
+    if (linear) { r = toSrgb(r); g = toSrgb(g); b = toSrgb(b); }
+    return new Color(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255), 255);
 }
 
 const _uni = new Vec4();
@@ -67,36 +82,47 @@ const _uni = new Vec4();
 /**
  * The albedo a material will actually render with, or null if it cannot be read.
  *
- * TWO PLACES TO LOOK, because a material we built and a material the glTF importer built keep
- * their colour in different places.
+ * WHERE AN IMPORTED MATERIAL KEEPS ITS COLOUR, which took a console diagnostic to find and is
+ * not where anyone would look first. The car materials report:
  *
- * 1. `getProperty` -- but that only reads EXPLICIT overrides (`Material._props`), which is
- *    what our own `litMaterial` sets and, apparently, not where an imported car material's
- *    baseColorFactor ends up: it returned null for every one of them. Several names are tried
- *    because builtin-standard declares `mainColor` with `target: albedo`, so which key a
- *    setter used depends on the setter.
- * 2. The PASS's uniform, which is what the GPU will actually read. That is the truthful
- *    source and it cannot be bypassed.
+ *     effect=builtin-standard passes=6 props=[metallic|roughness|occlusion|albedoScale] x6
  *
- * A WHITE result from the pass is REJECTED rather than returned, and that is the important
- * part: white is exactly what the effect defaults to, so a white uniform cannot be told apart
- * from "nobody set anything". Returning it would replace an honest "I cannot read this" with a
- * confident wrong answer -- and the caller's whole job is to notice.
+ * No `albedo` and no `mainColor` anywhere -- the glTF importer writes baseColorFactor into
+ * **`albedoScale`**, the Vec3 that multiplies albedo, and leaves `albedo` itself at its white
+ * default. So `getProperty('mainColor')` and `getProperty('albedo')` both return null on every
+ * car material, which is what sent the tyres, hubs and trim down the WHITE fallback for
+ * several builds. `albedoScale` is a linear multiplier, so it needs converting; see `toColour`.
+ *
+ * Our OWN materials keep their colour in `mainColor` as an sRGB Color, so that is tried first
+ * and is not converted.
+ *
+ * The pass uniform is the last resort -- it is what the GPU actually reads, so nothing can hide
+ * from it -- and a WHITE result from it is REJECTED rather than returned: white is exactly the
+ * effect default, so a white uniform cannot be told apart from "nobody set anything". Returning
+ * it would replace an honest "I cannot read this" with a confident wrong answer, and noticing is
+ * the caller's whole job. Note `passes=6`, so the loop cannot assume pass 0 carries albedo.
  */
 export function readMainColor(m: Material): Color | null {
-    for (const name of ['mainColor', 'albedo', 'diffuseColor', 'color']) {
-        const c = toColour(m.getProperty(name) as ColourLike);
+    // Ours: sRGB, as set.
+    for (const name of ['mainColor', 'color']) {
+        const c = toColour(m.getProperty(name) as ColourLike, false);
         if (c) return c;
     }
-    const pass = m.passes?.[0];
-    if (!pass) return null;
-    for (const name of ['albedo', 'mainColor', 'diffuseColor']) {
-        const handle = pass.getHandle(name);
-        if (!handle) continue;
-        const c = toColour(pass.getUniform(handle, _uni));
-        if (!c) continue;
-        if (c.r === 255 && c.g === 255 && c.b === 255) continue;
-        return c;
+    // Imported: linear.
+    for (const name of ['albedoScale', 'albedo', 'diffuseColor']) {
+        const c = toColour(m.getProperty(name) as ColourLike, true);
+        if (c) return c;
+    }
+    const passes = m.passes ?? [];
+    for (const pass of passes) {
+        for (const name of ['albedoScale', 'albedo', 'mainColor']) {
+            const handle = pass.getHandle(name);
+            if (!handle) continue;
+            const c = toColour(pass.getUniform(handle, _uni), true);
+            if (!c) continue;
+            if (c.r === 255 && c.g === 255 && c.b === 255) continue;
+            return c;
+        }
     }
     return null;
 }
