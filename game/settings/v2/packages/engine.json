@@ -174,7 +174,7 @@
             "_value": true
           },
           "custom-pipeline-post-process": {
-            "_value": false
+            "_value": true
           },
           "render-pipeline": {
             "_value": true,
@@ -197,6 +197,7 @@
           "audio",
           "base",
           "custom-pipeline",
+          "custom-pipeline-post-process",
           "gfx-webgl",
           "intersection-2d",
           "light-probe",

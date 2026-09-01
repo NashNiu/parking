@@ -1,6 +1,7 @@
 import { generateLevel, levelParams, LOT, BLOCKED_TOLERANCE } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
+import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, LevelData } from '../../game/assets/scripts/core/types';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -144,6 +145,25 @@ test('a later level is measurably harder than the first, at the same size', () =
   expect(last.score).toBeGreaterThan(first.score);
 });
 
+test('every level above the colour floor beats the one-line rule, and stays winnable', () => {
+  // The contract of the painting search, and the reason it exists. "Keep the four stalls
+  // all different colours" used to win all ten shipped levels -- a rule a player states in
+  // one sentence, against a generator that was painting colours round-robin over the
+  // leaving order and so handing that rule over by construction.
+  //
+  // Both halves are needed. Hard without fair is a level with no way through; fair without
+  // hard is the level that plays itself. Below the floor neither is assertable: a bay that
+  // covers every colour cannot jam, so at UNLOCKED open stalls a level of that many colours
+  // or fewer is won by the one-line rule whatever the generator does. Those ids are teaching
+  // levels and this asserts nothing about them -- see levelParams.
+  for (const id of IDS) {
+    if (levelParams(id).colors <= 4) continue;
+    const verdict = isHardButFair(levelFor(id));
+    expect({ id, ...verdict, carelessLoss: undefined })
+      .toEqual({ id, hard: true, fair: true, carelessLoss: undefined });
+  }
+});
+
 test('the curve actually sets the blocked-car count, within its stated tolerance', () => {
   // The contract levelParams makes. Worth pinning because it was NOT true in the grid era
   // and is easy to lose again: the band has to sit on the range the packer produces, or the
@@ -184,11 +204,15 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
     const seats = level.lot.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0);
     expect(pax).toBe(seats);
-    // GROUP_SIZE (8) board per tick at 0.34s (GameController's TICK): 900 passengers is
-    // about 38 seconds of boarding, and a full 36-car lot runs 670-770 of them. The budget
-    // doubled with GROUP_SIZE, which is what a tick's boarding is capped at -- it is a
-    // budget on TIME, and the passengers now leave twice as fast.
-    expect(pax).toBeLessThanOrEqual(900);
+    // A budget on TIME, expressed in passengers, so it has to be re-derived every time
+    // either side of that conversion moves. Both have: GROUP_SIZE board per tick, and TICK
+    // halved to 0.17 when the carousel sped up. At 1000 passengers that is 250 ticks, about
+    // 42 seconds of boarding -- SHORTER than the 900 this replaces was at the old tick (76
+    // seconds), so the ceiling went up and the levels got quicker at the same time.
+    //
+    // A full 46-car lot runs around 900 of them, so this leaves headroom rather than sitting
+    // on the number the generator happens to produce.
+    expect(pax).toBeLessThanOrEqual(1000);
   }
 });
 

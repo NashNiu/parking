@@ -19,6 +19,25 @@ function soloLevel(): LevelData {
   };
 }
 
+/**
+ * Three green cars in a row and a queue with no green in it: nothing parked can ever fill,
+ * so the bay is a one-way street. Starts with 2 of 3 slots open, which is what lets a test
+ * fill the bay and still have something to unlock.
+ */
+function deadlockLevel(): LevelData {
+  return {
+    id: 5,
+    lot: { w: 4, h: 2, cars: [
+      { id: 1, x: -1.2, y: 0, angle: 90, color: 'green', cap: 'small' },
+      { id: 2, x: 0, y: 0, angle: 90, color: 'green', cap: 'small' },
+      { id: 3, x: 1.2, y: 0, angle: 90, color: 'green', cap: 'small' },
+    ] },
+    parking: { slots: 3, unlocked: 2 },
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 16 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+}
+
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
   expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
@@ -173,4 +192,90 @@ test('deadlock is detected when no progress is possible', () => {
   expect(game.getState()).toBe('deadlock');
   game.stepLoop(); // guarded no-op once state is no longer 'playing'
   expect(game.getState()).toBe('deadlock');
+});
+
+test('a full bay with a locked slot left is not a deadlock', () => {
+  // The player can still unlock, so the game is not over -- reporting deadlock here would
+  // end a level the player had a legal move in. Two colours the ring will never carry, so
+  // nothing parked can ever fill: the ONLY way out is the locked slot.
+  const level = deadlockLevel();
+  const core = new GameCore(level);
+  // Fill both starting slots with cars whose colour the queue does not contain.
+  expect(core.tapCar(1).ok).toBe(true);
+  expect(core.tapCar(2).ok).toBe(true);
+  core.stepLoop();
+  expect(core.parking.hasFreeSlot()).toBe(false);
+  expect(core.parking.canUnlock()).toBe(true);
+  expect(core.getState()).toBe('playing');
+  // Unlock, park the last one, and now there is nothing left to unlock.
+  expect(core.unlockSlot()).toBeGreaterThanOrEqual(0);
+  expect(core.tapCar(3).ok).toBe(true);
+  core.stepLoop();
+  expect(core.parking.canUnlock()).toBe(false);
+  expect(core.getState()).toBe('deadlock');
+});
+
+test('unlockSlot refuses once every slot is open', () => {
+  const core = new GameCore(deadlockLevel());
+  expect(core.unlockSlot()).toBe(2);
+  expect(core.unlockSlot()).toBe(-1);
+});
+
+test('needsUnlock names the state where opening a stall is the only move left', () => {
+  // The same position as "a full bay with a locked slot left is not a deadlock", asked the
+  // other way round. Core is right that it is not over -- and the player, watching a board
+  // where nothing changes, cannot tell the difference. This is what the view says so.
+  const core = new GameCore(deadlockLevel());
+  expect(core.needsUnlock()).toBe(false);   // slots free, nothing to say
+  expect(core.tapCar(1).ok).toBe(true);
+  expect(core.tapCar(2).ok).toBe(true);
+  core.stepLoop();
+  expect(core.getState()).toBe('playing');
+  expect(core.needsUnlock()).toBe(true);
+  // Opening one answers it, and the cue comes down.
+  expect(core.unlockSlot()).toBeGreaterThanOrEqual(0);
+  expect(core.needsUnlock()).toBe(false);
+});
+
+test('needsUnlock is false once the bay is beyond saving, so the banner speaks instead', () => {
+  // Deadlock and "waiting on an unlock" are the same jam with and without a stall to open,
+  // and they must never both be true: one asks the player to act, the other says it is over.
+  const core = new GameCore(deadlockLevel());
+  core.tapCar(1);
+  core.tapCar(2);
+  core.unlockSlot();
+  core.tapCar(3);
+  core.stepLoop();
+  expect(core.getState()).toBe('deadlock');
+  expect(core.needsUnlock()).toBe(false);
+});
+
+test('a bay that can still fill is not waiting on an unlock', () => {
+  // Full bay, no locked stall in the way of anything -- but the ring still carries the
+  // colour parked, so the level is moving on its own and has nothing to ask for.
+  const core = new GameCore(soloLevel());
+  expect(core.tapCar(1).ok).toBe(true);
+  expect(core.parking.hasFreeSlot()).toBe(true);
+  expect(core.needsUnlock()).toBe(false);
+});
+
+test('declining the unlock is what ends a level that still had a move in it', () => {
+  const core = new GameCore(deadlockLevel());
+  core.tapCar(1);
+  core.tapCar(2);
+  core.stepLoop();
+  expect(core.needsUnlock()).toBe(true);
+  expect(core.declineUnlock()).toBe(true);
+  expect(core.getState()).toBe('deadlock');
+  // Idempotent: a second answer to a question that is no longer being asked does nothing.
+  expect(core.declineUnlock()).toBe(false);
+});
+
+test('declineUnlock refuses on a position that is still moving', () => {
+  // The view could ask late -- a car can land between the prompt going up and the tap
+  // landing -- and a level must not be endable from a position the player could play on.
+  const core = new GameCore(soloLevel());
+  expect(core.needsUnlock()).toBe(false);
+  expect(core.declineUnlock()).toBe(false);
+  expect(core.getState()).toBe('playing');
 });

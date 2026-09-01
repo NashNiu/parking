@@ -12,12 +12,24 @@ import {
  * texture, white so it can be tinted, and shared by every node that asks for it.
  */
 
-/** Corner radius of the rounded frame, in texture pixels; also its 9-slice inset. */
-const RADIUS = 15;
-const ROUND_SIZE = RADIUS * 2 + 2; // 32, keeping the texture a power of two
 const DOT_SIZE = 32;
 
-let roundFrame: SpriteFrame | null = null;
+/**
+ * One rounded frame per corner radius asked for, painted on demand.
+ *
+ * It used to be a single 32px frame with a radius of 15 -- half its width, so the painted
+ * shape was very nearly a CIRCLE -- and `frameFrom` never set the 9-slice insets. A SLICED
+ * sprite with no insets has no border to protect: the whole texture is its centre, and the
+ * centre is stretched to the node's size. So every "rounded rectangle" on the HUD was in
+ * fact that circle stretched into an ELLIPSE. On a 210x88 pill that passes for a rounded
+ * pill and nobody looked twice; on a 520x380 dialog panel it is a white blob, which is what
+ * finally showed it.
+ *
+ * With the insets set, the radius is honoured in DESIGN UNITS whatever the node's size --
+ * which is the whole point of slicing, and also why the radius has to be a parameter now:
+ * one radius cannot suit both a 88-tall pill and a 420-tall panel.
+ */
+const roundFrames = new Map<number, SpriteFrame>();
 let dotFrame: SpriteFrame | null = null;
 
 /**
@@ -38,7 +50,7 @@ function paint(size: number, coverage: (x: number, y: number) => number): Uint8A
     return data;
 }
 
-function frameFrom(data: Uint8Array, size: number): SpriteFrame {
+function frameFrom(data: Uint8Array, size: number, inset = 0): SpriteFrame {
     const image = new ImageAsset({
         width: size,
         height: size,
@@ -58,14 +70,22 @@ function frameFrom(data: Uint8Array, size: number): SpriteFrame {
     frame.texture = tex;
     frame.originalSize = new Size(size, size);
     frame.rect = new Rect(0, 0, size, size);
+    // The 9-slice border. Without it a SLICED sprite has no corners to protect and stretches
+    // the whole texture -- see `roundFrames`.
+    frame.insetLeft = inset;
+    frame.insetRight = inset;
+    frame.insetTop = inset;
+    frame.insetBottom = inset;
     return frame;
 }
 
 /** Distance from a rounded rect's outline, positive inside: the classic corner-clamp trick. */
-function roundedCoverage(x: number, y: number): number {
-    const cx = Math.min(Math.max(x, RADIUS), ROUND_SIZE - RADIUS);
-    const cy = Math.min(Math.max(y, RADIUS), ROUND_SIZE - RADIUS);
-    return RADIUS - Math.hypot(x - cx, y - cy) + 0.5;
+function roundedCoverage(r: number, size: number): (x: number, y: number) => number {
+    return (x, y) => {
+        const cx = Math.min(Math.max(x, r), size - r);
+        const cy = Math.min(Math.max(y, r), size - r);
+        return r - Math.hypot(x - cx, y - cy) + 0.5;
+    };
 }
 
 function dotCoverage(x: number, y: number): number {
@@ -90,12 +110,27 @@ function spriteNode(
 }
 
 /**
- * A rounded rectangle `w`x`h`, tinted `color`. 9-sliced, so the corner radius stays the
- * same whatever size it is stretched to.
+ * A rounded rectangle `w`x`h`, tinted `color`, with corners of `radius` DESIGN UNITS.
+ *
+ * The default is half the shorter side, which draws a stadium -- straight sides, semicircular
+ * ends -- and is what every pill on the HUD wants. Pass a smaller radius for a panel, which
+ * wants corners rather than ends.
+ *
+ * The radius is also clamped to half the shorter side on the way in: a corner wider than the
+ * shape has no meaning, and the two clamped quarter-circles would meet in the middle and
+ * leave the slice's centre strip inside-out.
  */
-export function roundedSprite(name: string, w: number, h: number, color: Color): Node {
-    if (!roundFrame) roundFrame = frameFrom(paint(ROUND_SIZE, roundedCoverage), ROUND_SIZE);
-    return spriteNode(name, w, h, color, roundFrame, Sprite.Type.SLICED);
+export function roundedSprite(
+    name: string, w: number, h: number, color: Color, radius?: number,
+): Node {
+    const r = Math.max(2, Math.round(Math.min(radius ?? Math.min(w, h) / 2, Math.min(w, h) / 2)));
+    let frame = roundFrames.get(r);
+    if (!frame) {
+        const size = r * 2 + 2;
+        frame = frameFrom(paint(size, roundedCoverage(r, size)), size, r);
+        roundFrames.set(r, frame);
+    }
+    return spriteNode(name, w, h, color, frame, Sprite.Type.SLICED);
 }
 
 /** A filled circle of diameter `d`, tinted `color`. */

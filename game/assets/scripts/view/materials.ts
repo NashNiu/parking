@@ -43,24 +43,6 @@ export function litMaterial(color: Color): Material {
     return mat;
 }
 
-/**
- * Read a material's albedo as 0-255 RGB, tolerating a 0-1 (linear/Vec4) return.
- * Imported glTF materials answer `mainColor` in either range depending on how the
- * property was authored, so callers that compare against a known 0-255 reference
- * (car-builder's role detection) or rebuild a `litMaterial` from it (the passenger
- * model's non-recolored roles) must normalize first. Returns null if the material
- * has no readable `mainColor`.
- */
-export function readMainColor(m: Material): Color | null {
-    const v = m.getProperty('mainColor') as
-        { r?: number; g?: number; b?: number; x?: number; y?: number; z?: number } | undefined;
-    if (!v) return null;
-    const r = v.r ?? v.x, g = v.g ?? v.y, b = v.b ?? v.z;
-    if (r == null || g == null || b == null) return null;
-    const s = (r <= 1 && g <= 1 && b <= 1) ? 255 : 1;
-    return new Color(Math.round(r * s), Math.round(g * s), Math.round(b * s), 255);
-}
-
 /** Unlit solid color (for UI-ish bits that must stay bright regardless of lighting). */
 export function unlitMaterial(color: Color): Material {
     const mat = new Material();
@@ -180,5 +162,57 @@ export function instancedLitMaterial(color: Color): Material {
     }
     const result = mat ?? litMaterial(color);
     instancedCache.set(k, result);
+    return result;
+}
+
+const vertexColorCache = new Map<string, Material>();
+
+/**
+ * Lit, instanced, and taking its albedo from the MESH's vertex colours rather than from a
+ * uniform. `mainColor` stays white: builtin-standard computes `albedo *= v_color` under
+ * `USE_VERTEX_COLOR`, so white lets the baked colours through untouched.
+ *
+ * This is what the drawn car is painted with (see `car-mesh.ts`). A car needs a white arrow,
+ * near-black tyres and eight shades of its own paint in one object; as materials that is eleven
+ * renderers per car and nothing batching, and as vertex colours it is one renderer per car.
+ *
+ * KEYED BY COLOUR even though the material itself does not depend on it, and that is
+ * deliberate. `setEmissive` mutates a material in place, so every car sharing a material
+ * flashes together -- one material for the whole lot would flash all forty-six cars on a
+ * refused tap. Keyed per colour, the flash reaches the cars of one colour, exactly as it did
+ * when the body was painted with `instancedLitMaterial`. Draw calls are unaffected: the mesh
+ * is already per-colour, so instancing was never going to merge two colours anyway.
+ *
+ * Same zero-pass guard as the others: if builtin-standard builds no passes here, fall back to
+ * the plain lit material for the colour. That fallback loses the vertex colours -- the car
+ * comes out one flat shade -- so it warns rather than degrading in silence.
+ */
+export function vertexColorMaterial(color: Color): Material {
+    const k = key(color);
+    const hit = vertexColorCache.get(k);
+    if (hit) return hit;
+    let mat: Material | null = null;
+    const eff = EffectAsset.get('builtin-standard');
+    if (eff) {
+        const m = new Material();
+        try {
+            m.initialize({
+                effectAsset: eff,
+                defines: { USE_INSTANCING: true, USE_VERTEX_COLOR: true },
+            });
+            if (m.passes && m.passes.length > 0) {
+                m.setProperty('mainColor', Color.WHITE);
+                mat = m;
+            }
+        } catch {
+            mat = null;
+        }
+    }
+    if (!mat) {
+        console.warn(`[materials] vertex colours unavailable for ${k}; cars of this colour will`
+            + ' be drawn as one flat shade');
+    }
+    const result = mat ?? litMaterial(color);
+    vertexColorCache.set(k, result);
     return result;
 }

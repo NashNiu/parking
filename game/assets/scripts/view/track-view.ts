@@ -2,7 +2,7 @@ import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
-import { buildPaxFigure, recolorPaxFigure, setArmSwing } from './pax-figure';
+import { buildPaxDot, buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
     BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
     PaxGroup, TrackPath,
@@ -43,19 +43,104 @@ const BAND_DROP = 0.07;
  * lengths are legal (see validateTrack), so this does not change independently of
  * the track's geometry budget.
  */
+/**
+ * EXPERIMENT: draw each group as ONE dot instead of four figures.
+ *
+ * A measurement, not a proposal. It has already been settled that a group has to read as
+ * FOUR -- that is what retired the stand-them-up experiment -- so this is not a candidate to
+ * ship. What it buys is the answer to "how much of the frame is the crowd?": it takes the
+ * ring and the channels from 256 figures at 268 triangles each down to 54 dots at 72, about
+ * 69k triangles to 3.9k, and the per-frame node writes in `repositionAll` from 220 to 55.
+ *
+ * If the frame rate barely moves, the crowd is not what is costing the frame and the search
+ * moves elsewhere. If it jumps, the honest options are fewer GROUPS (a shorter ring) rather
+ * than fewer people per group.
+ *
+ * The dot is BLOCK.figure across, which is also blockLength -- so at seam 0 the dots just
+ * touch, and a ring of dots is exactly as long as the ring of rows it replaces.
+ *
+ * Set to true to price the crowd again. Boarding always flies real figures: `spawnPassenger`
+ * is untouched, both because the flight has to read and because it was not on the measurement.
+ *
+ * ANSWERED, on device, level 1 with a filled ring. Splitting the two speeds' frame times into
+ * a per-frame part and a per-tick part (frame = P + tickWork/fps, and 2x doubles the tick
+ * rate) gives:
+ *
+ *     256 figures   per-frame 14.93ms   tick work 254 ms/s
+ *      54 dots      per-frame 14.71ms   tick work 147 ms/s
+ *
+ * So DRAWING the crowd costs 0.2ms a frame -- nothing. Deleting 79% of the passenger
+ * geometry did not buy a frame; what it bought was PER-TICK work, 107 ms/s of it. Two
+ * consequences: simplifying the figures further is pointless, and there is a floor of about
+ * 14.8ms (~68fps) underneath all of this that is the rest of the scene, not the passengers.
+ * The tick is where the remaining work is, which is why the tag now prints it (`tickFps`).
+ */
+const ROW_AS_DOT = false;
+const OFFSET_SCRATCH_ZERO = { across: 0, along: 0 };
+
 const PAX_HEIGHT = 0.55;
 
 /**
- * Ring-figure arm swing, driven by the ring's own phase (`repositionAll`) rather than
- * a separate accumulator, so it advances with the ring's motion and stops when the
- * ring stops. `phaseHolder.p` sweeps a narrow range every tick (from -1/capacity up to
- * 0, see `update()`), so SWING_PHASE_SCALE blows that back up into a useful sweep of
- * the sine argument. SWING_STAGGER offsets each figure by its own mixed row/seat
- * index so a whole ring doesn't swing in lockstep like a marching toy.
+ * How much depth (+Z, toward the camera) a figure gains for every board unit it stands
+ * BELOW the top of the crowd -- so the lower a figure's feet, the nearer it is drawn, the
+ * way a crowd standing on a floor reads.
+ *
+ * Without it the figures are all at z = 0 and INTERPENETRATE, which is what a player sees
+ * as two groups smeared into each other. The cause is a mismatch core cannot see: a figure
+ * lies IN the board plane and is 0.55 tall (see `trackReach`), but `minRowGap` -- the check
+ * `capacityOptions` gates a ring length on -- models it as a 0.22 DOT at its feet. Rows are
+ * 0.33-0.38 apart, so a body reaches a row and a half past the point that was checked.
+ * Measured across the five shapes at their shipped capacities, 96-134 pairs of figures from
+ * DIFFERENT cells overlap on screen, the worst by 40-53% of a whole figure's area, and the
+ * checked gap (0.226-0.272) clears its 0.22 floor in every one of those cases. The check is
+ * not wrong about what it measures; it measures the wrong solid.
+ *
+ * Spacing cannot fix it: clearing a 0.55 body needs rows 0.55 apart, which is a ring of ~16
+ * instead of 24-28. Depth can, and it is free -- the camera is ORTHOGRAPHIC and the board is
+ * untilted (BOARD_TILT 0), so z moves nothing on screen. It only decides who is in front.
+ *
+ * 2.1 is the smallest value that separates every overlapping cross-cell pair on all five
+ * shapes THROUGH A WHOLE ROTATION. Sizing it at one phase is not enough and cost a round:
+ * 1.6 clears every pair in a still frame, but the ring turns, and swept over a full cell
+ * pitch the closest overlapping pair closes to 0.106 of board in y rather than the 0.14 a
+ * still frame shows -- so 714 of 98690 overlapping pairs still had less than a head (0.22)
+ * of depth between them at some point in the turn. That is a defect you can only see while
+ * it MOVES, which is exactly how it was reported. At 2.1 the count is zero.
+ *
+ * A second slope for the four figures WITHIN a row was measured and rejected. On the ring's
+ * flanks a row lies across the screen and its four heads overlap by design, all at the same
+ * depth; a per-seat ladder would separate them. But it trades against this one: at 2.1 with
+ * a seat ladder of 0.8, cross-cell interpenetration goes from 0 back up to 283, while
+ * same-row overlaps only fall from 19458 to 17481. Different colours smearing is the defect;
+ * one colour merging into its own silhouette is the design (see BLOCK in core). Do not
+ * spend the first to buy the second.
+ *
+ * The ring ends up 6.5 units deep, against a camera 15 away.
+ *
+ * STANDING THE FIGURES UP would have made this whole constant unnecessary, and it was tried
+ * and rejected -- do not propose it again without reading why. A quarter turn on the `fit`
+ * node sends the figure's own axis at the camera; the head is the widest part, so it hides
+ * the rest and each passenger draws as a ball. Geometrically it wins outright: cross-cell
+ * overlaps 98690 -> 5836, worst case 60% of a body -> a 5% graze, and `minRowGap` becomes
+ * TRUE rather than merely satisfied, since a ball seen end-on really is the 0.22 dot it
+ * measures. It was rejected on gameplay: a row of four balls does not read as FOUR, and how
+ * many a group holds is a number the player has to judge to know which car it can fill.
  */
-const SWING_AMPLITUDE_DEG = 22;
-const SWING_PHASE_SCALE = 40;
-const SWING_STAGGER = 0.7;
+const PAX_DEPTH = 2.1;
+
+/**
+ * There is no arm swing any more, and the arms are baked into the figure's one mesh (see
+ * ARM_POSE_DEG in pax-figure). It was the most expensive thing on the frame -- two node
+ * rotations per shown figure, so 224 writes on leaf renderer nodes at 28 cells and 384 at
+ * 48 -- and it needed its own node per arm, which is what kept a passenger at four
+ * renderers instead of one. The device was measured at 8fps against the simulator's 49.
+ *
+ * It had also been strobing rather than swinging, which is a separate bug worth not
+ * repeating: it was driven by `phaseHolder.p`, a SAWTOOTH reset every tick, so every arm
+ * swept and then snapped back 5.9 times a second -- a mean of 18 degrees and up to 29, on
+ * every figure at once. That fix (drive it from monotonic travel, not from the phase) is
+ * recorded in the README, and it is the fix to start from if the swing ever comes back.
+ */
 
 /** Identity shade — the active/undimmed case for `paintPassenger`. */
 const NO_SHADE = (c: Color): Color => c;
@@ -85,6 +170,13 @@ const LANE_RANK_STEP = (LANE.step - BLOCK.figure) / Math.max(1, RANKS - 1);
 const OFFSET_SCRATCH = { across: 0, along: 0 };
 
 /**
+ * Corner radius of a lane slab. Only its INNER end is ever seen now -- the outer end is
+ * drawn past the edge of the screen (see `buildLanes`) -- but the radius still has to be
+ * counted into how far past, or the rounding lands just inside the frame.
+ */
+const LANE_SLAB_R = 0.2;
+
+/**
  * How far the drawn ring reaches above and below its own origin, in board units.
  *
  * The camera frames the board off this (see `buildBoard`), so it has to be MEASURED rather
@@ -100,18 +192,56 @@ const OFFSET_SCRATCH = { across: 0, along: 0 };
  *
  * Only the top gets the figure height; the bottom edge of a row is its feet.
  */
-export function trackReach(path: TrackPath): { top: number; bottom: number } {
+export function trackReach(
+    path: TrackPath,
+): { top: number; bottom: number; left: number; right: number } {
     const SAMPLES = 240;
     const p = { x: 0, y: 0 };
     let top = -Infinity;
     let bottom = Infinity;
+    let left = Infinity;
+    let right = -Infinity;
     for (let i = 0; i < SAMPLES; i++) {
         path.pointAt(i / SAMPLES, p);
         if (p.y > top) top = p.y;
         if (p.y < bottom) bottom = p.y;
+        if (p.x < left) left = p.x;
+        if (p.x > right) right = p.x;
     }
     const across = blockSpan(GROUP_SIZE) / 2;
-    return { top: top + across + PAX_HEIGHT, bottom: bottom - across };
+    // `across` on all four sides -- a row straddles the centreline wherever it sits on the
+    // path. PAX_HEIGHT only on top, because a figure stands UP the board plane from its feet
+    // (see pax-figure), so it reaches further up than the row's own half-width but no further
+    // to either side.
+    return {
+        top: top + across + PAX_HEIGHT,
+        bottom: bottom - across,
+        left: left - across,
+        right: right + across,
+    };
+}
+
+/**
+ * How low the LEFT-hand feeder channel's rows hang, path-relative -- the floor of the empty
+ * band down the left of the carousel, which is where the speed button lives.
+ *
+ * Channels enter at the track's vertical middle (measured: y 0 on rect/hex/oval, -0.027 on
+ * trap), and their rows straddle that by half a block, so this comes out near -0.41 and the
+ * band below it is 1.25 units tall on every shipped level -- ample for a button 0.68 across.
+ *
+ * Capped at 0 so the band can never reach above the track's own centreline. Without the cap,
+ * a level fed only from the right has no left channel at all, the band becomes the whole left
+ * side, and a button centred in it climbs to the carousel's MIDDLE left -- not the bottom-left
+ * corner that was asked for.
+ */
+export function leftLaneFloor(path: TrackPath, capacity: number, channels: Channel[]): number {
+    const p = { x: 0, y: 0 };
+    let floor = 0;
+    for (const channel of channels) {
+        path.pointAt(channel.entry / capacity, p);
+        if (p.x < 0) floor = Math.min(floor, p.y - blockSpan(GROUP_SIZE) / 2);
+    }
+    return floor;
 }
 
 /**
@@ -126,10 +256,18 @@ export function trackReach(path: TrackPath): { top: number; bottom: number } {
  * turns as they travel; once at build time for the lanes, whose direction is fixed.
  */
 function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
+    // A row drawn as one thing sits on its own centre -- there is no block to spread out.
+    if (figures.length === 1) { figures[0].setPosition(0, 0, 0); return; }
     const ax = dy, ay = -dx;
     for (let i = 0; i < figures.length; i++) {
         const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
-        figures[i].setPosition(o.across * dx + o.along * ax, o.across * dy + o.along * ay, 0);
+        const oy = o.across * dy + o.along * ay;
+        // Depth from the figure's own y within the row, so the ramp holds INSIDE a row too.
+        // It has to: where the path runs horizontally the four abreast stack up the screen
+        // 0.20 apart, each 0.55 tall, and the same overlap appears within one group as
+        // between two. The row node carries the depth of its own y (see `depthAt`), and
+        // these compose because a row is never rotated.
+        figures[i].setPosition(o.across * dx + o.along * ax, oy, -oy * PAX_DEPTH);
     }
 }
 
@@ -154,6 +292,10 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
  */
 function makeRow(name: string): Node {
     const row = new Node(name);
+    if (ROW_AS_DOT) {
+        row.addChild(buildPaxDot(`${name}-0`, Color.WHITE, BLOCK.figure));
+        return row;
+    }
     for (let i = 0; i < GROUP_SIZE; i++) {
         row.addChild(makePassenger(`${name}-${i}`, Color.WHITE));
     }
@@ -195,6 +337,51 @@ const BAND_IDLE = new Color(211, 217, 231);
  */
 export class TrackView {
     private readonly path: TrackPath;
+    /**
+     * One walking-in row per side, reused for every entry (see `flierRow`), together with
+     * its four figure nodes so the layout does not re-walk `children` every tick.
+     *
+     * `flierCycleId` replaces the node-identity test the old per-tick row allowed: with a
+     * pooled node, "is this still my flier?" has to be a number. `flierOwns` is the CLUSTER
+     * (not the ring slot -- see `ringOffset`) a side has hidden, so an interrupted cycle can
+     * put its own one back; the old code did not need it because the interrupting cycle
+     * always hid the same node, which stops being true once two entries share one row.
+     */
+    /**
+     * How far cluster indices have drifted from ring slots: cluster `c` draws ring slot
+     * `(c + ringOffset) % capacity`.
+     *
+     * THIS IS THE FRAME-RATE FIX, and it is worth stating why the obvious mapping was the
+     * expensive one. `LoopSystem.step` rotates the ring by exactly +1 and MOVES the groups
+     * rather than rebuilding them, so with cluster c bound to slot c, every cluster holds a
+     * different colour every tick -- and a repaint is `MeshRenderer.material = ...`, which
+     * rebuilds the sub-model's passes and re-buckets it in the instancing buffer. Measured
+     * on device: 44 cells x 4 figures, about three quarters of them changing colour, cost
+     * 127 of the tick's 157 ms/s -- 21.5ms inside a single frame, six times a second.
+     *
+     * Advancing this offset with the ring instead means a cluster follows its own group, so
+     * its colour does not change at all. What changes per tick is only where it is DRAWN,
+     * and that was already recomputed every frame by `repositionAll`. Repaints drop to the
+     * two slots core actually touches: the one that empties at the gap and the one an
+     * entrance fills.
+     *
+     * Correctness does NOT rest on the +1 assumption -- `shownColor`/`shownCount` do. If the
+     * offset were ever wrong the comparison repaints, exactly as before; only the saving
+     * would be lost.
+     */
+    private ringOffset = 0;
+    /**
+     * What each cluster is currently showing, so a repaint only happens on a real change.
+     * Colour AND count, because a row loses figures one at a time as it boards.
+     */
+    private shownColor: (string | null)[] = [];
+    private shownCount: number[] = [];
+
+    private readonly flierRows: Record<FeedSide, Node | null> = { far: null, near: null };
+    private flierFigures: Record<FeedSide, Node[]> = { far: [], near: [] };
+    private readonly flierCycleId: Record<FeedSide, number> = { far: 0, near: 0 };
+    private readonly flierOwns: Record<FeedSide, number | null> = { far: null, near: null };
+
     private readonly capacity: number;
     private readonly boardIndex: number;
     /**
@@ -208,7 +395,19 @@ export class TrackView {
     /** loopRoot; needed to turn board-local path points into world positions. */
     private readonly root: Node;
     private readonly cy: number;
-    private readonly tick: number;
+    /**
+     * Board-local y of the HIGHEST feet on the track -- the zero of the depth ramp, so no
+     * figure is ever pushed to a negative z and behind the band it stands on (BAND_Z).
+     * `trackReach().top` adds a figure's height on top of the highest feet, which is exactly
+     * what has to come back off.
+     */
+    private readonly feetTop: number;
+    /**
+     * Seconds a rotation takes, which is also the tick the controller steps the core on --
+     * every animation in here is exactly one tick long so the drawing lands where the data
+     * already is. NOT readonly: the speed button changes it (see `setTick`).
+     */
+    private tick: number;
     /** Path parameters where the band opens up: the boarding gap and each entry. */
     private gapTs: number[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
@@ -227,9 +426,6 @@ export class TrackView {
     private phaseHolder = { p: 0 };
     private phaseTween: Tween<{ p: number }> | null = null;
 
-    /** The in-flight entry flier for each side, if any (see `playEntry`). */
-    private pendingFlier: Record<FeedSide, Node | null> = { far: null, near: null };
-
     /** Scratch for `point`/`normal`'s core-side sample; core's `Pt`, not a `Vec3`. */
     private readonly _pt = { x: 0, y: 0 };
     private readonly _nt = { x: 0, y: 0 };
@@ -237,6 +433,13 @@ export class TrackView {
     constructor(
         parent: Node, path: TrackPath, capacity: number, boardIndex: number,
         channels: Channel[], y: number, tick: number,
+        /**
+         * Visible half-width of the board, in board units -- what the camera actually
+         * shows across at this screen's shape, NOT the LANE.edgeLimit bound. The lanes
+         * are drawn out past it so they leave the screen rather than stopping short of
+         * it; see `buildLanes`.
+         */
+        private edgeX: number,
     ) {
         this.path = path;
         this.capacity = capacity;
@@ -244,6 +447,7 @@ export class TrackView {
         this.channels = channels;
         this.root = parent;
         this.cy = y;
+        this.feetTop = y + trackReach(path).top - PAX_HEIGHT;
         this.tick = tick;
         this.gapTs = [
             boardIndex / capacity,
@@ -259,6 +463,15 @@ export class TrackView {
         const p = this.path.pointAt(t, this._pt);
         out.set(p.x, this.cy + p.y, 0);
         return out;
+    }
+
+    /**
+     * Depth for a row (or a lone figure) whose feet are at board-local `y`. See PAX_DEPTH:
+     * lower on the board means nearer the camera, so the crowd occludes rather than
+     * interpenetrates. Zero at the top of the track and positive everywhere else.
+     */
+    private depthAt(y: number): number {
+        return (this.feetTop - y) * PAX_DEPTH;
     }
 
     /** Board-local outward normal at t: the core path's normal, unit length, in the x/y plane. */
@@ -277,6 +490,18 @@ export class TrackView {
     destroy(): void {
         this.phaseTween?.stop();
         this.phaseTween = null;
+        // The pooled entry rows are children of the board and die with it, but the
+        // references would outlive them -- and `flierRow` hands back whatever it holds.
+        // It re-checks isValid, so this is belt and braces; the cycle counters are not,
+        // since a stale one would let a dead callback re-show a slot on the next level.
+        for (const side of ['far', 'near'] as FeedSide[]) {
+            const row = this.flierRows[side];
+            if (row) Tween.stopAllByTarget(row);
+            this.flierRows[side] = null;
+            this.flierFigures[side] = [];
+            this.flierCycleId[side]++;
+            this.flierOwns[side] = null;
+        }
     }
 
     /**
@@ -343,7 +568,7 @@ export class TrackView {
             this.rowFigures.push(cluster.children.slice());
             const t = i / this.capacity;
             const p = this.point(t);
-            cluster.setPosition(p.x, p.y, 0);
+            cluster.setPosition(p.x, p.y, this.depthAt(p.y));
             cluster.active = false;
             parent.addChild(cluster);
             this.clusters.push(cluster);
@@ -358,11 +583,33 @@ export class TrackView {
      * is symmetric top to bottom. The trapezoid's entry sits on a slanted edge, so its
      * channel leaves at 15 degrees and everything here follows that automatically.
      *
-     * The outward reach is bounded: `dockX + BAND_HALF + LANE_START +
+     * The WAITING SLOTS are bounded: `dockX + BAND_HALF + LANE_START +
      * (lookahead - 1) * LANE_STEP + LANE.margin` must stay inside the visible
      * half-width (LANE.edgeLimit, 4.67). validateTrack enforces exactly that, against
      * the same constants (LANE.margin included, not a restated literal), so a level
      * that gets here already fits.
+     *
+     * The SLAB is not, and deliberately: it runs from the ring out PAST the edge of the
+     * screen. The shipped levels' slots stop 0.31 to 1.6 units short of the frame, which
+     * drew each channel as a rounded white tray floating with a gap beside it -- the queue
+     * looked like it ended there. A lane that leaves the screen reads as a queue that
+     * continues off it, which is the truth: level 1 has 744 more passengers to come.
+     *
+     * THE ROWS GO WITH IT. The queue continues out along the lane at the same pitch until
+     * a row's centre is past the frame edge, so the last one is cut off by the screen
+     * rather than by an arbitrary count -- which is what a queue arriving from off screen
+     * looks like. The colours are the real ones: `Channel.queue` already holds the whole
+     * remaining list for that channel, and `updateLanes` walks whatever rows exist, so
+     * this needs nothing from core.
+     *
+     * What it costs, and it is worth knowing rather than discovering: `lookahead` is a
+     * PURE DISPLAY LIMIT -- core never reads it, `step()` shifts the queue regardless --
+     * so it was the whole of the difficulty knob, and drawing to the edge maxes that knob
+     * out on every level. The shipped levels go from 5 rows to 7 (level 1) and from 3 to 9
+     * (level 10), and their authored 3/4/5 lookaheads stop being visible as a difference.
+     * If the ramp is wanted back, the honest lever is to keep drawing the crowd but stop
+     * committing its colours past `lookahead` -- desaturate those rows -- rather than to
+     * shorten the lane again.
      */
     private buildLanes(parent: Node): void {
         for (const channel of this.channels) {
@@ -377,20 +624,44 @@ export class TrackView {
                 0,
             );
             const span = LANE_STEP * (channel.lookahead - 1);
-            const slabW = span + LANE.margin * 2;
-            // Floor centred on the slots it carries, and turned to follow the lane so a
-            // tilted channel's slab tilts with it rather than sticking out square.
-            const mid = new Vec3(first.x + out.x * span / 2, first.y + out.y * span / 2, 0);
+            // Where the slab starts and ends, as distances along `out` from `first` (the
+            // innermost waiting slot). The inner end keeps its margin; the outer end is
+            // whichever is further, the slots' own margin or far enough out to be off
+            // screen. `OFF_SCREEN` covers the band's half-width and the slab's corner
+            // radius, so the rounded end is over the edge rather than just touching it.
+            const OFF_SCREEN = BAND_HALF + LANE_SLAB_R;
+            const inner = -LANE.margin;
+            let outer = span + LANE.margin;
+            // Distance along `out` at which the lane's centreline crosses the frame edge.
+            // Guarded: a channel leaving straight up or down would never cross it, and a
+            // side channel always does (its `out` is within 15 degrees of horizontal on
+            // every shipped shape).
+            if (Math.abs(out.x) > 1e-3) {
+                const toEdge = (Math.sign(out.x) * this.edgeX - first.x) / out.x;
+                outer = Math.max(outer, toEdge + OFF_SCREEN);
+            }
+            const slabW = outer - inner;
+            // Turned to follow the lane, so a tilted channel's slab tilts with it rather
+            // than sticking out square.
+            const mid = new Vec3(
+                first.x + out.x * (inner + outer) / 2,
+                first.y + out.y * (inner + outer) / 2,
+                0,
+            );
             const angle = Math.atan2(out.y, out.x) * 180 / Math.PI;
 
-            const shadow = makeShadowSlab(`lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, 0.2, 34);
+            const shadow = makeShadowSlab(
+                `lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, LANE_SLAB_R, 34,
+            );
             shadow.setPosition(mid.x, mid.y - BAND_DROP, BAND_Z - 0.06);
             shadow.setRotationFromEuler(0, 0, angle);
             parent.addChild(shadow);
 
             // Same white as the ring and as deep, so a channel reads as the track running
             // off to the side.
-            const slab = makeSlab(`lane-${channel.side}`, slabW, BAND_HALF * 2, 0.06, BAND, 0.2);
+            const slab = makeSlab(
+                `lane-${channel.side}`, slabW, BAND_HALF * 2, 0.06, BAND, LANE_SLAB_R,
+            );
             slab.setPosition(mid.x, mid.y, BAND_Z);
             slab.setRotationFromEuler(0, 0, angle);
             parent.addChild(slab);
@@ -399,7 +670,16 @@ export class TrackView {
             this.laneClusters[channel.side] = [];
             this.laneFigures[channel.side] = [];
             this.laneHome[channel.side] = [];
-            for (let i = 0; i < channel.lookahead; i++) {
+            // As many rows as the lane can carry before it leaves the screen, never fewer
+            // than the level asked for. `+ 2` so the run does not stop just short: one row
+            // straddling the edge and one fully past it, which is what makes the queue read
+            // as continuing rather than as ending in a neat last group.
+            let rows = channel.lookahead;
+            if (Math.abs(out.x) > 1e-3) {
+                const atEdge = (Math.sign(out.x) * this.edgeX - first.x) / out.x / LANE_STEP;
+                rows = Math.max(rows, Math.floor(atEdge) + 2);
+            }
+            for (let i = 0; i < rows; i++) {
                 const n = makeRow(`wait-${channel.side}-${i}`);
                 const figures = n.children.slice();
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
@@ -433,7 +713,8 @@ export class TrackView {
                 const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
                 for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
                 this.laneFigures[channel.side].push(figures);
-                n.setPosition(first.x + out.x * LANE_STEP * i, first.y + out.y * LANE_STEP * i, 0);
+                const ly = first.y + out.y * LANE_STEP * i;
+                n.setPosition(first.x + out.x * LANE_STEP * i, ly, this.depthAt(ly));
                 n.active = false;
                 parent.addChild(n);
                 this.laneClusters[channel.side].push(n);
@@ -443,16 +724,45 @@ export class TrackView {
     }
 
     /** Reflects ring contents (color/visibility) and advances the flow phase one step. */
-    update(ring: (PaxGroup | null)[], channels: Channel[]): void {
-        for (let i = 0; i < this.clusters.length; i++) {
-            const group = ring[i];
-            const cluster = this.clusters[i];
-            if (group) {
-                cluster.active = true;
-                paintRow(this.rowFigures[i], colorOf(group.color), group.count, NO_SHADE);
-            } else {
+    /**
+     * Retime every animation in here, for the speed button.
+     *
+     * Takes effect on the NEXT tick rather than reaching into the tweens already running.
+     * A rotation cut short mid-flight would snap the ring forward, and one stretched would
+     * still be moving when the core had already stepped past it -- and the whole reason
+     * every duration here equals the tick is that the drawing must land where the data is.
+     * One tick of the old timing after the tap is invisible; a snap is not.
+     */
+    setTick(tick: number): void {
+        this.tick = tick;
+    }
+
+    /**
+     * Reflect the ring's contents and start the tick's rotation.
+     *
+     * `rotated` says whether core stepped the loop since the last call -- true for a tick,
+     * false for the initial paint, which shows a ring nobody has rotated yet. It only moves
+     * `ringOffset`; getting it wrong would cost the saving described there, not correctness.
+     */
+    update(ring: (PaxGroup | null)[], channels: Channel[], rotated = true): void {
+        if (rotated) this.ringOffset = (this.ringOffset + 1) % this.capacity;
+        for (let c = 0; c < this.clusters.length; c++) {
+            const group = ring[this.slotOf(c)];
+            const cluster = this.clusters[c];
+            if (!group) {
                 cluster.active = false;
+                this.shownColor[c] = null;
+                continue;
             }
+            cluster.active = true;
+            // The whole point of `ringOffset`: with the cluster following its own group this
+            // is false for all but the one or two cells core actually changed this tick.
+            if (this.shownColor[c] === group.color && this.shownCount[c] === group.count) {
+                continue;
+            }
+            this.shownColor[c] = group.color;
+            this.shownCount[c] = group.count;
+            paintRow(this.rowFigures[c], colorOf(group.color), group.count, NO_SHADE);
         }
 
         // Absolute, never relative. The resting phase is 0 by definition, so each tick
@@ -476,8 +786,11 @@ export class TrackView {
     /**
      * Draw the head of each channel. The channel that is not feeding yet has a GREY FLOOR
      * (see BAND_IDLE), so "this one feeds next" is readable without a tutorial while every
-     * waiting passenger still shows its true colour. Only the head `channel.lookahead` are
-     * drawn; the rest are implied.
+     * waiting passenger still shows its true colour. How MANY are drawn is `buildLanes`'
+     * business -- as many as fit before the lane leaves the screen -- and this walks
+     * whatever rows it made, switching off the tail once the queue is shorter than the
+     * lane is long. That is also what makes the end of a level look right: the crowd
+     * thins from the back as the queue runs out.
      */
     private updateLanes(ring: (PaxGroup | null)[], channels: Channel[]): void {
         // The live channel is the first one still holding rows: drain order, not screen
@@ -545,9 +858,22 @@ export class TrackView {
             if (!n.isValid || !n.active) continue;
             const home = this.laneHome[active.side][i];
             Tween.stopAllByTarget(n);          // a tick can land before the last slide ends
-            n.setPosition(home.x + out.x * LANE_STEP, home.y + out.y * LANE_STEP, home.z);
+            // Depth from the SLID y, not `home.z`: a tilted channel slides partly up the
+            // board, and a row whose y moved has to take the depth that goes with it.
+            const sy = home.y + out.y * LANE_STEP;
+            n.setPosition(home.x + out.x * LANE_STEP, sy, this.depthAt(sy));
             tween(n).to(this.tick, { position: home.clone() }).start();
         }
+    }
+
+    /** Ring slot that cluster `c` currently draws. */
+    private slotOf(c: number): number {
+        return (c + this.ringOffset) % this.capacity;
+    }
+
+    /** The cluster drawing ring slot `slot` -- the inverse of `slotOf`. */
+    private clusterOf(slot: number): number {
+        return (slot - this.ringOffset + this.capacity) % this.capacity;
     }
 
     private repositionAll(): void {
@@ -556,9 +882,9 @@ export class TrackView {
             const cluster = this.clusters[i];
             // Guard against a tween tick landing after the board was destroyed on restart.
             if (!cluster || !cluster.isValid) continue;
-            const t = (i / this.capacity + phase) % 1;
+            const t = (this.slotOf(i) / this.capacity + phase) % 1;
             const p = this.point(t, REPOSITION_SCRATCH);
-            cluster.setPosition(p.x, p.y, 0);
+            cluster.setPosition(p.x, p.y, this.depthAt(p.y));
             // The row runs across the track, so its spread turns with the path. Rows
             // that are hidden this tick are skipped — nothing to lay out, and it keeps
             // the per-frame cost at the rows actually on screen.
@@ -566,16 +892,6 @@ export class TrackView {
             const n = this.normal(t, NORMAL_SCRATCH);
             const figures = this.rowFigures[i];
             layoutRow(figures, n.x, n.y, BLOCK.rankStep);
-            // The ring is moving and the channels are not — that contrast is what
-            // tells a player which one is which — so only ring figures swing, driven
-            // by the same phase that already moves them, and only the ones actually
-            // shown this tick (paintRow toggles `active` per seat).
-            for (let j = 0; j < figures.length; j++) {
-                if (!figures[j].active) continue;
-                const mixed = i * GROUP_SIZE + j;
-                const swing = Math.sin(phase * SWING_PHASE_SCALE + mixed * SWING_STAGGER) * SWING_AMPLITUDE_DEG;
-                setArmSwing(figures[j], swing);
-            }
         }
     }
 
@@ -602,13 +918,15 @@ export class TrackView {
         const local = this.point(t, new Vec3());
         const n = this.normal(t);
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
-        // was standing on rather than a point on the centreline.
-        const o = blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
-        local.set(
-            local.x + o.across * n.x + o.along * n.y,
-            local.y + o.across * n.y - o.along * n.x,
-            0,
-        );
+        // was standing on rather than a point on the centreline -- unless the group is drawn
+        // as one dot (ROW_AS_DOT), in which case the centreline IS where it stood.
+        const o = ROW_AS_DOT
+            ? OFFSET_SCRATCH_ZERO
+            : blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
+        const fy = local.y + o.across * n.y - o.along * n.x;
+        // Its depth too, or the flight starts at z = 0 while the figure it replaces was
+        // several units nearer -- which reads as the passenger jumping backwards on takeoff.
+        local.set(local.x + o.across * n.x + o.along * n.y, fy, this.depthAt(fy));
         const out = new Vec3();
         Vec3.transformMat4(out, local, this.root.worldMatrix);
         return out;
@@ -625,46 +943,85 @@ export class TrackView {
      */
     private playEntry(channel: Channel, group: PaxGroup): void {
         const { side, entry: index } = channel;
-        const slot = this.clusters[index];
+        // `entry` is a RING slot; the node drawing it is found through the offset.
+        const at = this.clusterOf(index);
+        const slot = this.clusters[at];
         const from = this.laneHome[side][0];
         if (!slot || !slot.isValid || !from) return;
 
         // The flier's tween and the tick are both exactly `this.tick` long, and
         // `tickAcc`'s leftover usually fires the next tick a frame before this one
         // lands -- so a second hole can reach this entrance while the previous
-        // flier is still in flight. Stop and drop it now so its completion callback
-        // (below) can't re-show `slot` after this cycle has already hidden it again.
-        const stale = this.pendingFlier[side];
-        if (stale) {
-            Tween.stopAllByTarget(stale);
-            if (stale.isValid) stale.destroy();
-            this.pendingFlier[side] = null;
+        // flier is still in flight. Take it over rather than replace it: the row is
+        // POOLED (see `flierRow`), so there is one node per side and the newer cycle
+        // simply stops the tween on it and starts its own. `flierCycleId` is what tells
+        // the two apart now that node identity cannot -- see the callback below.
+        const flier = this.flierRow(side);
+        Tween.stopAllByTarget(flier);
+        const cycle = ++this.flierCycleId[side];
+        const owned = this.flierOwns[side];
+        if (owned !== null && owned !== at) {
+            // The cycle we are interrupting had hidden a DIFFERENT slot. Put it back,
+            // or it stays invisible for the rest of the level.
+            const prev = this.clusters[owned];
+            if (prev && prev.isValid) prev.active = true;
         }
+        this.flierOwns[side] = at;
 
         slot.active = false;
         // A whole row walks in, laid out the way it will rest once it joins the track,
         // so the hand-off to the real row at the end is invisible.
-        const flier = makeRow('pax-enter');
-        const figures = flier.children.slice();
+        const figures = this.flierFigures[side];
         const entryT = index / this.capacity;
         const n = this.normal(entryT);
         layoutRow(figures, n.x, n.y, BLOCK.rankStep);
         paintRow(figures, colorOf(group.color), group.count, NO_SHADE);
         flier.setPosition(from);
-        this.root.addChild(flier);
-        this.pendingFlier[side] = flier;
+        flier.active = true;
+        // The resting spot AND its depth: the flier hands over to the real row at the end,
+        // and a hand-off between two different depths shows as a pop in who occludes whom.
+        const rest = this.point(index / this.capacity);
+        rest.z = this.depthAt(rest.y);
         tween(flier)
-            .to(this.tick, { position: this.point(index / this.capacity) })
+            .to(this.tick, { position: rest })
             .call(() => {
-                // Only re-activate the slot if this flier is still the pending one
-                // for this side -- if not, a newer playEntry already stopped and
-                // destroyed it (see above), and that newer cycle owns `slot` now.
-                if (this.pendingFlier[side] === flier) {
-                    this.pendingFlier[side] = null;
-                    if (slot.isValid) slot.active = true;
-                }
-                if (flier.isValid) flier.destroy();
+                // Only hand `slot` back if this cycle is still the current one: a newer
+                // playEntry may have taken the pooled row over (see above), and that
+                // cycle owns the slot -- and the row -- now.
+                if (this.flierCycleId[side] !== cycle) return;
+                this.flierOwns[side] = null;
+                if (slot.isValid) slot.active = true;
+                if (flier.isValid) flier.active = false;
             })
             .start();
+    }
+
+    /**
+     * The pooled walking-in row for one side, built on first use.
+     *
+     * It used to be a fresh `makeRow` every tick, destroyed when it landed: four Nodes and
+     * four MeshRenderers created and torn down per tick per feeding channel. A MeshRenderer
+     * is not a cheap object -- it brings up a scene Model, a sub-model and its descriptor
+     * sets -- and the cost lands in one lump inside a single frame, which is the shape of a
+     * stutter rather than a lower average.
+     *
+     * That is also why DOUBLE SPEED felt worse than half the frame rate would explain: the
+     * per-frame work is unchanged by the speed button, but this ran once per TICK, so 2x
+     * doubled it. Measured on device: 40fps at 1x, 30fps at 2x, on a filled ring.
+     *
+     * Two rows for the whole level now, hidden between entries. `playBoarding` in
+     * GameController still spawns its fliers per boarding and could get the same treatment;
+     * it is left alone because boarding needs a matching car at the gap, so unlike this it
+     * does not fire every tick.
+     */
+    private flierRow(side: FeedSide): Node {
+        let row = this.flierRows[side];
+        if (row && row.isValid) return row;
+        row = makeRow(`pax-enter-${side}`);
+        row.active = false;
+        this.root.addChild(row);
+        this.flierRows[side] = row;
+        this.flierFigures[side] = row.children.slice();
+        return row;
     }
 }

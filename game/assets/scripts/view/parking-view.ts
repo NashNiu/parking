@@ -1,6 +1,8 @@
 import { Node, Color, Vec3, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
 import { flatMaterial } from './materials';
-import { makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, MeshPart } from './slabs';
+import {
+    makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, triPart, MeshPart,
+} from './slabs';
 import { SHADOW_Z } from './scene-stage';
 import { CAP_BOX, CAR_SCALE } from '../core/index';
 
@@ -141,6 +143,20 @@ const LOCK_SHACKLE = new Color(150, 162, 194);
 /** Warning tint for `pulse`: amber, not red -- a full bay is a wait, not a mistake. */
 const PULSE = new Color(255, 176, 64);
 
+/**
+ * The play triangle under the padlock on the next stall a tap would open. Sized and placed
+ * in the same reference units as the padlock (see GLYPH_REF_W), so it scales with it.
+ *
+ * A triangle rather than a word because the board draws meshes, not text -- everything up
+ * here is procedural geometry. It is the same shape the reference art puts on its unlock
+ * button, which is what makes it read as "tap this" rather than as decoration.
+ */
+const CUE_W = 0.19;
+const CUE_H = 0.20;
+const CUE_Y = -0.30;
+const CUE = new Color(255, 255, 255, 255);
+
+
 export class ParkingView {
     private positions: Vec3[] = [];
     /** The bay panel, kept so `pulse` can draw the eye to it. */
@@ -148,6 +164,14 @@ export class ParkingView {
     /** This board's stall box, and the trim scale that goes with it. */
     private readonly box: StallBox;
     private readonly g: number;
+    /**
+     * One node per stall, holding everything drawn for it. Stalls are redrawn in place when
+     * one is unlocked, and a node per stall is what makes that a destroy-and-rebuild of a
+     * subtree rather than a hunt through `parent`'s children by name.
+     */
+    private stalls: Node[] = [];
+    /** How many stalls are open. Grows with `openSlot`; see `nextLocked`. */
+    private open: number;
 
     constructor(
         private parent: Node,
@@ -158,6 +182,7 @@ export class ParkingView {
     ) {
         this.box = stallFootprint(scale);
         this.g = this.box.w / GLYPH_REF_W;
+        this.open = unlocked;
     }
 
     render(): void {
@@ -179,79 +204,129 @@ export class ParkingView {
         this.panel = panel;
 
         for (let i = 0; i < this.slots; i++) {
-            const locked = i >= this.unlocked;
             const pos = new Vec3(startX + i * pitch, this.y, 0);
-
-            if (locked) {
-                // Same rim-and-pad build as an open stall, just dimmer, so the row reads as
-                // seven slots rather than four slots and three holes.
-                const rim = makeSlab(
-                    `slot-rim-${i}`, slotW, slotH, 0.06, RIM_LOCKED, PAD_R * g,
-                );
-                rim.setPosition(pos.x, pos.y, RIM_Z);
-                this.parent.addChild(rim);
-
-                const pad = makeSlab(
-                    `slot-${i}`, slotW - 2 * RIM * g, slotH - 2 * RIM * g, 0.06,
-                    PAD_LOCKED, (PAD_R - RIM) * g,
-                );
-                pad.setPosition(pos.x, pos.y, PAD_Z);
-                this.parent.addChild(pad);
-
-                // The whole glyph goes under one node scaled by `g`, so the four pieces
-                // keep their measured relationship to each other (see LOCK_BODY_Y) at any
-                // board scale, and their z order with it.
-                const lock = new Node(`lock-${i}`);
-                lock.setPosition(pos.x, pos.y, 0);
-                lock.setScale(g, g, g);
-                this.parent.addChild(lock);
-
-                const sh = new Node('shackle');
-                const smr = sh.addComponent(MeshRenderer);
-                smr.mesh = utils.createMesh(primitives.torus(
-                    LOCK_SHACKLE_R, LOCK_SHACKLE_TUBE, { radialSegments: 16, tubularSegments: 8 },
-                ));
-                smr.material = flatMaterial(LOCK_SHACKLE);
-                smr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
-                sh.setPosition(0, LOCK_SHACKLE_Y, LOCK_SHACKLE_Z);
-                sh.setRotationFromEuler(90, 0, 0);
-                lock.addChild(sh);
-
-                const body = makeSlab(
-                    'lockbody', LOCK_BODY_W, LOCK_BODY_H, 0.1, LOCK_BODY, LOCK_BODY_R,
-                );
-                body.setPosition(0, LOCK_BODY_Y, LOCK_BODY_Z);
-                lock.addChild(body);
-
-                // Keyhole: a disc over a tapering slot, in the PAD's own colour so it reads
-                // as punched through the body rather than painted on it. One merged mesh --
-                // the two parts share a colour and a depth, so they share a draw call.
-                const key: MeshPart[] = [
-                    roundedSlabPart(0.09, 0.09, 0.06, 0.045, 0, 0.015),
-                    boxPart(0.035, 0.075, 0.06, 0, -0.045),
-                ];
-                const keyhole = makeMerged('lockkey', key, PAD_LOCKED);
-                keyhole.setPosition(0, LOCK_BODY_Y, LOCK_KEY_Z);
-                lock.addChild(keyhole);
-            } else {
-                // An open stall is two nested slabs: the light rim shows as a border
-                // because the dark pad on top of it is inset by RIM on every side. Two
-                // draw calls instead of the four edge strips this replaces.
-                const rim = makeSlab(
-                    `slot-rim-${i}`, slotW, slotH, 0.06, PAD_RIM, PAD_R * g,
-                );
-                rim.setPosition(pos.x, pos.y, RIM_Z);
-                this.parent.addChild(rim);
-
-                const pad = makeSlab(
-                    `slot-${i}`, slotW - 2 * RIM * g, slotH - 2 * RIM * g, 0.06, PAD,
-                    (PAD_R - RIM) * g,
-                );
-                pad.setPosition(pos.x, pos.y, PAD_Z);
-                this.parent.addChild(pad);
-            }
+            const stall = new Node(`stall-${i}`);
+            this.parent.addChild(stall);
+            this.stalls.push(stall);
             this.positions.push(pos);
+            this.drawStall(i);
         }
+    }
+
+    /**
+     * Draw stall `i` from scratch: rim and pad always, and the padlock when it is still
+     * locked. Called by `render` and again by `openSlot`, which is why it clears the node
+     * first -- redrawing over the old slabs would leave two rims fighting for the same
+     * depth.
+     *
+     * The NEXT stall to open is the only locked one that gets the play triangle. Unlocking
+     * runs in order (see ParkingSystem.unlock: `parked.length` is the unlocked count, so
+     * the stall that opens is always the leftmost locked one), and putting the affordance
+     * on any other stall would promise something the tap does not do.
+     */
+    private drawStall(i: number): void {
+        const { w: slotW, h: slotH } = this.box;
+        const g = this.g;
+        const root = this.stalls[i];
+        if (!root || !root.isValid) return;
+        for (const child of root.children.slice()) child.destroy();
+        const pos = this.positions[i];
+        const locked = i >= this.open;
+
+        // Same rim-and-pad build either way, just dimmer when locked, so the row reads as
+        // seven slots rather than four slots and three holes. An open stall is two nested
+        // slabs: the light rim shows as a border because the dark pad on top of it is inset
+        // by RIM on every side. Two draw calls instead of the four edge strips it replaces.
+        const rim = makeSlab(
+            `slot-rim-${i}`, slotW, slotH, 0.06, locked ? RIM_LOCKED : PAD_RIM, PAD_R * g,
+        );
+        rim.setPosition(pos.x, pos.y, RIM_Z);
+        root.addChild(rim);
+
+        const pad = makeSlab(
+            `slot-${i}`, slotW - 2 * RIM * g, slotH - 2 * RIM * g, 0.06,
+            locked ? PAD_LOCKED : PAD, (PAD_R - RIM) * g,
+        );
+        pad.setPosition(pos.x, pos.y, PAD_Z);
+        root.addChild(pad);
+        if (!locked) return;
+
+        // The whole glyph goes under one node scaled by `g`, so the pieces keep their
+        // measured relationship to each other (see LOCK_BODY_Y) at any board scale, and
+        // their z order with it.
+        const lock = new Node(`lock-${i}`);
+        lock.setPosition(pos.x, pos.y, 0);
+        lock.setScale(g, g, g);
+        root.addChild(lock);
+
+        const sh = new Node('shackle');
+        const smr = sh.addComponent(MeshRenderer);
+        smr.mesh = utils.createMesh(primitives.torus(
+            LOCK_SHACKLE_R, LOCK_SHACKLE_TUBE, { radialSegments: 16, tubularSegments: 8 },
+        ));
+        smr.material = flatMaterial(LOCK_SHACKLE);
+        smr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+        sh.setPosition(0, LOCK_SHACKLE_Y, LOCK_SHACKLE_Z);
+        sh.setRotationFromEuler(90, 0, 0);
+        lock.addChild(sh);
+
+        const body = makeSlab(
+            'lockbody', LOCK_BODY_W, LOCK_BODY_H, 0.1, LOCK_BODY, LOCK_BODY_R,
+        );
+        body.setPosition(0, LOCK_BODY_Y, LOCK_BODY_Z);
+        lock.addChild(body);
+
+        // Keyhole: a disc over a tapering slot, in the PAD's own colour so it reads as
+        // punched through the body rather than painted on it. One merged mesh -- the two
+        // parts share a colour and a depth, so they share a draw call.
+        const key: MeshPart[] = [
+            roundedSlabPart(0.09, 0.09, 0.06, 0.045, 0, 0.015),
+            boxPart(0.035, 0.075, 0.06, 0, -0.045),
+        ];
+        const keyhole = makeMerged('lockkey', key, PAD_LOCKED);
+        keyhole.setPosition(0, LOCK_BODY_Y, LOCK_KEY_Z);
+        lock.addChild(keyhole);
+
+        if (i !== this.open) return;
+        // Play triangle under the padlock: this is the one a tap opens. Three points and a
+        // merged mesh rather than a sprite, like everything else on the board.
+        const cue = makeMerged(`unlock-cue-${i}`, [triPart(CUE_W, CUE_H, 0.06, 0, CUE_Y)], CUE);
+        cue.setPosition(pos.x, pos.y, LOCK_KEY_Z);
+        root.addChild(cue);
+    }
+
+    /**
+     * The next stall a tap would open, or -1 when they are all open. Mirrors
+     * ParkingSystem.canUnlock -- the view keeps its own count because it is redrawing, not
+     * deciding, and asking core for it would put a core reference in a drawing class.
+     */
+    nextLocked(): number {
+        return this.open < this.slots ? this.open : -1;
+    }
+
+    /**
+     * Whether `local` (parkingRoot-local, which is board-local: the root sits at the
+     * origin) is inside the next locked stall. Only that one is a target -- see
+     * `drawStall`.
+     */
+    hitsNextLocked(local: Vec3): boolean {
+        const i = this.nextLocked();
+        if (i < 0) return false;
+        const pos = this.positions[i];
+        if (!pos) return false;
+        return Math.abs(local.x - pos.x) <= this.box.w / 2
+            && Math.abs(local.y - pos.y) <= this.box.h / 2;
+    }
+
+    /**
+     * Redraw stall `index` as open, and move the play triangle to the next locked one.
+     * `index` is what ParkingSystem.unlock returned, so the two counts cannot drift.
+     */
+    openSlot(index: number): void {
+        if (index < 0 || index >= this.slots || index < this.open) return;
+        this.open = index + 1;
+        this.drawStall(index);
+        if (this.open < this.slots) this.drawStall(this.open);
     }
 
     /** World position of a usable slot (parkingRoot sits at the origin). */

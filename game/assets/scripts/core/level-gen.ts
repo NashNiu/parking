@@ -3,6 +3,7 @@ import {
     CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, CLEARANCE, Feed, LevelData, Lot, QueueGroup,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
+import { isHardButFair } from './play-sim';
 import { pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -21,7 +22,14 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
 /**
  * The lot, in board units.
  *
- * 7 x 8, PORTRAIT, and the shape is the whole point: it is what the cars are drawn at.
+ * 8 x 8. Square, and the width is a MEASURED fit rather than a round number: the view sizes
+ * one board unit from whichever budget is tighter, and on a phone that is the HEIGHT (1.032
+ * against 1.0325 across), so widening the lot costs the cars nothing. At 8 the car area comes
+ * out 8.416 wide against a slab of 8.720 -- the difference is exactly the slab's own 0.3
+ * border. At 7 the cars filled 7.364 of that same slab and left 0.37 of bare asphalt down
+ * each side, which is what "the lot is not full" looked like.
+ *
+ * It was 7 x 8, PORTRAIT, and the shape was the whole point: it is what the cars are drawn at.
  * The board is framed by its WIDTH (see `viewFrame` in GameController), so a phone's
  * spare height is only worth anything to a lot that is willing to use it. Measured on a
  * 1170x2532 phone, against the 9 x 6 this replaces: the cars draw 31% bigger and the
@@ -42,9 +50,9 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * this is exactly the ring of side air a square cell left around an oblong car.
  *
  * Both dimensions have to clear the longest body (CAP_BOX.big at 1.949) with room for it
- * to turn, which 7 does with 3.6x over.
+ * to turn, which 8 does with 4.1x over.
  */
-export const LOT: Lot = { w: 7, h: 8 };
+export const LOT: Lot = { w: 8, h: 8 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -113,15 +121,23 @@ export interface GenParams {
  * each one owes its neighbours the packer is working at about 55%: full, with the loose
  * board a player needs to see a way into it.
  *
- * 36 rather than more because the last few cars cost the most. Random rotated rectangles
- * stop separating reliably somewhere past this, and an attempt that cannot separate them
- * is a wasted attempt (see `pack`), so the count stops being flat. Denser is also a
- * worse-looking lot -- with no gaps left, nothing reads as a route.
+ * 46, up from 36, and the lot grew from 56 square units to 64 at the same time -- so this is
+ * a real densening (0.72 cars per unit against 0.64), not just a bigger lot carrying the same
+ * traffic. Both halves were asked for together, and one without the other is worse than
+ * neither: more cars in the old lot stops packing, a wider lot at the old count reads emptier
+ * than before.
  *
- * Passengers are the other ceiling: 36 cars run 670-770 of them, which at GROUP_SIZE (8) a
- * tick is about 90 ticks of boarding, half a minute. The generator's tests hold it to 900.
+ * The count is still bounded by the packer, not by taste. The last few cars cost the most --
+ * random rotated rectangles stop separating reliably somewhere past this, and an attempt that
+ * cannot separate them is a wasted attempt (see `pack`). The gate is the generator's own test
+ * that every car asked for is actually placed; if this number is raised until that fails, it
+ * has been raised too far.
+ *
+ * Passengers are the other ceiling, and it moved: 46 cars run around 900 of them, which at
+ * GROUP_SIZE a tick is about 225 ticks. That used to be 76 seconds of boarding and is now 38,
+ * because TICK halved when the carousel sped up. The test's budget was raised to match.
  */
-const CARS_PER_LEVEL = 36;
+const CARS_PER_LEVEL = 46;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -184,7 +200,29 @@ export function levelParams(id: number): GenParams {
     const t = Math.min(1, Math.max(0, (id - 1) / 9));
     return {
         cars: CARS_PER_LEVEL,
-        colors: Math.min(5, 2 + Math.floor((id - 1) / 3)),
+        // 4, 4, 5, 5, then 6 from level 5 on. The floor of 4 and the early climb are both
+        // forced, and by the same rule: a level is only capable of difficulty when it has
+        // MORE colours than the bay has open stalls.
+        //
+        // Why -- a bay covering every colour in play cannot jam. Every row reaching the gap
+        // boards, every boarding frees a ring cell, so the track never seals, and a sealed
+        // track is the only way to lose (LoopSystem.reachableColors, GameCore.isDeadlocked).
+        // So at 4 open stalls, a level of 4 colours or fewer is won by a player who does
+        // nothing but keep the four stalls all different, WHATEVER the lot looks like. The
+        // old ramp opened 2, 3, 3, 4, 4 -- five levels that were free by construction, which
+        // is what "the first four levels have no difficulty" was.
+        //
+        // Measured, over 66 colour paintings per packing on four different packings: the
+        // count that beat that one-line rule was 0 of 66 at four colours (every packing),
+        // 0 to 2 at five, and 4 to 7 at six. Four colours is not a hard band the search
+        // missed; it is provably empty.
+        //
+        // Levels 1 and 2 therefore stay teaching levels, deliberately and unavoidably. They
+        // are where the colour match is learnt, and no painting can make them bite.
+        //
+        // 6 is the ceiling because PALETTE has six entries and the view has exactly those six
+        // in `colors.ts`. A seventh would draw grey (see `colorOf`).
+        colors: Math.min(6, 4 + Math.floor((id - 1) / 2)),
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
@@ -490,8 +528,13 @@ function round4(n: number): number {
 
 /**
  * One attempt at a level's cars: pack the lot, work out an order they can leave in, then
- * paint them. Colours go round-robin over the leaving order so no colour dominates and no
- * colour is confined to one corner.
+ * paint them round-robin over that order.
+ *
+ * The round-robin is a STARTING POINT ONLY, and on its own it is the easiest painting there
+ * is: `i` is the leaving order, so red/blue/green/yellow/red/... puts one car of every
+ * colour in the lot's outermost layer at all times, and hands the player the one-line rule
+ * that beats the whole game ("keep the stalls all different"). `choosePainting` searches
+ * past it; this is what that search starts from and falls back to.
  *
  * Rounding happens HERE, before anything validates or solves these cars, so the numbers
  * checked are the numbers written -- a ten-thousandth is small, but the clearance it is
@@ -528,21 +571,93 @@ function repair(id: number, cars: CarSpec[]): CarSpec[] {
     return kept;
 }
 
+/** Same cars, same places, different colours. */
+function repaint(cars: CarSpec[], assign: string[]): CarSpec[] {
+    return cars.map((car, i) => ({ ...car, color: assign[i] }));
+}
+
+/**
+ * Colour paintings to try, in order, forever. Index `i` is the car's place in the LEAVING
+ * order, which is the only ordering that matters here -- what a painting decides is which
+ * colours are within reach at each moment, not which corner they sit in.
+ *
+ * Runs first, shortest to longest: a run of `k` means the outermost layer holds one colour
+ * for `k` cars at a time, and run 1 is exactly the round-robin. Runs alone are a cliff
+ * rather than a dial (measured: at six colours a run of 4 beats the one-line rule and a
+ * careful player still wins, while a run of 6 is unwinnable for every policy tried), which
+ * is why they are only the opening moves and the rest are seeded shuffles. Every painting
+ * uses each colour a near-equal number of times, so no colour can starve.
+ */
+function* paintings(n: number, colors: number, rand: () => number): Generator<string[]> {
+    for (let run = 1; run <= 6; run++) {
+        yield Array.from({ length: n }, (_, i) => PALETTE[Math.floor(i / run) % colors]);
+    }
+    for (;;) {
+        const assign = Array.from({ length: n }, (_, i) => PALETTE[i % colors]);
+        for (let i = assign.length - 1; i > 0; i--) {
+            const j = Math.floor(rand() * (i + 1));
+            const tmp = assign[i];
+            assign[i] = assign[j];
+            assign[j] = tmp;
+        }
+        yield assign;
+    }
+}
+
+/** Paintings tried per packing, and packings tried, before the search gives up. */
+const PAINTINGS = 400;
+const PACKINGS = 3;
+
+/**
+ * Repaint `cars` until the level is hard but fair, or return null if the search runs out.
+ *
+ * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
+ * cars (`queueFor`), so every painting is colour-balanced by construction and cannot fail
+ * `validateLevel`. The lot's geometry -- the blocked count and solver rounds the curve was
+ * tuned against -- is untouched.
+ *
+ * Skipped outright below `UNLOCKED` colours, and that is not an optimisation: at four open
+ * stalls a four-colour level cannot be beaten by any painting (see `levelParams`), so the
+ * search would burn 400 simulations to fail. Those levels take the round-robin and are
+ * teaching levels.
+ */
+function choosePainting(id: number, cars: CarSpec[], p: GenParams): CarSpec[] | null {
+    if (p.colors <= UNLOCKED) return null;
+    const rand = mulberry32(id * 104729 + 17);
+    let tried = 0;
+    for (const assign of paintings(cars.length, p.colors, rand)) {
+        if (tried++ >= PAINTINGS) return null;
+        const painted = repaint(cars, assign);
+        const verdict = isHardButFair(assemble(id, painted));
+        if (verdict.hard && verdict.fair) return painted;
+    }
+    return null;
+}
+
 /**
  * A level for `id`: deterministic, colour-balanced by construction (the passenger queue is
- * derived from the cars, so `validateLevel` cannot fail), solvable, and as close to the
- * curve's blocking target as 200 attempts get.
+ * derived from the cars, so `validateLevel` cannot fail), solvable, as close to the curve's
+ * blocking target as 200 attempts get, and -- where the colour count allows one at all --
+ * painted so that the one-line rule loses and a careful player wins.
  *
- * Note the guarantee is about the LOT: every car can be driven out in some order. Whether
- * a player wins also depends on which colours they park against the incoming queue, which
- * is their decision and is what deadlock detection is for.
+ * Two searches, nested, because they answer different questions. The packing decides how
+ * tangled the LOT is: every car can be driven out in some order, and how much digging that
+ * takes is what `blockedRatio` and `minRounds` measure. The painting decides how tangled the
+ * GAME is: which colours are in reach when, against the colours coming round the track. The
+ * shipped levels used to be searched on the first alone, and were free on the second.
+ *
+ * On-target packings are collected rather than returned on sight, so a packing whose colours
+ * cannot be made to bite can be abandoned for the next one. A level that exhausts all of
+ * them keeps the first on-target packing, round-robin painted, exactly as before -- the
+ * generation log is where that shows up (see the `hard`/`fair` columns in tools/gen-levels).
  */
 export function generateLevel(id: number): LevelData {
     const p = levelParams(id);
     const wantBlocked = Math.round(p.blockedRatio * p.cars);
     let best: { cars: CarSpec[]; miss: number } | null = null;
+    const onTarget: CarSpec[][] = [];
 
-    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    for (let attempt = 0; attempt < ATTEMPTS && onTarget.length < PACKINGS; attempt++) {
         // Seeded from the id, so the same id walks the same attempts in the same order.
         const cars = scatter(mulberry32(id * 7919 + attempt), p);
         if (cars.length < p.cars) continue;      // could not place them all
@@ -550,11 +665,18 @@ export function generateLevel(id: number): LevelData {
         if (!isSolvable(level)) continue;
         const d = estimateDifficulty(level);
         if (Math.abs(d.blocked - wantBlocked) <= BLOCKED_TOLERANCE && d.rounds >= p.minRounds) {
-            return level;
+            onTarget.push(cars);
+            continue;
         }
         // Keep the nearest miss: distance in blocked cars, then in rounds.
         const miss = Math.abs(d.blocked - wantBlocked) + Math.max(0, p.minRounds - d.rounds);
         if (!best || miss < best.miss) best = { cars, miss };
     }
+
+    for (const cars of onTarget) {
+        const painted = choosePainting(id, cars, p);
+        if (painted) return assemble(id, painted);
+    }
+    if (onTarget.length > 0) return assemble(id, onTarget[0]);
     return assemble(id, best ? best.cars : repair(id, scatter(mulberry32(id * 7919), p)));
 }
