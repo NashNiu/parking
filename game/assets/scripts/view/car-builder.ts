@@ -1,11 +1,10 @@
 import {
-    Node, Color, Mesh, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
+    Node, Color, MeshRenderer, Material, Prefab, resources, assetManager, instantiate,
     Vec3, Mat4, utils, primitives,
 } from 'cc';
 import { Cap } from '../core/index';
 import { instancedLitMaterial, readMainColor } from './materials';
 import { blobShadow } from './blob-shadow';
-import { mergeParts, triPart } from './slabs';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -17,9 +16,18 @@ export type { Cap };
  * Real 3D car art (cartoon GLB models made in Claude Design), one per capacity.
  * These live under assets/resources/models and are loaded as prefabs. Each model
  * shares the same rig: a named `paint` material for the body (recolored per car),
- * plus glass/trim/lamp/taillamp/tire/hub (kept as authored). The model's own baked
- * `roof_arrow` is switched OFF and replaced by `roofDecal` -- see the note there for why
- * nothing else on the model can be seen from this camera either.
+ * plus glass/trim/lamp/taillamp/tire/hub (kept as authored), and a white `roof_arrow` that
+ * says which way the car leaves.
+ *
+ * THE MODELS ARE AUTHORED FOR THIS CAMERA, which is orthographic and looks at the board
+ * straight on, so only the TOP-DOWN PLAN silhouette exists -- height buys nothing. Anything
+ * meant to be seen has to be WIDER IN PLAN than the roof: the wheels stick out past the body,
+ * the body's shoulders past the roof, and the windows face upward. The previous set was built
+ * for a 3/4 view and eight of its nine primitives were invisible here -- measured, the
+ * windshield showed 0.025 past the roof's silhouette, the sill 0.03, the bumpers and lamps
+ * 0.09, the wheels 0.28 and the hubcaps 0.16, those last being the little white dashes along a
+ * car's flank, a hubcap seen edge-on. Re-check that before swapping the models again: the view
+ * has no way to compensate for a model drawn for another angle.
  */
 const MODEL_PATH: Record<Cap, string> = {
     small: 'models/car',
@@ -116,31 +124,6 @@ function matchesRole(m: Material, role: 'paint' | 'glass'): boolean {
     return Math.abs(c.r - t.r) + Math.abs(c.g - t.g) + Math.abs(c.b - t.b) < 90;
 }
 
-/**
- * Which of `trim`'s jobs a node is doing, by name -- and it has to be by name, because the
- * model gives all of them ONE material.
- *
- * `trim` is the only material in bus/car/truck.glb with **no `baseColorFactor`**, and glTF
- * says that means white. Three nodes share it: `sill`, a 2.0 x 1.1 flat slab lying under the
- * whole car; `bumper_front`/`bumper_rear`; and `roof_arrow`, the plate that says which way
- * the car leaves. All three therefore came out white, which is one bug wearing two faces:
- *
- * - the sill is wider than the painted body (1.10 against 1.04), so a white tray showed all
- *   round the car and read as a BACKGROUND behind it rather than as part of it;
- * - and the arrow, being the same white, had nothing to stand out against.
- *
- * So the fix is not to recolour `trim` but to stop treating it as one thing. The sill and
- * bumpers take a dark neutral, which in this flat art reads as a stroke around the car and
- * lets the body read as one object; the arrow keeps the white and becomes the ONLY white on
- * the car, which is what makes it legible. Node names come straight from the glTF and Cocos
- * keeps them (`sill`, `roof_arrow`, ...), so this is as stable as the model itself.
- */
-function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
-    const n = nodeName.toLowerCase();
-    if (n.includes('arrow')) return 'arrow';
-    if (n.includes('sill') || n.includes('bumper')) return 'chassis';
-    return null;
-}
 
 /**
  * THE CAMERA SEES THE ROOF AND ALMOST NOTHING ELSE, which is why the car is drawn on top of
@@ -167,67 +150,51 @@ function trimRole(nodeName: string): 'chassis' | 'arrow' | null {
  * Proportions are FRACTIONS of the car, not fixed sizes, because the three caps differ in
  * length by more than 2x and a fixed windscreen would swallow the small car.
  */
-const ROOF_LIFT = 0.01;
-const DECAL_D = 0.02;
 /**
- * The arrow, as fractions of the car: how far forward of centre it sits, and how much of the
- * length and width it takes. Fractions rather than sizes because the three caps differ in
- * length by more than 2x, and one number would either lose the arrow on the truck or bury
- * the small car under it.
+ * Warn ONCE per material name when a slot has no readable colour.
+ *
+ * This is the whole reason the cars were wrong for three builds. The previous models had one
+ * material -- `trim` -- with no `baseColorFactor`, which glTF defines as WHITE, and `trim`
+ * was the sill AND the bumpers AND the roof arrow. So a 2.0 x 1.1 white slab lay under every
+ * car and read as a tray behind it, and the arrow, being the same white, had nothing to stand
+ * out against. Nothing said so: the fallback just quietly painted them white.
+ *
+ * A model can always be re-exported with a material left at its default, so the fallback has
+ * to stay -- but it must be audible. One line per material, not per car.
  */
-const ROOF_ARROW = { x: 0.04, w: 0.30, h: 0.48 };
+const warnedMaterials = new Set<string>();
 
-const arrowMeshes = new Map<string, Mesh>();
-
-/**
- * The arrow on the roof, and nothing else on it.
- *
- * Windows were drawn here too for one build and taken out: at 40px a car cannot carry three
- * marks, and a windscreen plus a rear window plus an arrow read as two dark blocks with a
- * triangle between them rather than as a car. What the roof has to say is which colour the
- * car is and which way it leaves -- and the body already says the first.
- *
- * One mesh cached per car size (there are only three caps) and one shared white material, so
- * the whole board costs about one draw call for all the arrows on it.
- *
- * It points +X because that is where the car leaves: `buildCar` turns `body` by the car's
- * heading and the model's length already runs along body X, so this agrees with the exit by
- * construction, exactly as the baked arrow it replaces did.
- */
-function roofDecal(body: Node, len: number, wid: number, hgt: number): void {
-    const key = `${len.toFixed(3)},${wid.toFixed(3)}`;
-    let mesh = arrowMeshes.get(key);
-    if (!mesh) {
-        mesh = mergeParts([
-            triPart(len * ROOF_ARROW.w, wid * ROOF_ARROW.h, DECAL_D, len * ROOF_ARROW.x, 0),
-        ]);
-        arrowMeshes.set(key, mesh);
-    }
-    const arrow = new Node('roof-arrow');
-    const mr = arrow.addComponent(MeshRenderer);
-    mr.mesh = mesh;
-    mr.material = instancedLitMaterial(Color.WHITE);
-    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
-    // Clear of the roof, which is at z = hgt in body space (`lay` centres the model there).
-    arrow.setPosition(0, 0, hgt + ROOF_LIFT);
-    body.addChild(arrow);
+function warnNoColour(m: Material): void {
+    const name = m.name || '(unnamed)';
+    if (warnedMaterials.has(name)) return;
+    warnedMaterials.add(name);
+    console.warn(`[car] material "${name}" has no readable mainColor, so it is drawn WHITE.`
+        + ' Give it an explicit baseColorFactor in the model.');
 }
 
 /**
- * How much darker the sill and bumpers are than the body, and the white the arrow has to
- * itself.
+ * Warn ONCE per cap if a model has no `paint` slot.
  *
- * A shade of the car's OWN colour, not a neutral. A dark slate was tried first and it just
- * swapped one problem for the other: the tray stopped being white and started being black,
- * because what reads as a tray is the CONTRAST, not the colour. At 0.88 the sill and bumpers
- * are the same car, a touch darker where they sit lower -- so there is no second object for
- * the eye to separate out, which is the only way the tray goes away.
- *
- * That the sill and bumpers stick out at all is the model's doing: the sill is 1.10 across
- * against a 1.04 body, and the bumpers reach x = 1.36 against the body's 1.27. So they will
- * always show; the question is only whether they show as the car or as something behind it.
+ * Without one, `recolorCar` leaves the car whatever colour the model shipped and every car on
+ * the board comes out the same -- very visible, but easy to misread as a colour-assignment bug
+ * in core rather than a naming mismatch in the model. `matchesRole` matches on the material
+ * NAME first and falls back to a colour near the old models' teal, so a re-export that renames
+ * or recolours `paint` lands here.
  */
-const CHASSIS_SHADE = 0.88;
+const warnedCaps = new Set<Cap>();
+
+function auditPaint(model: Node, cap: Cap): void {
+    if (warnedCaps.has(cap)) return;
+    warnedCaps.add(cap);
+    for (const mr of model.getComponentsInChildren(MeshRenderer)) {
+        for (const m of mr.sharedMaterials) {
+            if (m && matchesRole(m, 'paint')) return;
+        }
+    }
+    console.warn(`[car] the ${cap} model has no material matching 'paint', so its body is not`
+        + ' recoloured. Name the body material `paint`.');
+}
+
 
 function scaleColor(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
@@ -258,8 +225,9 @@ function scaleColor(c: Color, f: number): Color {
  * of the same colour to lose. Re-check that if the models are ever re-exported with a
  * texture -- `readMainColor` would silently flatten it away.
  *
- * SIX of the seven materials carry a baseColorFactor. The seventh, `trim`, does not, and
- * that one needs `trimRole` rather than a colour read -- see the note there.
+ * That claim is now CHECKED rather than assumed: the previous set had one material, `trim`,
+ * with no baseColorFactor, and glTF makes that white -- which is how a white tray ended up
+ * under every car. `warnNoColour` says so on the console the first time it happens.
  *
  * `instancedLitMaterial` is builtin-standard, so the emissive flash still works. It is
  * shared per colour, so flashing one car flashes every car of that colour -- already true
@@ -269,20 +237,23 @@ function scaleColor(c: Color, f: number): Color {
 function recolorCar(model: Node, color: Color): void {
     const paintMat = instancedLitMaterial(color);
     const glassMat = instancedLitMaterial(scaleColor(color, 0.72));
-    const chassisMat = instancedLitMaterial(scaleColor(color, CHASSIS_SHADE));
     for (const mr of model.getComponentsInChildren(MeshRenderer)) {
-        const role = trimRole(mr.node.name);
         const mats = mr.sharedMaterials;
         for (let i = 0; i < mats.length; i++) {
             const m = mats[i];
             if (!m) continue;
             if (matchesRole(m, 'paint')) mr.setMaterial(paintMat, i);
             else if (matchesRole(m, 'glass')) mr.setMaterial(glassMat, i);
-            else if (role === 'chassis') mr.setMaterial(chassisMat, i);
-            // Everything left keeps its own colour and gains instancing. The lamps, the
-            // tyres and the hubs all carry a baseColorFactor, so `readMainColor` has
-            // something to read and the fallback never fires for them.
-            else mr.setMaterial(instancedLitMaterial(readMainColor(m) ?? Color.WHITE), i);
+            else {
+                // Every other role keeps the colour the model gave it, and gains instancing.
+                // The sill, the bumpers and the roof arrow used to be forced here -- the sill
+                // to a shade of the body so it stopped reading as a tray, the arrow to white
+                // and 1.8x its size so it could be seen at all. None of that is needed now:
+                // the models are authored for this camera, so what they say is what we draw.
+                const own = readMainColor(m);
+                if (!own) warnNoColour(m);
+                mr.setMaterial(instancedLitMaterial(own ?? Color.WHITE), i);
+            }
         }
     }
 }
@@ -307,18 +278,6 @@ function fallbackBox(body: Node, len: number, wid: number, color: Color): void {
  * into the board (-Z), so there's no meaningful lateral shadow offset to fake.
  * z = -0.06 puts it between the lot surface (-0.10) and the wheels (0).
  */
-/**
- * Switch off the model's baked roof arrow, which `roofDecal` replaces.
- *
- * It is 0.9 x 0.76 with a node scale of 0.88 x 0.72 already on it, so it covers 0.79 x 0.55
- * of a roof 2.5 long -- and scaling it up (1.3x, then 1.8x) never made it read. Left on, it
- * would sit under the drawn arrow and fight it.
- */
-function hideBakedArrow(model: Node): void {
-    for (const mr of model.getComponentsInChildren(MeshRenderer)) {
-        if (trimRole(mr.node.name) === 'arrow') mr.node.active = false;
-    }
-}
 
 function addShadow(body: Node, len: number, wid: number): void {
     const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
@@ -401,8 +360,7 @@ export function buildCar(
     body.addChild(lay);
 
     recolorCar(model, color);
-    hideBakedArrow(model);
-    roofDecal(body, drawnLen, drawnWid, hgt);
+    auditPaint(model, cap);
     addShadow(body, drawnLen, drawnWid);
 
     // The body carries the heading. After the Rx(90) lay-down the model's length runs along

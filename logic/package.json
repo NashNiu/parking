@@ -7,7 +7,9 @@
     "gen": "tsc -p tsconfig.gen.json && node ../.tmp/gen/tools/gen-levels.js",
     "typecheck:view": "tsc -p tsconfig.view.json",
     "preview": "node ../tools/preview.mjs",
-    "preview:nobuild": "node ../tools/preview.mjs --no-build"
+    "preview:nobuild": "node ../tools/preview.mjs --no-build",
+    "uuids": "node ../tools/sync-car-uuids.mjs",
+    "uuids:check": "node ../tools/sync-car-uuids.mjs --check"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
