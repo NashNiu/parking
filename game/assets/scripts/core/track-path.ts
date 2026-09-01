@@ -12,7 +12,13 @@ import { FeedSide, GROUP_SIZE } from './types';
 export const LANE = Object.freeze({
     bandHalf: 0.38,
     start: 0.52,
-    step: 0.34,
+    // 0.27 leaves a bare band of 0.05 between waiting rows, down from 0.12. A channel is
+    // STRAIGHT, so nothing here is bounded by `clearance` the way the ring is -- rows could sit
+    // at exactly 0.22 and touch. What stops it is the ring: the two halves of the track have to
+    // read alike (the test in track-path.test.ts pins that), and the ring cannot pack below a
+    // seam of 0.084 without its rows overlapping on the corners. 0.27 is the tightest value
+    // inside that bound; 0.26 falls outside it.
+    step: 0.27,
     margin: 0.25,
     edgeLimit: 4.67,
 });
@@ -23,12 +29,19 @@ export const LANE = Object.freeze({
  * point, on a curved or slanted stretch whose normal is nowhere near horizontal.
  *
  * Which of them a given shape may actually use is decided by `capacityOptions`, from the
- * shape's own perimeter -- not from this list. The list stops at 28 because 32 is where the
- * rows start to touch: on a trapezoid, an oval or a circle at 32 the nearest figure in the
- * NEXT row is closer than a figure is wide, so the two rows overlap on the corners however
- * the seam is measured. See BLOCK.clearance.
+ * shape's own perimeter -- not from this list. The list stops at 32 because that is where the
+ * ROOMIEST shape runs out: 36 brings the next row within a figure's width on all five, so no
+ * shape could use it. Where each shape actually stops is its own business and varies -- 32 on
+ * a rectangle and a hexagon, 28 on a trapezoid and an oval, 24 on a circle -- and it is
+ * `minRowGap` against BLOCK.clearance that decides, measured where the corners put the figures
+ * rather than on the centreline.
+ *
+ * This list held 28 as its ceiling for two rounds, which quietly cost the rectangle and the
+ * hexagon a free step each: both clear `clearance` at 32 with room to spare (0.238 and 0.221
+ * against 0.22). The global cap was standing in for a per-shape limit that `capacityOptions`
+ * was already applying.
  */
-export const CAPACITY_OPTIONS = [8, 12, 16, 20, 24, 28] as const;
+export const CAPACITY_OPTIONS = [8, 12, 16, 20, 24, 28, 32] as const;
 
 /**
  * How the GROUP_SIZE figures of one ring cell stand: `across` of them side by side across
@@ -114,22 +127,30 @@ export const ROW_SPACING_MIN = 0.30;
  * Both ends are read in figures, because a figure is the only length on screen the player
  * has to compare against:
  *
- * - the FLOOR is about half a figure. It has come down twice, from a whole figure, as the
- *   arguments for it turned out to be about the wrong comparison: what the eye judges the
- *   seam against is the spacing INSIDE a row, not the size of a person;
+ * - the FLOOR is about a third of a figure. It has come down three times, from a whole one,
+ *   and every time for the same reason: it was standing in front of a ring that `clearance`
+ *   allowed. The last step, 0.10 to 0.08, was rejecting a 32-cell hexagon whose corners are
+ *   genuinely clear (minRowGap 0.221 against 0.22) -- and `clearance` is the rule that is
+ *   actually about rows colliding, measured where the corners put them. What the eye judges
+ *   the seam against is the spacing INSIDE a row, not the size of a person;
  * - the CEILING is about three quarters of a figure, past which the ring reads as bare track
  *   with rows on it. It replaces an old bound on cell SPACING, which said this far less
  *   directly, since what shows as emptiness is the band between rows and not the pitch of
  *   the cells.
  *
- * The ceiling is the one that does the work: it is what carries the ring to 28 cells (24 on
- * the circle). Every shape's seam lands in 0.11-0.16, and the channels sit at 0.12 -- see
- * LANE.step, which has to be moved with this or the two halves of the track stop matching.
+ * The ceiling is what stops a ring being needlessly sparse; `clearance` is what stops it being
+ * too dense. Between them the five shapes land on 32/32/28/28/24, with seams of 0.084 to 0.155,
+ * and the channels sit at 0.05 -- see LANE.step, which has to be moved with this or the two
+ * halves of the track stop matching.
  *
- * What stops this going lower is no longer the boarding doorway but `clearance`: at 32 cells
- * three of the five shapes have rows that overlap on their corners.
+ * What stops this going lower is not the boarding doorway and not this floor: it is `clearance`.
+ * At 36 cells all five shapes have rows that overlap on their corners, and no narrower row can
+ * buy that back -- a row is already down to arms touching. So the ring CANNOT be packed to a
+ * zero seam, on any shape, at any figure size: on a closed loop with corners, squeezing the
+ * straights shut is the same thing as overlapping the corners. That is geometry, not a setting,
+ * and it is the answer to "take the gaps out" being only partly possible.
  */
-export const SEAM_MIN = 0.10;
+export const SEAM_MIN = 0.08;
 export const SEAM_MAX = 0.16;
 
 /**

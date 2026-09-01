@@ -99,12 +99,14 @@ test('the near entry is a quarter lap from the gap and the far one three quarter
 });
 
 test('each shape allows only the capacities whose seam reads', () => {
-  // Exactly one length each: a block is one row, 0.22 long, and the seam band leaves each
-  // perimeter one place to put its cells. The circle's perimeter is 60% of the
-  // quadrilaterals', so it lands one step lower.
+  // A block is one row, 0.22 long, and between the seam ceiling and `clearance` each perimeter
+  // is left with one or two places to put its cells. The rectangle and the hexagon can carry a
+  // 32-cell ring with their corners still clear (minRowGap 0.238 and 0.221 against 0.22); the
+  // trapezoid and the oval cannot, and the circle -- whose perimeter is 60% of theirs -- lands
+  // a step lower again. Levels take the LONGEST option their shape allows; see TRACK_CURVE.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [28],
-    hex: [28],
+    rect: [28, 32],
+    hex: [28, 32],
     trap: [28],
     oval: [28],
     circle: [24],
@@ -203,8 +205,16 @@ test('minRowGap measures the corners, not a constant', () => {
   for (const shape of TRACK_SHAPES) {
     for (const c of CAPACITY_OPTIONS) {
       const gap = minRowGap(shape, c, GROUP_SIZE);
-      expect(gap).toBeGreaterThan(BLOCK.acrossStep);
+      // Never the constant, on any ring -- legal or not. This is the actual regression guard:
+      // returning acrossStep is what the bug did, and it did it everywhere.
+      expect(gap).not.toBeCloseTo(BLOCK.acrossStep, 4);
       seen.add(gap.toFixed(4));
+    }
+    // On the rings a shape may actually USE it also has to clear acrossStep outright. Only
+    // over those: an illegal ring is illegal precisely because its corners are too close, and
+    // a circle at 32 -- rejected for exactly that -- comes in under acrossStep at 0.186.
+    for (const c of capacityOptions(shape)) {
+      expect(minRowGap(shape, c, GROUP_SIZE)).toBeGreaterThan(BLOCK.acrossStep);
     }
   }
   expect(seen.size).toBeGreaterThan(TRACK_SHAPES.length);
@@ -225,15 +235,21 @@ test('a ring one step too short is rejected for seam alone', () => {
 });
 
 test('row overlap is what stops the ring packing tighter still', () => {
-  // Why the seam bottoms out where it does. It is no longer the boarding doorway, which held
-  // this position for two rounds and now sits well under every legal ring; it is the corners.
-  // At 32 cells three of the five shapes bring the row ahead within a figure's width, and no
-  // narrower row can buy that back -- the row is already down to arms touching. That is why
-  // CAPACITY_OPTIONS stops at 28.
+  // Why the seam bottoms out where it does. It is not the boarding doorway, which held this
+  // position for two rounds and now sits well under every legal ring; it is the corners. Each
+  // shape stops in its own place -- 32 on a rectangle and a hexagon, 28 on a trapezoid and an
+  // oval, 24 on a circle -- and no narrower row can buy the next step back, because a row is
+  // already down to arms touching.
   for (const shape of ['trap', 'oval', 'circle'] as TrackShape[]) {
     expect(minRowGap(shape, 32, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
   }
-  expect(Math.max(...CAPACITY_OPTIONS)).toBe(28);
+  // 36 is where the ROOMIEST shape runs out, so no shape could ever use it: that is what caps
+  // the list. This is also the measurement behind "the ring cannot be packed to a zero seam" --
+  // on a closed loop, shutting the straights is the same act as overlapping the corners.
+  for (const shape of TRACK_SHAPES) {
+    expect(minRowGap(shape, 36, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
+  }
+  expect(Math.max(...CAPACITY_OPTIONS)).toBe(32);
   // ...and the doorway floor really is slack now, on every ring that ships.
   for (const shape of TRACK_SHAPES) {
     for (const c of capacityOptions(shape)) {
@@ -298,7 +314,7 @@ test('lookahead tops out where the channel would leave the visible width', () =>
   // hexagon and the trapezoid dock closest to the centre of the four quadrilaterals, so they
   // are the ones that pick up the extra batch each time LANE.step comes down.
   const EXPECTED: Record<TrackShape, number> = {
-    rect: 5, hex: 6, trap: 6, oval: 5, circle: 7,
+    rect: 7, hex: 7, trap: 8, oval: 7, circle: 9,
   };
   for (const shape of TRACK_SHAPES) {
     expect(maxLookahead(shape)).toBe(EXPECTED[shape]);

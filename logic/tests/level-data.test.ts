@@ -182,8 +182,9 @@ test('a lookahead of zero is rejected', () => {
 });
 
 test('a lookahead past the visible width is rejected', () => {
-  // rect docks its channel at x=1.85, which leaves room for five batches, not six.
-  const feeds = [{ side: 'near', lookahead: 6 }] as Feed[];
+  // rect docks its channel at x=1.85, which leaves room for seven batches at LANE.step 0.27,
+  // not eight. (It was five batches while the step was 0.34.)
+  const feeds = [{ side: 'near', lookahead: 8 }] as Feed[];
   expect(validateTrack(trackLevel({ feeds })).join(' ')).toContain('lookahead');
 });
 

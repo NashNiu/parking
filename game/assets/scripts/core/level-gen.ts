@@ -250,18 +250,28 @@ const TWIN: Feed[] = [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 
  * and the first level where the player sees a track fed from one side only.
  *
  * Ring length is NOT one of the knobs any more. A shape's perimeter decides what it can
- * carry (see capacityOptions, and the seam rule behind it), and that comes out at exactly
- * one length per shape: 28 for the four quadrilaterals, 24 for the circle, whose perimeter
- * is 75% of theirs. So the curve turns the two knobs it still has -- how many batches a
- * channel shows, and whether there are two channels or one.
+ * carry (see capacityOptions, and `clearance` behind it), and each shape is set to the LONGEST
+ * ring it can carry without its rows overlapping on the corners: 32 for the rectangle and the
+ * hexagon, 28 for the trapezoid and the oval, 24 for the circle, whose perimeter is 75% of
+ * theirs. So the curve turns the two knobs it still has -- how many batches a channel shows,
+ * and whether there are two channels or one.
+ *
+ * NOTE that raising a ring lengthens its planning window as a side effect: the far channel's
+ * entry is three quarters of the way round, so its warning is 3 * capacity / 4 ticks. Going
+ * 28 -> 32 hands levels 1, 2, 5 and 6 three more ticks of warning on the far side and one more
+ * on the near. That is a real easing, and it is accepted rather than overlooked -- the
+ * acceptance run in core/play-sim.ts is what says whether a level still refuses to play itself.
  */
 const TRACK_CURVE: TrackParams[] = [
-    { track: 'rect',   capacity: 28, feeds: TWIN },
-    { track: 'hex',    capacity: 28, feeds: TWIN },
+    { track: 'rect',   capacity: 32, feeds: TWIN },
+    { track: 'hex',    capacity: 32, feeds: TWIN },
     { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
     { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
-    { track: 'rect',   capacity: 28, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 4 }] },
-    { track: 'hex',    capacity: 28, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
+    // near 3, not 4: the 32-cell ring already hands this level one more tick of warning than
+    // the 28-cell ring on level 4, and a level 5 that warns you EARLIER than level 4 walks the
+    // curve backwards. The lookahead knob gives that tick back. See the note above the table.
+    { track: 'rect',   capacity: 32, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
+    { track: 'hex',    capacity: 32, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
     { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 4 }] },
     { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }] },
     { track: 'circle', capacity: 24, feeds: [{ side: 'near', lookahead: 4 }] },
