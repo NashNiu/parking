@@ -33,7 +33,20 @@ const { ccclass, property } = _decorator;
  * I forget to bump it is still worth more than no number at all -- it can only ever say a
  * package is OLDER than expected, never newer, so the failure is safe.
  */
-const BUILD_TAG = 'build 0901-1';
+/**
+ * A millisecond clock for the on-screen tick timer.
+ *
+ * `performance.now()` where the runtime has it (sub-millisecond, and monotonic, so a clock
+ * change cannot produce a negative duration) and `Date.now()` where it does not -- the
+ * WeChat mini-game adapter usually provides `performance`, but not on every base library,
+ * and a missing global here would take the whole controller down rather than one readout.
+ */
+const nowMs: () => number =
+    typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? () => performance.now()
+        : () => Date.now();
+
+const BUILD_TAG = 'build 0901-2';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -404,6 +417,9 @@ export class GameController extends Component {
     private tagText = '';
     private fpsFrames = 0;
     private fpsClock = 0;
+    /** Milliseconds spent inside the tick body since the last readout, and the worst one. */
+    private tickMsSum = 0;
+    private tickMsMax = 0;
     /**
      * Degrees the board leans back. Zero means the camera looks straight down the board's
      * normal — a flat, straight-on view, which is what the art is designed for. It was 52
@@ -1052,6 +1068,7 @@ export class GameController extends Component {
         this.tickAcc += dt;
         while (this.tickAcc >= this.tick) {
             this.tickAcc -= this.tick;
+            const tickStartedAt = nowMs();
             const res = this.core.stepLoop();
             const lp = this.core.loop;
             this.loopView?.update(lp.ring, lp.channels);
@@ -1076,6 +1093,10 @@ export class GameController extends Component {
                     this.onDeparted(res.departedCarIds);
                 }
             }
+            // Before the early exits below, so a tick that ends the level is still counted.
+            const tickMs = nowMs() - tickStartedAt;
+            this.tickMsSum += tickMs;
+            if (tickMs > this.tickMsMax) this.tickMsMax = tickMs;
             if (this.core.getState() !== 'playing') {
                 this.onEnd(this.core.getState());
                 break;
@@ -1102,9 +1123,20 @@ export class GameController extends Component {
         this.fpsClock += dt;
         if (this.fpsClock < 1) return;
         const fps = Math.round(this.fpsFrames / this.fpsClock);
+        // Milliseconds of tick work PER SECOND, which is the number that matters: the tick
+        // body runs inside a frame, so this is how much of every second the frame budget
+        // never gets. Reported next to the worst single tick, because a 20ms lump inside one
+        // frame is a visible hitch even when the average looks affordable.
+        const tickLoad = Math.round(this.tickMsSum / this.fpsClock);
+        const tickMax = Math.round(this.tickMsMax);
         this.fpsFrames = 0;
         this.fpsClock = 0;
-        if (this.tagText) this.hud?.setBuildTag(`${this.tagText} · ${fps}fps`);
+        this.tickMsSum = 0;
+        this.tickMsMax = 0;
+        if (this.tagText) {
+            this.hud?.setBuildTag(
+                `${this.tagText} · ${fps}fps · tick ${tickLoad}ms/s max ${tickMax}`);
+        }
     }
 
     /**

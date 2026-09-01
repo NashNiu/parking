@@ -59,10 +59,23 @@ const BAND_DROP = 0.07;
  * The dot is BLOCK.figure across, which is also blockLength -- so at seam 0 the dots just
  * touch, and a ring of dots is exactly as long as the ring of rows it replaces.
  *
- * Set to false to get the crowd back. Boarding still flies real figures: `spawnPassenger` is
- * untouched, both because the flight has to read and because it is not on this measurement.
+ * Set to true to price the crowd again. Boarding always flies real figures: `spawnPassenger`
+ * is untouched, both because the flight has to read and because it was not on the measurement.
+ *
+ * ANSWERED, on device, level 1 with a filled ring. Splitting the two speeds' frame times into
+ * a per-frame part and a per-tick part (frame = P + tickWork/fps, and 2x doubles the tick
+ * rate) gives:
+ *
+ *     256 figures   per-frame 14.93ms   tick work 254 ms/s
+ *      54 dots      per-frame 14.71ms   tick work 147 ms/s
+ *
+ * So DRAWING the crowd costs 0.2ms a frame -- nothing. Deleting 79% of the passenger
+ * geometry did not buy a frame; what it bought was PER-TICK work, 107 ms/s of it. Two
+ * consequences: simplifying the figures further is pointless, and there is a floor of about
+ * 14.8ms (~68fps) underneath all of this that is the rest of the scene, not the passengers.
+ * The tick is where the remaining work is, which is why the tag now prints it (`tickFps`).
  */
-const ROW_AS_DOT = true;
+const ROW_AS_DOT = false;
 const OFFSET_SCRATCH_ZERO = { across: 0, along: 0 };
 
 const PAX_HEIGHT = 0.55;
