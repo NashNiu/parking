@@ -45,6 +45,25 @@ function canvasSize(canvas: Node): { w: number; h: number } {
 }
 
 /**
+ * The passenger figure as a flat glyph, centred on `parent`: a head over a narrower body.
+ *
+ * The two pieces are positioned so the pair straddles the parent's centre -- the head above
+ * it, the body below -- rather than stacking upward from it, so the glyph is optically
+ * centred in whatever it sits in without the caller doing arithmetic.
+ */
+function paxGlyph(parent: Node): void {
+    const total = PILL_FIG_HEAD + PILL_FIG_BODY_H - PILL_FIG_TUCK;
+    const top = total / 2;
+    const body = roundedSprite('paxBody', PILL_FIG_BODY_W, PILL_FIG_BODY_H, PILL_ICON);
+    parent.addChild(body);
+    body.setPosition(0, top - PILL_FIG_HEAD + PILL_FIG_TUCK - PILL_FIG_BODY_H / 2, 0);
+    // After the body, so the head is the later sibling and draws over the tuck.
+    const head = dotSprite('paxHead', PILL_FIG_HEAD, PILL_ICON);
+    parent.addChild(head);
+    head.setPosition(0, top - PILL_FIG_HEAD / 2, 0);
+}
+
+/**
  * A readout plate: a white face over a base of the same shape, offset down so it shows as a
  * lip. Returns both, because callers hang their contents off the FACE (so the contents move
  * with it) and position the HOLDER.
@@ -80,7 +99,7 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 
  * 236 wide, up from 210: the count reaches FOUR digits now (a level runs 1200-1350 passengers,
  * see CARS_PER_LEVEL), and the old width was measured against a three-digit readout.
  */
-const PILL_W = 236;
+const PILL_W = 240;
 const PILL_H = 88;
 /**
  * Both readouts are drawn as TWO plates -- a white face over a cool-grey base peeking out
@@ -329,10 +348,37 @@ const CHIP_H = 58;
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
-const PILL_ICON = new Color(255, 150, 66);
-/** The passenger icon's well: a pale warm disc, so the dots read as an icon and not as dots. */
-const PILL_WELL = new Color(255, 236, 218, 255);
-const PILL_WELL_D = 62;
+/**
+ * The passenger badge: a saturated disc at the pill's left end with a WHITE figure on it.
+ *
+ * It was three orange dots in a huddle on a pale well, and it came back as "the little
+ * flower" -- which is exactly what three round blobs in a triangle are. The icon on a counter
+ * has to name what is being counted, and three dots name nothing.
+ *
+ * So it is now the game's OWN passenger, drawn flat: a round head over a narrower rounded
+ * body, the proportions this project already settled on for the figures on the track (see
+ * HEAD_RADIUS in pax-figure.ts -- a big head on a small body is what makes that silhouette
+ * read as a person at any size). Two sprites, no new shape needed.
+ *
+ * WHITE ON SATURATED, not saturated on pale. The old pairing was orange ink on a cream well,
+ * a contrast ratio of about 1.4; white on this orange is nearer 2.6, and at the size an icon
+ * on a HUD pill actually occupies, contrast is the only thing that survives.
+ */
+const PILL_ICON = new Color(255, 255, 255, 255);
+const PILL_BADGE = new Color(255, 146, 58, 255);
+const PILL_BADGE_D = 68;
+/**
+ * The flat figure inside the badge: head diameter, then the body's width and height, then how
+ * far the body TUCKS UNDER the head.
+ *
+ * The overlap is not a nicety. The body is a stadium, so its top is a semicircle; butted
+ * against the head it leaves a visible pinch where the two curves meet, which reads as a neck
+ * on a figure that has no neck. Four units of overlap puts the join inside the head.
+ */
+const PILL_FIG_HEAD = 21;
+const PILL_FIG_BODY_W = 17;
+const PILL_FIG_BODY_H = 24;
+const PILL_FIG_TUCK = 4;
 
 /**
  * Ink for the level title and the win/lose banner. The board is a light scene, so white
@@ -446,40 +492,35 @@ export class HudView {
 
     /**
      * The remaining-passenger readout: a lifted plate on the left, one row under the title,
-     * holding the passenger icon in its own well, a small caption, and a big count.
+     * with the passenger badge at its left end and the caption over the count beside it.
      *
-     * The ICON SITS IN A WELL now -- a pale disc behind the three orange dots. Loose dots on a
-     * white plate read as three dots; the same dots inside a disc read as an icon, and it gives
-     * the plate a left edge to start from instead of the number floating in the middle of it.
-     * Three dots in a huddle is still all the passenger that survives at this size: a drawn
-     * figure would be a smudge.
+     * The two lines are read as ONE unit -- the caption is the label for the number under it --
+     * so they share an x, and that x is the middle of what the badge leaves rather than a
+     * nudged offset. At four digits and 48px bold the count is about 110 wide, which leaves it
+     * eleven units clear of the badge on one side and of the plate's edge on the other.
+     *
+     * 48 and 24, down from 54 and 22, and the pair moved TOGETHER for one reason: at 54 the
+     * count's line box (1.2x the font) reached up through the caption's. Shrinking the number
+     * a little and growing the caption a little buys both of them room and makes the caption
+     * legible, which at 22 it was not -- it is the smallest type on the screen and it was
+     * carrying the only words that say what the number means.
      */
     private buildPassengerPill(canvas: Node, w: number, margin: number, y: number): Label {
         const { holder, face } = liftedPill('PaxPill', PILL_W, PILL_H);
         canvas.addChild(holder);
         holder.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
 
-        const well = dotSprite('paxwell', PILL_WELL_D, PILL_WELL);
-        face.addChild(well);
-        well.setPosition(-PILL_W / 2 + PILL_WELL_D / 2 + 10, 0, 0);
-        for (const [dx, dy, d] of [[-11, 5, 21], [11, 5, 21], [0, -11, 24]] as const) {
-            const dot = dotSprite('paxdot', d, PILL_ICON);
-            well.addChild(dot);
-            dot.setPosition(dx, dy, 0);
-        }
+        const badge = dotSprite('paxBadge', PILL_BADGE_D, PILL_BADGE);
+        face.addChild(badge);
+        badge.setPosition(-PILL_W / 2 + PILL_BADGE_D / 2 + 12, 0, 0);
+        paxGlyph(badge);
 
-        // The caption and the number share an x and are read as one unit -- the caption is the
-        // label for the number under it. That x is the MIDDLE of the space the well leaves,
-        // worked out rather than nudged: at four digits and 54px bold the count is about 120
-        // wide, and centring it here leaves it about 22 clear of the well on one side and of
-        // the plate's edge on the other. A guessed offset was 62 units too far left and ran
-        // the number through the icon.
-        const wellRight = -PILL_W / 2 + 10 + PILL_WELL_D;
-        const textX = (wellRight + PILL_W / 2) / 2;
-        const caption = makeLabel(face, 'PaxCaption', 22, 24, textX);
+        const badgeRight = -PILL_W / 2 + 12 + PILL_BADGE_D;
+        const textX = (badgeRight + PILL_W / 2) / 2;
+        const caption = makeLabel(face, 'PaxCaption', 24, 23, textX);
         caption.string = '剩余乘客';
         caption.color = PILL_CAPTION;
-        const count = makeLabel(face, 'PaxCount', 54, -17, textX);
+        const count = makeLabel(face, 'PaxCount', 48, -19, textX);
         count.color = PILL_INK;
         count.isBold = true;
         return count;
