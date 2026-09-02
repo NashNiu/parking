@@ -307,6 +307,13 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     const root = new Node(name);
     const fit = new Node('fit');
     fit.setScale(height, height, height);
+    // STANDING UP, along the board's normal, and facing back down the screen at the viewer.
+    // `figureMesh` builds the figure along +Y with its front toward +Z, which is what a flat
+    // board wanted: seen straight on, a figure lying on the board reads as one standing up.
+    // Under a tilted board it reads as a figure lying down, so it is turned a quarter to put
+    // its length along +Z. The rotation lives here rather than in the mesh so the mesh stays
+    // the one thing the whole crowd shares.
+    fit.setRotationFromEuler(90, 0, 0);
     root.addChild(fit);
 
     // One colour for the whole figure, so one material -- which is also why the four parts

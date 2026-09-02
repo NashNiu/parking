@@ -53,7 +53,13 @@ export function setupEnvironment(root: Node): void {
     const globals = scene.globals;
     if (globals && globals.ambient) {
         globals.ambient.skyColor = new Color(208, 212, 218, 255) as unknown as any;
-        globals.ambient.skyIllum = 20000;
+        // 28000, up from 20000, and the tilt is why. The key light comes from up-screen and
+        // above (KEY_LIGHT_PITCH_DEG), so the face of a car the viewer now SEES -- its near
+        // wall -- is the one turned away from it, and its only light is this. At 20000 against
+        // the key's 70000 that wall got 22% of full and read as a silhouette rather than as a
+        // side; this puts it near 29%. Scene-wide, so it lifts every shaded face, the crowd's
+        // included: if the board comes out looking washed, bring this back down first.
+        globals.ambient.skyIllum = 28000;
         globals.ambient.groundAlbedo = new Color(150, 145, 138, 255) as unknown as any;
     }
 

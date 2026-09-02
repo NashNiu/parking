@@ -2,6 +2,45 @@ import { Vec3 } from 'cc';
 import { Cap, CAP_BOX, CAR_SCALE } from '../core/index';
 
 /**
+ * How far the board is tipped back from the camera, in degrees. It lives here, in the module
+ * about board geometry, because more than one part of the view has to know about it.
+ *
+ * ZERO REPRODUCES THE FLAT BOARD EXACTLY. Everything derived from it collapses to what it was,
+ * so this is the single number to put back if the tilt has to go.
+ *
+ * WHY THE BOARD TILTS AND NOT THE CAMERA: the camera stays orthographic and pointed down world
+ * -Z, and `boardRoot` carries the rotation. Same picture, and it keeps `placeCamera` and the
+ * HUD's board-point projections as simple as they were.
+ *
+ * WHAT IT COSTS, all of it accounted for rather than discovered:
+ *
+ *  - The board FORESHORTENS by cos(tilt) up the screen, so `viewFrame` and `fitCamera` have to
+ *    convert between board units and world units instead of treating them as the same thing. At
+ *    30 degrees that is 13%.
+ *  - HEIGHT BECOMES VISIBLE, which is the point. It also means a car is drawn CAR_HEIGHT *
+ *    tan(tilt) up-screen of the footprint core reasons about, so `onTap` subtracts that back
+ *    out; see ROOF_RISE. It is EXACT rather than approximate, and only because the camera is
+ *    orthographic: every car shifts by the same vector, so nothing is scaled and no two cars
+ *    shift differently. A perspective camera's error was position-dependent, which is what made
+ *    it unfixable; see the projection note in `buildBoard`.
+ *  - ANY Z USED PURELY TO ORDER THE DRAW now moves on screen, by z * sin(tilt). Every value in
+ *    the scene was swept for this. The layering ones are all inside +-0.5 (the ground panel at
+ *    -0.5, the lot at -0.13, the track band at -0.09, a car's plates 0.008 apart), so they move
+ *    at most 0.25 world units and mostly under 0.05. TWO were not: DRIVE_LIFT, which was 1.2
+ *    because nothing bounded it, and PAX_DEPTH, which was 2.1 and would have sheared the whole
+ *    ring up the screen. Both are dealt with where they are declared.
+ */
+// Typed as `number` rather than left to infer the literal 30: PAX_DEPTH compares against 0, and
+// the inferred literal type makes TypeScript call that comparison impossible.
+export const BOARD_TILT: number = 30;
+
+/** cos of the tilt: board units up the screen per world unit, and the factor `fitCamera` needs. */
+export const TILT_COS = Math.cos(BOARD_TILT * Math.PI / 180);
+
+/** tan of the tilt: board units up the screen per world unit of HEIGHT. */
+export const TILT_TAN = Math.tan(BOARD_TILT * Math.PI / 180);
+
+/**
  * Board coordinates to world positions for the parking lot.
  *
  * Replaces GridLayout, and is a good deal less work than it was: the board's origin IS the

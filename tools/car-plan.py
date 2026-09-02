@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Render the drawn car's TOP-DOWN PLAN, the only view that decides whether it reads as a car.
+"""Render the drawn car AS THE TILTED BOARD SHOWS IT: roof, side wall, wheels and shadow.
 
-WHY THIS EXISTS. The camera is orthographic and looks at the board straight on, so a car IS its
-plan and nothing else. That cannot be judged from a phone screenshot -- four rounds of tuning
-the car's look from one got it wrong every time -- and nothing else in the project can show it.
+WHY THIS EXISTS. The camera is orthographic, so a car is its roof plus however much of its side
+the board's tilt reveals -- and nothing else. That cannot be judged from a phone screenshot;
+several rounds of tuning the car's look from one got it wrong every time, and the round that
+finally forced this tool into existence was four attempts at a FAKE side wall, every one of them
+shipped blind. Nothing else in the project can show what a car will look like.
 
-It reads its numbers OUT OF the source: the design constants from `car-mesh.ts`, the shadow lift
-from `car-builder.ts`, the key light's pitch from `environment.ts`, and the three body sizes from
-core's `CAP_BOX`. Change a constant there, run this, look. If a piece is added or reordered in
-`car-mesh.ts`, `design()` below has to follow -- the constants cannot drift, but the STACK can,
-so keep the two side by side.
+It reads its numbers OUT OF the source -- the design from `car-mesh.ts`, the tilt and the shadow
+lift from `GameController.ts` and `car-builder.ts`, the key light's pitch from `environment.ts`,
+the three body sizes from core's `CAP_BOX` -- so the picture cannot drift from the code. If a
+piece is added or reordered in `car-mesh.ts`, `triangles()` below has to follow: the constants
+cannot drift, but the STACK can.
 
-THE LIGHTING HERE IS AN APPROXIMATION, and it matters that you know which half to trust. The
-roof's depth comes from real engine lighting on tilted normals, so a render that ignored the
-light would show a flat slab and be worse than useless. What this does instead is Lambert against
-the key light's real direction, normalised so a straight-up-facing plate comes out exactly as
-authored. So: trust it on WHERE the highlight falls, how wide the shoulder is, and how the pieces
-sit together. Do not trust it on exact colour -- the engine runs a full PBR pass with its own
-exposure, and this clips a bright highlight where the engine would roll it off.
+WHAT TO TRUST. The projection and the depth sorting are exact -- the same orthographic tilt the
+camera applies, so the silhouette, how much wall shows, and what occludes what are all real. The
+LIGHTING is Lambert against the key light's true direction, normalised so a roof-facing plate
+comes out as authored; trust it on which faces are light and dark and by roughly how much, but
+not on exact colour, since the engine runs a full PBR pass with its own exposure and rolls off a
+highlight this clips.
 
     python tools/car-plan.py [out.png]      default: .tmp/car-plan.png
 """
@@ -30,18 +31,19 @@ import zlib
 
 MESH = 'game/assets/scripts/view/car-mesh.ts'
 BUILDER = 'game/assets/scripts/view/car-builder.ts'
+CTRL = 'game/assets/scripts/view/board-layout.ts'
 ENV = 'game/assets/scripts/view/environment.ts'
 TYPES = 'game/assets/scripts/core/types.ts'
 CAR = (244, 67, 72)                 # COLORS.red, the busiest colour on a board
 BG = (222, 226, 232)
 SHADOW_ALPHA = 45 / 255             # blob-shadow.ts's mainColor alpha
-PPU, PAD, SS = 300, 0.16, 3
+PPU, PAD, SS = 240, 0.20, 2         # SS supersamples the whole frame, then it is box-filtered
 
 # Relative ambient fill. The scene has skyIllum 20000 against the key light's 70000, but the two
 # reach albedo through different BRDF terms, so this is a fitted knob rather than a derived
-# number. It sets how dark the unlit side of the roof goes; raise it if the render reads harsher
-# than the device does.
-AMBIENT = 0.30
+# number. It sets how dark an unlit face goes; raise it if the render reads harsher than the
+# device does.
+AMBIENT = 0.40
 
 
 def numbers(path, needed):
@@ -49,7 +51,8 @@ def numbers(path, needed):
     with open(path, encoding='utf-8') as f:
         t = f.read()
     nums = {n: float(v) for n, v in
-            re.findall(r'^(?:export )?const ([A-Z][A-Z0-9_]*) = (-?[0-9.]+);', t, re.M)}
+            re.findall(r'^(?:export )?const ([A-Z][A-Z0-9_]*)(?::\s*\w+)? = (-?[0-9.]+);',
+                       t, re.M)}
     missing = [k for k in needed if k not in nums]
     if missing:
         raise SystemExit(f'{path} is missing {missing} -- renamed?')
@@ -58,7 +61,8 @@ def numbers(path, needed):
 
 def constants():
     needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT', 'CORNER_SEGMENTS',
-              'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW',
+              'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW', 'DOME_RISE',
+              'CAR_HEIGHT', 'WALL_FOOT', 'WHEEL_Z', 'Z_STEP',
               'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R', 'GLASS_KEEP', 'WINDOW_R',
               'WINDSCREEN_X', 'WINDSCREEN_W', 'WINDSCREEN_H',
               'REAR_WINDOW_X', 'REAR_WINDOW_W', 'REAR_WINDOW_H',
@@ -75,6 +79,7 @@ def constants():
     if len(profile) < 2:
         raise SystemExit(f'DOME_PROFILE in {MESH} needs at least two rings')
     k.update(numbers(BUILDER, ('SHADOW_LIFT',))[0])
+    k.update(numbers(CTRL, ('BOARD_TILT',))[0])
     k.update(numbers(ENV, ('KEY_LIGHT_PITCH_DEG',))[0])
     k['ACROSS_TO_ALONG'] = (k['BODY_ACROSS'] / k['BODY_ALONG']) / k['REFERENCE_ASPECT']
     return k, tuple(int(g) for g in tyre.groups()), profile
@@ -97,12 +102,16 @@ def caps():
 K, TYRE, PROFILE = constants()
 CAPS = caps()
 
-# The key light, as a direction TOWARD it, in board space. `setupEnvironment` rotates the node by
-# euler (pitch, 0, 0) and a DirectionalLight shines along its forward (-Z), which comes out as
+TILT = math.radians(K['BOARD_TILT'])
+TILT_SIN, TILT_COS = math.sin(TILT), math.cos(TILT)
+
+# The key light, as a direction TOWARD it, in BOARD space -- the tilt does not move it, because
+# the light is a scene node and the board is what rotates under it. `setupEnvironment` turns the
+# light node by euler (pitch, 0, 0) and a DirectionalLight shines along its forward (-Z), giving
 # (0, -sin|pitch|, -cos|pitch|); this is the negation of that.
 _p = math.radians(-K['KEY_LIGHT_PITCH_DEG'])
 LIGHT = (0.0, math.sin(_p), math.cos(_p))
-FLAT_TERM = AMBIENT + (1 - AMBIENT) * LIGHT[2]      # what a straight-up plate receives
+FLAT_TERM = AMBIENT + (1 - AMBIENT) * LIGHT[2]      # what a roof-facing plate receives
 
 
 def lighten(c, t):
@@ -114,7 +123,7 @@ def shade(c, f):
 
 
 def lit(c, normal, ln, wd):
-    """`c` as the engine would light it, normalised so a straight-up plate comes out unchanged.
+    """`c` as the engine would light it, normalised so a roof-facing plate comes out unchanged.
 
     The mesh normal is transformed by the node's INVERSE TRANSPOSE, which for a scale of
     (ln, wd, 1) is a division by each axis -- so the across component is amplified by about 1.8x
@@ -171,175 +180,171 @@ def arrow_pieces():
     ]
 
 
-def design():
-    """The same three groups as `design()` in car-mesh.ts: under the roof, the roof, over it."""
-    under = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
-              shade(CAR, K['EDGE_SHADE']))]
+def ellipse(cx, cy, w, h, seg=48):
+    return [(cx + math.cos(2 * math.pi * i / seg) * w / 2,
+             cy + math.sin(2 * math.pi * i / seg) * h / 2) for i in range(seg)]
+
+
+def triangles(ln, wd):
+    """Every triangle of the car, mirroring `carMesh`'s stack, as (3 board verts, 3 colours).
+
+    A board vert is (x, y, z): x and y in fractions of the car (they get multiplied by ln/wd on
+    the way to the screen, exactly as the node's scale does), z in world units.
+    """
+    tris = []
+
+    def flat(pts, z, col):
+        c = lit(col, (0, 0, 1), ln, wd)
+        for i in range(1, len(pts) - 1):
+            tris.append((((pts[0][0], pts[0][1], z), (pts[i][0], pts[i][1], z),
+                          (pts[i + 1][0], pts[i + 1][1], z)), (c, c, c)))
+
+    def band(pts_a, za, ca, tilt_a, pts_b, zb, cb, tilt_b):
+        """The band between two rings, mirroring `Plan.addBand` including its normals."""
+        outs_a, outs_b = outwards(pts_a), outwards(pts_b)
+        la, ua = math.sin(math.radians(tilt_a)), math.cos(math.radians(tilt_a))
+        lb, ub = math.sin(math.radians(tilt_b)), math.cos(math.radians(tilt_b))
+        col_a = [lit(ca, (o[0] * la, o[1] * la, ua), ln, wd) for o in outs_a]
+        col_b = [lit(cb, (o[0] * lb, o[1] * lb, ub), ln, wd) for o in outs_b]
+        n = len(pts_a)
+        for i in range(n):
+            j = (i + 1) % n
+            ai = (pts_a[i][0], pts_a[i][1], za)
+            aj = (pts_a[j][0], pts_a[j][1], za)
+            bi = (pts_b[i][0], pts_b[i][1], zb)
+            bj = (pts_b[j][0], pts_b[j][1], zb)
+            tris.append(((ai, aj, bi), (col_a[i], col_a[j], col_b[i])))
+            tris.append(((aj, bj, bi), (col_a[j], col_b[j], col_b[i])))
+
+    rim = body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS'])
+    height = K['CAR_HEIGHT']
+
+    # Wheels, low on the wall.
     for sx in (-1, 1):
         for sy in (-1, 1):
-            under.append((round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
-                                     K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), TYRE))
-    rings = [{
-        'pts': body_outline(1 - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
-                            1 - K['DOME_NARROW'] * at),
-        'c': CAR,       # nothing is lightened -- the crown is exactly the palette colour
-        'tilt': tilt,
-    } for at, tilt in PROFILE]
-    glass = shade(rings[-1]['c'], K['GLASS_KEEP'])
+            flat(round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
+                            K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), K['WHEEL_Z'], TYRE)
+
+    # The wall: the rim extruded from the board up to the roof, normals flat and outward.
+    band(rim, 0.0, shade(CAR, K['WALL_FOOT']), 90, rim, height, CAR, 90)
+    flat(rim, height, shade(CAR, K['EDGE_SHADE']))
+
+    # The roof.
+    base = height + K['Z_STEP']
+    rings = [(body_outline(1 - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
+                           1 - K['DOME_NARROW'] * at),
+              base + K['DOME_RISE'] * at, tilt) for at, tilt in PROFILE]
+    for i in range(len(rings) - 1):
+        pa, za, ta = rings[i]
+        pb, zb, tb = rings[i + 1]
+        band(pa, za, CAR, ta, pb, zb, CAR, tb)
+    crown_pts, crown_z, _ = rings[-1]
+    flat(crown_pts, crown_z, CAR)
+
+    # Glass and arrow, on the crown.
+    glass = shade(CAR, K['GLASS_KEEP'])
     over = [
         (round_rect(K['WINDSCREEN_X'], 0, K['WINDSCREEN_W'], K['WINDSCREEN_H'], K['WINDOW_R']),
          glass),
         (round_rect(K['REAR_WINDOW_X'], 0, K['REAR_WINDOW_W'], K['REAR_WINDOW_H'], K['WINDOW_R']),
          glass),
     ] + [(piece, (255, 255, 255)) for piece in arrow_pieces()]
-    return under, rings, over
-
-
-def ellipse(cx, cy, w, h, seg=48):
-    return [(cx + math.cos(2 * math.pi * i / seg) * w / 2,
-             cy + math.sin(2 * math.pi * i / seg) * h / 2) for i in range(seg)]
+    for i, (pts, col) in enumerate(over):
+        flat(pts, crown_z + (i + 1) * K['Z_STEP'], col)
+    return tris
 
 
 def render(out_path):
-    W = max(c[1] for c in CAPS) + PAD * 2
-    Hs = [c[2] + PAD * 2 for c in CAPS]
-    w, h = int(W * PPU), int(sum(Hs) * PPU)
-    buf = [[BG] * w for _ in range(h)]
-
-    def blend(xx, yy, col, a):
-        if a >= 1:
-            buf[yy][xx] = col
-        else:
-            o = buf[yy][xx]
-            buf[yy][xx] = tuple(round(o[i] + (col[i] - o[i]) * a) for i in range(3))
-
-    def fill(pts, col, alpha=1.0):
-        """Flat colour, supersampled, even-odd point-in-polygon."""
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        for yy in range(max(0, int(min(ys))), min(h, int(max(ys)) + 1)):
-            for xx in range(max(0, int(min(xs))), min(w, int(max(xs)) + 1)):
-                n = 0
-                for sy in range(SS):
-                    py = yy + (sy + 0.5) / SS
-                    for sx in range(SS):
-                        px = xx + (sx + 0.5) / SS
-                        inside = False
-                        j = len(pts) - 1
-                        for i in range(len(pts)):
-                            xi, yi = pts[i]
-                            xj, yj = pts[j]
-                            if (yi > py) != (yj > py) and \
-                               px < (xj - xi) * (py - yi) / (yj - yi) + xi:
-                                inside = not inside
-                            j = i
-                        if inside:
-                            n += 1
-                if n:
-                    blend(xx, yy, col, n / (SS * SS) * alpha)
-
-    class Roof:
-        """Accumulator for the roof, composited ONCE at the end.
-
-        Compositing each triangle straight into the frame does not work here. Neighbouring
-        triangles tile the roof exactly, so each one covers about half of every shared boundary
-        pixel -- blend them one after another and that pixel ends up part background twice over,
-        which draws a visible seam along every single edge. Sixty of them radiating out of the
-        four corners is not a design to judge. Accumulating coverage first makes interior pixels
-        come out fully covered, and leaves antialiasing only where the roof genuinely ends.
-        """
-
-        def __init__(self):
-            self.acc = {}
-
-        def tri(self, p, c):
-            (x1, y1), (x2, y2), (x3, y3) = p
-            den = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
-            if abs(den) < 1e-9:
-                return
-            for yy in range(max(0, int(min(y1, y2, y3))), min(h, int(max(y1, y2, y3)) + 1)):
-                for xx in range(max(0, int(min(x1, x2, x3))), min(w, int(max(x1, x2, x3)) + 1)):
-                    n, add = 0, [0.0, 0.0, 0.0]
-                    for sy in range(SS):
-                        py = yy + (sy + 0.5) / SS
-                        for sx in range(SS):
-                            px = xx + (sx + 0.5) / SS
-                            a = ((y2 - y3) * (px - x3) + (x3 - x2) * (py - y3)) / den
-                            b = ((y3 - y1) * (px - x3) + (x1 - x3) * (py - y3)) / den
-                            g = 1 - a - b
-                            if a < 0 or b < 0 or g < 0:
-                                continue
-                            n += 1
-                            for i in range(3):
-                                add[i] += a * c[0][i] + b * c[1][i] + g * c[2][i]
-                    if not n:
-                        continue
-                    cell = self.acc.setdefault((xx, yy), [0.0, 0.0, 0.0, 0])
-                    for i in range(3):
-                        cell[i] += add[i]
-                    cell[3] += n
-
-        def composite(self):
-            for (xx, yy), (r, g, b, n) in self.acc.items():
-                blend(xx, yy, (round(r / n), round(g / n), round(b / n)),
-                      min(1.0, n / (SS * SS)))
-
-    under, rings, over = design()
     throw = K['SHADOW_LIFT'] * math.tan(math.radians(-K['KEY_LIGHT_PITCH_DEG']))
-    lift = 0.0
+    # Each row is as tall as the car projects: its width foreshortened, plus the wall's rise.
+    rows = [(name, ln, wd, wd * TILT_COS + K['CAR_HEIGHT'] * TILT_SIN + 2 * PAD)
+            for name, ln, wd in CAPS]
+    W = max(ln for _, ln, _ in CAPS) + 2 * PAD
+    w, h = int(W * PPU), int(sum(r[3] for r in rows) * PPU)
+    sw, sh = w * SS, h * SS
+    ppu = PPU * SS
+
+    # Supersampled colour and depth. Depth is world z after the board's rotation, so LARGER is
+    # nearer the camera; -inf means nothing has been drawn there yet, which is also how the
+    # shadow knows where it is allowed to land (see below).
+    col = [BG] * (sw * sh)
+    depth = [-1e9] * (sw * sh)
+
+    def project(v, cx, cy, ln, wd):
+        """A board vert to (pixel x, pixel y, depth). The board is tipped back about X."""
+        x, y, z = v
+        by = y * wd
+        wy = by * TILT_COS + z * TILT_SIN          # up the screen
+        wz = -by * TILT_SIN + z * TILT_COS         # toward the camera
+        return (cx + x * ln * ppu, cy - wy * ppu, wz)
+
+    def raster(p, c, alpha=1.0):
+        """One triangle, depth-tested per sample. `alpha` under 1 only paints where nothing is."""
+        (x1, y1, d1), (x2, y2, d2), (x3, y3, d3) = p
+        den = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
+        if abs(den) < 1e-9:
+            return
+        xa, xb = max(0, int(min(x1, x2, x3))), min(sw, int(max(x1, x2, x3)) + 2)
+        ya, yb = max(0, int(min(y1, y2, y3))), min(sh, int(max(y1, y2, y3)) + 2)
+        for yy in range(ya, yb):
+            py = yy + 0.5
+            row = yy * sw
+            for xx in range(xa, xb):
+                px = xx + 0.5
+                a = ((y2 - y3) * (px - x3) + (x3 - x2) * (py - y3)) / den
+                b = ((y3 - y1) * (px - x3) + (x1 - x3) * (py - y3)) / den
+                g = 1 - a - b
+                if a < 0 or b < 0 or g < 0:
+                    continue
+                d = a * d1 + b * d2 + g * d3
+                i = row + xx
+                if d <= depth[i]:
+                    continue
+                if alpha >= 1:
+                    depth[i] = d
+                    col[i] = (round(a * c[0][0] + b * c[1][0] + g * c[2][0]),
+                              round(a * c[0][1] + b * c[1][1] + g * c[2][1]),
+                              round(a * c[0][2] + b * c[1][2] + g * c[2][2]))
+                elif depth[i] < -1e8:
+                    # Transparent, and depth-tested but not depth-writing -- the same state
+                    # `builtin-unlit` technique 1 uses, which is why a shadow never paints over
+                    # a car in front of it.
+                    o = col[i]
+                    col[i] = tuple(round(o[j] + (c[0][j] - o[j]) * alpha) for j in range(3))
+
     y0 = 0.0
-    for (name, ln, wd), ch in zip(CAPS, Hs):
-        cx0, cy0 = W / 2 * PPU, (y0 + ch / 2) * PPU
-
-        def to_px(pts, cx0=cx0, cy0=cy0, ln=ln, wd=wd):
-            # MINUS on y: board +Y is UP on the board (and so on screen -- the camera looks
-            # straight down -Z), while image rows run downward. It made no difference while the
-            # car was symmetric across its length; now that the key light comes from board +Y it
-            # decides which edge is the lit one, so getting it backwards would show a render that
-            # is a mirror of the device.
-            return [(cx0 + x * ln * PPU, cy0 - y * wd * PPU) for x, y in pts]
-
-        # Everything below is offset in BOARD space -- down the screen, where the light throws
-        # things. Every car here is at zero heading, so board -Y is just -Y; on the board
-        # `boardToLocal` rotates the same board-space offsets back through each car's heading.
-        def raise_(pts, dy):
-            return [(x, y + dy) for x, y in pts]
-
-        # The shadow is thrown from the top face, which is already `lift` up.
-        fill(to_px(ellipse(0, -throw / wd, 0.94, 1.02)), (0, 0, 0), SHADOW_ALPHA)
-
-        for pts, col in under:
-            fill(to_px(raise_(pts, lift)), col)
-
-        # The roof: each ring's vertices lit from their own tilted normal, then interpolated
-        # across the bands between them. Bands and crown together tile the roof exactly, so they
-        # go through one accumulator and are composited once (see Roof).
-        roof = Roof()
-        shaded = []
-        for ring in rings:
-            lean = math.sin(math.radians(ring['tilt']))
-            up = math.cos(math.radians(ring['tilt']))
-            shaded.append((to_px(raise_(ring['pts'], lift)),
-                           [lit(ring['c'], (o[0] * lean, o[1] * lean, up), ln, wd)
-                            for o in outwards(ring['pts'])]))
-        for i in range(len(shaded) - 1):
-            (pa, ca), (pb, cb) = shaded[i], shaded[i + 1]
-            n = len(pa)
-            for j in range(n):
-                k = (j + 1) % n
-                roof.tri((pa[j], pa[k], pb[j]), (ca[j], ca[k], cb[j]))
-                roof.tri((pa[k], pb[k], pb[j]), (ca[k], cb[k], cb[j]))
-        crown, flat = shaded[-1][0], lit(rings[-1]['c'], (0, 0, 1), ln, wd)
-        for j in range(1, len(crown) - 1):
-            roof.tri((crown[0], crown[j], crown[j + 1]), (flat, flat, flat))
-        roof.composite()
-
-        for pts, col in over:
-            fill(to_px(raise_(pts, lift)), lit(col, (0, 0, 1), ln, wd))
+    for (name, ln, wd, ch) in rows:
+        cx, cy = W / 2 * ppu, (y0 + ch / 2) * ppu
+        # The contact shadow, on the board, thrown down-screen by the light. It goes down first
+        # so the car's own depth values are all in front of it.
+        sh_pts = ellipse(0, -throw / wd, 0.94, 1.02)
+        black = ((0, 0, 0),) * 3
+        for i in range(1, len(sh_pts) - 1):
+            raster((project((sh_pts[0][0], sh_pts[0][1], -0.06), cx, cy, ln, wd),
+                    project((sh_pts[i][0], sh_pts[i][1], -0.06), cx, cy, ln, wd),
+                    project((sh_pts[i + 1][0], sh_pts[i + 1][1], -0.06), cx, cy, ln, wd)),
+                   black, SHADOW_ALPHA)
+        for verts, cols in triangles(ln, wd):
+            raster(tuple(project(v, cx, cy, ln, wd) for v in verts), cols)
         print(f'{name}: {ln} x {wd}')
         y0 += ch
 
-    raw = b''.join(b'\x00' + b''.join(bytes(c) for c in row) for row in buf)
+    # Box-filter the supersampled frame down.
+    out = bytearray()
+    n = SS * SS
+    for yy in range(h):
+        out.append(0)
+        base = yy * SS * sw
+        for xx in range(w):
+            r = g = b = 0
+            for sy in range(SS):
+                i = base + sy * sw + xx * SS
+                for sx in range(SS):
+                    p = col[i + sx]
+                    r += p[0]
+                    g += p[1]
+                    b += p[2]
+            out += bytes((r // n, g // n, b // n))
 
     def chunk(tag, data):
         return (struct.pack('>I', len(data)) + tag + data
@@ -348,11 +353,12 @@ def render(out_path):
     with open(out_path, 'wb') as f:
         f.write(b'\x89PNG\r\n\x1a\n'
                 + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0))
-                + chunk(b'IDAT', zlib.compress(raw, 9)) + chunk(b'IEND', b''))
+                + chunk(b'IDAT', zlib.compress(bytes(out), 9)) + chunk(b'IEND', b''))
     print(f'wrote {w}x{h} -> {out_path}')
-    print(f'{len(under)} under + {len(rings)} roof rings + {len(over)} over, from {MESH}')
+    print(f'tilt {K["BOARD_TILT"]:.0f} deg, car height {K["CAR_HEIGHT"]:.2f} '
+          f'-> {K["CAR_HEIGHT"] * TILT_SIN:.3f} world units of wall on screen')
     print(f'light {tuple(round(v, 3) for v in LIGHT)}, ambient {AMBIENT}, '
-          f'shadow throw {throw:.3f} world units')
+          f'shadow throw {throw:.3f}')
 
 
 render(sys.argv[1] if len(sys.argv) > 1 else '.tmp/car-plan.png')

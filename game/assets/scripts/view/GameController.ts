@@ -7,7 +7,7 @@ import {
     GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
 } from '../core/index';
-import { BoardLayout } from './board-layout';
+import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
@@ -17,6 +17,7 @@ import { HudView } from './hud-view';
 import { setupEnvironment } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
+import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
 
@@ -45,7 +46,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0902-03';
+const BUILD_TAG = 'build 0902-04';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -200,7 +201,16 @@ const ARRIVE_TURN_TIME = 0.1;
  * construction (core only allows a tap whose corridor is empty), so nothing is being driven
  * over on the way out.
  */
-const DRIVE_LIFT = 1.2;
+/**
+ * How far a driving car rises off the board, in world units.
+ *
+ * It only has to beat the parked cars' own height so the mover draws in front of them, and it
+ * used to be 1.2 because nothing bounded it: with the board flat, lifting a car moved it not one
+ * pixel. The tilt makes it visible -- DRIVE_LIFT * sin(BOARD_TILT) of travel up the screen and
+ * back -- so it is now sized to read as a slight lift rather than a hop, while still clearing
+ * CAR_HEIGHT with room over.
+ */
+const DRIVE_LIFT = 0.45;
 
 /**
  * How much of its stall a parked car may fill, across and along -- the ceiling `stallScale`
@@ -235,6 +245,15 @@ const PREVIEW_ASPECT = 0.79;
  * board the layout spends the difference. See `viewFrame` and `fitCamera`.
  */
 const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
+
+/**
+ * How far up the screen the car's roof sits relative to its footprint, in BOARD units.
+ *
+ * A roof point at height h appears exactly where the board point (x, y + h * tan(tilt)) would,
+ * which is what makes the tap compensation a subtraction rather than an approximation. See
+ * BOARD_TILT in board-layout.ts.
+ */
+const ROOF_RISE = CAR_HEIGHT * TILT_TAN;
 
 /**
  * Draw core's footprints and lane bars from the moment a level loads, and log what core
@@ -438,7 +457,7 @@ export class GameController extends Component {
      * for a 2.5D three-quarter look; the trade is that at zero the cars only ever show
      * their roofs, since the models stand along the board's +Z toward the camera.
      */
-    private readonly BOARD_TILT = 0;
+    private readonly BOARD_TILT = BOARD_TILT;
 
     private busy = false;
     private ended = false;
@@ -995,8 +1014,11 @@ export class GameController extends Component {
         // Zero or NaN only happens before the window has a size. Assume the preview's own
         // shape rather than dividing by it; `update` refits the moment a real one arrives.
         const aspect = Number.isFinite(raw) && raw > 0 ? raw : PREVIEW_ASPECT;
-        const halfH = Math.max(VIEW_HALF_H, LANE.edgeLimit / aspect);
-        return { halfW: halfH * aspect, halfH };
+        // The vertical half-view the camera needs is in WORLD units and the board's own extent
+        // is in BOARD units, and the tilt is the factor between them. Across the screen they
+        // are still the same thing, so the width requirement converts the other way.
+        const halfH = Math.max(VIEW_HALF_H, LANE.edgeLimit / (aspect * TILT_COS));
+        return { halfW: halfH * TILT_COS * aspect, halfH };
     }
 
     /**
@@ -1014,17 +1036,19 @@ export class GameController extends Component {
         if (!Number.isFinite(aspect) || aspect <= 0) return;
         if (Math.abs(aspect - this.fitAspect) < 1e-4) return;
         this.fitAspect = aspect;
-        const oh = Math.max(this.needHalfH, this.needHalfW / aspect);
+        // orthoHeight is world; needHalfH/needHalfW are board. Up the screen those differ by
+        // the tilt, across it they do not.
+        const oh = Math.max(this.needHalfH * TILT_COS, this.needHalfW / aspect);
         this.cam.orthoHeight = oh;
         // Reserve the HUD's bands off the top and bottom, then centre the board in what is
         // left. `surplus` is the room a viewport wider than the board needs hands back, and
         // it splits evenly -- reserving a share of the screen is a floor on those bands,
         // not a claim on everything going spare.
         const view = 2 * oh;
-        const surplus = view - (this.contentTop - this.contentBottom)
+        const surplus = view - (this.contentTop - this.contentBottom) * TILT_COS
             - (this.padTop + this.padBottom) * view;
         const top = this.padTop * view + Math.max(0, surplus) / 2;
-        this.camY = this.contentTop + top - oh;
+        this.camY = this.contentTop * TILT_COS + top - oh;
         this.placeCamera(this.cam.node);
     }
 
@@ -1055,7 +1079,7 @@ export class GameController extends Component {
         this.hud.placeSpeed(this.uiCam.screenToWorld(screen, new Vec3()));
     }
 
-    /** Point the camera straight down the board's normal at `camY`. */
+    /** Point the camera down world -Z at `camY`. The BOARD is what carries the tilt. */
     private placeCamera(camNode: Node): void {
         camNode.setPosition(new Vec3(0, this.camY, CAMERA_DIST));
         camNode.lookAt(new Vec3(0, this.camY, 0));
@@ -1758,6 +1782,11 @@ export class GameController extends Component {
             }
         }
 
+        // The car is drawn ROOF_RISE up-screen of its footprint, because the tilt makes its
+        // height visible (see BOARD_TILT). The player aims at the roof, so the tap has to come
+        // back down to the plane core is reasoning on. Exact, not approximate: under ortho every
+        // car shifts by the same vector.
+        localHit.y -= ROOF_RISE;
         const id = this.gridView.pickCar(localHit);
         if (id == null) return;
 

@@ -1,4 +1,5 @@
 import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
+import { BOARD_TILT } from './board-layout';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
@@ -126,7 +127,20 @@ const PAX_HEIGHT = 0.55;
  * measures. It was rejected on gameplay: a row of four balls does not read as FOUR, and how
  * many a group holds is a number the player has to judge to know which car it can fill.
  */
-const PAX_DEPTH = 2.1;
+/**
+ * Fake depth for the crowd: how much board z a row gets per board unit it sits UP the board, so
+ * that a near row draws in front of a far one.
+ *
+ * ZERO ONCE THE BOARD IS TILTED, and not as a compromise -- the tilt does this job properly. A
+ * row further up a board tipped away from the camera IS further from the camera, so the depth
+ * buffer orders the crowd on its own. Keeping the fake as well would be actively wrong: at 2.1
+ * per board unit over a ring about two units deep, it is more than four world units of z, which
+ * a tilt turns into over two units of SHEAR up the screen. That is the one value in the scene
+ * big enough to have wrecked the tilt, and it was only ever free because the board was flat.
+ *
+ * The 2.1 is kept for the flat case so BOARD_TILT 0 still reproduces the old board exactly.
+ */
+const PAX_DEPTH = BOARD_TILT === 0 ? 2.1 : 0;
 
 /**
  * There is no arm swing any more, and the arms are baked into the figure's one mesh (see
@@ -710,8 +724,13 @@ export class TrackView {
                 // was luck, not a validated derivation. If this ever needs to change,
                 // measure it again on screen — do not re-derive it on paper; multiple
                 // paper derivations before this one were wrong.
+                // About Z, the BOARD'S NORMAL, not about Y. A figure stands along +Z now
+                // (see `buildPaxFigure`), so spinning it about Y would tip it over instead of
+                // turning it on the spot. The magnitude is unchanged; the SIGN is the thing to
+                // check on screen, per the note above -- this axis change is the third time the
+                // frame under it has moved.
                 const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
-                for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
+                for (const figure of figures) figure.setRotationFromEuler(0, 0, yaw);
                 this.laneFigures[channel.side].push(figures);
                 const ly = first.y + out.y * LANE_STEP * i;
                 n.setPosition(first.x + out.x * LANE_STEP * i, ly, this.depthAt(ly));
