@@ -39,11 +39,10 @@ BG = (222, 226, 232)
 SHADOW_ALPHA = 45 / 255             # blob-shadow.ts's mainColor alpha
 PPU, PAD, SS = 240, 0.20, 2         # SS supersamples the whole frame, then it is box-filtered
 
-# Relative ambient fill. The scene has skyIllum 20000 against the key light's 70000, but the two
-# reach albedo through different BRDF terms, so this is a fitted knob rather than a derived
-# number. It sets how dark an unlit face goes; raise it if the render reads harsher than the
-# device does.
-AMBIENT = 0.40
+# How much of a fully-lit surface's light is ambient, read out of `setupEnvironment` rather than
+# fitted, so it tracks the scene. It is a ROUGH stand-in -- the hemisphere ambient and the key
+# light reach albedo through different BRDF terms -- but it is the number that decides how dark
+# an unlit face goes, and having it sourced beats having it guessed.
 
 
 def numbers(path, needed):
@@ -57,6 +56,17 @@ def numbers(path, needed):
     if missing:
         raise SystemExit(f'{path} is missing {missing} -- renamed?')
     return nums, t
+
+
+def illuminances():
+    """The key light's illuminance and the hemisphere ambient's, from `setupEnvironment`."""
+    with open(ENV, encoding='utf-8') as f:
+        s = f.read()
+    key = re.search(r'illuminance\s*=\s*(\d+)', s)
+    amb = re.search(r'skyIllum\s*=\s*(\d+)', s)
+    if not key or not amb:
+        raise SystemExit(f'could not read illuminance/skyIllum out of {ENV}')
+    return float(key.group(1)), float(amb.group(1))
 
 
 def constants():
@@ -105,12 +115,26 @@ CAPS = caps()
 TILT = math.radians(K['BOARD_TILT'])
 TILT_SIN, TILT_COS = math.sin(TILT), math.cos(TILT)
 
-# The key light, as a direction TOWARD it, in BOARD space -- the tilt does not move it, because
-# the light is a scene node and the board is what rotates under it. `setupEnvironment` turns the
-# light node by euler (pitch, 0, 0) and a DirectionalLight shines along its forward (-Z), giving
-# (0, -sin|pitch|, -cos|pitch|); this is the negation of that.
+KEY_LUX, AMB_LUX = illuminances()
+AMBIENT = AMB_LUX / (AMB_LUX + KEY_LUX)
+
+# The key light, as a direction TOWARD it. `setupEnvironment` turns the light node by euler
+# (pitch, 0, 0) and a DirectionalLight shines along its forward (-Z), giving
+# (0, -sin|pitch|, -cos|pitch|) in WORLD space; this is the negation of that.
 _p = math.radians(-K['KEY_LIGHT_PITCH_DEG'])
-LIGHT = (0.0, math.sin(_p), math.cos(_p))
+LIGHT_WORLD = (0.0, math.sin(_p), math.cos(_p))
+
+# AND THEN INTO BOARD SPACE, which an earlier version of this file got wrong. The light is a
+# scene node, so tilting the board does not move it -- but every normal here is in BOARD
+# coordinates, and dotting a board normal with a world light is meaningless. The board is turned
+# by -tilt about X, so a world vector reaches board coordinates through the inverse, Rx(+tilt).
+#
+# This is not a detail: it is the entire reason a roof gets brighter when the board tips. In
+# board space the light's z component is cos(pitch - tilt), so a roof-facing plate goes from
+# 0.574 at no tilt to 0.956 at 38 degrees. Missing it hid a 67% brightness change.
+LIGHT = (0.0,
+         LIGHT_WORLD[1] * TILT_COS - LIGHT_WORLD[2] * TILT_SIN,
+         LIGHT_WORLD[1] * TILT_SIN + LIGHT_WORLD[2] * TILT_COS)
 FLAT_TERM = AMBIENT + (1 - AMBIENT) * LIGHT[2]      # what a roof-facing plate receives
 
 
@@ -357,8 +381,11 @@ def render(out_path):
     print(f'wrote {w}x{h} -> {out_path}')
     print(f'tilt {K["BOARD_TILT"]:.0f} deg, car height {K["CAR_HEIGHT"]:.2f} '
           f'-> {K["CAR_HEIGHT"] * TILT_SIN:.3f} world units of wall on screen')
-    print(f'light {tuple(round(v, 3) for v in LIGHT)}, ambient {AMBIENT}, '
-          f'shadow throw {throw:.3f}')
+    print(f'light board-space {tuple(round(v, 3) for v in LIGHT)} '
+          f'(roof N.L {LIGHT[2]:.3f}), key {KEY_LUX:.0f} + ambient {AMB_LUX:.0f} '
+          f'-> ambient fraction {AMBIENT:.2f}')
+    print(f'a wall facing the viewer renders at '
+          f'{AMBIENT / FLAT_TERM * 100:.0f}% of the roof; shadow throw {throw:.3f}')
 
 
 render(sys.argv[1] if len(sys.argv) > 1 else '.tmp/car-plan.png')

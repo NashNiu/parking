@@ -16,7 +16,12 @@ import { Cap, CAP_BOX, CAR_SCALE } from '../core/index';
  *
  *  - The board FORESHORTENS by cos(tilt) up the screen, so `viewFrame` and `fitCamera` have to
  *    convert between board units and world units instead of treating them as the same thing. At
- *    30 degrees that is 13%.
+ *    38 degrees that is 21%.
+ *  - EVERY UP-FACING SURFACE TURNS TOWARD THE KEY LIGHT, which is easy to miss because nothing
+ *    in the scene moved relative to anything else. A roof's normal against the light goes from
+ *    cos(light pitch) to cos(light pitch - tilt): 0.574 to 0.956 here, 67% more light on every
+ *    roof in the game. The first build at this tilt came back as "the roofs look white", and the
+ *    fix is in `setupEnvironment` -- the key light is simply too strong for a tilted board.
  *  - HEIGHT BECOMES VISIBLE, which is the point. It also means a car is drawn CAR_HEIGHT *
  *    tan(tilt) up-screen of the footprint core reasons about, so `onTap` subtracts that back
  *    out; see ROOF_RISE. It is EXACT rather than approximate, and only because the camera is
@@ -32,7 +37,7 @@ import { Cap, CAP_BOX, CAR_SCALE } from '../core/index';
  */
 // Typed as `number` rather than left to infer the literal 30: PAX_DEPTH compares against 0, and
 // the inferred literal type makes TypeScript call that comparison impossible.
-export const BOARD_TILT: number = 30;
+export const BOARD_TILT: number = 38;
 
 /** cos of the tilt: board units up the screen per world unit, and the factor `fitCamera` needs. */
 export const TILT_COS = Math.cos(BOARD_TILT * Math.PI / 180);

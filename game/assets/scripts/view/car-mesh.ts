@@ -179,14 +179,13 @@ const ARROW_HEAD = 0.52;
  * as tall as a truck.
  *
  * What it buys on screen is CAR_HEIGHT * sin(BOARD_TILT), so the two have to be judged together.
- * At the tilt of 30 degrees this ships with, 0.26 shows about 0.13 world units of wall, which is
- * a tenth of a medium car's length -- enough to read as a solid without the wall competing with
- * the roof.
+ * At the tilt of 38 degrees this ships with, 0.34 shows about 0.21 world units of wall, a bit
+ * over a third of a medium car's width.
  *
  * It is also the amount by which the drawn car sits up-screen of the footprint core reasons
  * about, so `onTap` subtracts it back out; see ROOF_RISE in GameController.
  */
-export const CAR_HEIGHT = 0.26;
+export const CAR_HEIGHT = 0.34;
 
 /** The wall's foot, as a shade of the body: a little darker than its top, so it grades. */
 const WALL_FOOT = 0.78;
