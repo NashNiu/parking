@@ -491,8 +491,8 @@
     "unlocked": 4
   },
   "loop": {
-    "capacity": 32,
-    "boardIndex": 16,
+    "capacity": 36,
+    "boardIndex": 18,
     "track": "rect",
     "feeds": [
       {

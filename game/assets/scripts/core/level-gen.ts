@@ -278,31 +278,39 @@ const TWIN: Feed[] = [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 
  *
  * Ring length is NOT one of the knobs any more. A shape's perimeter decides what it can
  * carry (see capacityOptions, and `clearance` behind it), and each shape is set to the LONGEST
- * ring it can carry without its rows overlapping on the corners: 32 for the rectangle and the
- * hexagon, 28 for the trapezoid and the oval, 24 for the circle, whose perimeter is 75% of
- * theirs. So the curve turns the two knobs it still has -- how many batches a channel shows,
- * and whether there are two channels or one.
+ * ring it can carry: 36 for the rectangle, 32 for the hexagon, the trapezoid and the oval, 28
+ * for the circle, whose perimeter is 75% of theirs. So the curve turns the two knobs it still
+ * has -- how many batches a channel shows, and whether there are two channels or one.
  *
  * NOTE that raising a ring lengthens its planning window as a side effect: the far channel's
- * entry is three quarters of the way round, so its warning is 3 * capacity / 4 ticks. Going
- * 28 -> 32 hands levels 1, 2, 5 and 6 three more ticks of warning on the far side and one more
- * on the near. That is a real easing, and it is accepted rather than overlooked -- the
- * acceptance run in core/play-sim.ts is what says whether a level still refuses to play itself.
+ * entry is three quarters of the way round, so its warning is 3 * capacity / 4 ticks, and the
+ * near one's is capacity / 4. Every step up hands the far side three more ticks and the near
+ * side one. That has now happened twice -- 28 -> 32, and this round's step -- and both times
+ * it was accepted rather than overlooked, because the alternative is worse: the compensating
+ * knob is `lookahead`, and cutting it is not free either. It is how many batches a channel
+ * actually HOLDS, so paying for a longer ring with a shorter lookahead empties the channels on
+ * screen, which is the opposite of what the longer ring was for.
+ *
+ * The curve is checked, not assumed: `planningWindow`'s tail across the ten levels has to stay
+ * non-increasing, and this step leaves it strictly better behaved than it was -- 14, 13, 12,
+ * 12, 12, 11, (28), 11, 11, 10, against 13, 13, 11, 11, 11, 11, (25), 10, 10, 9. The pin is in
+ * level-gen.test.ts. The acceptance run in core/play-sim.ts is what says whether a level still
+ * refuses to play itself.
  */
 const TRACK_CURVE: TrackParams[] = [
-    { track: 'rect',   capacity: 32, feeds: TWIN },
+    { track: 'rect',   capacity: 36, feeds: TWIN },
     { track: 'hex',    capacity: 32, feeds: TWIN },
-    { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
-    { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
-    // near 3, not 4: the 32-cell ring already hands this level one more tick of warning than
-    // the 28-cell ring on level 4, and a level 5 that warns you EARLIER than level 4 walks the
-    // curve backwards. The lookahead knob gives that tick back. See the note above the table.
-    { track: 'rect',   capacity: 32, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
+    { track: 'trap',   capacity: 32, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
+    { track: 'oval',   capacity: 32, feeds: [{ side: 'far', lookahead: 5 }, { side: 'near', lookahead: 4 }] },
+    // near 3, not 4: this level's ring is the longest there is, so it already hands out more
+    // warning than level 4's, and a level 5 that warns you EARLIER than level 4 walks the curve
+    // backwards. The lookahead knob gives that tick back. See the note above the table.
+    { track: 'rect',   capacity: 36, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
     { track: 'hex',    capacity: 32, feeds: [{ side: 'far', lookahead: 4 }, { side: 'near', lookahead: 3 }] },
-    { track: 'trap',   capacity: 28, feeds: [{ side: 'far', lookahead: 4 }] },
-    { track: 'oval',   capacity: 28, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }] },
-    { track: 'circle', capacity: 24, feeds: [{ side: 'near', lookahead: 4 }] },
-    { track: 'circle', capacity: 24, feeds: [{ side: 'near', lookahead: 3 }] },
+    { track: 'trap',   capacity: 32, feeds: [{ side: 'far', lookahead: 4 }] },
+    { track: 'oval',   capacity: 32, feeds: [{ side: 'far', lookahead: 3 }, { side: 'near', lookahead: 3 }] },
+    { track: 'circle', capacity: 28, feeds: [{ side: 'near', lookahead: 4 }] },
+    { track: 'circle', capacity: 28, feeds: [{ side: 'near', lookahead: 3 }] },
 ];
 
 /**

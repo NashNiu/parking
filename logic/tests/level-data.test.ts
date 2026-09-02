@@ -149,9 +149,11 @@ test('a capacity that is not a multiple of four is rejected', () => {
 });
 
 test('a capacity the shape cannot carry legibly is rejected', () => {
-  // The circle's perimeter is 7.85, so 28 slots is a row spacing of 0.28 -- a seam of 0.06,
-  // well under the floor, and rows that touch on the curve.
-  const level = trackLevel({ track: 'circle', capacity: 28, boardIndex: 14 });
+  // The circle's perimeter is 7.85, so 32 slots is a row spacing of 0.245 -- under the floor,
+  // a seam of 0.025 under ITS floor, and rows overlapping on the curve at 0.186. It used to be
+  // 28 here, which `clearance` coming down to 0.20 made legal (it is what the circle ships at
+  // now). The example has to be a ring that fails, so it moved up a step with the rule.
+  const level = trackLevel({ track: 'circle', capacity: 32, boardIndex: 16 });
   expect(validateTrack(level).join(' ')).toContain('row spacing');
 });
 

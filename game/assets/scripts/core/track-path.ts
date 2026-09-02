@@ -29,19 +29,23 @@ export const LANE = Object.freeze({
  * point, on a curved or slanted stretch whose normal is nowhere near horizontal.
  *
  * Which of them a given shape may actually use is decided by `capacityOptions`, from the
- * shape's own perimeter -- not from this list. The list stops at 32 because that is where the
- * ROOMIEST shape runs out: 36 brings the next row within a figure's width on all five, so no
- * shape could use it. Where each shape actually stops is its own business and varies -- 32 on
- * a rectangle and a hexagon, 28 on a trapezoid and an oval, 24 on a circle -- and it is
- * `minRowGap` against BLOCK.clearance that decides, measured where the corners put the figures
- * rather than on the centreline.
+ * shape's own perimeter -- not from this list. Where each shape stops is its own business and
+ * varies -- 36 on a rectangle, 32 on a hexagon, a trapezoid and an oval, 28 on a circle -- and
+ * it is `minRowGap` against BLOCK.clearance that decides, measured where the corners put the
+ * figures rather than on the centreline.
  *
- * This list held 28 as its ceiling for two rounds, which quietly cost the rectangle and the
- * hexagon a free step each: both clear `clearance` at 32 with room to spare (0.238 and 0.221
- * against 0.22). The global cap was standing in for a per-shape limit that `capacityOptions`
- * was already applying.
+ * The list has been the binding limit twice, both times by accident. It held 28 for two rounds,
+ * which quietly cost the rectangle and the hexagon a free step each; then it held 32, with a
+ * note saying 36 "brings the next row within a figure's width on all five, so no shape could
+ * use it". That was true and it was the wrong thing to measure -- by HOW MUCH is what mattered,
+ * and nobody had asked. At 36 a rectangle's corners miss by 0.008 board units, which is SIX
+ * TENTHS OF A PIXEL on a phone. `clearance` coming down to 0.20 is what actually opened these
+ * up; see BLOCK.
+ *
+ * 44 is on the list and no shape reaches it -- it is there so the next person to widen
+ * `clearance` finds the ceiling in `capacityOptions` where the rule lives, not here.
  */
-export const CAPACITY_OPTIONS = [8, 12, 16, 20, 24, 28, 32] as const;
+export const CAPACITY_OPTIONS = [8, 12, 16, 20, 24, 28, 32, 36, 40, 44] as const;
 
 /**
  * How the GROUP_SIZE figures of one ring cell stand: `across` of them side by side across
@@ -66,13 +70,34 @@ export const CAPACITY_OPTIONS = [8, 12, 16, 20, 24, 28, 32] as const;
  * BODY. Both come from pax-figure.ts, which core cannot import -- a change to the figure's
  * proportions has to be copied here by hand.
  *
- * `clearance` is the floor for figures in DIFFERENT rows, and it is a figure's own width:
- * two rows may come as close as touching and no closer. Row-mates are held to `arms`
+ * `clearance` is the floor for figures in DIFFERENT rows. Row-mates are held to `arms`
  * instead, and the difference is not an oversight -- a row is one colour, so two of its
  * figures overlapping merge into one silhouette of the right colour, while two rows
  * overlapping smear one group's colour into the next, which is the one thing the player is
  * reading off the ring. The view reads all of this: one source of truth for a layout that
  * core has to be able to check.
+ *
+ * 0.20, DOWN FROM 0.22, asked for as "shrink the gap between rows to the minimum". It used to
+ * be exactly `figure`, i.e. "two rows may come as close as TOUCHING and no closer", and the
+ * measurement that moved it is what the whole change rests on -- the bare band between rows,
+ * per shape, at the capacity each one could then reach:
+ *
+ *          at 0.22        at 0.20        seam before -> after
+ *   rect    32 (0.238)     36 (0.212)      0.108 -> 0.072
+ *   hex     32 (0.221)     32 (0.221)      0.084 -> unchanged, 36 misses at 0.196
+ *   trap    28 (0.244)     32 (0.214)      0.117 -> 0.075
+ *   oval    28 (0.226)     32 (0.204)      0.131 -> 0.087
+ *   circle  24 (0.248)     28 (0.213)      0.107 -> 0.060
+ *
+ * What 0.20 buys is one more step on four of the five shapes, roughly HALVING the ring's seam
+ * -- and it brings the ring into line with the CHANNELS, which have been sitting at 0.05 (see
+ * LANE.step) while the ring was at 0.108, twice as loose. The two halves of the track finally
+ * read at the same density, which is what the consistency test in track-path.test.ts is about.
+ *
+ * What it costs is that two rows may now OVERLAP at the corners, by clearance - minRowGap: at
+ * most 0.008 board units on a rectangle and 0.016 on a circle. On a phone that is 0.6 to 1.2
+ * PIXELS of two heads touching. The colour-smearing objection above is real and this is well
+ * under it; the number to watch if this is pushed further is `minRowGap`, not the seam.
  */
 export const BLOCK = Object.freeze({
     across: 4,
@@ -80,7 +105,7 @@ export const BLOCK = Object.freeze({
     rankStep: 0.15,
     figure: 0.22,
     arms: 0.20,
-    clearance: 0.22,
+    clearance: 0.20,
 });
 
 /** Ranks in a block of `groupSize`, `BLOCK.across` of them abreast. */
@@ -109,10 +134,16 @@ export function blockSpan(groupSize: number): number {
  * matching ceiling -- how the ring READS is the seam's job, below.
  *
  * It went two rounds as the thing that capped the ring's density, and it is not that any
- * more: `clearance` overtook it once the rows got close enough to touch on the corners. It
- * is back to being a floor with margin under it.
+ * more: `clearance` overtook it once the rows got close enough to touch on the corners.
+ *
+ * 0.27, down from 0.30, and it is back to being what it says it is. At 0.30 it was AGAIN the
+ * binding limit rather than the floor -- the tightest ring `clearance` 0.20 allows is a
+ * 28-cell circle at a pitch of 0.280, which 0.30 rejected outright. What it has to protect is
+ * GAP_ARC (0.26): the doorway must not swallow a whole neighbouring cell, so this has to stay
+ * above it, and 0.27 leaves the 0.01 that ordering needs. The test in track-path.test.ts pins
+ * it, so the pair cannot drift into each other.
  */
-export const ROW_SPACING_MIN = 0.30;
+export const ROW_SPACING_MIN = 0.27;
 
 /**
  * The bare band between one cell's block and the next, in board units: a cell's arc length
@@ -127,30 +158,31 @@ export const ROW_SPACING_MIN = 0.30;
  * Both ends are read in figures, because a figure is the only length on screen the player
  * has to compare against:
  *
- * - the FLOOR is about a third of a figure. It has come down three times, from a whole one,
- *   and every time for the same reason: it was standing in front of a ring that `clearance`
- *   allowed. The last step, 0.10 to 0.08, was rejecting a 32-cell hexagon whose corners are
- *   genuinely clear (minRowGap 0.221 against 0.22) -- and `clearance` is the rule that is
- *   actually about rows colliding, measured where the corners put them. What the eye judges
- *   the seam against is the spacing INSIDE a row, not the size of a person;
+ * - the FLOOR is a quarter of a figure. It has come down FOUR times, from a whole one, and
+ *   every time for the same reason: it was standing in front of a ring that `clearance`
+ *   allowed. This step, 0.08 to 0.05, is `clearance` coming down to 0.20 and opening up one
+ *   more capacity on four of the five shapes, whose seams land at 0.060 to 0.087. And 0.05 is
+ *   not an arbitrary new floor -- it is EXACTLY the channels' seam (see LANE.step). The two
+ *   halves of the track are now allowed to be equally tight, where the ring was held at twice
+ *   the channels' spacing by a rule that was never about the ring's legibility;
  * - the CEILING is about three quarters of a figure, past which the ring reads as bare track
  *   with rows on it. It replaces an old bound on cell SPACING, which said this far less
  *   directly, since what shows as emptiness is the band between rows and not the pitch of
  *   the cells.
  *
  * The ceiling is what stops a ring being needlessly sparse; `clearance` is what stops it being
- * too dense. Between them the five shapes land on 32/32/28/28/24, with seams of 0.084 to 0.155,
- * and the channels sit at 0.05 -- see LANE.step, which has to be moved with this or the two
+ * too dense. Between them the five shapes land on 36/32/32/32/28, with seams of 0.060 to 0.084,
+ * against the channels' 0.05 -- see LANE.step, which has to be moved with this or the two
  * halves of the track stop matching.
  *
  * What stops this going lower is not the boarding doorway and not this floor: it is `clearance`.
- * At 36 cells all five shapes have rows that overlap on their corners, and no narrower row can
- * buy that back -- a row is already down to arms touching. So the ring CANNOT be packed to a
- * zero seam, on any shape, at any figure size: on a closed loop with corners, squeezing the
- * straights shut is the same thing as overlapping the corners. That is geometry, not a setting,
- * and it is the answer to "take the gaps out" being only partly possible.
+ * A row is already down to arms touching, so no narrower row can buy anything back, and the
+ * ring CANNOT be packed to a zero seam on any shape at any figure size: on a closed loop with
+ * corners, squeezing the straights shut IS overlapping the corners. That is geometry, not a
+ * setting, and it is the answer to "take the gaps out" being only partly possible. What has
+ * changed is only how much overlap is called acceptable -- see `clearance`.
  */
-export const SEAM_MIN = 0.08;
+export const SEAM_MIN = 0.05;
 export const SEAM_MAX = 0.16;
 
 /**
