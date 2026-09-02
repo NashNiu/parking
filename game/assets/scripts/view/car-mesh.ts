@@ -22,8 +22,8 @@ import { Color, Mesh, primitives, utils } from 'cc';
  * WHAT READS AS A CAR FROM DIRECTLY ABOVE, in the order the cues matter:
  *
  *   1. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- not baked, unlike the rest.
- *   2. ONE hue. Dark rim, main colour, and whatever the light does to it. A second hue anywhere
- *      reads as a decal, not as form.
+ *   2. ONE hue. The paint, and whatever the light does to it. A second hue anywhere reads as a
+ *      decal, not as form.
  *   3. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
  *      hard point off. See the note on BODY_CORNER.
  *   4. Glass ON THE WALL, as a band round the car at window height, not panels on the roof. On
@@ -91,10 +91,23 @@ const BODY_ACROSS = 0.90;
  */
 const BODY_CORNER = 0.10;
 
-/** The dark rim: the body outline grown a little, more across than along. */
+/**
+ * The car's real silhouette: the body outline grown a little, more across than along. It is the
+ * wall's footprint, and the roof's shoulder now starts on it exactly.
+ *
+ * IT USED TO BE A DARK RIM -- a flat lip of paint at EDGE_SHADE 0.52, filling the gap between
+ * this outline and the roof's outermost ring. That gap existed because the ring sat on the
+ * ungrown body outline, so something had to cap the top of the wall. Growing the ring onto this
+ * outline instead closes the gap, and the lip goes away rather than being recoloured: paint it
+ * the body colour and it would have become a BRIGHT halo instead of a dark one, because it
+ * faces straight up while the shoulder just inside it is tilted away.
+ *
+ * What it cost: two cars of the same colour parked side by side no longer have a dark line
+ * between them. What separates them now is one car's wall against the other's roof, which the
+ * tilt makes about a fifth of a world unit tall -- see WALL_LIFT and CAR_HEIGHT.
+ */
 const EDGE_GROW_ALONG = 1.015;
 const EDGE_GROW_ACROSS = 1.075;
-const EDGE_SHADE = 0.52;
 
 /**
  * The roof, as concentric rings of the body outline whose NORMALS tilt outward.
@@ -387,10 +400,8 @@ class Plan {
  * Split out from `carMesh` so `tools/car-plan.py` has one description to mirror and the ordering
  * cannot drift between the mesh and the picture used to judge it.
  */
-function design(color: Color): { rim: Flat; wheels: Flat[]; rings: Ring[]; over: Flat[] } {
-    const rim: Flat = {
-        pts: bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), c: shade(color, EDGE_SHADE),
-    };
+function design(color: Color): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring[]; over: Flat[] } {
+    const rim = bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS);
     const wheels: Flat[] = [];
     for (const sx of [-1, 1]) {
         for (const sy of [-1, 1]) {
@@ -401,10 +412,13 @@ function design(color: Color): { rim: Flat; wheels: Flat[]; rings: Ring[]; over:
         }
     }
 
-    const base = CAR_HEIGHT + Z_STEP;
+    // The outermost ring sits ON the silhouette, at exactly the wall's top edge, so the wall
+    // and the roof meet with nothing between them. DOME_NARROW's inset is unchanged: it is
+    // subtracted from the grown outline rather than from the body's.
     const rings: Ring[] = DOME_PROFILE.map(({ at, tilt }) => ({
-        pts: bodyOutline(1 - DOME_NARROW * ACROSS_TO_ALONG * at, 1 - DOME_NARROW * at),
-        z: base + DOME_RISE * at,
+        pts: bodyOutline(EDGE_GROW_ALONG - DOME_NARROW * ACROSS_TO_ALONG * at,
+            EDGE_GROW_ACROSS - DOME_NARROW * at),
+        z: CAR_HEIGHT + DOME_RISE * at,
         c: color,
         tilt,
     }));
@@ -457,8 +471,8 @@ export function carMesh(color: Color): Mesh {
     // car, so the side facing the viewer is always the side facing the viewer.
     const wall = lighten(color, WALL_LIFT);
     plan.addBand(
-        { pts: rim.pts, z: 0, c: shade(wall, WALL_FOOT), tilt: 90 },
-        { pts: rim.pts, z: CAR_HEIGHT, c: wall, tilt: 90 },
+        { pts: rim, z: 0, c: shade(wall, WALL_FOOT), tilt: 90 },
+        { pts: rim, z: CAR_HEIGHT, c: wall, tilt: 90 },
     );
     // The window band, on the same outline grown just enough not to z-fight the wall.
     const glassPts = bodyOutline(EDGE_GROW_ALONG * GLASS_OUT, EDGE_GROW_ACROSS * GLASS_OUT);
@@ -467,8 +481,6 @@ export function carMesh(color: Color): Mesh {
         { pts: glassPts, z: CAR_HEIGHT * GLASS_LOW, c: glass, tilt: 90 },
         { pts: glassPts, z: CAR_HEIGHT * GLASS_HIGH, c: glass, tilt: 90 },
     );
-    plan.addFlat(rim.pts, CAR_HEIGHT, rim.c);          // the roof's rim, capping the wall
-
     for (let i = 0; i + 1 < rings.length; i++) plan.addBand(rings[i], rings[i + 1]);
     const roof = rings[rings.length - 1];
     plan.addFlat(roof.pts, roof.z, roof.c);            // the crown, inside the innermost ring

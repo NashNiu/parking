@@ -71,7 +71,7 @@ def illuminances():
 
 def constants():
     needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT', 'CORNER_SEGMENTS',
-              'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW', 'DOME_RISE',
+              'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'DOME_NARROW', 'DOME_RISE',
               'CAR_HEIGHT', 'WALL_LIFT', 'WALL_FOOT', 'WHEEL_Z', 'Z_STEP',
               'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R',
               'GLASS_LOW', 'GLASS_HIGH', 'GLASS_OUT', 'GLASS_SHADE',
@@ -259,13 +259,11 @@ def triangles(ln, wd):
     gc = shade(CAR, K['GLASS_SHADE'])
     band(gp, height * K['GLASS_LOW'], gc, 90, gp, height * K['GLASS_HIGH'], gc, 90)
 
-    flat(rim, height, shade(CAR, K['EDGE_SHADE']))
-
-    # The roof.
-    base = height + K['Z_STEP']
-    rings = [(body_outline(1 - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
-                           1 - K['DOME_NARROW'] * at),
-              base + K['DOME_RISE'] * at, tilt) for at, tilt in PROFILE]
+    # The roof. Its outermost ring sits ON the silhouette, at the wall's top edge -- there is
+    # no rim lip between them any more.
+    rings = [(body_outline(K['EDGE_GROW_ALONG'] - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
+                           K['EDGE_GROW_ACROSS'] - K['DOME_NARROW'] * at),
+              height + K['DOME_RISE'] * at, tilt) for at, tilt in PROFILE]
     for i in range(len(rings) - 1):
         pa, za, ta = rings[i]
         pb, zb, tb = rings[i + 1]
