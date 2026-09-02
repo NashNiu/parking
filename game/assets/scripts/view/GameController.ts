@@ -15,7 +15,9 @@ import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { setupEnvironment, setupAntiAliasing } from './environment';
-import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
+import {
+    setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
+} from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
@@ -46,7 +48,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0902-10';
+const BUILD_TAG = 'build 0902-11';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -1024,9 +1026,12 @@ export class GameController extends Component {
             this.cam.projection = Camera.ProjectionType.ORTHO;
             this.cam.orthoHeight = VIEW_HALF_H;
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
-            // Matches the ground panel, so any sliver outside it doesn't flash a
-            // different colour.
-            this.cam.clearColor = new Color(205, 215, 236, 255);
+            // The ground panel's OWN colour, read from it rather than copied: anywhere the
+            // panel does not reach has to be indistinguishable from where it does, and a
+            // second literal is a second thing to forget. (`setupBackground` sizes the panel
+            // to the frame, so in practice nothing outside it is visible -- this is the belt
+            // to that braces.)
+            this.cam.clearColor = GROUND;
         }
     }
 

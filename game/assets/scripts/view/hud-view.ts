@@ -1,5 +1,5 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
-import { roundedSprite, dotSprite, starSprite } from './ui-shapes';
+import { roundedSprite, dotSprite, starSprite, burstSprite } from './ui-shapes';
 
 declare const wx: any;
 
@@ -44,6 +44,23 @@ function canvasSize(canvas: Node): { w: number; h: number } {
     return ct ? { w: ct.width, h: ct.height } : { w: 720, h: 1280 };
 }
 
+/**
+ * A readout plate: a white face over a base of the same shape, offset down so it shows as a
+ * lip. Returns both, because callers hang their contents off the FACE (so the contents move
+ * with it) and position the HOLDER.
+ */
+function liftedPill(name: string, w: number, h: number): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(w, h);
+    const base = roundedSprite('base', w, h, PILL_BASE);
+    holder.addChild(base);
+    base.setPosition(0, -PILL_LIFT, 0);
+    const face = roundedSprite('face', w, h, PILL_BG);
+    holder.addChild(face);
+    return { holder, face };
+}
+
 function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 0): Label {
     const n = new Node(name);
     n.layer = Layers.Enum.UI_2D;
@@ -57,9 +74,27 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 
     return label;
 }
 
-/** The remaining-passenger pill, sized off its own type so it stays in step with the HUD. */
-const PILL_W = 210;
+/**
+ * The remaining-passenger pill, sized off its own type so it stays in step with the HUD.
+ *
+ * 236 wide, up from 210: the count reaches FOUR digits now (a level runs 1200-1350 passengers,
+ * see CARS_PER_LEVEL), and the old width was measured against a three-digit readout.
+ */
+const PILL_W = 236;
 const PILL_H = 88;
+/**
+ * Both readouts are drawn as TWO plates -- a white face over a cool-grey base peeking out
+ * below -- which is the same trick as the unlock button, the padlock rims on the board and the
+ * win panel's stars. They were flat white stadiums, and flat is what "redesign these" was
+ * about: on a HUD where the pressable things have a top face, the readouts having none made
+ * them read as unfinished rather than as a different kind of object.
+ *
+ * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
+ * blue-grey (see GROUND in scene-stage), so a neutral shadow under a white plate reads as
+ * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
+ */
+const PILL_BASE = new Color(202, 211, 231, 255);
+const PILL_LIFT = 6;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
 
@@ -92,7 +127,7 @@ const PILL_MARGIN = 0.03;
  * plate owns, and `fitCamera` frames the board below it -- see `buildBoard`. Centring it and
  * leaving the board where it was is what put the plate behind the Dynamic Island.
  */
-const TITLE_PILL_W = 190;
+const TITLE_PILL_W = 216;
 const TITLE_PILL_H = PILL_H;
 
 /**
@@ -181,21 +216,43 @@ const PROMPT_X_INK = new Color(122, 133, 160, 255);
  * ANYWHERE (see `onTouchEnd`), so this panel deliberately has no hit test of its own and the
  * button is a drawing, not a target -- tapping it works only because tapping anything works.
  */
-const WIN_W = 560;
-const WIN_H = 440;
-const WIN_R = 44;
-const WIN_SCRIM = new Color(10, 14, 26, 96);
-const WIN_STAR_D = 108;
-const WIN_STAR_MID_D = 136;
-const WIN_STAR_PITCH = 132;
-const WIN_STAR_Y = 96;
-const WIN_STAR_MID_Y = 124;
+const WIN_W = 600;
+const WIN_H = 420;
+const WIN_R = 56;
+const WIN_SCRIM = new Color(10, 14, 26, 110);
+/**
+ * The stars STRADDLE the card's top edge, which is the single thing that stops this reading as
+ * a dialog box with stars in it. Their y is measured from the card's centre, so a side star at
+ * 196 with the card 420 tall sits half in and half out; the middle one is bigger, higher, and
+ * mostly outside.
+ *
+ * The pitch keeps eight units of daylight between a side star and the middle one at these
+ * diameters -- worth checking by hand if any of the three change, because two stars whose
+ * points cross look like a mistake rather than a cluster.
+ */
+const WIN_STAR_D = 120;
+const WIN_STAR_MID_D = 156;
+const WIN_STAR_PITCH = 146;
+const WIN_STAR_Y = 196;
+const WIN_STAR_MID_Y = 224;
 /** How far each star's darker twin peeks out below it. */
-const WIN_STAR_LIFT = 7;
+const WIN_STAR_LIFT = 8;
 const WIN_STAR = new Color(255, 201, 52, 255);
 const WIN_STAR_BASE = new Color(206, 140, 18, 255);
 const WIN_STAR_OFF = new Color(219, 224, 236, 255);
 const WIN_STAR_OFF_BASE = new Color(183, 191, 209, 255);
+/**
+ * The sunburst behind the card: very large, very faint, and turning once every forty seconds.
+ *
+ * It is the one thing here that is purely decorative, and it earns its place by being the only
+ * element that MOVES once the entrance is over -- a still panel over a board that has stopped
+ * moving reads as a screenshot. Slow enough that it is not an animation you watch; fast enough
+ * that the screen is alive.
+ */
+const WIN_BURST_D = 980;
+const WIN_BURST = new Color(255, 255, 255, 30);
+const WIN_BURST_TURN = 40;
+const WIN_CAPTION = new Color(140, 150, 175, 255);
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -273,6 +330,9 @@ const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
 const PILL_ICON = new Color(255, 150, 66);
+/** The passenger icon's well: a pale warm disc, so the dots read as an icon and not as dots. */
+const PILL_WELL = new Color(255, 236, 218, 255);
+const PILL_WELL_D = 62;
 
 /**
  * Ink for the level title and the win/lose banner. The board is a light scene, so white
@@ -306,6 +366,8 @@ export class HudView {
     private pickNodes: Node[] = [];
     private speedNode: Node;
     private speedLabel: Label;
+    /** The level on screen, kept because the win panel's caption names it. See `setLevel`. */
+    private levelId = 1;
 
     constructor(canvas: Node) {
         this.canvas = canvas;
@@ -368,42 +430,56 @@ export class HudView {
     }
 
     /**
-     * The level title on its own rounded plate, centred at the top (see TITLE_PILL_W for
-     * what makes the centre safe). 42px, not the counter's 52: at three digits a bolder
-     * setting would run past the plate's edge.
+     * The level title on its own lifted plate, centred at the top (see TITLE_PILL_W for what
+     * makes the centre safe). 46px against the counter's 54 -- it is the quieter of the two,
+     * because the number is the one that changes.
      */
     private buildTitlePill(canvas: Node, x: number, line: number): Label {
-        const pill = roundedSprite('TitlePill', TITLE_PILL_W, TITLE_PILL_H, PILL_BG);
-        canvas.addChild(pill);
-        pill.setPosition(x, line, 0);
-        const label = makeLabel(pill, 'LevelLabel', 42, 0);
+        const { holder, face } = liftedPill('TitlePill', TITLE_PILL_W, TITLE_PILL_H);
+        canvas.addChild(holder);
+        holder.setPosition(x, line, 0);
+        const label = makeLabel(face, 'LevelLabel', 46, 0);
         label.color = TITLE_INK;
         label.isBold = true;
         return label;
     }
 
     /**
-     * The remaining-passenger readout: a white rounded pill on the left, one row under the
-     * title, holding a huddle of passenger dots, a small caption, and a big count. It
-     * replaces a bare centred line of text, which read as debug output rather than a HUD.
+     * The remaining-passenger readout: a lifted plate on the left, one row under the title,
+     * holding the passenger icon in its own well, a small caption, and a big count.
+     *
+     * The ICON SITS IN A WELL now -- a pale disc behind the three orange dots. Loose dots on a
+     * white plate read as three dots; the same dots inside a disc read as an icon, and it gives
+     * the plate a left edge to start from instead of the number floating in the middle of it.
+     * Three dots in a huddle is still all the passenger that survives at this size: a drawn
+     * figure would be a smudge.
      */
     private buildPassengerPill(canvas: Node, w: number, margin: number, y: number): Label {
-        const pill = roundedSprite('PaxPill', PILL_W, PILL_H, PILL_BG);
-        canvas.addChild(pill);
-        pill.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
+        const { holder, face } = liftedPill('PaxPill', PILL_W, PILL_H);
+        canvas.addChild(holder);
+        holder.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
 
-        // Three dots in a huddle is all the passenger icon that survives at this size —
-        // a drawn figure would just be a smudge.
-        for (const [dx, dy, d] of [[-13, 6, 24], [13, 6, 24], [0, -12, 27]] as const) {
+        const well = dotSprite('paxwell', PILL_WELL_D, PILL_WELL);
+        face.addChild(well);
+        well.setPosition(-PILL_W / 2 + PILL_WELL_D / 2 + 10, 0, 0);
+        for (const [dx, dy, d] of [[-11, 5, 21], [11, 5, 21], [0, -11, 24]] as const) {
             const dot = dotSprite('paxdot', d, PILL_ICON);
-            pill.addChild(dot);
-            dot.setPosition(-68 + dx, dy, 0);
+            well.addChild(dot);
+            dot.setPosition(dx, dy, 0);
         }
 
-        const caption = makeLabel(pill, 'PaxCaption', 24, 23, 34);
+        // The caption and the number share an x and are read as one unit -- the caption is the
+        // label for the number under it. That x is the MIDDLE of the space the well leaves,
+        // worked out rather than nudged: at four digits and 54px bold the count is about 120
+        // wide, and centring it here leaves it about 22 clear of the well on one side and of
+        // the plate's edge on the other. A guessed offset was 62 units too far left and ran
+        // the number through the icon.
+        const wellRight = -PILL_W / 2 + 10 + PILL_WELL_D;
+        const textX = (wellRight + PILL_W / 2) / 2;
+        const caption = makeLabel(face, 'PaxCaption', 22, 24, textX);
         caption.string = '剩余乘客';
         caption.color = PILL_CAPTION;
-        const count = makeLabel(pill, 'PaxCount', 52, -18, 34);
+        const count = makeLabel(face, 'PaxCount', 54, -17, textX);
         count.color = PILL_INK;
         count.isBold = true;
         return count;
@@ -718,6 +794,7 @@ export class HudView {
     }
 
     setLevel(id: number): void {
+        this.levelId = id;
         // No spaces around the number: the title has a plate to fit inside, and at three
         // digits the spaced form runs past its edge.
         this.levelLabel.string = `第${id}关`;
@@ -762,6 +839,11 @@ export class HudView {
         scrim.addComponent(UIOpacity);
         this.canvas.addChild(scrim);
 
+        // Outside the panel node, so the entrance scale does not scale the glow with it.
+        const burst = burstSprite('WinBurst', WIN_BURST_D, WIN_BURST);
+        scrim.addChild(burst);
+        tween(burst).by(WIN_BURST_TURN, { angle: 360 }).repeatForever().start();
+
         const panel = new Node('WinPanel');
         panel.layer = Layers.Enum.UI_2D;
         panel.addComponent(UITransform);
@@ -793,15 +875,20 @@ export class HudView {
             this.winStars.push(holder);
         }
 
-        const title = makeLabel(plate, 'WinTitle', 84, -46);
+        // 84, not 92, and the caption a row lower: at 92 the title's line box (1.2x the font)
+        // reached from 9 up to 119 against the stars' bottom edge at 136 and DOWN through the
+        // caption's box. The three of them now clear each other by 13 to 24 units.
+        const title = makeLabel(plate, 'WinTitle', 84, 72);
         title.color = TITLE_INK;
         title.isBold = true;
+        const caption = makeLabel(plate, 'WinCaption', 30, -14);
+        caption.color = WIN_CAPTION;
 
         const cta = new Node('WinCta');
         cta.layer = Layers.Enum.UI_2D;
         cta.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
         plate.addChild(cta);
-        cta.setPosition(0, -148, 0);
+        cta.setPosition(0, -112, 0);
         const ctaBase = roundedSprite(
             'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
         );
@@ -834,6 +921,10 @@ export class HudView {
         const plate = panel.getChildByName('plate')!;
         plate.getChildByName('WinTitle')!.getComponent(Label)!.string =
             hasNext ? '过关!' : '全部通关!';
+        // The caption is the only place the level's own number appears once the board is
+        // cleared, and it is what stops the panel being three words on a card.
+        plate.getChildByName('WinCaption')!.getComponent(Label)!.string =
+            hasNext ? `第 ${this.levelId} 关完成` : '十关全部完成';
         plate.getChildByName('WinCta')!.getChildByName('face')!
             .getChildByName('WinCtaLabel')!.getComponent(Label)!.string =
             hasNext ? '点击进入下一关' : '点击重玩';
@@ -873,6 +964,19 @@ export class HudView {
                 .to(0.1, { scale: Vec3.ONE })
                 .start();
         }
+
+        // The button breathes, and that is the only reason it reads as the thing to do next --
+        // it cannot be a hit target (a tap anywhere advances), so movement is all it has.
+        const cta = plate.getChildByName('WinCta')!;
+        Tween.stopAllByTarget(cta);
+        cta.setScale(Vec3.ONE);
+        tween(cta)
+            .delay(0.5)
+            .to(0.7, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'sineInOut' })
+            .to(0.7, { scale: Vec3.ONE }, { easing: 'sineInOut' })
+            .union()
+            .repeatForever()
+            .start();
     }
 
     /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */

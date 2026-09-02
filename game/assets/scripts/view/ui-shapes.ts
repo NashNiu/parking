@@ -25,6 +25,21 @@ const STAR_SIZE = 128;
 const STAR_WAIST = 0.475;
 
 /**
+ * The sunburst: alternating wedges from the centre, fading out before the rim.
+ *
+ * It is drawn very large and very faint -- a glow behind the win panel, turning slowly -- so it
+ * is painted small and the falloff does the work. A hard-edged wedge scaled 8x would be a
+ * blurry hard edge, which looks like a mistake; a wedge that fades radially scaled 8x looks
+ * like light, which is what it is for.
+ *
+ * BURST_FADE is where the fade starts, as a fraction of the radius, and the alpha runs to zero
+ * at the rim. The centre is left solid: a burst with a hole in it reads as a ring.
+ */
+const BURST_SIZE = 128;
+const BURST_SPOKES = 12;
+const BURST_FADE = 0.30;
+
+/**
  * One rounded frame per corner radius asked for, painted on demand.
  *
  * It used to be a single 32px frame with a radius of 15 -- half its width, so the painted
@@ -42,6 +57,7 @@ const STAR_WAIST = 0.475;
 const roundFrames = new Map<number, SpriteFrame>();
 let dotFrame: SpriteFrame | null = null;
 let starFrame: SpriteFrame | null = null;
+let burstFrame: SpriteFrame | null = null;
 
 /**
  * White pixels whose alpha comes from `coverage`, evaluated at each pixel centre and
@@ -153,6 +169,29 @@ function starCoverage(size: number): (x: number, y: number) => number {
     };
 }
 
+/**
+ * Coverage for `BURST_SPOKES` wedges of a `size` texture, alternating on and off around the
+ * circle, with a radial falloff from BURST_FADE out to the rim.
+ *
+ * The wedge edges are left HARD in angle and soft in radius. Softening them in angle too would
+ * need a per-pixel angular width, which is what an actual antialiased shader does; at the size
+ * this is drawn -- a faint glow eight times the texture's width -- the magnification is the
+ * antialiasing.
+ */
+function burstCoverage(size: number): (x: number, y: number) => number {
+    const c = size / 2;
+    return (x, y) => {
+        const px = x - c, py = y - c;
+        const d = Math.hypot(px, py) / c;
+        if (d > 1) return 0;
+        const wedge = Math.floor(
+            ((Math.atan2(py, px) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / BURST_SPOKES),
+        );
+        if (wedge % 2 === 1) return 0;
+        return d <= BURST_FADE ? 1 : (1 - d) / (1 - BURST_FADE);
+    };
+}
+
 function spriteNode(
     name: string, w: number, h: number, color: Color, frame: SpriteFrame, type: number,
 ): Node {
@@ -207,4 +246,12 @@ export function dotSprite(name: string, d: number, color: Color): Node {
 export function starSprite(name: string, d: number, color: Color): Node {
     if (!starFrame) starFrame = frameFrom(paint(STAR_SIZE, starCoverage(STAR_SIZE)), STAR_SIZE);
     return spriteNode(name, d, d, color, starFrame, Sprite.Type.SIMPLE);
+}
+
+/** A radiating sunburst `d` units across, tinted `color`. See `burstCoverage`. */
+export function burstSprite(name: string, d: number, color: Color): Node {
+    if (!burstFrame) {
+        burstFrame = frameFrom(paint(BURST_SIZE, burstCoverage(BURST_SIZE)), BURST_SIZE);
+    }
+    return spriteNode(name, d, d, color, burstFrame, Sprite.Type.SIMPLE);
 }
