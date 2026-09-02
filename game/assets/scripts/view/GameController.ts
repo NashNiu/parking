@@ -46,7 +46,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0902-07';
+const BUILD_TAG = 'build 0902-08';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -184,6 +184,16 @@ const DRIVE_SPEED_MAX_MULT = 1.6;
  * is waiting out.
  */
 const ARRIVE_TURN_TIME = 0.1;
+
+/**
+ * Bare board between a car driving down the side of the lot and the outermost parked cars, in
+ * board units. See `driveSideX`, which is where the trade this pays for is set out.
+ *
+ * ZERO means "just touching", which is what answers the report that the mover covered the cars
+ * parked along the edge; every unit of it is paid for out of the driving car's own visible
+ * width, so it is deliberately not padded further.
+ */
+const PASS_CLEARANCE = 0;
 
 /**
  * How far toward the camera a car rides while it is out on the ring road, in board units.
@@ -403,15 +413,23 @@ export class GameController extends Component {
      * The x a car DRIVES at down the side of the lot, which is no longer the side lane's own
      * centreline.
      *
-     * The ring road is drawn around the slab, and the slab now reaches 93% of the screen --
-     * so the side lane's centreline sits at 4.98 against a frame half-width of 4.67, and a
-     * car on it showed 0.016 of its 0.652-wide body. It was not "mostly hidden", it was gone.
+     * The ring road is drawn around the slab, and the slab reaches 93% of the screen -- so the
+     * side lane's centreline sits at 4.98 against a frame half-width of 4.67, and a car on it
+     * showed 0.016 of its 0.652-wide body. It was not "mostly hidden", it was gone.
      *
-     * There is no corridor that satisfies everything: the parked cars reach 4.208 and the
-     * frame ends at 4.67, which is 0.462 of room for a body 0.652 across. So the choice is
-     * between a car that is partly off screen and one that passes over the outermost parked
-     * cars, and a car driving OUT of a car park passing close to the parked ones is the
-     * normal-looking half of that pair. Fully visible wins.
+     * THERE IS NO CORRIDOR THAT SATISFIES EVERYTHING, and the arithmetic is worth keeping
+     * because it is the whole decision. The outermost parked cars reach 4.21 and the frame ends
+     * at 4.67, so a body 0.652 across has 0.46 of room and needs 0.65. Three positions:
+     *
+     *   4.28  fully on screen, overlapping the parked cars by 0.23 -- a third of the car
+     *   4.54  clear of the parked cars, with 0.19 of the car past the frame edge
+     *   4.98  the drawn lane, 0.016 of the car on screen
+     *
+     * It shipped at 4.28 with "fully visible wins", and that came back as the mover covering
+     * the cars parked along the edge. So it is at 4.54 now: PASS_CLEARANCE is the knob, and
+     * `Math.max` is what expresses "as far out as it takes, but no further" -- on a viewport
+     * where the frame is roomier than the lot, the fully-visible bound wins on its own and
+     * nothing is clipped.
      *
      * Measured from the biggest body rather than each car's own, so every car takes the same
      * line -- cars of three sizes each on their own lane would read as three roads.
@@ -765,12 +783,21 @@ export class GameController extends Component {
         this.boardScale = scale;
         const lotH = lotHeight(level.lot.h, scale);
         const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * lotHalfW);
-        // Pulled in off the side lane by half the widest body plus a hair, so the whole car
-        // is inside the frame while it drives. See `driveSideX`.
+        // How far out the driving line goes, between the two bounds `driveSideX` describes:
+        // far enough out to clear the outermost parked cars, and never past the lane the road
+        // is actually drawn on. `parkedReach` is where a car in the outermost column ends --
+        // core keeps every footprint inside the lot, so the lot's own half-width IS that
+        // reach, and it is the GRID's width, not the slab's (the slab is widened past it for
+        // looks; see `lotW`).
         const EDGE_PAD = 0.06;
+        const bodyWid = CAP_BOX.big.wid * CAR_SCALE * scale;
+        const parkedReach = (level.lot.w * scale) / 2;
         this.driveSideX = Math.min(
             lotW / 2 + RING_OFF,
-            frame.halfW - (CAP_BOX.big.wid * CAR_SCALE * scale) / 2 - EDGE_PAD,
+            Math.max(
+                frame.halfW - bodyWid / 2 - EDGE_PAD,
+                parkedReach + bodyWid / 2 + PASS_CLEARANCE,
+            ),
         );
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
