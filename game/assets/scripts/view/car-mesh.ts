@@ -86,7 +86,7 @@ const BODY_CORNER = 0.10;
 /** The dark rim: the body outline grown a little, more across than along. */
 const EDGE_GROW_ALONG = 1.015;
 const EDGE_GROW_ACROSS = 1.075;
-const EDGE_SHADE = 0.52;
+const EDGE_SHADE = 0.55;
 
 /**
  * The roof, as concentric rings of the body outline whose NORMALS tilt outward.
@@ -150,11 +150,23 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
  * a PERSPECTIVE camera broke, and it broke them because its error was position-dependent; a
  * uniform translation is a different animal. See the camera note in the README.
  *
+ * IT HAS TO READ AS THE CAR, NOT AS A SHADOW, and that is what SKIRT_SHADE is for. The first
+ * version at 0.44 was too dark by half: against a pale lot floor a band that dark reads as a
+ * hole under the car, and with the blob shadow immediately below it the two merged into one dark
+ * smear -- reported back as "the shadow makes the car look strange", which was the right
+ * diagnosis. A side face in shade is still plainly the same paint, so 0.72. The roof's own rim
+ * (EDGE_SHADE) is left DARKER than the wall on purpose: it then reads as the fold between the
+ * two rather than as an outline around both.
+ *
+ * SHORTER, TOO. 0.34 of the car's width was tall enough that the wall competed with the roof for
+ * the eye instead of supporting it. Height in a flat illustration is carried by the wall being
+ * unmistakably a wall, not by it being big.
+ *
  * A FRACTION OF THE CAR'S WIDTH, not a world distance, so the three caps stay proportional and
  * go on sharing one mesh.
  */
-const SKIRT_DROP = 0.34;
-const SKIRT_SHADE = 0.44;
+const SKIRT_DROP = 0.18;
+const SKIRT_SHADE = 0.72;
 
 /**
  * Wheels, at (±x, ±y). They belong to the SIDE WALL, not to the roof: a wheel meets the ground,

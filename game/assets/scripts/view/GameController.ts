@@ -45,7 +45,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0902-01';
+const BUILD_TAG = 'build 0902-02';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build

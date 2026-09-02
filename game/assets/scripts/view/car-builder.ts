@@ -54,7 +54,10 @@ function boardToLocal(angle: number, dx: number, dy: number): [number, number] {
  * is measured from there. Change the light's pitch and every shadow on the board follows.
  */
 function addShadow(body: Node, len: number, wid: number, angle: number, foot: number): void {
-    const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
+    // Tighter than the car, not wider. A shadow the full width of the body fans out past the
+    // side wall and adds a SECOND dark shape below it, which is what made the two read as one
+    // smear; drawn narrower it stays a contact shadow and mostly hides under the wall.
+    const shadow = blobShadow('shadow', len * 0.92, wid * 0.90);
     const throwDown = SHADOW_LIFT * Math.tan(-KEY_LIGHT_PITCH_DEG * Math.PI / 180);
     const [dx, dy] = boardToLocal(angle, 0, foot - throwDown);
     shadow.setPosition(dx, dy, -0.06);

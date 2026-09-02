@@ -317,7 +317,7 @@ def render(out_path):
 
         # The shadow is thrown from the top face, which is already `lift` up.
         foot = -K['SKIRT_DROP']
-        fill(to_px(ellipse(0, foot - throw / wd, 0.94, 1.08)), (0, 0, 0), SHADOW_ALPHA)
+        fill(to_px(ellipse(0, foot - throw / wd, 0.92, 0.90)), (0, 0, 0), SHADOW_ALPHA)
         for pts, col in wall:                                                # the side wall
             fill(to_px(raise_(pts, foot)), col)
 
