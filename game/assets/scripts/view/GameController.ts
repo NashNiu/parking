@@ -14,7 +14,7 @@ import { GridView } from './grid-view';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
-import { setupEnvironment } from './environment';
+import { setupEnvironment, setupAntiAliasing } from './environment';
 import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { CAR_HEIGHT } from './car-mesh';
@@ -46,7 +46,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0902-09';
+const BUILD_TAG = 'build 0902-10';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -811,17 +811,19 @@ export class GameController extends Component {
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
-        // NO `setupAntiAliasing(this.cam)`. It hangs a PostProcess component off the board
-        // camera, and post-process is a FULL-SCREEN PASS -- on a phone at 1170x2532 that is
-        // 3.0M pixels read and written again, every frame, on top of the scene. It went in to
-        // answer a jagged-edges report and was flagged then as needing a device check it
-        // never got; the device now measures 8fps against the simulator's 49, and this is the
-        // most expensive thing in the frame that buys the least.
+        // FXAA, BACK ON, and the frame rate is the whole argument in both directions. It is a
+        // FULL-SCREEN PASS: on a phone at 1170x2532 that is 3.0M pixels read and written
+        // again every frame, on top of the scene. It was taken out when the device measured
+        // 8fps against the simulator's 49, as the most expensive thing in the frame that
+        // bought the least. The device now reports 60fps with 60 cars on the board, so the
+        // budget it was competing for exists again -- and what it buys came back as a report
+        // in almost the same words the note predicted: the passengers look "over-sharpened,
+        // grainy". A crowd of small spheres with no AA is a field of staircased edges.
         //
-        // One line to put back if the jaggies matter more than the frame rate. The engine
-        // module (`custom-pipeline-post-process` in settings/v2/packages/engine.json) is
-        // still compiled in, so restoring it needs nothing but this call.
-        setupBackground(this.boardRoot);
+        // WATCH THE ON-SCREEN FPS after changing this. It is one line either way, and the
+        // engine module (`custom-pipeline-post-process` in settings/v2/packages/engine.json)
+        // stays compiled in whichever way it goes.
+        setupAntiAliasing(this.cam);
         setupStage(this.boardRoot, lotW, lotH, GRID_Y);
         setupRoads(this.boardRoot, this.ring, ROAD_H);
 
@@ -923,6 +925,13 @@ export class GameController extends Component {
         // board it has to hold -- and the y it has to look at -- have both just changed. Fit
         // straight away too, so a level's first frame is already framed rather than being
         // one frame late.
+        // The ground panel is built HERE, after the content bounds above, because it is sized
+        // and centred from them -- see `setupBackground`. Its depth is what orders it, not the
+        // order it was added in, so coming last costs nothing.
+        setupBackground(
+            this.boardRoot, frame.halfW, Math.max(frame.halfH, this.needHalfH),
+            (this.contentTop + this.contentBottom) / 2,
+        );
         this.fitAspect = 0;
         this.fitCamera();
 

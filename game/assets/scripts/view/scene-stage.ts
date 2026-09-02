@@ -74,12 +74,32 @@ export interface RingRoad {
 
 /**
  * The ground: one big panel in the base colour with a white grid over it, both parented
- * under `root` (the tilted boardRoot) and sized to cover the frame at their depth. The
- * grid is a single merged mesh — 52 separate line nodes would be 52 draw calls for
- * something the eye reads as one texture.
+ * under `root` (the tilted boardRoot). The grid is a single merged mesh — 60-odd separate
+ * line nodes would be 60 draw calls for something the eye reads as one texture.
+ *
+ * SIZED AND CENTRED FROM THE FRAME, where it used to be a hard-coded 13 x 21 centred on
+ * board y = -1. Both halves of that were wrong once the board tilted and the lot grew:
+ *
+ *  - The frame is about 25.7 board units tall on a phone (2 * orthoHeight / cos(tilt) --
+ *    board units up the screen foreshorten, so the camera holds MORE of them than of world
+ *    units), against a panel 21 tall. Nearly five units short.
+ *  - The camera centres on the CONTENT's midpoint, not on board y = 0, and that midpoint
+ *    moves down whenever the lot grows. So the panel's own centre has to follow it or the
+ *    shortfall all lands at the top.
+ *
+ * Both together left a band across the top of the screen with NO GRID on it. The ground
+ * COLOUR was never missing there -- `setupCamera`'s clear colour is exactly GROUND, which is
+ * why this went unnoticed for so long -- what was missing was the grid over it, and the
+ * report was "extend the background at the top of the screen up to the edge".
+ *
+ * MARGIN, not an exact fit: a viewport resize re-runs `fitCamera` and can only ever zoom
+ * FURTHER out, and it does not rebuild the board -- so the panel has to be bigger than the
+ * frame it was built for, by more than a plausible resize.
  */
-export function setupBackground(root: Node): void {
-    const W = 13, H = 21, cy = -1;
+const BG_MARGIN = 2;
+
+export function setupBackground(root: Node, halfW: number, halfH: number, cy: number): void {
+    const W = 2 * (halfW + BG_MARGIN), H = 2 * (halfH + BG_MARGIN);
     const ground = makeSlab('Ground', W, H, 0.35, GROUND);
     ground.setPosition(0, cy, GROUND_Z);
     root.addChild(ground);

@@ -151,6 +151,14 @@ export function instancedLitMaterial(color: Color): Material {
             m.initialize({ effectAsset: eff, defines: { USE_INSTANCING: true } });
             if (m.passes && m.passes.length > 0) {
                 m.setProperty('mainColor', color);
+                // ROUGH, 0.9 against the effect's default 0.5, for the same reason the drawn
+                // car's roof is (see `vertexColorMaterial`) and for a symptom that reads quite
+                // differently at this size. The only thing painted with this material is the
+                // crowd, and a passenger is a sphere about nine pixels across: at 0.5 each one
+                // collects a tight specular hotspot, and a couple of hundred hotspots on a
+                // packed ring read as SPECKLE. Reported as the passengers looking grainy,
+                // alongside the aliasing that FXAA answers -- two causes, one symptom.
+                m.setProperty('roughness', 0.9);
                 mat = m;
             }
         } catch {

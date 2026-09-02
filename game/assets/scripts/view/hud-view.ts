@@ -1,5 +1,5 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
-import { roundedSprite, dotSprite } from './ui-shapes';
+import { roundedSprite, dotSprite, starSprite } from './ui-shapes';
 
 declare const wx: any;
 
@@ -158,6 +158,46 @@ const PROMPT_X_BG = new Color(232, 236, 246, 255);
 const PROMPT_X_INK = new Color(122, 133, 160, 255);
 
 /**
+ * The win panel, which is the one piece of CELEBRATION on this HUD.
+ *
+ * It replaces two bare Labels floating over the board -- big outlined type plus three star
+ * GLYPHS from the system font -- reported as needing "some cartoon and some depth". Neither
+ * was reachable from where it was: type with a rim has no depth to give, and a star glyph is
+ * a thin outline-weight shape at whatever proportions the device's font happens to draw it.
+ *
+ * So it is built out of the vocabulary the unlock prompt already established -- a scrim, a
+ * card with a darker plate behind it, and a key drawn as two plates so it has a top face --
+ * plus real star SHAPES (`starSprite`) each sitting on its own darker copy, which is the same
+ * two-plate trick a third time. That is where the depth comes from: one light source, implied
+ * by every element being offset the same way against a darker twin, on a HUD that otherwise
+ * has none.
+ *
+ * The MIDDLE star is bigger and higher, and lands last. Three identical stars in a row read as
+ * a progress bar; an arch with the emphasis in the middle reads as a prize.
+ *
+ * A LIGHTER scrim than the prompt's 178. The prompt has to swallow taps and be answered; this
+ * one is a curtain call over a board the player has just emptied, and there is nothing left
+ * behind it worth hiding. It also must NOT behave modally: the level advances on a tap
+ * ANYWHERE (see `onTouchEnd`), so this panel deliberately has no hit test of its own and the
+ * button is a drawing, not a target -- tapping it works only because tapping anything works.
+ */
+const WIN_W = 560;
+const WIN_H = 440;
+const WIN_R = 44;
+const WIN_SCRIM = new Color(10, 14, 26, 96);
+const WIN_STAR_D = 108;
+const WIN_STAR_MID_D = 136;
+const WIN_STAR_PITCH = 132;
+const WIN_STAR_Y = 96;
+const WIN_STAR_MID_Y = 124;
+/** How far each star's darker twin peeks out below it. */
+const WIN_STAR_LIFT = 7;
+const WIN_STAR = new Color(255, 201, 52, 255);
+const WIN_STAR_BASE = new Color(206, 140, 18, 255);
+const WIN_STAR_OFF = new Color(219, 224, 236, 255);
+const WIN_STAR_OFF_BASE = new Color(183, 191, 209, 255);
+
+/**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
  * reading x1 or x2.
  *
@@ -251,7 +291,9 @@ export class HudView {
     private levelLabel: Label;
     private progressLabel: Label;
     private bannerLabel: Label;
-    private starLabels: Label[] = [];
+    /** The win panel's scrim and the three star nodes on it, built on first win. */
+    private win: Node | null = null;
+    private winStars: Node[] = [];
     /** The toast pill and its parts, built on first use. See `showToast`. */
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
@@ -302,12 +344,6 @@ export class HudView {
         this.bannerLabel.outlineColor = new Color(255, 255, 255, 235);
         this.bannerLabel.outlineWidth = 5;
         this.bannerLabel.node.active = false;
-        for (let i = 0; i < 3; i++) {
-            const label = makeLabel(canvas, `Star${i}`, 60, 100);
-            label.node.setPosition((i - 1) * 80, 100, 0);
-            label.node.active = false;
-            this.starLabels.push(label);
-        }
     }
 
     /**
@@ -696,16 +732,14 @@ export class HudView {
     }
 
     /**
-     * Moves the banner and the stars to the end of the canvas's child list, so they
-     * render on top of every seat chip. `newSeatChip` appends chips at runtime as cars
-     * park, which makes each one a later — and therefore higher-rendering — sibling of
-     * the banner and stars, which are constructed early. Raising both at show time (once
-     * the game is over, no further chip can appear) undoes that ordering.
+     * Moves the banner to the end of the canvas's child list, so it renders on top of every
+     * seat chip. `newSeatChip` appends chips at runtime as cars park, which makes each one a
+     * later — and therefore higher-rendering — sibling of the banner, which is constructed
+     * early. Raising it at show time (once the game is over, no further chip can appear)
+     * undoes that ordering. `showWin` does the same for the win panel's scrim.
      */
     private raiseBannerToFront(): void {
-        const lastIndex = this.canvas.children.length - 1;
-        this.bannerLabel.node.setSiblingIndex(lastIndex);
-        for (const label of this.starLabels) label.node.setSiblingIndex(lastIndex);
+        this.bannerLabel.node.setSiblingIndex(this.canvas.children.length - 1);
     }
 
     showBanner(text: string): void {
@@ -715,26 +749,130 @@ export class HudView {
     }
 
     /**
-     * Victory panel: big banner + a row of 3 stars, filled left-to-right up to
-     * `starCount`, each popping in in turn. `hasNext` switches the call-to-action
-     * between advancing and replaying, matching what the next tap will actually do.
+     * The win panel, built once and kept. See WIN_W for what it is made of and why.
+     *
+     * The star ORDER on screen is left, middle, right; the order in `winStars` is the order
+     * they are ANIMATED in -- left, right, middle -- so `showWin` can just stagger by index.
+     * Filling left-to-right up to `starCount` reads off the x positions, not the array, so
+     * the two are kept separate rather than one being inferred from the other.
+     */
+    private buildWinPanel(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('WinScrim', w * 2, h * 2, WIN_SCRIM, 2);
+        scrim.addComponent(UIOpacity);
+        this.canvas.addChild(scrim);
+
+        const panel = new Node('WinPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
+        scrim.addChild(panel);
+
+        const shadow = roundedSprite('shadow', WIN_W, WIN_H, PROMPT_SHADOW, WIN_R);
+        panel.addChild(shadow);
+        shadow.setPosition(0, -PROMPT_SHADOW_DROP, 0);
+        const plate = roundedSprite('plate', WIN_W, WIN_H, PROMPT_BG, WIN_R);
+        panel.addChild(plate);
+
+        // Left, right, middle -- see the note above.
+        const slots: { x: number; y: number; d: number }[] = [
+            { x: -WIN_STAR_PITCH, y: WIN_STAR_Y, d: WIN_STAR_D },
+            { x: WIN_STAR_PITCH, y: WIN_STAR_Y, d: WIN_STAR_D },
+            { x: 0, y: WIN_STAR_MID_Y, d: WIN_STAR_MID_D },
+        ];
+        for (let i = 0; i < slots.length; i++) {
+            const { x, y, d } = slots[i];
+            const holder = new Node(`WinStar${i}`);
+            holder.layer = Layers.Enum.UI_2D;
+            holder.addComponent(UITransform);
+            plate.addChild(holder);
+            holder.setPosition(x, y, 0);
+            const base = starSprite('base', d, WIN_STAR_BASE);
+            holder.addChild(base);
+            base.setPosition(0, -WIN_STAR_LIFT, 0);
+            holder.addChild(starSprite('face', d, WIN_STAR));
+            this.winStars.push(holder);
+        }
+
+        const title = makeLabel(plate, 'WinTitle', 84, -46);
+        title.color = TITLE_INK;
+        title.isBold = true;
+
+        const cta = new Node('WinCta');
+        cta.layer = Layers.Enum.UI_2D;
+        cta.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
+        plate.addChild(cta);
+        cta.setPosition(0, -148, 0);
+        const ctaBase = roundedSprite(
+            'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
+        );
+        cta.addChild(ctaBase);
+        ctaBase.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const face = roundedSprite('face', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN, PROMPT_BTN_R);
+        cta.addChild(face);
+        const ctaLabel = makeLabel(face, 'WinCtaLabel', 44, 0);
+        ctaLabel.isBold = true;
+
+        scrim.active = false;
+        this.win = scrim;
+    }
+
+    /**
+     * Victory panel: three stars filled left-to-right up to `starCount`, over a card that
+     * scales in, with the stars popping and spinning into place behind it. `hasNext` switches
+     * the call to action between advancing and replaying, matching what the next tap will
+     * actually do.
+     *
+     * Every tween is stopped before it is restarted and every property it will touch is set
+     * explicitly first: this panel can be shown again without the scene being rebuilt (win,
+     * replay, win), and a half-finished pop from last time would otherwise leave a star at
+     * whatever scale it had got to.
      */
     showWin(starCount: number, hasNext: boolean = false): void {
-        this.bannerLabel.string = hasNext ? '过关!\n点击进入下一关' : '全部通关!\n点击重玩';
-        this.bannerLabel.node.active = true;
-        this.raiseBannerToFront();
-        this.starLabels.forEach((label, i) => {
-            const filled = i < starCount;
-            label.string = filled ? '★' : '☆'; // ★ / ☆
-            label.color = filled ? new Color(255, 210, 60) : new Color(120, 120, 120);
-            label.node.active = true;
-            label.node.setScale(0.01, 0.01, 0.01);
-            tween(label.node)
-                .delay(i * 0.12)
-                .to(0.18, { scale: new Vec3(1.3, 1.3, 1.3) }, { easing: 'backOut' })
-                .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
+        if (!this.win) this.buildWinPanel();
+        const scrim = this.win!;
+        const panel = scrim.children[0];
+        const plate = panel.getChildByName('plate')!;
+        plate.getChildByName('WinTitle')!.getComponent(Label)!.string =
+            hasNext ? '过关!' : '全部通关!';
+        plate.getChildByName('WinCta')!.getChildByName('face')!
+            .getChildByName('WinCtaLabel')!.getComponent(Label)!.string =
+            hasNext ? '点击进入下一关' : '点击重玩';
+
+        scrim.active = true;
+        // Past every seat chip: chips are appended as cars park, so they are later siblings
+        // than anything built in the constructor. Same reason as the banner and the prompt.
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        const fade = scrim.getComponent(UIOpacity)!;
+        Tween.stopAllByTarget(fade);
+        fade.opacity = 0;
+        tween(fade).to(0.14, { opacity: 255 }).start();
+
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.82, 0.82, 1);
+        tween(panel)
+            .to(0.16, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'backOut' })
+            .to(0.09, { scale: Vec3.ONE })
+            .start();
+
+        for (let i = 0; i < this.winStars.length; i++) {
+            const star = this.winStars[i];
+            // Slot order is left, right, middle (see `buildWinPanel`), and the fill is by
+            // POSITION: the middle star is the third of three, the right one the second.
+            const rank = i === 2 ? 1 : (i === 0 ? 0 : 2);
+            const on = rank < starCount;
+            star.getChildByName('face')!.getComponent(Sprite)!.color =
+                on ? WIN_STAR : WIN_STAR_OFF;
+            star.getChildByName('base')!.getComponent(Sprite)!.color =
+                on ? WIN_STAR_BASE : WIN_STAR_OFF_BASE;
+            Tween.stopAllByTarget(star);
+            star.setScale(0.01, 0.01, 1);
+            star.angle = -50;
+            tween(star)
+                .delay(0.16 + i * 0.11)
+                .to(0.2, { scale: new Vec3(1.22, 1.22, 1), angle: 0 }, { easing: 'backOut' })
+                .to(0.1, { scale: Vec3.ONE })
                 .start();
-        });
+        }
     }
 
     /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */
@@ -742,12 +880,11 @@ export class HudView {
         this.bannerLabel.string = '游戏失败\n点击重试';
         this.bannerLabel.node.active = true;
         this.raiseBannerToFront();
-        for (const label of this.starLabels) label.node.active = false;
     }
 
-    /** Hides the banner and any win-panel stars; used on restart to clear whichever panel was shown. */
+    /** Takes down whichever end-of-level panel was shown. Safe before either has been built. */
     hideBanner(): void {
         this.bannerLabel.node.active = false;
-        for (const label of this.starLabels) label.node.active = false;
+        if (this.win) this.win.active = false;
     }
 }
