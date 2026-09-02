@@ -138,9 +138,23 @@ const instancedCache = new Map<string, Material>();
  * but that is a different property, already true of `litMaterial`'s own cache, and at
  * most cosmetic.) If `mainColor` ever stops being immutable here, this sharing stops
  * being safe too.
+ *
+ * `vertexTint` keeps `mainColor` but ALSO multiplies in the mesh's vertex colours, which is a
+ * different thing from `vertexColorMaterial` below: there the mesh carries the whole colour and
+ * `mainColor` is white, here the mesh carries a per-vertex MULTIPLIER on a colour the caller
+ * still owns. That is what the passenger figures need -- one shared mesh whose face patch is
+ * darker than its body, painted whatever colour the passenger happens to be.
+ *
+ * A tint of v behaves exactly like shading the colour by v in sRGB, which is worth stating
+ * because it is not obvious: builtin-standard computes `albedo = linear(mainColor) *
+ * SRGBToLinear(v_color)` and Cocos uses gamma 2.0 on both sides, so the product is
+ * (mainColor * v) squared -- the same number `linear(shade(mainColor, v))` gives.
+ *
+ * A tinted material on a mesh with NO colour attribute reads v_color as zero and comes out
+ * black, so the two are not interchangeable per caller; see `buildPaxDot`, which stays plain.
  */
-export function instancedLitMaterial(color: Color): Material {
-    const k = key(color);
+export function instancedLitMaterial(color: Color, vertexTint = false): Material {
+    const k = vertexTint ? `${key(color)},tint` : key(color);
     const hit = instancedCache.get(k);
     if (hit) return hit;
     let mat: Material | null = null;
@@ -148,7 +162,12 @@ export function instancedLitMaterial(color: Color): Material {
     if (eff) {
         const m = new Material();
         try {
-            m.initialize({ effectAsset: eff, defines: { USE_INSTANCING: true } });
+            m.initialize({
+                effectAsset: eff,
+                defines: vertexTint
+                    ? { USE_INSTANCING: true, USE_VERTEX_COLOR: true }
+                    : { USE_INSTANCING: true },
+            });
             if (m.passes && m.passes.length > 0) {
                 m.setProperty('mainColor', color);
                 mat = m;

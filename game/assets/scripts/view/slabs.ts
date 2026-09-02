@@ -7,23 +7,52 @@ export interface MeshPart {
     normals?: number[];
     uvs?: number[];
     indices?: number[];
+    /** Optional per-vertex RGBA, four floats in 0..1 per vertex. See `mergeParts`. */
+    colors?: number[];
 }
 
-/** Merge several geometries into one mesh, i.e. one draw call for the lot. */
+/**
+ * Merge several geometries into one mesh, i.e. one draw call for the lot.
+ *
+ * EVERY OPTIONAL ATTRIBUTE IS ALL-OR-NOTHING, and it is checked rather than assumed. If one
+ * part carries uvs or colours and another does not, the merged attribute comes out SHORT --
+ * every vertex after the gap then reads the wrong entry, silently. That was a live hazard the
+ * moment a hand-built part joined the engine's primitives, which all carry uvs: `faceCap` in
+ * pax-figure.ts had to be given uvs it has no use for, and this is what would have said so.
+ *
+ * A part that wants the material's own colour asks for white; see `tinted`.
+ */
 export function mergeParts(parts: MeshPart[]): Mesh {
     const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
+    const colors: number[] = [];
+    const tinted = parts.some((g) => g.colors);
+    const mapped = parts.some((g) => g.uvs);
+    const lit = parts.some((g) => g.normals);
     let base = 0;
     for (const g of parts) {
         const vc = g.positions.length / 3;
+        if (tinted && !g.colors) {
+            throw new Error('mergeParts: some parts carry vertex colours and some do not');
+        }
+        if (mapped && !g.uvs) throw new Error('mergeParts: some parts carry uvs and some do not');
+        if (lit && !g.normals) {
+            throw new Error('mergeParts: some parts carry normals and some do not');
+        }
         for (let i = 0; i < vc; i++) {
             positions.push(g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]);
             if (g.normals) normals.push(g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]);
             if (g.uvs) uvs.push(g.uvs[i * 2], g.uvs[i * 2 + 1]);
+            if (g.colors) {
+                colors.push(g.colors[i * 4], g.colors[i * 4 + 1],
+                    g.colors[i * 4 + 2], g.colors[i * 4 + 3]);
+            }
         }
         for (const ii of (g.indices || [])) indices.push(ii + base);
         base += vc;
     }
-    return utils.createMesh({ positions, normals, uvs, indices });
+    return utils.createMesh(
+        tinted ? { positions, normals, uvs, indices, colors } : { positions, normals, uvs, indices },
+    );
 }
 
 /** Segments per rounded corner. Four is plenty at the size these slabs are drawn. */
