@@ -210,9 +210,11 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     // 42 seconds of boarding -- SHORTER than the 900 this replaces was at the old tick (76
     // seconds), so the ceiling went up and the levels got quicker at the same time.
     //
-    // A full 46-car lot runs around 900 of them, so this leaves headroom rather than sitting
-    // on the number the generator happens to produce.
-    expect(pax).toBeLessThanOrEqual(1000);
+    // 1400, raised with the lot: 60 cars on an 8x10 board run 1200 to 1350, so this still
+    // leaves headroom rather than sitting on the number the generator happens to produce.
+    // At GROUP_SIZE a tick that is about 320 ticks, or 54 seconds of boarding -- the ceiling
+    // that matters is how long a level takes to finish, and this is what it costs.
+    expect(pax).toBeLessThanOrEqual(1400);
   }
 });
 

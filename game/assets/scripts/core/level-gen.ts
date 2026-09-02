@@ -49,10 +49,29 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * old grid's "88% occupied" counted CELLS CLAIMED, and the difference between that and
  * this is exactly the ring of side air a square cell left around an oblong car.
  *
- * Both dimensions have to clear the longest body (CAP_BOX.big at 1.949) with room for it
- * to turn, which 8 does with 4.1x over.
+ * Both dimensions have to clear the longest body (CAP_BOX.big at 1.793) with room for it
+ * to turn, which 8 does with 4.5x over.
+ *
+ * 8 x 10 AS OF THIS REVISION, up from 8 x 8, and the two rows came out of vertical budget that
+ * was already going spare -- so the cars did NOT get smaller to pay for them. Two separate
+ * slacks, both measured:
+ *
+ *  - THE CELL. The view sizes one board unit from whichever budget is tighter, and those were
+ *    tied at 1.032 by construction on a phone. Tilting the board broke the tie: board units up
+ *    the screen foreshorten by cos(38), so the same frame holds 27% more board HEIGHT and the
+ *    vertical budget went to 1.3725 while the width budget stayed at 1.0325. At h = 10 the
+ *    vertical budget is 1.094, still the looser of the two, so the cell is still 1.0325 and a
+ *    car draws exactly the size it did. At 11 it would fall to 0.993 and start shrinking them,
+ *    which is the wall -- clearing it means moving the upper half of the board up (ROAD_Y),
+ *    which is a bigger change than two rows is worth.
+ *  - THE FRAME. `fitCamera` centres the content and splits whatever is left over top and
+ *    bottom, and that surplus measured about 3.8 board units on a 1170x2532 phone -- the blank
+ *    bands above the ring and below the lot. Two rows spend 2.1 of it, so the camera does not
+ *    step back and, because the lot grows DOWNWARD while the ring stays where it is, the whole
+ *    board re-centres and the ring moves UP the screen. Which is what was asked for; it is the
+ *    lot growing that does it, not the ring being moved.
  */
-export const LOT: Lot = { w: 8, h: 8 };
+export const LOT: Lot = { w: 8, h: 10 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -136,8 +155,16 @@ export interface GenParams {
  * Passengers are the other ceiling, and it moved: 46 cars run around 900 of them, which at
  * GROUP_SIZE a tick is about 225 ticks. That used to be 76 seconds of boarding and is now 38,
  * because TICK halved when the carousel sped up. The test's budget was raised to match.
+ *
+ * 60, up from 46, and it is the same pair of changes as last time rather than a lone dial: the
+ * lot went from 64 square units to 80 and medium and big bodies came down 8-9% (see LOT and
+ * CAP_BOX). Together those move the average body from 0.743 square units to 0.665, so 60 cars
+ * cover 39.9 of 80 -- 49.9%, against the 53.4% that 46 covered of 64. So this is slightly
+ * LOOSER packing than shipped, on a lot half again as roomy, which is the safe direction: the
+ * count is bounded by whether the packer can still separate everything, and the gate is the
+ * generator's own test that every car asked for is placed.
  */
-const CARS_PER_LEVEL = 46;
+const CARS_PER_LEVEL = 60;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.

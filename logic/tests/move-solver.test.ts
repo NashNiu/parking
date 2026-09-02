@@ -115,13 +115,23 @@ test('a blocker is never missed, whatever angle it sits at or how far off the la
   // check that nothing was there to hit. Dropping the blocker's own radius from the bound
   // -- the obvious way to get this wrong -- makes 29 of these 40 cases report a blocker
   // that is really there as absent, and every one of them fails here.
+  //
+  // BARE BODIES, and finely stepped. This used to walk the mover inflated by a whole
+  // CLEARANCE, which asserted a rule firstBlocker deliberately does not follow: it sweeps
+  // bare bodies on purpose, so that a car is never refused a gap that is genuinely open
+  // (see its own note, and CLEARANCE in types.ts). The inflation was there as slack against
+  // the coarse step, and it was not even sound slack -- growing ONE body by the whole
+  // clearance is a different rule from half on each once the boxes can rotate, worth up to
+  // sqrt(2) of it at 45 degrees. It went off when medium and big bodies were resized: one of
+  // these 64 cases settled 0.028 apart, which is clear, and the inflation read it as a
+  // 0.012 overlap. The step carries the slack instead, at 0.05 against a body 0.5 across.
   const mover = car({ id: 1, x: -4, y: 0, angle: 0 });
   for (const angle of [0, 23, 45, 67, 90, 134, 200, 300]) {
     for (const offset of [0, 0.2, 0.4, 0.6, 0.75, 0.8, 1.0, 1.2]) {
       const blocker = car({ id: 2, x: 0, y: offset, angle, cap: 'big' });
       if (firstBlocker(mover, [mover, blocker], LOT)) continue;
-      const body = inflate(carBox(mover), CLEARANCE);
-      for (let t = 0; t <= 9; t += 0.25) {
+      const body = carBox(mover);
+      for (let t = 0; t <= 9; t += 0.05) {
         expect(overlapMTV({ ...body, x: body.x + t }, carBox(blocker))).toBeNull();
       }
     }

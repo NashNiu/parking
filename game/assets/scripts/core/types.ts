@@ -56,11 +56,24 @@ export interface Lot { w: number; h: number }
  * work: a model AABB was fitted to a grid cell and the size fell out of the fit. Do
  * not re-derive CAP_BOX from a model at runtime -- core cannot see models, and the two
  * directions together would be a circle.
+ *
+ * THE MODELS ARE GONE, so these are simply the authored sizes now: a car is drawn from
+ * `car-mesh.ts` into whatever box this table gives it, and the guard tool that used to check
+ * them against the glb files went with the models.
+ *
+ * medium and big came DOWN in this revision, asked for as "a bit smaller": medium by 9.1% and
+ * big by 8%, both UNIFORMLY, so each keeps its proportions. Medium's aspect ratio being
+ * unchanged is load-bearing rather than tidy -- `REFERENCE_ASPECT` in car-mesh.ts is that
+ * ratio, and the drawn body's corner radius is worked out at it, so a medium car that changed
+ * shape would silently move every car's corners.
+ *
+ * It pairs with the lot growing to 8 x 10 (see LOT): smaller bodies and more board are the two
+ * halves of "park more cars", and CARS_PER_LEVEL is what spends them.
  */
 export const CAP_BOX: Record<Cap, Box> = {
   small: { len: 0.964, wid: 0.471 },
-  medium: { len: 1.772, wid: 0.567 },
-  big: { len: 1.949, wid: 0.620 },
+  medium: { len: 1.611, wid: 0.515 },
+  big: { len: 1.793, wid: 0.570 },
 };
 
 /**
