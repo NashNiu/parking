@@ -4,6 +4,7 @@ import { vertexColorMaterial } from './materials';
 import { carMesh } from './car-mesh';
 import { blobShadow } from './blob-shadow';
 import { KEY_LIGHT_PITCH_DEG } from './environment';
+import { BOARD_TILT } from './board-layout';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -45,13 +46,18 @@ function boardToLocal(angle: number, dx: number, dy: number): [number, number] {
  * one. z = -0.06 puts it under the side wall (-0.02) and over the lot surface (-0.10).
  *
  * The direction and distance come from the key light rather than from taste: a point `h` above
- * the board lands at -h * L.xy / L.z, and with the light at KEY_LIGHT_PITCH_DEG that is
- * h * tan(55°) straight down the screen. `lift` is where the top face already sits, so the throw
- * is measured from there. Change the light's pitch and every shadow on the board follows.
+ * the board lands at -h * L.xy / L.z, taken in BOARD space, which is h * tan(pitch - tilt).
+ *
+ * IN BOARD SPACE, not world -- the light is a scene node and the board is what turns under it,
+ * so the two frames differ by exactly the tilt. Written as tan(pitch) it happened to be right
+ * only while the pitch stayed larger than the tilt; once the light moved to the near side of the
+ * board (see KEY_LIGHT_PITCH_DEG) that form threw the shadow to the wrong side. Change either
+ * the pitch or the tilt and this follows both.
  */
 function addShadow(body: Node, len: number, wid: number, angle: number): void {
     const shadow = blobShadow('shadow', len * 0.94, wid * 1.02);
-    const throwDown = SHADOW_LIFT * Math.tan(-KEY_LIGHT_PITCH_DEG * Math.PI / 180);
+    const throwDown = SHADOW_LIFT
+        * Math.tan((-KEY_LIGHT_PITCH_DEG - BOARD_TILT) * Math.PI / 180);
     const [dx, dy] = boardToLocal(angle, 0, -throwDown);
     shadow.setPosition(dx, dy, -0.06);
     body.addChild(shadow);

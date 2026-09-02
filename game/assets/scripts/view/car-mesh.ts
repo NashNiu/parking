@@ -26,9 +26,11 @@ import { Color, Mesh, primitives, utils } from 'cc';
  *      reads as a decal, not as form.
  *   3. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
  *      hard point off. See the note on BODY_CORNER.
- *   4. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
- *      before the arrow does. It wants to be SMALL and PALE: a dark panel at real size reads as
- *      a hole punched in the roof, not as a window.
+ *   4. Glass ON THE WALL, as a band round the car at window height, not panels on the roof. On
+ *      a flat board the roof was the only surface there was, so the windows had to go there and
+ *      read as dark holes punched in it; with a wall to put them on they read as windows. The
+ *      band runs right round rather than stopping at the ends, which is what a vehicle looks
+ *      like from up here and is a great deal simpler than partial rings.
  *   5. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
  *      past its silhouette -- which is all a wheel is from above.
  *
@@ -146,23 +148,34 @@ const WHEEL_R = 0.35;
 const TYRE = new Color(25, 28, 34);
 
 /**
- * Glass: black at 30% over the plate beneath it, which is the topmost dome step. Composited
- * here rather than blended by the GPU -- the result is identical for a flat opaque stack, and
- * it keeps the whole car on one opaque instanced material.
+ * Glass: a band round the side wall, between GLASS_LOW and GLASS_HIGH of the car's height.
  *
- * Both the tint and the panel sizes came DOWN after seeing them on a device (42% black over
- * panels a third larger). Scaled to a forty-pixel car, a dark panel that size stops reading as
- * a window and starts reading as a hole punched through the roof -- and it was competing with
- * the arrow, which is the one thing on the car that has to be read instantly.
+ * GROWN A HAIR OUTWARD (GLASS_OUT) so it sits just proud of the wall instead of coplanar with
+ * it, which would z-fight the whole way round. It reaches past the car's silhouette by about
+ * 0.0014 world units, which is nothing.
+ *
+ * The shade is deeper than anything else on the car on purpose: the wall it sits on is already
+ * the car's darkest lit surface, so the glass has to be darker still to read as glass rather
+ * than as a slightly different panel. But only just -- the first version at 0.52 across 46% of
+ * the wall's height came out at 30% of the roof's brightness over most of the visible side, so
+ * the WALL got reported as too dark when the wall itself was fine at 58% and the glass was
+ * covering it. Measured with `tools/car-plan.py`, which prints these percentages.
  */
-const GLASS_KEEP = 0.70;
-const WINDSCREEN_X = 0.230;
-const WINDSCREEN_W = 0.095;
-const WINDSCREEN_H = 0.42;
-const REAR_WINDOW_X = -0.288;
-const REAR_WINDOW_W = 0.058;
-const REAR_WINDOW_H = 0.32;
-const WINDOW_R = 0.30;
+const GLASS_LOW = 0.40;
+const GLASS_HIGH = 0.74;
+const GLASS_OUT = 1.006;
+const GLASS_SHADE = 0.66;
+
+/**
+ * Two thin lines across the roof, at +-RAIL_X, which is clear of the arrow (it spans -0.19 to
+ * +0.15). They read as panel seams, and their job is to give the roof something for the eye to
+ * measure its curve against -- a single flat expanse of colour reads flatter than it is however
+ * well it is shaded.
+ */
+const RAIL_X = 0.34;
+const RAIL_W = 0.020;
+const RAIL_H = 0.50;
+const RAIL_SHADE = 0.84;
 
 /** The exit arrow, pointing +X (the body's own forward). */
 const ARROW_X = -0.02;
@@ -187,8 +200,19 @@ const ARROW_HEAD = 0.52;
  */
 export const CAR_HEIGHT = 0.34;
 
-/** The wall's foot, as a shade of the body: a little darker than its top, so it grades. */
-const WALL_FOOT = 0.78;
+/**
+ * The side wall's paint: lifted toward white, then graded a little darker at the foot.
+ *
+ * WHY IT IS LIFTED AND NOT JUST LEFT AS THE BODY COLOUR. The wall receives 58% of the light the
+ * roof does (measured -- `tools/car-plan.py` prints it), and 58% of the light on a SATURATED
+ * colour is darker than it sounds: red (244,67,72) carries only 41% of white's luminance to
+ * begin with, so the lit wall lands at 24% and reads nearly black. Multiplying is not what a
+ * painter does to a shaded face; they shift it toward the light that is actually falling on it,
+ * which here is a grey-blue sky ambient. WALL_LIFT is that shift, and it is why the side can read
+ * as "the same car, in shade" rather than as a hole -- which is what it was reported as.
+ */
+const WALL_LIFT = 0.24;
+const WALL_FOOT = 0.90;
 
 /** How high up the wall the wheels sit. Low, so they read as touching the ground. */
 const WHEEL_Z = 0.03;
@@ -385,11 +409,10 @@ function design(color: Color): { rim: Flat; wheels: Flat[]; rings: Ring[]; over:
         tilt,
     }));
 
-    const roof = rings[rings.length - 1];
-    const glass = shade(roof.c, GLASS_KEEP);
+    const rail = shade(color, RAIL_SHADE);
     const over: Flat[] = [
-        { pts: roundRect(WINDSCREEN_X, 0, WINDSCREEN_W, WINDSCREEN_H, WINDOW_R), c: glass },
-        { pts: roundRect(REAR_WINDOW_X, 0, REAR_WINDOW_W, REAR_WINDOW_H, WINDOW_R), c: glass },
+        { pts: roundRect(RAIL_X, 0, RAIL_W, RAIL_H, 0.5), c: rail },
+        { pts: roundRect(-RAIL_X, 0, RAIL_W, RAIL_H, 0.5), c: rail },
         ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE }) as Flat),
     ];
     return { rim, wheels, rings, over };
@@ -432,9 +455,17 @@ export function carMesh(color: Color): Mesh {
     // normals lying flat and pointing outward (tilt 90). That is what makes the engine light the
     // four sides differently -- and, unlike everything the fake wall tried, it turns with the
     // car, so the side facing the viewer is always the side facing the viewer.
+    const wall = lighten(color, WALL_LIFT);
     plan.addBand(
-        { pts: rim.pts, z: 0, c: shade(color, WALL_FOOT), tilt: 90 },
-        { pts: rim.pts, z: CAR_HEIGHT, c: color, tilt: 90 },
+        { pts: rim.pts, z: 0, c: shade(wall, WALL_FOOT), tilt: 90 },
+        { pts: rim.pts, z: CAR_HEIGHT, c: wall, tilt: 90 },
+    );
+    // The window band, on the same outline grown just enough not to z-fight the wall.
+    const glassPts = bodyOutline(EDGE_GROW_ALONG * GLASS_OUT, EDGE_GROW_ACROSS * GLASS_OUT);
+    const glass = shade(color, GLASS_SHADE);
+    plan.addBand(
+        { pts: glassPts, z: CAR_HEIGHT * GLASS_LOW, c: glass, tilt: 90 },
+        { pts: glassPts, z: CAR_HEIGHT * GLASS_HIGH, c: glass, tilt: 90 },
     );
     plan.addFlat(rim.pts, CAR_HEIGHT, rim.c);          // the roof's rim, capping the wall
 

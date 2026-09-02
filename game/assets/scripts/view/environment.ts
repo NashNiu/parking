@@ -3,14 +3,26 @@ import { Node, DirectionalLight, Color, director, Camera, postProcess } from 'cc
 /**
  * Pitch of the key light, in degrees, as a node euler-X.
  *
- * EXPORTED because two other things are now derived from it and must not be allowed to drift:
- * the drop shadow's offset (`car-builder.ts`, which needs the direction the light travels) and
- * the car roof's normal tilts (`car-mesh.ts`, which needs the screen-vertical component to be
- * there at all). At -55 the light travels (0, -0.82, -0.57) in board space: mostly down the
- * screen, partly into the board. Level it out toward the board normal and the cars go flat and
- * lose their shadows, with nothing in the console to say why.
+ * EXPORTED because two other things are derived from it and must not be allowed to drift: the
+ * drop shadow's offset (`car-builder.ts`) and the roof's normal tilts (`car-mesh.ts`).
+ *
+ * -18, DOWN FROM -55, AND THE BOARD'S TILT IS WHAT DECIDES IT. In BOARD space the light is
+ * (0, sin(pitch - tilt), cos(pitch - tilt)), so the sign of the first term decides which side of
+ * the board it comes from -- and the face a player SEES is the near wall, facing board -Y. That
+ * wall gets key light only while the pitch is UNDER the tilt. There is no middle setting: at -55
+ * against a 38-degree board the light is behind the car and its whole visible side is ambient,
+ * 33% of the roof, which came back from a device as "the sides are too dark". At -18 it is 22
+ * degrees on the near side and the wall reads at about 58%.
+ *
+ * The crowd gains the same way: a passenger stands facing board -Y, so its front went from
+ * ambient-only to catching a real share of the key.
+ *
+ * The shadow now throws UP-screen rather than down, which turns out not to matter: the car is
+ * CAR_HEIGHT tall and the shadow lies on the board, so the tilt already separates them by
+ * (CAR_HEIGHT + 0.06) * sin(tilt) -- about 0.25 world units -- and the shadow stays plainly
+ * below the car whichever way it leans.
  */
-export const KEY_LIGHT_PITCH_DEG = -55;
+export const KEY_LIGHT_PITCH_DEG = -18;
 
 /**
  * Adds cartoon lighting attached to the scene.

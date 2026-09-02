@@ -202,6 +202,16 @@ export function vertexColorMaterial(color: Color): Material {
             });
             if (m.passes && m.passes.length > 0) {
                 m.setProperty('mainColor', Color.WHITE);
+                // ROUGH, 0.9 against the effect's default 0.5, and this is what answers "the
+                // roofs look a bit white". Clipping a bright albedo cannot whiten it much -- red
+                // (244,67,72) pushed past 1.0 clips in one channel and stays red -- so a surface
+                // reading white has to be getting an ADDITIVE white term, and the only one here
+                // is the specular. A car's roof is close to facing both the light and the
+                // camera, so the specular lobe points more or less straight back: at roughness
+                // 0.5 that is a broad sheen over the whole roof. Roughening it spreads the same
+                // energy wider and drops the peak, which takes the wash off without touching the
+                // paint's brightness the way lowering the key light would.
+                m.setProperty('roughness', 0.9);
                 mat = m;
             }
         } catch {

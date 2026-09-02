@@ -72,10 +72,10 @@ def illuminances():
 def constants():
     needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT', 'CORNER_SEGMENTS',
               'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW', 'DOME_RISE',
-              'CAR_HEIGHT', 'WALL_FOOT', 'WHEEL_Z', 'Z_STEP',
-              'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R', 'GLASS_KEEP', 'WINDOW_R',
-              'WINDSCREEN_X', 'WINDSCREEN_W', 'WINDSCREEN_H',
-              'REAR_WINDOW_X', 'REAR_WINDOW_W', 'REAR_WINDOW_H',
+              'CAR_HEIGHT', 'WALL_LIFT', 'WALL_FOOT', 'WHEEL_Z', 'Z_STEP',
+              'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R',
+              'GLASS_LOW', 'GLASS_HIGH', 'GLASS_OUT', 'GLASS_SHADE',
+              'RAIL_X', 'RAIL_W', 'RAIL_H', 'RAIL_SHADE',
               'ARROW_X', 'ARROW_W', 'ARROW_H', 'ARROW_SHAFT', 'ARROW_HEAD')
     k, t = numbers(MESH, needed)
     tyre = re.search(r'const TYRE = new Color\((\d+), (\d+), (\d+)', t)
@@ -250,7 +250,15 @@ def triangles(ln, wd):
                             K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), K['WHEEL_Z'], TYRE)
 
     # The wall: the rim extruded from the board up to the roof, normals flat and outward.
-    band(rim, 0.0, shade(CAR, K['WALL_FOOT']), 90, rim, height, CAR, 90)
+    wall = lighten(CAR, K['WALL_LIFT'])
+    band(rim, 0.0, shade(wall, K['WALL_FOOT']), 90, rim, height, wall, 90)
+
+    # The window band, on the same outline grown just enough not to z-fight the wall.
+    gp = body_outline(K['EDGE_GROW_ALONG'] * K['GLASS_OUT'],
+                      K['EDGE_GROW_ACROSS'] * K['GLASS_OUT'])
+    gc = shade(CAR, K['GLASS_SHADE'])
+    band(gp, height * K['GLASS_LOW'], gc, 90, gp, height * K['GLASS_HIGH'], gc, 90)
+
     flat(rim, height, shade(CAR, K['EDGE_SHADE']))
 
     # The roof.
@@ -265,13 +273,11 @@ def triangles(ln, wd):
     crown_pts, crown_z, _ = rings[-1]
     flat(crown_pts, crown_z, CAR)
 
-    # Glass and arrow, on the crown.
-    glass = shade(CAR, K['GLASS_KEEP'])
+    # Roof seams and the arrow, on the crown.
+    rail = shade(CAR, K['RAIL_SHADE'])
     over = [
-        (round_rect(K['WINDSCREEN_X'], 0, K['WINDSCREEN_W'], K['WINDSCREEN_H'], K['WINDOW_R']),
-         glass),
-        (round_rect(K['REAR_WINDOW_X'], 0, K['REAR_WINDOW_W'], K['REAR_WINDOW_H'], K['WINDOW_R']),
-         glass),
+        (round_rect(K['RAIL_X'], 0, K['RAIL_W'], K['RAIL_H'], 0.5), rail),
+        (round_rect(-K['RAIL_X'], 0, K['RAIL_W'], K['RAIL_H'], 0.5), rail),
     ] + [(piece, (255, 255, 255)) for piece in arrow_pieces()]
     for i, (pts, col) in enumerate(over):
         flat(pts, crown_z + (i + 1) * K['Z_STEP'], col)
@@ -279,7 +285,10 @@ def triangles(ln, wd):
 
 
 def render(out_path):
-    throw = K['SHADOW_LIFT'] * math.tan(math.radians(-K['KEY_LIGHT_PITCH_DEG']))
+    # Board space, like `addShadow`: tan(pitch - tilt), which flips sign when the light crosses
+    # to the near side of the board.
+    throw = K['SHADOW_LIFT'] * math.tan(
+        math.radians(-K['KEY_LIGHT_PITCH_DEG'] - K['BOARD_TILT']))
     # Each row is as tall as the car projects: its width foreshortened, plus the wall's rise.
     rows = [(name, ln, wd, wd * TILT_COS + K['CAR_HEIGHT'] * TILT_SIN + 2 * PAD)
             for name, ln, wd in CAPS]
@@ -384,8 +393,22 @@ def render(out_path):
     print(f'light board-space {tuple(round(v, 3) for v in LIGHT)} '
           f'(roof N.L {LIGHT[2]:.3f}), key {KEY_LUX:.0f} + ambient {AMB_LUX:.0f} '
           f'-> ambient fraction {AMBIENT:.2f}')
-    print(f'a wall facing the viewer renders at '
-          f'{AMBIENT / FLAT_TERM * 100:.0f}% of the roof; shadow throw {throw:.3f}')
+    # Every face's brightness against the roof's, because reading them off the picture is how
+    # the glass band got blamed on the wall. Taken on the medium car.
+    def lum(c):
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    roof = lum(lit(CAR, (0, 0, 1), 1.772, 0.567))
+    faces = [
+        ('near wall, top', lit(lighten(CAR, K['WALL_LIFT']), (0, -1, 0), 1.772, 0.567)),
+        ('near wall, foot',
+         lit(shade(lighten(CAR, K['WALL_LIFT']), K['WALL_FOOT']), (0, -1, 0), 1.772, 0.567)),
+        ('glass band', lit(shade(CAR, K['GLASS_SHADE']), (0, -1, 0), 1.772, 0.567)),
+        ('nose/tail wall', lit(CAR, (1, 0, 0), 1.772, 0.567)),
+    ]
+    print('against the roof: ' + ', '.join(
+        f'{n} {lum(c) / roof * 100:.0f}%' for n, c in faces)
+        + f"; glass covers {(K['GLASS_HIGH'] - K['GLASS_LOW']) * 100:.0f}% of the wall")
+    print(f'shadow throw {throw:.3f} (negative = up-screen, behind the car)')
 
 
 render(sys.argv[1] if len(sys.argv) > 1 else '.tmp/car-plan.png')
