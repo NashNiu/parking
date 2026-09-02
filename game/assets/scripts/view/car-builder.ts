@@ -12,20 +12,19 @@ import { KEY_LIGHT_PITCH_DEG } from './environment';
 export type { Cap };
 
 /**
- * How high off the board the car's TOP FACE is meant to read as being, in world units.
+ * How far the shadow falls BELOW the side wall's bottom edge, in world units.
  *
- * Not how tall the mesh is -- under this camera the car has no visible height at all and the
- * plates are barely a tenth of a unit thick. This is the height the drop shadow is thrown from,
- * so it and SKIRT_DROP are the two places the car's apparent height is stated.
+ * The wall's bottom is where the car meets the ground, so that is where the shadow starts; this
+ * is only the extra throw that keeps it from reading as painted on. Small, because the wall is
+ * already carrying the height.
  *
- * It can afford to be generous, and that corrects an earlier note here which said the opposite.
- * The shadow uses `builtin-unlit` technique 1, whose depth state is `depthTest: true,
- * depthWrite: false` -- so a shadow sitting at z = -0.06 is depth-REJECTED wherever a car in
- * front of it has already written depth. It cannot paint across a neighbour's paint however far
- * it is offset. What bounds it is only how far a shadow can drift before it stops reading as
- * this car's.
+ * It can afford to be generous if it ever needs to be, which corrects an earlier note here
+ * saying the opposite. The shadow uses `builtin-unlit` technique 1, whose depth state is
+ * `depthTest: true, depthWrite: false` -- so a shadow at z = -0.06 is depth-REJECTED wherever a
+ * car in front of it has already written depth, and cannot paint across a neighbour's paint at
+ * any offset.
  */
-const SHADOW_LIFT = 0.06;
+const SHADOW_LIFT = 0.03;
 
 /**
  * A board-space offset, expressed in `body`'s own frame.
@@ -54,10 +53,10 @@ function boardToLocal(angle: number, dx: number, dy: number): [number, number] {
  * h * tan(55°) straight down the screen. `lift` is where the top face already sits, so the throw
  * is measured from there. Change the light's pitch and every shadow on the board follows.
  */
-function addShadow(body: Node, len: number, wid: number, angle: number, lift: number): void {
+function addShadow(body: Node, len: number, wid: number, angle: number, foot: number): void {
     const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
     const throwDown = SHADOW_LIFT * Math.tan(-KEY_LIGHT_PITCH_DEG * Math.PI / 180);
-    const [dx, dy] = boardToLocal(angle, 0, lift - throwDown);
+    const [dx, dy] = boardToLocal(angle, 0, foot - throwDown);
     shadow.setPosition(dx, dy, -0.06);
     body.addChild(shadow);
 }
@@ -129,17 +128,16 @@ export function buildCar(
     // in board space, so there is no lay-down rotation: the plates stack a few hundredths of a
     // unit up in +Z, just far enough apart not to z-fight.
     //
-    // TWO renderers, half a step apart up and down the SCREEN: the top face and, under it, the
-    // side wall that makes the car read as having thickness. Half a step each rather than a
-    // whole step on one of them, so the drawn car exceeds core's footprint by half as much; see
-    // SKIRT_DROP.
-    const lift = (skirtDrop() / 2) * wid;
-    const plan = mesh('plan', carMesh(color), color, len, wid, angle, lift, 0);
-    const skirt = mesh('skirt', carSkirtMesh(color), color, len, wid, angle, -lift, -0.02);
+    // TWO renderers: the roof, sitting EXACTLY on core's footprint, and under it the side wall
+    // that makes the car read as a box rather than a sticker. The wall carries the whole offset
+    // so the roof carries none of it -- see SKIRT_DROP for why that is the right way round.
+    const drop = skirtDrop() * wid;
+    const plan = mesh('plan', carMesh(color), color, len, wid, angle, 0, 0);
+    const skirt = mesh('skirt', carSkirtMesh(color), color, len, wid, angle, -drop, -0.02);
     body.addChild(skirt);
     body.addChild(plan);
 
-    addShadow(body, len, wid, angle, lift);
+    addShadow(body, len, wid, angle, -drop);
 
     // The body carries the heading. The mesh's arrow points +X, which is the body's own
     // forward, so a spin of `angle` about the board normal puts both the car and the arrow

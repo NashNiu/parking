@@ -35,7 +35,7 @@ TYPES = 'game/assets/scripts/core/types.ts'
 CAR = (244, 67, 72)                 # COLORS.red, the busiest colour on a board
 BG = (222, 226, 232)
 SHADOW_ALPHA = 45 / 255             # blob-shadow.ts's mainColor alpha
-PPU, PAD, SS = 300, 0.16, 3
+PPU, PAD, SS = 300, 0.34, 3      # PAD clears the side wall, which hangs well below the body
 
 # Relative ambient fill. The scene has skyIllum 20000 against the key light's 70000, but the two
 # reach albedo through different BRDF terms, so this is a fitted knob rather than a derived
@@ -173,19 +173,20 @@ def arrow_pieces():
 
 
 def skirt():
-    """The side wall: the body silhouette in a dark shade, drawn half a step DOWN the screen."""
-    return (body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
-            shade(CAR, K['SKIRT_SHADE']))
+    """The side wall -- the body silhouette in a dark shade -- and the wheels that stand on it."""
+    parts = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
+              shade(CAR, K['SKIRT_SHADE']))]
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            parts.append((round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
+                                     K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), TYRE))
+    return parts
 
 
 def design():
     """The same three groups as `design()` in car-mesh.ts: under the roof, the roof, over it."""
     under = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
               shade(CAR, K['EDGE_SHADE']))]
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            under.append((round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
-                                     K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), TYRE))
     rings = [{
         'pts': body_outline(1 - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
                             1 - K['DOME_NARROW'] * at),
@@ -292,12 +293,10 @@ def render(out_path):
                       min(1.0, n / (SS * SS)))
 
     under, rings, over = design()
-    wall_pts, wall_col = skirt()
+    wall = skirt()
     throw = K['SHADOW_LIFT'] * math.tan(math.radians(-K['KEY_LIGHT_PITCH_DEG']))
-    # Half of SKIRT_DROP, in the same width-fractions everything else here is measured in: the
-    # top face goes up by it and the side wall down by it, so the two together span the footprint
-    # rather than one of them hanging a whole step off it.
-    lift = K['SKIRT_DROP'] / 2
+    # The roof sits ON the footprint and the wall hangs the whole of SKIRT_DROP below it.
+    lift = 0.0
     y0 = 0.0
     for (name, ln, wd), ch in zip(CAPS, Hs):
         cx0, cy0 = W / 2 * PPU, (y0 + ch / 2) * PPU
@@ -317,8 +316,10 @@ def render(out_path):
             return [(x, y + dy) for x, y in pts]
 
         # The shadow is thrown from the top face, which is already `lift` up.
-        fill(to_px(ellipse(0, lift - throw / wd, 0.94, 1.08)), (0, 0, 0), SHADOW_ALPHA)
-        fill(to_px(raise_(wall_pts, -lift)), wall_col)                       # the side wall
+        foot = -K['SKIRT_DROP']
+        fill(to_px(ellipse(0, foot - throw / wd, 0.94, 1.08)), (0, 0, 0), SHADOW_ALPHA)
+        for pts, col in wall:                                                # the side wall
+            fill(to_px(raise_(pts, foot)), col)
 
         for pts, col in under:
             fill(to_px(raise_(pts, lift)), col)

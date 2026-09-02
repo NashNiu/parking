@@ -134,21 +134,34 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
  * a board direction, and the mesh rotates with the car. So it is a second node, offset in board
  * space (see `boardToLocal` in car-builder.ts), sharing this colour's material.
  *
- * THE OFFSET IS SPLIT, HALF EACH WAY -- the body up-screen, the wall down-screen -- rather than
- * dropping the wall a whole step. That halves the amount by which the drawn car exceeds the
- * footprint core reasons about, to SKIRT_DROP/2 of the car's width, which works out at about
- * 0.04 board units: the same size as CLEARANCE, and a tenth of what the old standing models were
- * out by. Getting that wrong is not cosmetic -- a picture that lies about the footprint breaks
- * blocked/clear, the size hierarchy and tap picking all at once, which is the whole argument for
- * the orthographic camera (see the README). Grow SKIRT_DROP and that bound grows with it.
+ * THE ROOF STAYS EXACTLY ON THE FOOTPRINT and the whole wall hangs BELOW it. An earlier version
+ * split the offset half each way to keep the drawn car centred on core's box; that was the right
+ * trade at a wall thin enough to be a bevel and the wrong one now. What the player aims at is the
+ * roof -- it is most of the car and all of its colour -- so putting the roof on the footprint
+ * makes tap picking EXACT rather than merely close, and leaves the whole error in the wall, which
+ * is a band nobody aims at.
+ *
+ * The wall does then reach 0.19 world units, about 0.26 board units, past the footprint on the
+ * down-screen side, and it will overlap whatever is parked behind. That is the 2.5D convention
+ * working as intended -- the near car occludes the far one -- and it costs none of the three
+ * things a lying picture usually costs. Under an orthographic camera every car shifts by the
+ * SAME vector, so relative gaps are exact (blocked/clear reads true), nothing is scaled (the
+ * size hierarchy is exact), and the roof is on the box (picking is exact). Those three are what
+ * a PERSPECTIVE camera broke, and it broke them because its error was position-dependent; a
+ * uniform translation is a different animal. See the camera note in the README.
  *
  * A FRACTION OF THE CAR'S WIDTH, not a world distance, so the three caps stay proportional and
  * go on sharing one mesh.
  */
-const SKIRT_DROP = 0.105;
-const SKIRT_SHADE = 0.34;
+const SKIRT_DROP = 0.34;
+const SKIRT_SHADE = 0.44;
 
-/** Wheels, at (±x, ±y), drawn under the body so only the overhang shows. */
+/**
+ * Wheels, at (±x, ±y). They belong to the SIDE WALL, not to the roof: a wheel meets the ground,
+ * and the ground here is the wall's lower edge. Being in the wall's mesh puts the down-screen
+ * pair low on the wall where a wheel looks like a wheel, and hides the up-screen pair behind
+ * the roof, which is exactly what a box seen from above does with its far wheels.
+ */
 const WHEEL_X = 0.30;
 const WHEEL_Y = 0.40;
 const WHEEL_W = 0.15;
@@ -356,14 +369,6 @@ function design(color: Color): { under: Flat[]; rings: Ring[]; over: Flat[] } {
     const under: Flat[] = [
         { pts: bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), c: shade(color, EDGE_SHADE) },
     ];
-    for (const sx of [-1, 1]) {
-        for (const sy of [-1, 1]) {
-            under.push({
-                pts: roundRect(sx * WHEEL_X, sy * WHEEL_Y, WHEEL_W, WHEEL_H, WHEEL_R),
-                c: TYRE,
-            });
-        }
-    }
 
     const base = under.length * Z_STEP;
     const rings: Ring[] = DOME_PROFILE.map(({ at, tilt }) => ({
@@ -404,6 +409,12 @@ export function carSkirtMesh(color: Color): Mesh {
     if (hit) return hit;
     const plan = new Plan();
     plan.addFlat(bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), 0, shade(color, SKIRT_SHADE));
+    for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+            plan.addFlat(roundRect(sx * WHEEL_X, sy * WHEEL_Y, WHEEL_W, WHEEL_H, WHEEL_R),
+                Z_STEP, TYRE);
+        }
+    }
     const mesh = utils.createMesh({
         positions: plan.positions,
         normals: plan.normals,
