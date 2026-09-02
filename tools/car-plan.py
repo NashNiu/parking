@@ -35,7 +35,7 @@ TYPES = 'game/assets/scripts/core/types.ts'
 CAR = (244, 67, 72)                 # COLORS.red, the busiest colour on a board
 BG = (222, 226, 232)
 SHADOW_ALPHA = 45 / 255             # blob-shadow.ts's mainColor alpha
-PPU, PAD, SS = 300, 0.34, 3      # PAD clears the side wall, which hangs well below the body
+PPU, PAD, SS = 300, 0.16, 3
 
 # Relative ambient fill. The scene has skyIllum 20000 against the key light's 70000, but the two
 # reach albedo through different BRDF terms, so this is a fitted knob rather than a derived
@@ -59,7 +59,6 @@ def numbers(path, needed):
 def constants():
     needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT', 'CORNER_SEGMENTS',
               'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'EDGE_SHADE', 'DOME_NARROW',
-              'SKIRT_DROP', 'SKIRT_SHADE',
               'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R', 'GLASS_KEEP', 'WINDOW_R',
               'WINDSCREEN_X', 'WINDSCREEN_W', 'WINDSCREEN_H',
               'REAR_WINDOW_X', 'REAR_WINDOW_W', 'REAR_WINDOW_H',
@@ -172,21 +171,14 @@ def arrow_pieces():
     ]
 
 
-def skirt():
-    """The side wall -- the body silhouette in a dark shade -- and the wheels that stand on it."""
-    parts = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
-              shade(CAR, K['SKIRT_SHADE']))]
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            parts.append((round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
-                                     K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), TYRE))
-    return parts
-
-
 def design():
     """The same three groups as `design()` in car-mesh.ts: under the roof, the roof, over it."""
     under = [(body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS']),
               shade(CAR, K['EDGE_SHADE']))]
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            under.append((round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
+                                     K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), TYRE))
     rings = [{
         'pts': body_outline(1 - K['DOME_NARROW'] * K['ACROSS_TO_ALONG'] * at,
                             1 - K['DOME_NARROW'] * at),
@@ -293,9 +285,7 @@ def render(out_path):
                       min(1.0, n / (SS * SS)))
 
     under, rings, over = design()
-    wall = skirt()
     throw = K['SHADOW_LIFT'] * math.tan(math.radians(-K['KEY_LIGHT_PITCH_DEG']))
-    # The roof sits ON the footprint and the wall hangs the whole of SKIRT_DROP below it.
     lift = 0.0
     y0 = 0.0
     for (name, ln, wd), ch in zip(CAPS, Hs):
@@ -316,10 +306,7 @@ def render(out_path):
             return [(x, y + dy) for x, y in pts]
 
         # The shadow is thrown from the top face, which is already `lift` up.
-        foot = -K['SKIRT_DROP']
-        fill(to_px(ellipse(0, foot - throw / wd, 0.92, 0.90)), (0, 0, 0), SHADOW_ALPHA)
-        for pts, col in wall:                                                # the side wall
-            fill(to_px(raise_(pts, foot)), col)
+        fill(to_px(ellipse(0, -throw / wd, 0.94, 1.02)), (0, 0, 0), SHADOW_ALPHA)
 
         for pts, col in under:
             fill(to_px(raise_(pts, lift)), col)
@@ -365,7 +352,7 @@ def render(out_path):
     print(f'wrote {w}x{h} -> {out_path}')
     print(f'{len(under)} under + {len(rings)} roof rings + {len(over)} over, from {MESH}')
     print(f'light {tuple(round(v, 3) for v in LIGHT)}, ambient {AMBIENT}, '
-          f'shadow throw {throw:.3f} world units, half-step {lift:.4f} of the car width')
+          f'shadow throw {throw:.3f} world units')
 
 
 render(sys.argv[1] if len(sys.argv) > 1 else '.tmp/car-plan.png')

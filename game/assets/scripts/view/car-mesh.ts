@@ -12,18 +12,15 @@ import { Color, Mesh, primitives, utils } from 'cc';
  *
  * WHAT READS AS A CAR FROM DIRECTLY ABOVE, in the order the cues matter:
  *
- *   1. A SIDE WALL. See SKIRT_DROP -- a dark band along the down-screen edge is the only
- *      thing that says the car has THICKNESS, as opposed to being a rounded flat sticker.
- *      Shading alone does not do it; that was tried and reported back as "still too flat".
- *   2. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- not baked, unlike the rest.
- *   3. ONE hue. Side wall, dark rim, main colour, and whatever the light does to it. A second
- *      hue anywhere reads as a decal, not as form.
- *   4. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
+ *   1. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- not baked, unlike the rest.
+ *   2. ONE hue. Dark rim, main colour, and whatever the light does to it. A second hue anywhere
+ *      reads as a decal, not as form.
+ *   3. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
  *      hard point off. See the note on BODY_CORNER.
- *   5. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
+ *   4. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
  *      before the arrow does. It wants to be SMALL and PALE: a dark panel at real size reads as
  *      a hole punched in the roof, not as a window.
- *   6. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
+ *   5. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
  *      past its silhouette -- which is all a wheel is from above.
  *
  * WHY THE DEPTH HAS TO COME FROM THE LIGHT AND NOT FROM BAKED SHADING. A highlight on one side
@@ -86,7 +83,7 @@ const BODY_CORNER = 0.10;
 /** The dark rim: the body outline grown a little, more across than along. */
 const EDGE_GROW_ALONG = 1.015;
 const EDGE_GROW_ACROSS = 1.075;
-const EDGE_SHADE = 0.55;
+const EDGE_SHADE = 0.52;
 
 /**
  * The roof, as concentric rings of the body outline whose NORMALS tilt outward.
@@ -120,59 +117,13 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
 ];
 
 /**
- * THE SIDE WALL: the one cue that says the car has height, and the reason it is built the way
- * it is.
+ * Wheels, at (±x, ±y), drawn under the body so only the overhang shows.
  *
- * Under an orthographic camera pointed straight at the board, a wall parallel to the view has
- * exactly zero screen area -- height is not merely hard to see here, it is geometrically absent.
- * So the wall is a FAKE, in the flat-illustration sense: the body's silhouette drawn again in a
- * dark shade of its own colour and offset down the screen, so a band of it shows below the car.
- * That reads as thickness in a way shading never will, which is what "still too flat" was about
- * after the roof was already being lit.
- *
- * IT CANNOT BE BAKED INTO THE MESH, for the same reason the highlight cannot: down-the-screen is
- * a board direction, and the mesh rotates with the car. So it is a second node, offset in board
- * space (see `boardToLocal` in car-builder.ts), sharing this colour's material.
- *
- * THE ROOF STAYS EXACTLY ON THE FOOTPRINT and the whole wall hangs BELOW it. An earlier version
- * split the offset half each way to keep the drawn car centred on core's box; that was the right
- * trade at a wall thin enough to be a bevel and the wrong one now. What the player aims at is the
- * roof -- it is most of the car and all of its colour -- so putting the roof on the footprint
- * makes tap picking EXACT rather than merely close, and leaves the whole error in the wall, which
- * is a band nobody aims at.
- *
- * The wall does then reach 0.19 world units, about 0.26 board units, past the footprint on the
- * down-screen side, and it will overlap whatever is parked behind. That is the 2.5D convention
- * working as intended -- the near car occludes the far one -- and it costs none of the three
- * things a lying picture usually costs. Under an orthographic camera every car shifts by the
- * SAME vector, so relative gaps are exact (blocked/clear reads true), nothing is scaled (the
- * size hierarchy is exact), and the roof is on the box (picking is exact). Those three are what
- * a PERSPECTIVE camera broke, and it broke them because its error was position-dependent; a
- * uniform translation is a different animal. See the camera note in the README.
- *
- * IT HAS TO READ AS THE CAR, NOT AS A SHADOW, and that is what SKIRT_SHADE is for. The first
- * version at 0.44 was too dark by half: against a pale lot floor a band that dark reads as a
- * hole under the car, and with the blob shadow immediately below it the two merged into one dark
- * smear -- reported back as "the shadow makes the car look strange", which was the right
- * diagnosis. A side face in shade is still plainly the same paint, so 0.72. The roof's own rim
- * (EDGE_SHADE) is left DARKER than the wall on purpose: it then reads as the fold between the
- * two rather than as an outline around both.
- *
- * SHORTER, TOO. 0.34 of the car's width was tall enough that the wall competed with the roof for
- * the eye instead of supporting it. Height in a flat illustration is carried by the wall being
- * unmistakably a wall, not by it being big.
- *
- * A FRACTION OF THE CAR'S WIDTH, not a world distance, so the three caps stay proportional and
- * go on sharing one mesh.
- */
-const SKIRT_DROP = 0.18;
-const SKIRT_SHADE = 0.72;
-
-/**
- * Wheels, at (±x, ±y). They belong to the SIDE WALL, not to the roof: a wheel meets the ground,
- * and the ground here is the wall's lower edge. Being in the wall's mesh puts the down-screen
- * pair low on the wall where a wheel looks like a wheel, and hides the up-screen pair behind
- * the roof, which is exactly what a box seen from above does with its far wheels.
+ * IN THE CAR'S OWN FRAME, which is the only frame they can be in. A version of this file put
+ * them in a screen-space side wall so they would sit at the car's foot; that works for a car
+ * lying across the screen and falls apart for one pointing up it, where the wall lands on the
+ * car's TAIL and takes the wheels with it -- two dark blobs stuck to the back bumper. The
+ * parking bay made it obvious, every stall holding a car pointing up. See the README.
  */
 const WHEEL_X = 0.30;
 const WHEEL_Y = 0.40;
@@ -381,6 +332,14 @@ function design(color: Color): { under: Flat[]; rings: Ring[]; over: Flat[] } {
     const under: Flat[] = [
         { pts: bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), c: shade(color, EDGE_SHADE) },
     ];
+    for (const sx of [-1, 1]) {
+        for (const sy of [-1, 1]) {
+            under.push({
+                pts: roundRect(sx * WHEEL_X, sy * WHEEL_Y, WHEEL_W, WHEEL_H, WHEEL_R),
+                c: TYRE,
+            });
+        }
+    }
 
     const base = under.length * Z_STEP;
     const rings: Ring[] = DOME_PROFILE.map(({ at, tilt }) => ({
@@ -398,46 +357,6 @@ function design(color: Color): { under: Flat[]; rings: Ring[]; over: Flat[] } {
         ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE }) as Flat),
     ];
     return { under, rings, over };
-}
-
-/** How far down-screen the side wall sits, as a fraction of the car's width. */
-export function skirtDrop(): number {
-    return SKIRT_DROP;
-}
-
-const skirtCache = new Map<string, Mesh>();
-
-/**
- * The car's side wall, as its own mesh: the body silhouette in a dark shade of the body colour,
- * facing straight up so it is lit the same however the car is turned. See SKIRT_DROP for why it
- * is a separate mesh on a separate node rather than another plate in `carMesh`.
- *
- * Same unit box and the same material as the body, so it costs one more instanced draw per
- * colour and nothing else.
- */
-export function carSkirtMesh(color: Color): Mesh {
-    const key = colourKey(color);
-    const hit = skirtCache.get(key);
-    if (hit) return hit;
-    const plan = new Plan();
-    plan.addFlat(bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), 0, shade(color, SKIRT_SHADE));
-    for (const sx of [-1, 1]) {
-        for (const sy of [-1, 1]) {
-            plan.addFlat(roundRect(sx * WHEEL_X, sy * WHEEL_Y, WHEEL_W, WHEEL_H, WHEEL_R),
-                Z_STEP, TYRE);
-        }
-    }
-    const mesh = utils.createMesh({
-        positions: plan.positions,
-        normals: plan.normals,
-        colors: plan.colors,
-        indices: plan.indices,
-        minPos: { x: -0.5, y: -0.5, z: 0 },
-        maxPos: { x: 0.5, y: 0.5, z: 0 },
-        boundingRadius: Math.sqrt(0.5),
-    });
-    skirtCache.set(key, mesh);
-    return mesh;
 }
 
 function colourKey(c: Color): string {

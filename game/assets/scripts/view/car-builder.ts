@@ -1,7 +1,7 @@
 import { Node, Color, Mesh, MeshRenderer } from 'cc';
 import { Cap } from '../core/index';
 import { vertexColorMaterial } from './materials';
-import { carMesh, carSkirtMesh, skirtDrop } from './car-mesh';
+import { carMesh } from './car-mesh';
 import { blobShadow } from './blob-shadow';
 import { KEY_LIGHT_PITCH_DEG } from './environment';
 
@@ -12,19 +12,15 @@ import { KEY_LIGHT_PITCH_DEG } from './environment';
 export type { Cap };
 
 /**
- * How far the shadow falls BELOW the side wall's bottom edge, in world units.
+ * How high off the board the car is meant to READ as being, in world units. The drop shadow is
+ * thrown from it, so it is the only place the car's apparent height is stated.
  *
- * The wall's bottom is where the car meets the ground, so that is where the shadow starts; this
- * is only the extra throw that keeps it from reading as painted on. Small, because the wall is
- * already carrying the height.
- *
- * It can afford to be generous if it ever needs to be, which corrects an earlier note here
- * saying the opposite. The shadow uses `builtin-unlit` technique 1, whose depth state is
- * `depthTest: true, depthWrite: false` -- so a shadow at z = -0.06 is depth-REJECTED wherever a
- * car in front of it has already written depth, and cannot paint across a neighbour's paint at
- * any offset.
+ * It can afford to be generous, which corrects an earlier note here saying the opposite. The
+ * shadow uses `builtin-unlit` technique 1, whose depth state is `depthTest: true,
+ * depthWrite: false` -- so a shadow at z = -0.06 is depth-REJECTED wherever a car in front of it
+ * has already written depth, and cannot paint across a neighbour's paint at any offset.
  */
-const SHADOW_LIFT = 0.03;
+const SHADOW_LIFT = 0.06;
 
 /**
  * A board-space offset, expressed in `body`'s own frame.
@@ -53,13 +49,10 @@ function boardToLocal(angle: number, dx: number, dy: number): [number, number] {
  * h * tan(55°) straight down the screen. `lift` is where the top face already sits, so the throw
  * is measured from there. Change the light's pitch and every shadow on the board follows.
  */
-function addShadow(body: Node, len: number, wid: number, angle: number, foot: number): void {
-    // Tighter than the car, not wider. A shadow the full width of the body fans out past the
-    // side wall and adds a SECOND dark shape below it, which is what made the two read as one
-    // smear; drawn narrower it stays a contact shadow and mostly hides under the wall.
-    const shadow = blobShadow('shadow', len * 0.92, wid * 0.90);
+function addShadow(body: Node, len: number, wid: number, angle: number): void {
+    const shadow = blobShadow('shadow', len * 0.94, wid * 1.02);
     const throwDown = SHADOW_LIFT * Math.tan(-KEY_LIGHT_PITCH_DEG * Math.PI / 180);
-    const [dx, dy] = boardToLocal(angle, 0, foot - throwDown);
+    const [dx, dy] = boardToLocal(angle, 0, -throwDown);
     shadow.setPosition(dx, dy, -0.06);
     body.addChild(shadow);
 }
@@ -131,16 +124,12 @@ export function buildCar(
     // in board space, so there is no lay-down rotation: the plates stack a few hundredths of a
     // unit up in +Z, just far enough apart not to z-fight.
     //
-    // TWO renderers: the roof, sitting EXACTLY on core's footprint, and under it the side wall
-    // that makes the car read as a box rather than a sticker. The wall carries the whole offset
-    // so the roof carries none of it -- see SKIRT_DROP for why that is the right way round.
-    const drop = skirtDrop() * wid;
-    const plan = mesh('plan', carMesh(color), color, len, wid, angle, 0, 0);
-    const skirt = mesh('skirt', carSkirtMesh(color), color, len, wid, angle, -drop, -0.02);
-    body.addChild(skirt);
-    body.addChild(plan);
+    // ONE renderer, sitting EXACTLY on core's footprint. A second one carrying a screen-space
+    // "side wall" under it was tried across four rounds and removed; see the README for the
+    // structural reason it cannot be tuned into working.
+    body.addChild(mesh('plan', carMesh(color), color, len, wid, angle, 0, 0));
 
-    addShadow(body, len, wid, angle, -drop);
+    addShadow(body, len, wid, angle);
 
     // The body carries the heading. The mesh's arrow points +X, which is the body's own
     // forward, so a spin of `angle` about the board normal puts both the car and the arrow
