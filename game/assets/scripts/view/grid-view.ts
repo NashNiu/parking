@@ -37,7 +37,7 @@ export class GridView {
         for (const [id, car] of this.lot.cars) {
             const { len, wid } = this.layout.carSize(car.cap as Cap);
             const built = buildCar(
-                `car-${id}`, len, wid, colorOf(car.color), car.angle,
+                `car-${id}`, len, wid, colorOf(car.color), car.angle, car.cap as Cap,
             );
             built.root.setPosition(this.layout.toWorld(car.x, car.y));
             this.parent.addChild(built.root);

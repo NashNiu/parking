@@ -31,18 +31,18 @@ import { mergeParts, MeshPart } from './slabs';
  * itself sits at world +Z looking toward -Z (GameController.setupCamera), so +Z is
  * also, concretely, the direction toward the camera.
  *
- * A FACE, as of the tilted board: a darker cap on the front of the head (see `faceCap`).
- * This module used to say "no face -- the human explicitly did not ask for one, and a face
- * would make the figure's orientation legible enough to matter". That came back as "the
- * passengers don't seem to have a facing" once the board tilted and the figures stood up,
- * and it is the same fact read the other way round: with nothing on the front of a
- * one-coloured blob there is no facing to see, whatever the transform says. Making it
- * legible is now the point, so the crowd's orientations have to be RIGHT -- which is why
- * track-view.ts stopped hand-picking the sign of a lane figure's turn and derives it.
+ * NO FACE, and it has now been settled from both directions. The figure had none because a
+ * face was never asked for; that came back as "the passengers don't seem to have a facing"
+ * once the board tilted and they stood up, which is the same fact read the other way round --
+ * a one-coloured blob with nothing on its front has no facing to see, whatever its transform
+ * says. So one was built (a darker spherical cap on the front of the head, a per-vertex tint
+ * so the crowd still shared one mesh), shown, and REJECTED: "the passengers don't need to
+ * tell front from back". Do not put it back without being asked; the reasoning above is not
+ * an argument for it, it is the record of it having been tried.
  *
- * The patch is a per-vertex MULTIPLIER, not a colour: one mesh still serves the whole crowd
- * in every colour, and a dimmed channel dims the face along with everything else. See
- * `instancedLitMaterial`'s `vertexTint`.
+ * What survives is the part that was worth keeping either way: track-view.ts now DERIVES the
+ * direction a figure faces instead of hand-picking a sign, so if a face is ever wanted again
+ * the orientations under it are already right.
  */
 
 // Every size below is a FRACTION of the `height` argument, not an absolute unit: the
@@ -173,26 +173,6 @@ const CAPSULE_HEIGHT_SEGMENTS = 8;
 const ARM_POSE_DEG = 14;
 
 /**
- * The face: a spherical cap on the FRONT of the head, tinted darker than the rest of the
- * figure. Not eyes and a mouth -- at this size the head is about nine pixels across, and one
- * dark patch is the most a nine-pixel head can carry.
- *
- * A CAP, sitting on the head's own sphere, rather than a flat disc laid against it: the disc
- * would have to be inset to hide its rim and would then z-fight the head over its whole
- * area. FACE_LIFT floats the cap 2% of the head's radius clear instead, which is well
- * outside the head's FACETS too -- a six-segment sphere dips 13% of its radius inside the
- * true sphere between vertices, so nothing here can poke through.
- *
- * FACE_HALF_ANGLE is measured from the front pole, so the patch spans 2*sin(42) = 1.34 head
- * radii, about two thirds of the head's width. FACE_SEGMENTS 6 costs six triangles, against
- * the 268 a figure already had.
- */
-const FACE_HALF_ANGLE = 42;
-const FACE_SEGMENTS = 6;
-const FACE_LIFT = 1.02;
-const FACE_SHADE = 0.55;
-
-/**
  * One part's geometry, rotated about X and then moved into place, ready to merge.
  *
  * Normals are rotated but NOT translated, which is the whole reason this is not a four-line
@@ -200,10 +180,7 @@ const FACE_SHADE = 0.55;
  * a way that is easy to ship and hard to see.
  */
 function placed(
-    g: {
-        positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[];
-        colors?: number[];
-    },
+    g: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] },
     deg: number, tx: number, ty: number, tz: number,
 ): MeshPart {
     const rad = deg * Math.PI / 180;
@@ -230,60 +207,7 @@ function placed(
         normals,
         uvs: g.uvs ? Array.from(g.uvs) : undefined,
         indices: g.indices ? Array.from(g.indices) : undefined,
-        colors: g.colors ? Array.from(g.colors) : undefined,
     };
-}
-
-/**
- * A part with one flat per-vertex tint, ready for `mergeParts`. `v` multiplies whatever
- * colour the material carries, so 1 is "the passenger's colour, untouched".
- *
- * Every part has to carry colours once ANY part does -- see `mergeParts` -- so this is what
- * the head, body and arms go through as well, at 1.
- */
-function tinted(part: MeshPart, v: number): MeshPart {
-    const vc = part.positions.length / 3;
-    const colors = new Array<number>(vc * 4);
-    for (let i = 0; i < vc; i++) {
-        colors[i * 4] = v; colors[i * 4 + 1] = v; colors[i * 4 + 2] = v; colors[i * 4 + 3] = 1;
-    }
-    return { ...part, colors };
-}
-
-/**
- * The face patch's geometry: a fan of `FACE_SEGMENTS` triangles over a spherical cap of
- * radius `r * FACE_LIFT`, centred on the +Z pole -- which is the direction the figure faces
- * (see the FACING note at the top of this file).
- *
- * Built at the origin, like every other part here, and moved onto the head by `placed`.
- * Normals are the radial directions, so the patch takes the same light the head under it
- * does and reads as part of the head rather than as a sticker.
- *
- * The uvs are there because the head, body and arms have them -- the engine's primitives all
- * do -- and a merged mesh cannot have the attribute on some vertices only; `mergeParts` throws
- * if it does. Nothing samples them: there is no texture anywhere on this figure.
- */
-function faceCap(r: number): MeshPart {
-    const lift = r * FACE_LIFT;
-    const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
-    const put = (dx: number, dy: number, dz: number): void => {
-        positions.push(dx * lift, dy * lift, dz * lift);
-        normals.push(dx, dy, dz);
-        uvs.push(0.5 + dx / 2, 0.5 + dy / 2);
-    };
-    put(0, 0, 1);                                   // the pole, at the centre of the fan
-    const theta = FACE_HALF_ANGLE * Math.PI / 180;
-    const st = Math.sin(theta), ct = Math.cos(theta);
-    for (let i = 0; i < FACE_SEGMENTS; i++) {
-        const phi = (i / FACE_SEGMENTS) * 2 * Math.PI;
-        put(st * Math.cos(phi), st * Math.sin(phi), ct);
-    }
-    // Rim wound with phi increasing, which is counter-clockwise seen from +Z -- i.e. from
-    // outside the head, which is the side that has to face front.
-    for (let i = 0; i < FACE_SEGMENTS; i++) {
-        indices.push(0, 1 + i, 1 + (i + 1) % FACE_SEGMENTS);
-    }
-    return { positions, normals, uvs, indices };
 }
 
 let figureMeshCache: Mesh | null = null;
@@ -318,13 +242,11 @@ function figureMesh(): Mesh {
     for (let i = 1; i < armPositions.length; i += 3) armPositions[i] -= ARM_LENGTH / 2;
     const shoulderArm = { ...arm, positions: armPositions };
 
-    const headY = BODY_HEIGHT + HEAD_RADIUS;
     figureMeshCache = mergeParts([
-        tinted(placed(body, 0, 0, BODY_HEIGHT / 2, 0), 1),
-        tinted(placed(head, 0, 0, headY, 0), 1),
-        tinted(placed(shoulderArm, ARM_POSE_DEG, -SHOULDER_X, SHOULDER_Y, 0), 1),
-        tinted(placed(shoulderArm, -ARM_POSE_DEG, SHOULDER_X, SHOULDER_Y, 0), 1),
-        tinted(placed(faceCap(HEAD_RADIUS), 0, 0, headY, 0), FACE_SHADE),
+        placed(body, 0, 0, BODY_HEIGHT / 2, 0),
+        placed(head, 0, 0, BODY_HEIGHT + HEAD_RADIUS, 0),
+        placed(shoulderArm, ARM_POSE_DEG, -SHOULDER_X, SHOULDER_Y, 0),
+        placed(shoulderArm, -ARM_POSE_DEG, SHOULDER_X, SHOULDER_Y, 0),
     ]);
     return figureMeshCache;
 }
@@ -403,10 +325,9 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     fit.setRotationFromEuler(90, 0, 0);
     root.addChild(fit);
 
-    // One colour for the whole figure, so one material -- which is also why the parts could
-    // be merged into one mesh with nothing lost; see `figureMesh`. The face patch does not
-    // break that: it is a per-vertex multiplier on this same colour, not a second colour.
-    const mat = instancedLitMaterial(color, true);
+    // One colour for the whole figure, so one material -- which is also why the four parts
+    // could be merged into one mesh with nothing lost; see `figureMesh`.
+    const mat = instancedLitMaterial(color);
     const mr = fit.addComponent(MeshRenderer);
     mr.mesh = figureMesh();
     mr.material = mat;
@@ -421,9 +342,7 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
 
 /**
  * Repaint a figure built by `buildPaxFigure`: every part takes `shade(color)`, the
- * same single colour the whole figure was built with -- the face patch included, since it is
- * a multiplier baked into the mesh rather than a colour of its own, so a dimmed channel dims
- * the face by exactly the same factor as the head around it. All four parts go through the
+ * same single colour the whole figure was built with. All four parts go through the
  * same call to `shade`, so a dimmed waiting row dims as one solid-coloured figure
  * rather than going two-tone -- the inactive channel has to read as inactive at a
  * glance, and (since revision 2) there is no second, skin-toned material left to fall
@@ -432,7 +351,7 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
 export function recolorPaxFigure(root: Node, color: Color, shade: (c: Color) => Color): void {
     const parts = registry.get(root);
     if (!parts) return;
-    const mat = instancedLitMaterial(shade(color), true);
+    const mat = instancedLitMaterial(shade(color));
     // An identity test, and a load-bearing one. Materials are cached per colour (see
     // `instancedLitMaterial`), and the ring repaints EVERY figure on EVERY tick -- six times
     // a second -- while most of those repaints ask for the colour already on it. Assigning a

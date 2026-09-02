@@ -109,12 +109,14 @@ export interface BuiltCar {
  * scale IS the size. They are handed straight back, exactly matching core's footprint -- there
  * is no fitted size left to differ from the requested one.
  *
- * It is also about seventy times cheaper to draw. One mesh and one material per colour, six
- * colours in the palette, one MeshRenderer per car: a full lot is six instanced draw calls,
- * against roughly 414 for 46 nine-primitive models.
+ * It is also about seventy times cheaper to draw. One MeshRenderer per car, sharing a mesh
+ * and a material with every other car of its colour AND capacity: a full lot is at most
+ * eighteen instanced draw calls, against roughly 414 for 46 nine-primitive models. `cap` is
+ * here for that mesh key alone -- the SIZE still arrives as `len`/`wid` from core's CAP_BOX,
+ * because nothing about the mesh's geometry may depend on a size the caller also passes.
  */
 export function buildCar(
-    name: string, len: number, wid: number, color: Color, angle: number,
+    name: string, len: number, wid: number, color: Color, angle: number, cap: Cap,
 ): BuiltCar {
     const root = new Node(name);
 
@@ -133,7 +135,7 @@ export function buildCar(
     // ONE renderer, sitting EXACTLY on core's footprint. A second one carrying a screen-space
     // "side wall" under it was tried across four rounds and removed; see the README for the
     // structural reason it cannot be tuned into working.
-    body.addChild(mesh('plan', carMesh(color), color, len, wid, angle, 0, 0));
+    body.addChild(mesh('plan', carMesh(color, cap), color, len, wid, angle, 0, 0));
 
     addShadow(body, len, wid, angle);
 

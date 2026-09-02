@@ -1,4 +1,4 @@
-import { Node, Color, Quat, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
+import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
 import { BOARD_TILT } from './board-layout';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
@@ -28,10 +28,10 @@ const LANE_START = LANE.start;
  * points straight across the screen and is not visible at all. At 45 the face still reads
  * while the body is plainly angled toward the track.
  *
- * The ring does NOT use this: its figures take the full turn (see `layoutRow`). A ring figure
- * faces the way its row is travelling, which sweeps through every direction as it goes round,
- * so there is no fixed "camera side" to hold it back toward -- and scaling a yaw toward zero
- * is not even continuous once it passes 180.
+ * The ring does NOT turn its figures at all, and that is a decision rather than an omission:
+ * a figure has no front to see (pax-figure.ts -- a face was built, shown and rejected), so
+ * turning one costs a rotation per figure per frame and buys nothing. A version of this did
+ * face every ring row along its direction of travel; it went when the face did.
  */
 const FACE_TURN = 45;
 
@@ -53,9 +53,6 @@ const FACE_TURN = 45;
 function faceYaw(fx: number, fy: number): number {
     return Math.atan2(fx, -fy) * 180 / Math.PI;
 }
-
-/** Scratch for the row-wide facing quaternion, so `layoutRow` allocates nothing per frame. */
-const FACING_SCRATCH = new Quat();
 
 /**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
@@ -299,19 +296,13 @@ export function leftLaneFloor(path: TrackPath, capacity: number, channels: Chann
  * Called every frame for ring cells, because their across direction is the path normal and
  * turns as they travel; once at build time for the lanes, whose direction is fixed.
  *
- * IT ALSO SETS THE FACING, onto the along-path direction -- a queue faces the way it is
- * moving. One quaternion for the whole row (they all face the same way) assigned to each
- * figure, so the per-frame cost over the old version is `figures.length` calls to
- * `setRotation` and no allocation. The lanes overwrite it immediately afterwards with their
- * own held-back turn; see `buildLanes`.
- *
- * A row drawn as ONE ball is left at identity: a ball has no front.
+ * POSITIONS ONLY. It does not set a facing: a ring figure is left at identity, facing down
+ * the screen, because there is nothing on its front to tell it from its back. See FACE_TURN.
  */
 function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
     // A row drawn as one thing sits on its own centre -- there is no block to spread out.
     if (figures.length === 1) { figures[0].setPosition(0, 0, 0); return; }
     const ax = dy, ay = -dx;
-    Quat.fromEuler(FACING_SCRATCH, 0, 0, faceYaw(ax, ay));
     for (let i = 0; i < figures.length; i++) {
         const o = blockOffset(i, RANKS, rankStep, OFFSET_SCRATCH);
         const oy = o.across * dy + o.along * ay;
@@ -321,7 +312,6 @@ function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): v
         // between two. The row node carries the depth of its own y (see `depthAt`), and
         // these compose because a row is never rotated.
         figures[i].setPosition(o.across * dx + o.along * ax, oy, -oy * PAX_DEPTH);
-        figures[i].setRotation(FACING_SCRATCH);
     }
 }
 
@@ -340,8 +330,8 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
 
 /**
  * A row node holding GROUP_SIZE passenger figures as children. The row's own transform is
- * the group's position on the track; the children carry the across-the-track offsets AND the
- * facing, which `layoutRow` sets.
+ * the group's position on the track; the children carry the across-the-track offsets, which
+ * `layoutRow` sets.
  *
  * The row is never rotated, but the reason it used to give for that is no longer true and
  * should not be trusted if this is revisited: it said the figures "stand along the board's +Y
@@ -747,9 +737,7 @@ export class TrackView {
                 // out once, across the lane's own direction.
                 layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
                 // Face the track: INWARD along the lane, which is -out, held back toward the
-                // camera by (1 - FACE_TURN/90) so the face stays visible. Overwrites the
-                // along-path facing `layoutRow` just set -- a lane never turns, so this is
-                // done once at build time rather than every frame.
+                // camera by (1 - FACE_TURN/90). Once at build time -- a lane never turns.
                 //
                 // Per figure rather than on the row node, whose children carry the
                 // across-the-lane offsets: rotating the parent would swing those round too.

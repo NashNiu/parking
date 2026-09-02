@@ -70,10 +70,11 @@ def illuminances():
 
 
 def constants():
-    needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'REFERENCE_ASPECT', 'CORNER_SEGMENTS',
+    needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'CORNER_SEGMENTS',
               'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'DOME_NARROW', 'DOME_RISE',
               'CAR_HEIGHT', 'WALL_LIFT', 'WALL_FOOT', 'WHEEL_Z', 'Z_STEP',
               'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R',
+              'BUS_WHEEL_X_OUTER', 'BUS_WHEEL_X_INNER', 'BUS_WHEEL_W',
               'GLASS_LOW', 'GLASS_HIGH', 'GLASS_OUT', 'GLASS_SHADE',
               'RAIL_X', 'RAIL_W', 'RAIL_H', 'RAIL_SHADE',
               'ARROW_X', 'ARROW_W', 'ARROW_H', 'ARROW_SHAFT', 'ARROW_HEAD')
@@ -91,6 +92,9 @@ def constants():
     k.update(numbers(BUILDER, ('SHADOW_LIFT',))[0])
     k.update(numbers(CTRL, ('BOARD_TILT',))[0])
     k.update(numbers(ENV, ('KEY_LIGHT_PITCH_DEG',))[0])
+    # The medium car's aspect, exactly as car-mesh.ts derives REFERENCE_ASPECT from CAP_BOX.
+    med = next(wd for name, ln, wd in CAPS if name == 'medium')
+    k['REFERENCE_ASPECT'] = next(ln for name, ln, _ in CAPS if name == 'medium') / med
     k['ACROSS_TO_ALONG'] = (k['BODY_ACROSS'] / k['BODY_ALONG']) / k['REFERENCE_ASPECT']
     return k, tuple(int(g) for g in tyre.groups()), profile
 
@@ -109,8 +113,9 @@ def caps():
     return out
 
 
-K, TYRE, PROFILE = constants()
+# CAPS first: `constants` derives REFERENCE_ASPECT from the medium car's box.
 CAPS = caps()
+K, TYRE, PROFILE = constants()
 
 TILT = math.radians(K['BOARD_TILT'])
 TILT_SIN, TILT_COS = math.sin(TILT), math.cos(TILT)
@@ -209,7 +214,15 @@ def ellipse(cx, cy, w, h, seg=48):
              cy + math.sin(2 * math.pi * i / seg) * h / 2) for i in range(seg)]
 
 
-def triangles(ln, wd):
+def axles(cap):
+    """Mirrors `axles` in car-mesh.ts: the wheel offsets along one side, and their width."""
+    if cap == 'big':
+        return ([K['BUS_WHEEL_X_OUTER'], K['BUS_WHEEL_X_INNER'],
+                 -K['BUS_WHEEL_X_INNER'], -K['BUS_WHEEL_X_OUTER']], K['BUS_WHEEL_W'])
+    return ([K['WHEEL_X'], -K['WHEEL_X']], K['WHEEL_W'])
+
+
+def triangles(ln, wd, cap):
     """Every triangle of the car, mirroring `carMesh`'s stack, as (3 board verts, 3 colours).
 
     A board vert is (x, y, z): x and y in fractions of the car (they get multiplied by ln/wd on
@@ -243,11 +256,12 @@ def triangles(ln, wd):
     rim = body_outline(K['EDGE_GROW_ALONG'], K['EDGE_GROW_ACROSS'])
     height = K['CAR_HEIGHT']
 
-    # Wheels, low on the wall.
-    for sx in (-1, 1):
+    # Wheels, low on the wall. How many depends on the capacity -- see `axles`.
+    xs, ww = axles(cap)
+    for x in xs:
         for sy in (-1, 1):
-            flat(round_rect(sx * K['WHEEL_X'], sy * K['WHEEL_Y'],
-                            K['WHEEL_W'], K['WHEEL_H'], K['WHEEL_R']), K['WHEEL_Z'], TYRE)
+            flat(round_rect(x, sy * K['WHEEL_Y'],
+                            ww, K['WHEEL_H'], K['WHEEL_R']), K['WHEEL_Z'], TYRE)
 
     # The wall: the rim extruded from the board up to the roof, normals flat and outward.
     wall = lighten(CAR, K['WALL_LIFT'])
@@ -355,7 +369,7 @@ def render(out_path):
                     project((sh_pts[i][0], sh_pts[i][1], -0.06), cx, cy, ln, wd),
                     project((sh_pts[i + 1][0], sh_pts[i + 1][1], -0.06), cx, cy, ln, wd)),
                    black, SHADOW_ALPHA)
-        for verts, cols in triangles(ln, wd):
+        for verts, cols in triangles(ln, wd, name):
             raster(tuple(project(v, cx, cy, ln, wd) for v in verts), cols)
         print(f'{name}: {ln} x {wd}')
         y0 += ch

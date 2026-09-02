@@ -1,4 +1,5 @@
 import { Color, Mesh, primitives, utils } from 'cc';
+import { Cap, CAP_BOX } from '../core/index';
 
 /**
  * The car, DRAWN rather than modelled: one flat vertex-coloured mesh per body colour.
@@ -32,7 +33,8 @@ import { Color, Mesh, primitives, utils } from 'cc';
  *      band runs right round rather than stopping at the ends, which is what a vehicle looks
  *      like from up here and is a great deal simpler than partial rings.
  *   5. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
- *      past its silhouette -- which is all a wheel is from above.
+ *      past its silhouette -- which is all a wheel is from above. HOW MANY of them is what
+ *      tells a bus from a car; see `axles`.
  *
  * WHY THE DEPTH HAS TO COME FROM THE LIGHT AND NOT FROM BAKED SHADING. A highlight on one side
  * is a claim about where the light is, and the mesh ROTATES WITH THE CAR -- so anything baked
@@ -141,7 +143,7 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
 ];
 
 /**
- * Wheels, at (±x, ±y), low on the wall so only the overhang past the body shows.
+ * Wheels, low on the wall so only the overhang past the body shows.
  *
  * WHEEL_Y is what decides how much that is: at 0.40 they reached 0.51 against a rim at 0.484,
  * which was plenty while the car was a flat plan on a pale floor and almost nothing once that
@@ -152,13 +154,40 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
  * lying across the screen and falls apart for one pointing up it, where the wall lands on the
  * car's TAIL and takes the wheels with it -- two dark blobs stuck to the back bumper. The
  * parking bay made it obvious, every stall holding a car pointing up. See the README.
+ *
+ * HOW MANY, and why it is per capacity. Only ONE side of a car is ever visible: the camera
+ * looks at the board from up-screen, so a car lying across the screen shows the two wheels on
+ * its near side and nothing of the far pair, while a car pointing up the screen shows both
+ * sides in profile. That is why every vehicle read as a two-wheeler however long it was, and
+ * why "the coach should have four wheels" was a request for four along ONE side -- so the big
+ * cap gets four per side, at the two mirrored offsets below, and its wheels are narrower so
+ * the four read as four rather than as a smear. Small and medium keep one axle at each end.
+ *
+ * The count is now a SIZE CUE, which is worth more than it cost: medium and big are within
+ * 11% of each other in length (1.611 against 1.793, see CAP_BOX) and were hard to tell apart.
  */
 const WHEEL_X = 0.30;
+const BUS_WHEEL_X_OUTER = 0.37;
+const BUS_WHEEL_X_INNER = 0.13;
 const WHEEL_Y = 0.45;
 const WHEEL_W = 0.15;
+const BUS_WHEEL_W = 0.10;
 const WHEEL_H = 0.22;
 const WHEEL_R = 0.35;
 const TYRE = new Color(25, 28, 34);
+
+/**
+ * Where this capacity's wheels sit along the body, as fractions of its length from the centre,
+ * and how wide each one is. Mirrored across the centreline already, so the list IS one side.
+ */
+function axles(cap: Cap): { xs: readonly number[]; w: number } {
+    return cap === 'big'
+        ? {
+            xs: [BUS_WHEEL_X_OUTER, BUS_WHEEL_X_INNER, -BUS_WHEEL_X_INNER, -BUS_WHEEL_X_OUTER],
+            w: BUS_WHEEL_W,
+        }
+        : { xs: [WHEEL_X, -WHEEL_X], w: WHEEL_W };
+}
 
 /**
  * Glass: a band round the side wall, between GLASS_LOW and GLASS_HIGH of the car's height.
@@ -246,17 +275,24 @@ const CORNER_SEGMENTS = 5;
 
 /**
  * Length-to-width ratio the rounded corners are shaped for -- the medium car's, which is the
- * commonest on a board.
+ * commonest on a board. READ OFF CAP_BOX rather than written down: it was a literal 3.126, and
+ * a revision that resized medium would have left it describing the wrong car in silence.
  *
  * A corner radius is only a circle in WORLD space, and the mesh is built in a unit box that
  * then gets stretched by (len, wid). Take the radius as a plain fraction of the normalized
  * shape and the stretch turns it into an ellipse three times wider than tall: the windows come
  * out rounded on their short sides and square on their long ones, which is a brick, not glass.
  * So the radius is worked out at this aspect and divided back out along X, which makes the
- * corners true circles on a medium car and near enough on the other two (2.05 and 3.14 against
- * 3.13). One shared mesh is worth that much error; a mesh per cap would not be.
+ * corners true circles on a medium car and near enough on big (3.15 against 3.13) -- small, at
+ * 2.05, is the one carrying real error, its corners about half again as rounded along X as
+ * across.
+ *
+ * That could now be made exact: the mesh is keyed by CAPACITY as well as colour (see
+ * `carMesh`), so each cap could be shaped at its own aspect. It would mean threading the
+ * aspect through `bodyOutline` and `roundRect` instead of reading a module constant, and the
+ * error it removes has never been reported, so it is recorded here rather than done.
  */
-const REFERENCE_ASPECT = 3.126;
+const REFERENCE_ASPECT = CAP_BOX.medium.len / CAP_BOX.medium.wid;
 
 /**
  * Convert an ACROSS shrink into the ALONG shrink that removes the same distance in world units.
@@ -400,13 +436,16 @@ class Plan {
  * Split out from `carMesh` so `tools/car-plan.py` has one description to mirror and the ordering
  * cannot drift between the mesh and the picture used to judge it.
  */
-function design(color: Color): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring[]; over: Flat[] } {
+function design(
+    color: Color, cap: Cap,
+): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring[]; over: Flat[] } {
     const rim = bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS);
     const wheels: Flat[] = [];
-    for (const sx of [-1, 1]) {
+    const axle = axles(cap);
+    for (const x of axle.xs) {
         for (const sy of [-1, 1]) {
             wheels.push({
-                pts: roundRect(sx * WHEEL_X, sy * WHEEL_Y, WHEEL_W, WHEEL_H, WHEEL_R),
+                pts: roundRect(x, sy * WHEEL_Y, axle.w, WHEEL_H, WHEEL_R),
                 c: TYRE,
             });
         }
@@ -432,16 +471,22 @@ function design(color: Color): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring
     return { rim, wheels, rings, over };
 }
 
-function colourKey(c: Color): string {
-    return `${c.r},${c.g},${c.b}`;
+function colourKey(c: Color, cap: Cap): string {
+    return `${c.r},${c.g},${c.b},${cap}`;
 }
 
 const meshCache = new Map<string, Mesh>();
 
 /**
  * The whole car as ONE mesh, in a unit box (length along X, width along Y, -0.5..0.5), with
- * every plate's colour baked into its vertices. Cached per colour -- there are six car colours
- * in the palette, so six meshes serve a whole lot.
+ * every plate's colour baked into its vertices. Cached per (colour, CAPACITY) -- six colours
+ * in the palette and three capacities, so at most eighteen meshes serve a whole lot.
+ *
+ * It was per colour alone until the wheels stopped being the same on every vehicle (see
+ * `axles`). The cost is draw calls: one instanced draw per (mesh, material) pair, so a lot
+ * went from six to at most eighteen. That is nothing here -- the frame-rate problem this
+ * design solved was ~414 draws for 46 modelled cars, and the JS-side cost of walking a
+ * thousand renderers, neither of which eighteen comes near.
  *
  * Vertex colours, not materials, are what collapse the draw calls. The car needs a white
  * arrow, near-black tyres and several shades of its own paint; as materials that is a dozen
@@ -452,13 +497,13 @@ const meshCache = new Map<string, Mesh>();
  * The roof's SHADING is not baked -- only its colour is. Its normals do that work, and the
  * engine's key light does the rest; see DOME_PROFILE.
  */
-export function carMesh(color: Color): Mesh {
-    const key = colourKey(color);
+export function carMesh(color: Color, cap: Cap): Mesh {
+    const key = colourKey(color, cap);
     const hit = meshCache.get(key);
     if (hit) return hit;
 
     const plan = new Plan();
-    const { rim, wheels, rings, over } = design(color);
+    const { rim, wheels, rings, over } = design(color, cap);
 
     // The wheels first, low on the wall, so the wall's own band draws over whatever part of them
     // falls inside the body: what shows is the sliver past the silhouette, which is all a wheel
