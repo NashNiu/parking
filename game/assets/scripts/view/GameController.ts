@@ -1,7 +1,7 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
     input, Input, EventTouch, EventMouse, EventKeyboard, KeyCode, geometry, tween, Mat4,
-    assetManager, EffectAsset, screen,
+    EffectAsset, Material, screen,
 } from 'cc';
 import {
     GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
@@ -48,7 +48,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0902-12';
+const BUILD_TAG = 'build 0903-01';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -274,6 +274,15 @@ const ROOF_RISE = CAR_HEIGHT * TILT_TAN;
  * it starts in, so that reading it never depends on the preview having keyboard focus.
  */
 const DEBUG_FOOTPRINTS = false;
+
+/**
+ * The material whose only job is to keep the `builtin-standard` effect in the package.
+ *
+ * See `preloadLitEffect` for why an asset has to exist for the effect to ship at all. It is
+ * never applied to anything: every lit material in the game is built in code (materials.ts),
+ * from the effect this one registers.
+ */
+const LIT_MATERIAL = 'materials/lit';
 
 /**
  * Seconds a startup preload gets before the game goes on without it.
@@ -549,8 +558,8 @@ export class GameController extends Component {
         // below us, in the engine or the asset download; if it is present, the hang is in
         // the preload chain below and the deadline warnings will say which step.
         console.log('[Game] controller start');
-        // Preload builtin-standard so lit materials get real lighting; it lives in
-        // the `internal` bundle but isn't preloaded unless something already uses it.
+        // Preload builtin-standard so lit materials get real lighting. Nothing else in the
+        // project uses it, so it needs asking for by name -- see preloadLitEffect.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
         //
         // This is the ONLY preload left. Cars and passengers are both drawn from code now
@@ -584,12 +593,24 @@ export class GameController extends Component {
         step(() => finish(false));
     }
 
-    /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */
+    /**
+     * Register the builtin-standard effect by loading a material that references it.
+     *
+     * The load is indirect on purpose. `builtin-standard` is NOT one of the engine's default
+     * materials, so it is only in the package if a PROJECT asset asks for it -- and for a long
+     * time it arrived by accident, as a dependency of three .glb models that nothing loaded.
+     * This method used to fetch it by its engine uuid, which worked only because those models
+     * were dragging it in; deleting them would have deleted the effect too and dropped every
+     * lit material to flat shading, with one warning line to say so.
+     *
+     * LIT_MATERIAL makes the dependency deliberate: everything under `resources` is packed
+     * whether or not code references it, and loading a material loads its effect, which
+     * registers itself under its own name for `EffectAsset.get` to find. The uuid now lives in
+     * the .mtl -- the one place the editor also writes it -- rather than in a comment here.
+     */
     private preloadLitEffect(done: () => void): void {
         if (EffectAsset.get('builtin-standard')) { done(); return; }
-        // Fixed engine uuid for effects/builtin-standard.effect.
-        const uuid = 'c8f66d17-351a-48da-a12c-0212d28575c4';
-        assetManager.loadAny({ uuid }, (err) => {
+        resources.load(LIT_MATERIAL, Material, (err) => {
             if (err) console.warn('[Game] builtin-standard preload failed, using flat shading:', err);
             done();
         });
