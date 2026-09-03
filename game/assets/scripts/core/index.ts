@@ -2,6 +2,7 @@ export * from './track-shapes';
 export * from './track-path';
 export * from './types';
 export * from './level-data';
+export * from './tunnel';
 export * from './move-solver';
 export * from './lot-system';
 export * from './parking-system';

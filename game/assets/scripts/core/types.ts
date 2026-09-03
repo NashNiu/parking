@@ -112,6 +112,46 @@ export const CAR_SCALE = 1.0;
  */
 export const CLEARANCE = 0.04;
 
+/** One car waiting in a tunnel. Everything else about it -- where it stands, which way
+ * it leaves, what id it gets -- belongs to the tunnel, not to the car. */
+export interface TunnelCar { color: string; cap: Cap }
+
+/**
+ * A queue of cars behind a fixed mouth. The car at the head stands OUTSIDE, in front of
+ * the body, and is a `CarSpec` like any other: it is tapped, blocked, parked and boarded
+ * by exactly the code every other car goes through. When it leaves, the next one takes
+ * its place (see `LotSystem.removeCar`).
+ *
+ * `x`/`y`/`angle` describe the BODY. The mouth car's position is derived from them by
+ * `mouthCar` rather than stored, because two stored copies is two chances to disagree.
+ * `angle` is the direction cars LEAVE in: 0 = +X, counter-clockwise, [0, 360), the same
+ * convention `CarSpec.angle` uses.
+ *
+ * `cars[0]` is whoever is at the mouth right now; the array is consumed from the head.
+ * Its LENGTH is the number the player sees on the tunnel -- the mouth car included,
+ * because it has not left yet.
+ */
+export interface TunnelSpec {
+  id: number;
+  x: number;
+  y: number;
+  angle: number;
+  cars: TunnelCar[];
+}
+
+/**
+ * The tunnel body's own size in board units, the same units and the same role as CAP_BOX.
+ *
+ * `wid` 0.76 is a small car's 0.471 plus a 0.145 wall each side, so a car emerging has
+ * visible wall beside it rather than appearing to squeeze out of a slot. `len` 1.2 is a
+ * little over one car length: enough that the roof reads as a solid thing under the count
+ * badge instead of a wafer.
+ *
+ * core owns this number and the view reads it, the same direction CAP_BOX runs. Do not
+ * re-derive it from whatever `tunnel-mesh.ts` draws.
+ */
+export const TUNNEL_BOX: Box = { len: 1.2, wid: 0.76 };
+
 export interface QueueGroup {
   color: string;
   count: number;
@@ -167,7 +207,7 @@ export const DEFAULT_FEEDS: Feed[] = [
 
 export interface LevelData {
   id: number;
-  lot: { w: number; h: number; cars: CarSpec[] };
+  lot: { w: number; h: number; cars: CarSpec[]; tunnels?: TunnelSpec[] };
   parking: { slots: number; unlocked: number };
   loop: {
     capacity: number;

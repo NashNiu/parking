@@ -220,3 +220,33 @@ test('nothing parked astern is ever a blocker, at every pair of headings', () =>
     }
   }
 });
+
+test('a static blocker stops a car, and reports carId -1', () => {
+  // Tunnel body at x=1 spans x 0.4..1.6. The car nose sits at -1.518.
+  const body = { x: 1, y: 0, angle: 0, len: 1.2, wid: 0.76 };
+  const mover = car({ id: 1, x: -2, y: 0, angle: 0 });
+  const hit = firstBlocker(mover, [mover], LOT, [body]);
+  expect(hit).not.toBeNull();
+  expect(hit!.carId).toBe(-1);
+  expect(hit!.gap).toBeCloseTo(0.4 - (-2 + CAP_BOX.small.len / 2), 6);
+});
+
+test('a static blocker behind the mover is not a blocker', () => {
+  const body = { x: 1, y: 0, angle: 0, len: 1.2, wid: 0.76 };
+  // Same body, but the car is past it and driving away.
+  const mover = car({ id: 1, x: 2.122, y: 0, angle: 0 });
+  expect(firstBlocker(mover, [mover], LOT, [body])).toBeNull();
+  expect(pathClear(mover, [mover], LOT, [body])).toBe(true);
+});
+
+test('the nearest of a car and a static blocker wins', () => {
+  const body = { x: 3, y: 0, angle: 0, len: 1.2, wid: 0.76 };
+  const mover = car({ id: 1, x: -3, y: 0, angle: 0 });
+  const near = car({ id: 2, x: 0, y: 0, angle: 0 });
+  expect(firstBlocker(mover, [mover, near], LOT, [body])!.carId).toBe(2);
+});
+
+test('no blockers argument behaves exactly as before', () => {
+  const mover = car({ id: 1, x: -2, y: 0, angle: 0 });
+  expect(firstBlocker(mover, [mover], LOT)).toBeNull();
+});
