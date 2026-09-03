@@ -586,6 +586,22 @@ export class HudView {
     }
 
     /**
+     * Drop every tunnel badge. The badges live under this HUD's own Canvas, not under the
+     * board -- `buildBoard`'s `boardRoot.destroy()` never touches them, so a level with no
+     * tunnel at id 3 that follows one that HAD a tunnel 3 would otherwise leave that badge
+     * sitting on screen forever, `active` and showing a stale count, since nothing would ever
+     * call `setTunnelCount(3, ...)` again to hide it.
+     *
+     * Destroys the holders rather than just deactivating them, the same way `switchTo`
+     * retires a departed car's seat chip (`e.chip.destroy()`) rather than hiding it -- one
+     * discipline for both of this HUD's per-id collections, not two.
+     */
+    clearTunnelBadges(): void {
+        for (const badge of this.tunnelBadges.values()) badge.holder.destroy();
+        this.tunnelBadges.clear();
+    }
+
+    /**
      * Show a passing message. Built on first use and reused after that, so a player
      * hammering a refused tap restarts one toast instead of stacking a pile of them --
      * which is also why every tween on the pill is stopped before the next one starts.

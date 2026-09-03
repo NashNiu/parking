@@ -785,6 +785,13 @@ export class GameController extends Component {
         // outlives the destroy and would otherwise hand `syncTunnels` a Node whose native
         // handle is gone the moment the next level's own tunnels are built.
         this.tunnelNodes.clear();
+        // Same reasoning, on the HUD side: the badges hang off the persistent Canvas, not the
+        // board, so nothing else ever takes down a tunnel id the NEW level doesn't have. Here,
+        // not in `switchTo`, for the same reason `tunnelNodes.clear()` is here rather than
+        // next to `parked.clear()` -- `buildBoard` is the one function every rebuild path runs
+        // through (the very first load included, where there is nothing to clear yet), and it
+        // has to happen before the loop below re-adds the badges the new level actually owns.
+        this.hud?.clearTunnelBadges();
 
         // The box the lot and its ring road have to live in. These were CONSTANTS
         // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
