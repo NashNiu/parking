@@ -286,7 +286,18 @@ const TUNNEL_CURVE: TunnelParams[] = [
 ];
 
 export function tunnelParams(id: number): TunnelParams {
-    const i = Math.min(Math.max(1, id), TUNNEL_CURVE.length) - 1;
+    // Floor before the clamp, same idiom `trackParams` uses just below and for the same
+    // reason: a fractional id is a fractional array index, and `TUNNEL_CURVE[3.5]` is
+    // `undefined`, not row 3 or row 4. `trackParams` stops there because a non-finite id
+    // falls into its OWN "past the authored table" branch, which happens to rebuild
+    // something drawable regardless. TUNNEL_CURVE has no such branch -- past its end the
+    // clamp is the whole story -- so a NaN id (Math.max(1, NaN) is NaN, and every compare
+    // against NaN is false) would sail straight through the clamp and come out as
+    // `TUNNEL_CURVE[NaN]`, `undefined`, which a caller would read as "this level's tunnel
+    // count" rather than a crash. `Number.isFinite` catches that case before it can reach
+    // the arithmetic at all.
+    const n = Number.isFinite(id) ? Math.floor(id) : 1;
+    const i = Math.min(Math.max(1, n), TUNNEL_CURVE.length) - 1;
     return TUNNEL_CURVE[i];
 }
 

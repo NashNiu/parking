@@ -353,6 +353,11 @@ test('the tunnel curve: none before level 4, two from level 7', () => {
 test('the tunnel curve clamps past its ends, like levelParams does', () => {
   expect(tunnelParams(0)).toEqual(tunnelParams(1));
   expect(tunnelParams(99)).toEqual(tunnelParams(10));
+  // A fractional id floors onto the row below it rather than reading a fractional array
+  // index (which is `undefined`), and a non-finite id lands on a real row instead of
+  // slipping past the clamp entirely -- see the comment on `tunnelParams`.
+  expect(tunnelParams(4.5)).toEqual(tunnelParams(4));
+  expect(tunnelParams(NaN)).toEqual(tunnelParams(1));
 });
 
 test('no level ever asks for more tunnel cars than it has cars', () => {
