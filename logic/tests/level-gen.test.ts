@@ -99,7 +99,15 @@ test('every level fills the lot, and fills it equally', () => {
     const level = levelFor(id);
     // Every car asked for is actually placed: a pack that quietly came up short is the
     // failure `pack`/`generateLevel` guard against, and this is that guard's assertion.
-    expect(level.lot.cars.length).toBe(levelParams(id).cars);
+    //
+    // The tunnel term is not a loosening -- it is what keeps the assertion measuring the
+    // same thing it always did. A tunnel's cars come OUT of the budget rather than on top
+    // of it (see TUNNEL_CURVE), so from level 4 the lot is packed with the remainder and
+    // `lot.cars.length` alone would be four to twelve short by design. Summing the two back
+    // together restores the original claim: the level holds exactly the cars asked for, and
+    // a short pack still fails here.
+    const inside = (level.lot.tunnels ?? []).reduce((n, t) => n + t.cars.length, 0);
+    expect(level.lot.cars.length + inside).toBe(levelParams(id).cars);
   }
 });
 
@@ -173,8 +181,19 @@ test('the curve actually sets the blocked-car count, within its stated tolerance
   // vacuous: minRounds runs 2..5 over these ten while the rounds they actually come out with
   // run 6..12, so it could only fire in the case this line already catches -- the generator
   // giving up and returning a nearest miss.
+  //
+  // The denominator is the cars ON THE BOARD at the opening position -- the grid cars plus
+  // one mouth car per tunnel -- and not the level's 60-car budget. That is not a loosening:
+  // `estimateDifficulty.blocked` counts cars whose exit lane is blocked, and a car still
+  // queued inside a tunnel has no exit lane at all to be blocked on, so it was never in the
+  // numerator either. Against the budget this would ask level 10 for 47 blocked cars out of
+  // the 50 that are on the board, which is a share of 0.94 and not the 0.78 the curve names.
+  // Restated from `levelParams`/`tunnelParams` rather than taken from `blockedTarget`, so
+  // this still fails if the generator's own copy of the formula drifts.
   for (const id of IDS) {
-    const want = Math.round(levelParams(id).blockedRatio * levelParams(id).cars);
+    const p = levelParams(id);
+    const tp = tunnelParams(id);
+    const want = Math.round(p.blockedRatio * (p.cars - tp.count * tp.cars + tp.count));
     expect(Math.abs(estimateDifficulty(levelFor(id)).blocked - want))
       .toBeLessThanOrEqual(BLOCKED_TOLERANCE);
   }
@@ -202,7 +221,15 @@ test('a level is short enough to finish: passengers stay within the budget', () 
   for (const id of IDS) {
     const level = levelFor(id);
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
-    const seats = level.lot.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0);
+    // Seats from EVERY car in the level, the ones still inside a tunnel included. The queue
+    // is derived from all of them (`queueFor`) because all of them reach the bay -- a tunnel
+    // car is one tap further away, not exempt. Counting only the board would make this the
+    // assertion that the queue is four to twelve cars' worth too big, which is the opposite
+    // of the balance it is here to pin.
+    const seats = level.lot.cars.reduce((n, c) => n + CAP_SIZE[c.cap], 0)
+      + (level.lot.tunnels ?? []).reduce(
+        (n, t) => n + t.cars.reduce((m, c) => m + CAP_SIZE[c.cap], 0), 0,
+      );
     expect(pax).toBe(seats);
     // A budget on TIME, expressed in passengers, so it has to be re-derived every time
     // either side of that conversion moves. Both have: GROUP_SIZE board per tick, and TICK
@@ -364,5 +391,60 @@ test('no level ever asks for more tunnel cars than it has cars', () => {
   for (const id of IDS) {
     const tp = tunnelParams(id);
     expect(tp.count * tp.cars).toBeLessThan(CARS_PER_LEVEL);
+  }
+});
+
+import { LotSystem } from '../../game/assets/scripts/core/lot-system';
+
+test('levels carry the tunnels their curve asks for', () => {
+  for (const id of IDS) {
+    const tp = tunnelParams(id);
+    const got = levelFor(id).lot.tunnels ?? [];
+    expect(got.length).toBe(tp.count);
+    for (const t of got) expect(t.cars.length).toBe(tp.cars);
+  }
+});
+
+test('every level still totals CARS_PER_LEVEL cars', () => {
+  // The budget claim, from the other side. The test above says the level holds what
+  // `levelParams` asked for; this says what that number IS, and that a tunnel spends it
+  // rather than adding to it -- the two together are what stops a tunnel level quietly
+  // becoming a 66-car level with a longer passenger queue and a longer playing time.
+  for (const id of IDS) {
+    const lvl = levelFor(id);
+    const inside = (lvl.lot.tunnels ?? []).reduce((n, t) => n + t.cars.length, 0);
+    expect(lvl.lot.cars.length + inside).toBe(CARS_PER_LEVEL);
+  }
+});
+
+test('no tunnel is welded shut at the start', () => {
+  for (const id of IDS) {
+    const lvl = levelFor(id);
+    const lot = new LotSystem(
+      { w: lvl.lot.w, h: lvl.lot.h }, lvl.lot.cars, lvl.lot.tunnels ?? [],
+    );
+    for (const t of lot.tunnels) {
+      const mouth = lot.mouthCarId(t.id);
+      expect(mouth).not.toBeNull();
+      // Not a correctness requirement -- see the note on `WELDED_PENALTY`, a welded tunnel
+      // is still drainable once the lot empties -- but a count the player cannot spend on
+      // the first tap reads as a bug, so the search is asked to avoid it and this is what
+      // says whether it did.
+      expect(lot.canExit(mouth!)).toBe(true);
+    }
+  }
+});
+
+test('tunnel cars only ever use the level palette', () => {
+  // A colour in a tunnel that no grid car carries would draw fine and board fine -- the
+  // queue is derived, so it would even balance -- but it would be a colour the player first
+  // meets when it is already at the mouth. `placeTunnels` draws from the level's own palette
+  // width to stop that, and the board's colour set is the visible witness to it.
+  for (const id of IDS) {
+    const lvl = levelFor(id);
+    const onBoard = new Set(lvl.lot.cars.map((c) => c.color));
+    for (const t of lvl.lot.tunnels ?? []) {
+      for (const c of t.cars) expect(onBoard.has(c.color)).toBe(true);
+    }
   }
 });

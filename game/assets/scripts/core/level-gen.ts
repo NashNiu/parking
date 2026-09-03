@@ -8,7 +8,8 @@ import { isHardButFair } from './play-sim';
 import { pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
-import { tunnelReservation } from './tunnel';
+import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
+import { LotSystem } from './lot-system';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -84,10 +85,26 @@ const CAP_MIX: { cap: Cap; weight: number }[] = [
 
 /** How many whole-level attempts before settling for the best one found. */
 const ATTEMPTS = 200;
+
+/**
+ * Attempts a level WITH tunnels gets instead, and why it needs its own number.
+ *
+ * A tunnel level throws attempts away that a plain one never had to: the packer has to
+ * settle around an immovable reservation (about one attempt in four does, against four in
+ * five on an empty lot), and on top of that both mouths have to come out unwelded, which is
+ * roughly the same coin toss an ordinary car's exit lane is. Measured on level 9 at 200
+ * attempts the search found NO packing inside the blocked tolerance and shipped a nearest
+ * miss that the one-line rule then won; at 400 it found two and the painting search bit on
+ * the first. The extra attempts are only spent where they are needed -- levels 1 to 3 stop
+ * at PACKINGS long before either number binds, so nothing about them changes.
+ */
+const TUNNEL_ATTEMPTS = 400;
 /** Relaxation passes before an attempt is written off. */
 const RELAX_ITERS = 60;
 /** Share of cars whose angle is snapped to a right angle. See `pack`. */
 const SNAP_SHARE = 0.25;
+/** Draws a piece gets at finding a seat clear of the tunnel reservations. See `pack`. */
+const SEED_TRIES = 8;
 
 /**
  * Below this, a residual `overlapMTV` reading is floating-point noise from a pair the
@@ -503,11 +520,66 @@ function clampInside(p: Piece): void {
     if (maxY > hh) p.y -= maxY - hh;
 }
 
-/** Passenger queue implied by the cars: per colour, exactly the seats that colour offers. */
-function queueFor(cars: CarSpec[]): QueueGroup[] {
+/**
+ * Passes `settle` gives the lot edge and the reservations to agree with each other. Three,
+ * because a piece squeezed out of a reservation can land outside the lot and come back in
+ * on top of the reservation it just left; each pass halves what is left of that, and a
+ * residue is harmless -- the relaxation's own reservation sweep is what actually decides
+ * whether the attempt is accepted.
+ */
+const SETTLE_PASSES = 3;
+
+/**
+ * Slide a piece until it is inside the lot AND clear of every tunnel reservation. Mutates it.
+ *
+ * The two constraints are applied together because they are the same KIND of constraint: a
+ * reservation is a wall, not a neighbour. That distinction is what this function is for.
+ * `clampInside` has always been applied immediately after every push, so a piece never
+ * spends a moment outside the lot, and doing the same for reservations is what stops the
+ * relaxation oscillating: a piece shoved into a reservation by a neighbour is shoved back
+ * out in the same breath, instead of sitting there until the end-of-sweep reservation pass
+ * pushes it back into the neighbour that put it there. Measured on level 7 -- pushing
+ * reservations only at the end of a sweep, the packer settled 7 attempts in 200 and the
+ * level shipped with a welded tunnel; projecting them here, 19 in 82 and the search stopped
+ * early with three on-target packings in hand.
+ *
+ * With no tunnels `reserved` is empty and this is exactly `clampInside`, one redundant call
+ * later -- which is why levels 1 to 3 regenerate byte for byte.
+ */
+function settle(p: Piece, reserved: OBB[]): void {
+    for (let k = 0; k < SETTLE_PASSES; k++) {
+        let moved = false;
+        for (const r of reserved) {
+            const mtv = overlapMTV(packBox(p), r);
+            if (!mtv || Math.hypot(mtv.x, mtv.y) < SETTLED_GAP) continue;
+            // The whole MTV, not half: a reservation cannot take its share of the shove.
+            p.x += mtv.x;
+            p.y += mtv.y;
+            moved = true;
+        }
+        clampInside(p);
+        if (!moved) return;
+    }
+}
+
+/**
+ * Passenger queue implied by EVERY car in the level: per colour, exactly the seats that
+ * colour offers -- on the board AND inside a tunnel.
+ *
+ * The tunnel cars are not an optional extra here. They reach the bay exactly as a grid car
+ * does, one at a time as the player empties the mouth, so a queue that did not seat them
+ * would leave the level a tunnel's worth of passengers short and `validateLevel`'s colour
+ * balance would say so. That the player cannot see them yet is a fact about the VIEW.
+ */
+function queueFor(cars: CarSpec[], tunnels: TunnelSpec[]): QueueGroup[] {
     const seats = new Map<string, number>();
     for (const car of cars) {
         seats.set(car.color, (seats.get(car.color) ?? 0) + CAP_SIZE[car.cap]);
+    }
+    for (const t of tunnels) {
+        for (const c of t.cars) {
+            seats.set(c.color, (seats.get(c.color) ?? 0) + CAP_SIZE[c.cap]);
+        }
     }
     // Palette order, so the file reads consistently; the loop shuffles the ring anyway.
     return PALETTE.filter((c) => seats.has(c)).map((color) => ({
@@ -515,25 +587,37 @@ function queueFor(cars: CarSpec[]): QueueGroup[] {
     }));
 }
 
-function assemble(id: number, cars: CarSpec[]): LevelData {
+function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): LevelData {
     const track = trackParams(id);
     return {
         id,
-        lot: { w: LOT.w, h: LOT.h, cars },
+        // The key is omitted entirely when there are none, rather than written as `[]`, so
+        // levels 1-3 keep the exact shape they shipped with and their JSON does not churn.
+        // `LevelData.lot.tunnels` is optional precisely so this is expressible.
+        lot: tunnels.length > 0
+            ? { w: LOT.w, h: LOT.h, cars, tunnels }
+            : { w: LOT.w, h: LOT.h, cars },
         parking: { slots: SLOTS, unlocked: UNLOCKED },
         loop: {
             capacity: track.capacity,
             boardIndex: track.capacity / 2,
             track: track.track,
             feeds: track.feeds,
-            queue: queueFor(cars),
+            queue: queueFor(cars, tunnels),
         },
         powerups: { refresh: 3, hardClear: 1, magnet: 1 },
     };
 }
 
 /**
- * Fill the lot with `want` pieces, or return nothing at all.
+ * Fill the lot with `want` pieces around `tunnels`, or return nothing at all.
+ *
+ * The tunnels are IMMOVABLE. Every other pair in this relaxation shoves both ways, but a
+ * tunnel cannot be shoved: its mouth would move with it, and the car standing outside the
+ * mouth would move with that -- so a tunnel has to be the thing everything else is packed
+ * around, which is why `placeTunnels` runs first over an empty lot. A piece overlapping a
+ * reservation therefore takes the whole MTV itself, which is also what the pair sweep does
+ * to each of its two, and for the reason given there.
  *
  * Scatter first and separate afterwards, rather than rejecting overlapping
  * placements. Reject-sampling is what the grid version did and it worked there only
@@ -568,16 +652,36 @@ function assemble(id: number, cars: CarSpec[]): LevelData {
  * pairs for the next sweep to chase, which is why it is also faster, not just
  * capable: measured success at RELAX_ITERS=60 went from 0/30 to 20/30.
  */
-function pack(rng: () => number, want: number): Piece[] {
+function pack(rng: () => number, want: number, tunnels: TunnelSpec[]): Piece[] {
+    // The same half-clearance-plus-rounding-slack `packBox` gives a car, applied to the
+    // reservation instead: a settled piece and a tunnel then owe each other the full
+    // CLEARANCE, which is exactly what `validateLevel` measures between the two.
+    const pad = CLEARANCE / 2 + ROUND_MARGIN;
+    const reserved = tunnels.map((t) => inflate(tunnelReservation(t), pad));
     const caps: Cap[] = [];
     for (let i = 0; i < want; i++) caps.push(pickCap(rng));
     caps.sort((a, b) => CAP_BOX[b].len - CAP_BOX[a].len);
 
+    // Seeded OFF the reservations where a draw or two can manage it. A piece dropped on top
+    // of a tunnel starts the relaxation with a shove it cannot negotiate -- the tunnel will
+    // not move, so the piece has to walk out through whatever is packed around it, dragging
+    // the neighbours it displaces along. Measured on level 7: seeding blind, the packer
+    // settled 7 attempts in 200; resampling here, 42. Eight draws is where it stops paying
+    // (thirty gave the identical run), and a piece that never finds a clear seat is kept
+    // anyway rather than dropped -- the relaxation is still allowed to solve it.
+    //
+    // With no tunnels the test is false on the first draw, so the rng sequence, and every
+    // level before the fourth, is unchanged.
     const pieces: Piece[] = caps.map((cap) => {
-        let angle = rng() * 360;
-        if (rng() < SNAP_SHARE) angle = Math.round(angle / 90) * 90;
-        const p: Piece = { x: (rng() - 0.5) * LOT.w, y: (rng() - 0.5) * LOT.h, angle, cap };
-        clampInside(p);
+        let p: Piece;
+        for (let k = 0; ; k++) {
+            let angle = rng() * 360;
+            if (rng() < SNAP_SHARE) angle = Math.round(angle / 90) * 90;
+            p = { x: (rng() - 0.5) * LOT.w, y: (rng() - 0.5) * LOT.h, angle, cap };
+            clampInside(p);
+            if (k + 1 >= SEED_TRIES) break;
+            if (!reserved.some((r) => overlapMTV(packBox(p), r))) break;
+        }
         return p;
     });
 
@@ -592,13 +696,29 @@ function pack(rng: () => number, want: number): Piece[] {
                 pieces[i].y += mtv.y;
                 pieces[j].x -= mtv.x;
                 pieces[j].y -= mtv.y;
-                clampInside(pieces[i]);
-                clampInside(pieces[j]);
+                settle(pieces[i], reserved);
+                settle(pieces[j], reserved);
+            }
+        }
+        // Every piece against every reservation, once a sweep. `settle` above has already
+        // caught the ones a pair push displaced; this is what catches a piece no pair
+        // touched, and -- because it sets `moved` -- it is also the convergence test. An
+        // attempt is only settled when nothing is left inside a tunnel.
+        for (const piece of pieces) {
+            for (const r of reserved) {
+                const mtv = overlapMTV(packBox(piece), r);
+                if (!mtv || Math.hypot(mtv.x, mtv.y) < SETTLED_GAP) continue;
+                moved = true;
+                piece.x += mtv.x;
+                piece.y += mtv.y;
+                clampInside(piece);
             }
         }
         if (!moved) return pieces;
     }
-    // Never settled. Better a failed attempt than a lot with cars inside each other.
+    // Never settled. Better a failed attempt than a lot with cars inside each other -- or,
+    // now, a car inside a tunnel. A piece pinned between a wall and a reservation can push
+    // back and forth forever, and a failed attempt is much the cheaper of the two.
     return [];
 }
 
@@ -613,6 +733,45 @@ function pack(rng: () => number, want: number): Piece[] {
  */
 function headingsFor(p: Piece): number[] {
     return [p.angle, p.angle + 180];
+}
+
+/**
+ * Point each tunnel down whichever of its two axis headings leaves the mouth car a clear
+ * lane; keep the axis it was placed on when neither does.
+ *
+ * The direct analogue of `headingsFor`, and it works for the same reason: the reservation is
+ * symmetric (see `tunnelReservation`), so a tunnel turned a half turn covers exactly the
+ * board the packer packed around and the placement stays valid either way. That is the whole
+ * point of paying for both ends -- whether a mouth has a clear lane is not knowable until the
+ * cars are down, so the heading is the last thing decided, not the first.
+ *
+ * Probed against the pieces AT THEIR OWN ANGLES, which is the same occupancy model `peel`
+ * and `isSolvable` use -- a rectangle is identical under a half turn, so the box a piece
+ * presents does not depend on which of its two headings it is later handed. The three cannot
+ * disagree about who blocks whom.
+ *
+ * The tunnel BODIES go in as static blockers, including the tunnel's own: a mouth car sits
+ * one CLEARANCE clear of the body behind it and `sweepHit` reports nothing strictly behind
+ * the mover, so a tunnel never blocks its own car (see `mouthCar`), but the OTHER tunnel on
+ * a two-tunnel level very much can.
+ */
+function aimTunnels(tunnels: TunnelSpec[], pieces: Piece[]): TunnelSpec[] {
+    const probes: CarSpec[] = pieces.map((p, i) => ({
+        id: i + 1, x: p.x, y: p.y, angle: p.angle, color: '', cap: p.cap,
+    }));
+    // A tunnel body is unchanged by a half turn, so one set of bodies serves both headings.
+    const bodies = tunnels.map(tunnelBox);
+    return tunnels.map((t) => {
+        for (const angle of [t.angle, (t.angle + 180) % 360]) {
+            const aimed = { ...t, angle };
+            // id 0, which no probe carries, so `pathClear` skips nothing it should not.
+            const mouth = mouthCar(aimed, 0);
+            if (mouth && pathClear(mouth, probes, LOT, bodies)) return aimed;
+        }
+        // Welded shut on both headings. Not a rejection -- see `WELDED_PENALTY` -- so the
+        // attempt survives and the search scores it down.
+        return t;
+    });
 }
 
 /**
@@ -636,8 +795,16 @@ function headingsFor(p: Piece): number[] {
  *
  * A stuck peel drops the pieces it could not take. That leaves holes in the lot rather
  * than an unsolvable level, and it is why `generateLevel` still checks the car count.
+ *
+ * `blockers` are the tunnel bodies, which never leave: a lane that only clears once the
+ * tunnel is gone is not a lane. Note what this order does NOT include -- the tunnel CARS.
+ * When they come out is decided by the player tapping the mouth, not by this peel, and a
+ * tunnel is drainable at the end whatever the lot did (see the spec's solvability argument),
+ * so leaving them out costs the order nothing and keeps it a statement about the grid.
  */
-function peel(rng: () => number, pieces: Piece[]): { piece: Piece; angle: number }[] {
+function peel(
+    rng: () => number, pieces: Piece[], blockers: OBB[],
+): { piece: Piece; angle: number }[] {
     const remaining = pieces.slice();
     const order: { piece: Piece; angle: number }[] = [];
     while (remaining.length > 0) {
@@ -648,7 +815,9 @@ function peel(rng: () => number, pieces: Piece[]): { piece: Piece; angle: number
         const moves: { i: number; angle: number }[] = [];
         for (let i = 0; i < remaining.length; i++) {
             for (const angle of headingsFor(remaining[i])) {
-                if (pathClear({ ...probes[i], angle }, probes, LOT)) moves.push({ i, angle });
+                if (pathClear({ ...probes[i], angle }, probes, LOT, blockers)) {
+                    moves.push({ i, angle });
+                }
             }
         }
         if (moves.length === 0) break;
@@ -664,8 +833,16 @@ function round4(n: number): number {
 }
 
 /**
- * One attempt at a level's cars: pack the lot, work out an order they can leave in, then
- * paint them round-robin over that order.
+ * One attempt at a level's cars: lay the tunnels down, pack the lot around them, aim each
+ * tunnel, work out an order the cars can leave in, then paint them round-robin over it.
+ *
+ * The tunnels go FIRST and on an empty lot, because they are the only thing here that cannot
+ * be nudged (see `pack`). An attempt that cannot seat them all is abandoned whole rather than
+ * shipped a tunnel short -- the count is the curve's, not the packer's to negotiate.
+ *
+ * Only the GRID cars are peeled and painted. The `want` handed to `pack` is already the
+ * remainder after the tunnels take their share of the budget; the caller works that out, so
+ * this can stay a function of the two curves it is given.
  *
  * The round-robin is a STARTING POINT ONLY, and on its own it is the easiest painting there
  * is: `i` is the leaving order, so red/blue/green/yellow/red/... puts one car of every
@@ -677,8 +854,15 @@ function round4(n: number): number {
  * checked are the numbers written -- a ten-thousandth is small, but the clearance it is
  * measured against is only 0.04.
  */
-function scatter(rng: () => number, p: GenParams): CarSpec[] {
-    return peel(rng, pack(rng, p.cars)).map(({ piece, angle }, i) => ({
+function scatter(
+    rng: () => number, p: GenParams, tp: TunnelParams,
+): { cars: CarSpec[]; tunnels: TunnelSpec[] } {
+    const tunnels = placeTunnels(rng, p.colors, tp);
+    if (tunnels.length < tp.count) return { cars: [], tunnels: [] };
+    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels);
+    const aimed = aimTunnels(tunnels, pieces);
+    const order = peel(rng, pieces, aimed.map(tunnelBox));
+    const cars = order.map(({ piece, angle }, i) => ({
         id: i + 1,
         x: round4(piece.x),
         y: round4(piece.y),
@@ -695,16 +879,21 @@ function scatter(rng: () => number, p: GenParams): CarSpec[] {
         color: PALETTE[i % p.colors],
         cap: piece.cap,
     }));
+    return { cars, tunnels: aimed };
 }
 
 /**
- * Drop cars until the lot clears. Exitability only ever improves as cars leave, so this
+ * Drop GRID cars until the lot clears. Exitability only ever improves as cars leave, so this
  * terminates — an empty lot is trivially solvable. It is the safety net for a seed whose
  * every attempt tangled: better a level one car short than an unsolvable one.
+ *
+ * The tunnels stay. They are not the safety valve: dropping one would change the level's
+ * passenger total by four to six cars at a stroke, and it cannot help anyway -- a tunnel
+ * drains once the lot around it empties, so it is never what makes a level unclearable.
  */
-function repair(id: number, cars: CarSpec[]): CarSpec[] {
+function repair(id: number, cars: CarSpec[], tunnels: TunnelSpec[]): CarSpec[] {
     const kept = cars.slice();
-    while (kept.length > 0 && !isSolvable(assemble(id, kept))) kept.pop();
+    while (kept.length > 0 && !isSolvable(assemble(id, kept, tunnels))) kept.pop();
     return kept;
 }
 
@@ -757,18 +946,81 @@ const PACKINGS = 3;
  * stalls a four-colour level cannot be beaten by any painting (see `levelParams`), so the
  * search would burn 400 simulations to fail. Those levels take the round-robin and are
  * teaching levels.
+ *
+ * `tunnels` is carried through only so `assemble` builds the WHOLE level for `isHardButFair`
+ * to play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
+ * verdict reached without them is a verdict about a different level. The tunnel cars are not
+ * themselves repainted: they are not in the leaving order (when they come out is the player's
+ * choice, not `peel`'s) and `queueFor` derives the queue from whatever colours they carry, so
+ * no painting of the grid can unbalance them.
  */
-function choosePainting(id: number, cars: CarSpec[], p: GenParams): CarSpec[] | null {
+function choosePainting(
+    id: number, cars: CarSpec[], tunnels: TunnelSpec[], p: GenParams,
+): CarSpec[] | null {
     if (p.colors <= UNLOCKED) return null;
     const rand = mulberry32(id * 104729 + 17);
     let tried = 0;
     for (const assign of paintings(cars.length, p.colors, rand)) {
         if (tried++ >= PAINTINGS) return null;
         const painted = repaint(cars, assign);
-        const verdict = isHardButFair(assemble(id, painted));
+        const verdict = isHardButFair(assemble(id, painted, tunnels));
         if (verdict.hard && verdict.fair) return painted;
     }
     return null;
+}
+
+/**
+ * How much a welded-shut tunnel mouth costs an attempt. Large enough to lose to nothing
+ * else: a level that is two blocked cars off target still plays, while one whose count badge
+ * cannot be spent on the first tap looks broken.
+ *
+ * A PENALTY and not a rejection, because a welded tunnel is not actually unsolvable -- the
+ * lot empties around it and it drains at the end (see the spec's solvability argument). If no
+ * attempt in ATTEMPTS finds a clear mouth, a playable level is still better than none.
+ */
+const WELDED_PENALTY = 100;
+
+/**
+ * Tunnels whose mouth car cannot move on the opening position.
+ *
+ * Asked of a real `LotSystem` rather than computed from the spec, because the mouth car is
+ * something the LotSystem SPAWNS -- it has no id in the level file and no existence outside a
+ * played lot. This is the same object the game builds on load, so what it says here is what
+ * the player's first tap will find.
+ */
+function weldedMouths(level: LevelData): number {
+    const lot = new LotSystem(
+        { w: level.lot.w, h: level.lot.h }, level.lot.cars, level.lot.tunnels ?? [],
+    );
+    let n = 0;
+    for (const t of lot.tunnels) {
+        const id = lot.mouthCarId(t.id);
+        if (id === null || !lot.canExit(id)) n++;
+    }
+    return n;
+}
+
+/**
+ * The blocked-car count the curve asks of `id`.
+ *
+ * Measured against what is actually ON THE BOARD at the opening position -- the grid cars
+ * plus one mouth car per tunnel -- and NOT against CARS_PER_LEVEL. `blockedRatio` is a share
+ * of the cars a player can see and tap; the cars still queued inside a tunnel have no exit
+ * lane at all to be blocked on, and `estimateDifficulty.blocked` does not count them (it asks
+ * the opening `LotSystem`, which holds one car per tunnel). Counting them here would ask
+ * level 10 for 47 blocked cars out of the 50 that are on the board -- a target the geometry
+ * cannot reach, so every late level would fall back to its nearest miss and the ramp would
+ * stop doing anything.
+ *
+ * Exported because three places need the number and they must not drift apart: the search's
+ * own miss metric, the offline tool's "on target" column, and the test that pins the curve.
+ * They were three copies of one expression before tunnels existed, and the copies agreed only
+ * because the denominator happened to be the same.
+ */
+export function blockedTarget(id: number): number {
+    const p = levelParams(id);
+    const tp = tunnelParams(id);
+    return Math.round(p.blockedRatio * (p.cars - tp.count * tp.cars + tp.count));
 }
 
 /**
@@ -787,33 +1039,51 @@ function choosePainting(id: number, cars: CarSpec[], p: GenParams): CarSpec[] | 
  * cannot be made to bite can be abandoned for the next one. A level that exhausts all of
  * them keeps the first on-target packing, round-robin painted, exactly as before -- the
  * generation log is where that shows up (see the `hard`/`fair` columns in tools/gen-levels).
+ *
+ * A third condition joins the two from level 4 on: no tunnel welded shut. It is a preference
+ * and not a filter -- see `WELDED_PENALTY` -- so an attempt with a welded mouth is still kept
+ * as a nearest miss, it just loses to anything without one.
  */
 export function generateLevel(id: number): LevelData {
     const p = levelParams(id);
-    const wantBlocked = Math.round(p.blockedRatio * p.cars);
-    let best: { cars: CarSpec[]; miss: number } | null = null;
-    const onTarget: CarSpec[][] = [];
+    const tp = tunnelParams(id);
+    // The tunnels' cars come OUT of the level's budget, so the lot gets the remainder.
+    const gridCars = p.cars - tp.count * tp.cars;
+    const attempts = tp.count > 0 ? TUNNEL_ATTEMPTS : ATTEMPTS;
+    const wantBlocked = blockedTarget(id);
+    let best: { cars: CarSpec[]; tunnels: TunnelSpec[]; miss: number } | null = null;
+    const onTarget: { cars: CarSpec[]; tunnels: TunnelSpec[] }[] = [];
 
-    for (let attempt = 0; attempt < ATTEMPTS && onTarget.length < PACKINGS; attempt++) {
+    for (let attempt = 0; attempt < attempts && onTarget.length < PACKINGS; attempt++) {
         // Seeded from the id, so the same id walks the same attempts in the same order.
-        const cars = scatter(mulberry32(id * 7919 + attempt), p);
-        if (cars.length < p.cars) continue;      // could not place them all
-        const level = assemble(id, cars);
+        const { cars, tunnels } = scatter(mulberry32(id * 7919 + attempt), p, tp);
+        // Short on either count is short: an attempt that seated the tunnels but not the
+        // cars, or the cars but not the tunnels, is not this level.
+        if (cars.length < gridCars || tunnels.length < tp.count) continue;
+        const level = assemble(id, cars, tunnels);
         if (!isSolvable(level)) continue;
+        const welded = weldedMouths(level);
         const d = estimateDifficulty(level);
-        if (Math.abs(d.blocked - wantBlocked) <= BLOCKED_TOLERANCE && d.rounds >= p.minRounds) {
-            onTarget.push(cars);
+        if (welded === 0
+            && Math.abs(d.blocked - wantBlocked) <= BLOCKED_TOLERANCE
+            && d.rounds >= p.minRounds) {
+            onTarget.push({ cars, tunnels });
             continue;
         }
-        // Keep the nearest miss: distance in blocked cars, then in rounds.
-        const miss = Math.abs(d.blocked - wantBlocked) + Math.max(0, p.minRounds - d.rounds);
-        if (!best || miss < best.miss) best = { cars, miss };
+        // Keep the nearest miss: distance in blocked cars, then in rounds, then -- dwarfing
+        // both -- a welded mouth.
+        const miss = Math.abs(d.blocked - wantBlocked)
+            + Math.max(0, p.minRounds - d.rounds)
+            + welded * WELDED_PENALTY;
+        if (!best || miss < best.miss) best = { cars, tunnels, miss };
     }
 
-    for (const cars of onTarget) {
-        const painted = choosePainting(id, cars, p);
-        if (painted) return assemble(id, painted);
+    for (const { cars, tunnels } of onTarget) {
+        const painted = choosePainting(id, cars, tunnels, p);
+        if (painted) return assemble(id, painted, tunnels);
     }
-    if (onTarget.length > 0) return assemble(id, onTarget[0]);
-    return assemble(id, best ? best.cars : repair(id, scatter(mulberry32(id * 7919), p)));
+    if (onTarget.length > 0) return assemble(id, onTarget[0].cars, onTarget[0].tunnels);
+    if (best) return assemble(id, best.cars, best.tunnels);
+    const fallback = scatter(mulberry32(id * 7919), p, tp);
+    return assemble(id, repair(id, fallback.cars, fallback.tunnels), fallback.tunnels);
 }
