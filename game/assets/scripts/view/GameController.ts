@@ -1788,7 +1788,7 @@ export class GameController extends Component {
         if (!this.core || !this.gridRoot || !this.layout) return;
         const lot = this.core.lot;
         this.debugOverlay = buildFootprintOverlay(
-            Array.from(lot.cars.values()), lot.bounds, this.layout,
+            Array.from(lot.cars.values()), lot.bounds, this.layout, lot.tunnels,
         );
         this.gridRoot.addChild(this.debugOverlay);
     }

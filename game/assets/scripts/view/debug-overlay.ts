@@ -1,5 +1,5 @@
 import { Node, Color } from 'cc';
-import { CAP_BOX, CAR_SCALE, CarSpec, firstBlocker, Lot } from '../core/index';
+import { CAP_BOX, CAR_SCALE, CarSpec, firstBlocker, Lot, TunnelSpec, tunnelBox } from '../core/index';
 import { boxPart, makeMerged, MeshPart } from './slabs';
 import { BoardLayout } from './board-layout';
 
@@ -41,6 +41,9 @@ const LANE = 0.035;
 const CLEAR = new Color(0, 235, 120, 255);
 const BLOCKED = new Color(255, 40, 200, 255);
 
+/** A static blocker: not a car, cannot be tapped, never leaves. */
+const STATIC = new Color(255, 190, 40, 255);
+
 /**
  * How far a ray from `(x, y)` along `(dx, dy)` runs before it leaves the `w` x `h` lot, in
  * board units. Only used to give a CLEAR car's lane bar somewhere to stop; core does not
@@ -74,17 +77,25 @@ function outlineParts(len: number, wid: number): MeshPart[] {
  *
  * `cars` goes in as core holds it, and `firstBlocker` is asked the same question `canExit`
  * asks -- this reports what core actually believes, not a second opinion computed here.
+ * `tunnels` feeds it the same `blockers` array `LotSystem.canExit` hands `firstBlocker`
+ * (`tunnels.map(tunnelBox)`), so a car stopped by a tunnel gets the same verdict here that
+ * it gets in the game -- and the tunnel bodies themselves are drawn too, in a third colour,
+ * since without them the board has a region core is reasoning about and the overlay says
+ * nothing at all.
  */
 export function buildFootprintOverlay(
-    cars: CarSpec[], lot: Lot, layout: BoardLayout,
+    cars: CarSpec[], lot: Lot, layout: BoardLayout, tunnels: TunnelSpec[] = [],
 ): Node {
     const root = new Node('DebugFootprints');
+    // Exactly what core is handed, so the bars report core's own verdict rather than a
+    // second opinion computed here -- including, now, what the tunnels block.
+    const blockers = tunnels.map(tunnelBox);
     for (const car of cars) {
         const b = CAP_BOX[car.cap];
         const len = b.len * CAR_SCALE * layout.scale;
         const wid = b.wid * CAR_SCALE * layout.scale;
 
-        const block = firstBlocker(car, cars, lot);
+        const block = firstBlocker(car, cars, lot, blockers);
         const r = car.angle * Math.PI / 180;
         // Board units of clear lane ahead: what core measured, or the run to the lot's edge
         // when core found nothing in the way at all.
@@ -104,6 +115,21 @@ export function buildFootprintOverlay(
         const p = layout.toWorld(car.x, car.y);
         n.setPosition(p.x, p.y, OVERLAY_Z);
         n.setRotationFromEuler(0, 0, car.angle);
+        root.addChild(n);
+    }
+    // The tunnel bodies themselves, in a third colour. Without these the board has a region
+    // core is reasoning about and the overlay says nothing at all -- and this overlay is the
+    // project's one way to tell a view bug from a core one.
+    for (const t of tunnels) {
+        const b = tunnelBox(t);
+        const n = makeMerged(
+            `fp-tunnel-${t.id}`,
+            outlineParts(b.len * layout.scale, b.wid * layout.scale),
+            STATIC,
+        );
+        const p = layout.toWorld(b.x, b.y);
+        n.setPosition(p.x, p.y, OVERLAY_Z);
+        n.setRotationFromEuler(0, 0, b.angle);
         root.addChild(n);
     }
     return root;
