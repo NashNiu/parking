@@ -345,6 +345,12 @@ const PICK_INK = new Color(255, 255, 255, 220);
 const CHIP_W = 88;
 const CHIP_H = 58;
 
+/**
+ * The tunnel count badge's fill: the blue block from the reference art. Not in `colors.ts` --
+ * that palette is keyed by core's colour STRINGS, and a tunnel has no colour in core.
+ */
+const TUNNEL_BADGE_BG = new Color(92, 168, 250);
+
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
@@ -410,6 +416,8 @@ export class HudView {
     private promptBtn: Node | null = null;
     private promptClose: Node | null = null;
     private pickNodes: Node[] = [];
+    /** Per-tunnel count readouts, keyed by tunnel id. See `setTunnelCount`. */
+    private tunnelBadges = new Map<number, { holder: Node; label: Label }>();
     private speedNode: Node;
     private speedLabel: Label;
     /** The level on screen, kept because the win panel's caption names it. See `setLevel`. */
@@ -547,6 +555,34 @@ export class HudView {
     /** Half the chip's height, so the caller can hang it off a stall's bottom edge. */
     get seatChipHalfHeight(): number {
         return CHIP_H / 2;
+    }
+
+    /**
+     * The count on a tunnel: how many cars it still holds, the one at the mouth included.
+     *
+     * It lives in the HUD rather than on the board, and is placed each frame at the tunnel's
+     * projected point -- the same route `placeSpeed` and the seat chips take. A Label on a
+     * 3D node would need a second rendering path for the one piece of text outside the
+     * Canvas; this needs none, and faces the camera for free. What it gives up is being
+     * occluded by anything in the scene, which for a readout that must always be legible is
+     * not a loss.
+     */
+    setTunnelCount(tunnelId: number, n: number): void {
+        let badge = this.tunnelBadges.get(tunnelId);
+        if (!badge) {
+            const holder = roundedSprite(`tunnel-${tunnelId}`, 64, 64, TUNNEL_BADGE_BG, 16);
+            this.canvas.addChild(holder);
+            const label = makeLabel(holder, 'count', 34, 0);
+            badge = { holder, label };
+            this.tunnelBadges.set(tunnelId, badge);
+        }
+        badge.label.string = String(n);
+        badge.holder.active = n > 0;
+    }
+
+    /** Put a tunnel's badge at a point already converted into UI space. */
+    placeTunnelBadge(tunnelId: number, ui: Vec3): void {
+        this.tunnelBadges.get(tunnelId)?.holder.setPosition(ui);
     }
 
     /**

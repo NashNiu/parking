@@ -5,12 +5,13 @@ import {
 } from 'cc';
 import {
     GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
-    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
+    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
+import { buildTunnel, TUNNEL_SHELL, TUNNEL_MOUTH } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
@@ -186,6 +187,17 @@ const DRIVE_SPEED_MAX_MULT = 1.6;
  * is waiting out.
  */
 const ARRIVE_TURN_TIME = 0.1;
+
+/**
+ * How long the tunnel's next car takes to slide from the mouth out to where core has already
+ * put it, once its predecessor is tapped away. Short on purpose: `busy` is already holding
+ * taps off for the departing car's own drive (see `playDriveToSlot`), and this has to be well
+ * inside that window or a second tap would land on a still-emerging car and read as ignored.
+ * It also has to be SHORT on its own terms -- unlike a drive to a stall, there is no route to
+ * watch, just a car appearing out of a hole, and a mouth that stays visibly empty for as long
+ * as a departure reads as the tunnel having jammed rather than as the next car being drawn.
+ */
+const EMERGE_TIME = 0.28;
 
 /**
  * Bare board between a car driving down the side of the lot and the outermost parked cars, in
@@ -381,6 +393,14 @@ export class GameController extends Component {
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
+    /**
+     * One mesh per tunnel, keyed by tunnel id -- built in `buildBoard` and read back by
+     * `syncTunnels` for the point an emerging car slides FROM. A GameController field, not a
+     * local: unlike `gridView`'s own car table (fresh on every `new GridView`, see
+     * grid-view.ts), this survives across `update` ticks between levels, so `buildBoard`
+     * clears it explicitly on every rebuild rather than trusting a stale entry to be replaced.
+     */
+    private tunnelNodes = new Map<number, Node>();
     /**
      * Half the world box that MUST be on screen, for the board AS BUILT -- not for the
      * level, and not from a constant. `buildBoard` measures it off what it actually laid
@@ -760,6 +780,11 @@ export class GameController extends Component {
     }
 
     private buildBoard(level: LevelData): void {
+        // `boardRoot.destroy()` in `switchTo` takes every tunnel mesh down with it, but this
+        // map is a GameController field, not a child of the board it points into -- it
+        // outlives the destroy and would otherwise hand `syncTunnels` a Node whose native
+        // handle is gone the moment the next level's own tunnels are built.
+        this.tunnelNodes.clear();
 
         // The box the lot and its ring road have to live in. These were CONSTANTS
         // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
@@ -996,6 +1021,22 @@ export class GameController extends Component {
         this.layout = layout;
         this.gridView = new GridView(gridRoot, this.core!.lot, layout);
         this.gridView.render();
+
+        // After `render()`, deliberately: the mouth car every tunnel starts with is an
+        // ordinary lot car and already drawn by it, so the tunnel body has to land on top of
+        // that, not under it, for the mouth to read as the car standing just outside a hole
+        // rather than the hole floating in front of the car.
+        for (const t of this.core!.lot.tunnels) {
+            const len = TUNNEL_BOX.len * layout.scale;
+            const wid = TUNNEL_BOX.wid * layout.scale;
+            const node = buildTunnel(`tunnel-${t.id}`, len, wid, TUNNEL_SHELL, TUNNEL_MOUTH);
+            node.setPosition(layout.toWorld(t.x, t.y));
+            node.setRotationFromEuler(0, 0, t.angle);
+            this.gridRoot!.addChild(node);
+            this.tunnelNodes.set(t.id, node);
+            this.hud?.setTunnelCount(t.id, this.core!.lot.remainingIn(t.id));
+        }
+
         if (DEBUG_FOOTPRINTS) this.toggleDebugOverlay();
     }
 
@@ -1141,6 +1182,18 @@ export class GameController extends Component {
         this.hud.placeSpeed(this.uiCam.screenToWorld(screen, new Vec3()));
     }
 
+    /** Tunnel counts hang off board points, so they move with the framing like the speed button. */
+    private placeTunnelBadges(): void {
+        if (!this.cam || !this.uiCam || !this.gridRoot || !this.hud || !this.core) return;
+        for (const t of this.core.lot.tunnels) {
+            const node = this.tunnelNodes.get(t.id);
+            if (!node) continue;
+            const world = node.worldPosition;
+            const screen = this.cam.worldToScreen(world, new Vec3());
+            this.hud.placeTunnelBadge(t.id, this.uiCam.screenToWorld(screen, new Vec3()));
+        }
+    }
+
     /** Point the camera down world -Z at `camY`. The BOARD is what carries the tilt. */
     private placeCamera(camNode: Node): void {
         camNode.setPosition(new Vec3(0, this.camY, CAMERA_DIST));
@@ -1153,6 +1206,7 @@ export class GameController extends Component {
         // which hangs off a board point and so moves with the framing.
         this.fitCamera();
         this.placeSpeedButton();
+        this.placeTunnelBadges();
         this.tickFps(dt);
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
@@ -1865,6 +1919,7 @@ export class GameController extends Component {
         if (this.debugOverlay) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
             this.playDriveToSlot(id, angle, res.slotIndex);
+            this.syncTunnels();
         } else if (res.reason === 'full') {
             this.playLotFull(id);
         } else {
@@ -1931,6 +1986,43 @@ export class GameController extends Component {
                 this.syncSeatCounts();
             },
         });
+    }
+
+    /**
+     * Bring every tunnel's view back in line with core: redraw the count, and slide out any
+     * mouth car core has already put on the board but the lot has not drawn yet.
+     *
+     * Idempotent, and deliberately so -- it is called after every successful tap and does
+     * nothing for the tunnels that tap did not touch. The alternative was working out which
+     * tunnel the departing car came from, which means the view keeping its own copy of a
+     * mapping core already has.
+     *
+     * The slide starts at the same moment the departing car pulls away, not after it. `busy`
+     * is already holding taps off for the drive, and a mouth that stays visibly empty for a
+     * second and a half reads as the tunnel having jammed.
+     */
+    private syncTunnels(): void {
+        if (!this.core || !this.gridView) return;
+        for (const t of this.core.lot.tunnels) {
+            this.hud?.setTunnelCount(t.id, this.core.lot.remainingIn(t.id));
+            const mouth = this.core.lot.mouthCarId(t.id);
+            // Guards against `addCar` being called twice for one live id: it has no such
+            // guard itself (see grid-view.ts), so a second call here would silently build a
+            // second node, overwrite the tracked one, and orphan the first as a ghost car.
+            // `syncTunnels` runs after EVERY tap, so without this check it would re-trigger
+            // for the same mouth car on every subsequent, unrelated tap until it parks.
+            if (mouth === null || this.gridView.getCarNode(mouth)) continue;
+            const node = this.gridView.addCar(mouth);
+            if (!node) continue;
+            const to = node.position.clone();
+            // Start inside the tunnel and slide out to where core says the car stands.
+            const from = this.tunnelNodes.get(t.id)?.position ?? to;
+            node.setPosition(from);
+            tween(node)
+                .to(EMERGE_TIME / this.speed, { position: to }, { easing: 'quadOut' })
+                .call(() => this.gridView?.activateCar(mouth))
+                .start();
+        }
     }
 
     /**
