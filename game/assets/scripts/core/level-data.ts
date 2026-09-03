@@ -5,6 +5,7 @@ import {
 } from './track-path';
 import { inflate, insideRect, overlapMTV } from './geometry';
 import { carBox } from './move-solver';
+import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
 
 export function validateLevel(level: LevelData): string[] {
   const errors: string[] = [];
@@ -12,6 +13,11 @@ export function validateLevel(level: LevelData): string[] {
   const carCap: Record<string, number> = {};
   for (const c of level.lot.cars) {
     carCap[c.color] = (carCap[c.color] || 0) + CAP_SIZE[c.cap];
+  }
+  // Tunnel cars are cars: they take passengers exactly like the ones on the board, and a
+  // level whose queue does not cover them is unwinnable in a way nothing else notices.
+  for (const t of level.lot.tunnels ?? []) {
+    for (const c of t.cars) carCap[c.color] = (carCap[c.color] || 0) + CAP_SIZE[c.cap];
   }
   const paxCount: Record<string, number> = {};
   for (const g of level.loop.queue) {
@@ -49,6 +55,43 @@ export function validateLevel(level: LevelData): string[] {
       const hit = overlapMTV(inflate(carBox(cars[i]), pad), inflate(carBox(cars[j]), pad));
       if (hit) {
         errors.push(`cars ${cars[i].id} and ${cars[j].id} are closer than the clearance`);
+      }
+    }
+  }
+
+  // Tunnels. Three separate boxes get checked because they answer three questions: the
+  // RESERVATION says the tunnel plus a car at either end fits on the board (it is symmetric,
+  // so this holds whichever heading the tunnel is aimed down), the BODY is what blocks, and
+  // the MOUTH CAR is an actual car standing on the lot from the first frame and owes every
+  // other car the same clearance they owe each other.
+  const tunnels = level.lot.tunnels ?? [];
+  for (const t of tunnels) {
+    if (t.cars.length === 0) {
+      errors.push(`tunnel ${t.id} holds no cars`);
+      continue;   // every box below is sized from the cars
+    }
+    if (!insideRect(tunnelReservation(t), level.lot.w, level.lot.h)) {
+      errors.push(`tunnel ${t.id} does not fit inside the lot`);
+    }
+    const body = tunnelBox(t);
+    const mouth = mouthCar(t, -1);
+    for (const car of cars) {
+      if (!Number.isFinite(car.angle)) continue;
+      const grown = inflate(carBox(car), pad);
+      if (overlapMTV(inflate(body, pad), grown)) {
+        errors.push(`tunnel ${t.id} and car ${car.id} are closer than the clearance`);
+      }
+      if (mouth && overlapMTV(inflate(carBox(mouth), pad), grown)) {
+        errors.push(`tunnel ${t.id}'s mouth car and car ${car.id} are closer than the clearance`);
+      }
+    }
+  }
+  for (let i = 0; i < tunnels.length; i++) {
+    for (let j = i + 1; j < tunnels.length; j++) {
+      const a = inflate(tunnelReservation(tunnels[i]), pad);
+      const b = inflate(tunnelReservation(tunnels[j]), pad);
+      if (overlapMTV(a, b)) {
+        errors.push(`tunnels ${tunnels[i].id} and ${tunnels[j].id} are closer than the clearance`);
       }
     }
   }

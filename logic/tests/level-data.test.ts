@@ -208,3 +208,69 @@ test('every complaint names what is wrong', () => {
   expect(errors[1]).toContain('row spacing');
   expect(errors[2]).toBe('boardIndex 6 must be half the capacity (7)');
 });
+
+// baseLevel()'s 2x2 lot is too small for a tunnel (reservation is 3.208 long), so tunnel
+// tests get their own level.
+function tunnelLevel(): LevelData {
+  return {
+    id: 1,
+    lot: {
+      w: 9, h: 6,
+      cars: [{ id: 1, x: -3, y: 2, angle: 90, color: 'red', cap: 'small' }],
+      tunnels: [{
+        id: 1, x: 1, y: 0, angle: 0,
+        cars: [{ color: 'red', cap: 'small' }, { color: 'red', cap: 'small' }],
+      }],
+    },
+    parking: { slots: 4, unlocked: 4 },
+    // 1 grid car + 2 tunnel cars, all small = 3 * 16
+    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 48 }] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+}
+
+test('a level with a tunnel validates', () => {
+  expect(validateLevel(tunnelLevel())).toEqual([]);
+});
+
+test('tunnel cars count towards the colour balance', () => {
+  const lvl = tunnelLevel();
+  lvl.loop.queue = [{ color: 'red', count: 16 }];   // the grid car only
+  expect(validateLevel(lvl).join(' ')).toContain('car capacity 48 != passengers 16');
+});
+
+test('a tunnel whose reservation leaves the lot is reported', () => {
+  const lvl = tunnelLevel();
+  lvl.lot.tunnels![0].x = 3.5;      // reservation reaches 5.104, past the 4.5 half-width
+  expect(validateLevel(lvl).join(' ')).toContain('tunnel 1 does not fit inside the lot');
+});
+
+test('a car inside a tunnel body is reported', () => {
+  const lvl = tunnelLevel();
+  lvl.lot.cars[0] = { id: 1, x: 1, y: 0, angle: 0, color: 'red', cap: 'small' };
+  expect(validateLevel(lvl).join(' ')).toContain('tunnel 1 and car 1');
+});
+
+test('a car standing where the mouth car stands is reported', () => {
+  const lvl = tunnelLevel();
+  lvl.lot.cars[0] = { id: 1, x: 2.122, y: 0, angle: 0, color: 'red', cap: 'small' };
+  expect(validateLevel(lvl).join(' ')).toContain("tunnel 1's mouth car and car 1");
+});
+
+test('two tunnels closer than the clearance are reported', () => {
+  const lvl = tunnelLevel();
+  lvl.lot.w = 12;
+  lvl.lot.tunnels = [
+    { id: 1, x: -1, y: 0, angle: 0, cars: [{ color: 'red', cap: 'small' }] },
+    { id: 2, x: 1, y: 0, angle: 0, cars: [{ color: 'red', cap: 'small' }] },
+  ];
+  lvl.loop.queue = [{ color: 'red', count: 48 }];
+  expect(validateLevel(lvl).join(' ')).toContain('tunnels 1 and 2');
+});
+
+test('an empty tunnel is a data error, not a drained one', () => {
+  const lvl = tunnelLevel();
+  lvl.lot.tunnels![0].cars = [];
+  lvl.loop.queue = [{ color: 'red', count: 16 }];
+  expect(validateLevel(lvl).join(' ')).toContain('tunnel 1 holds no cars');
+});
