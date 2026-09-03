@@ -33,7 +33,9 @@ export class GameCore {
   private state: GameState = 'playing';
 
   constructor(level: LevelData) {
-    this.lot = new LotSystem({ w: level.lot.w, h: level.lot.h }, level.lot.cars);
+    this.lot = new LotSystem(
+      { w: level.lot.w, h: level.lot.h }, level.lot.cars, level.lot.tunnels ?? [],
+    );
     this.parking = new ParkingSystem(level.parking.slots, level.parking.unlocked);
     this.loop = new LoopSystem(
       level.loop.capacity,
