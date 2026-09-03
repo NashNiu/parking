@@ -1,12 +1,14 @@
-import { inflate, obbCorners, overlapMTV, OBB } from './geometry';
+import { inflate, insideRect, obbCorners, overlapMTV, OBB } from './geometry';
 import {
     CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, CLEARANCE, Feed, LevelData, Lot, QueueGroup,
+    TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
 import { isHardButFair } from './play-sim';
 import { pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
+import { tunnelReservation } from './tunnel';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -164,7 +166,7 @@ export interface GenParams {
  * count is bounded by whether the packer can still separate everything, and the gate is the
  * generator's own test that every car asked for is placed.
  */
-const CARS_PER_LEVEL = 60;
+export const CARS_PER_LEVEL = 60;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -253,6 +255,85 @@ export function levelParams(id: number): GenParams {
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
+}
+
+/** How many tunnels a level has, and how many cars each of them holds. */
+export interface TunnelParams { count: number; cars: number }
+
+/**
+ * The tunnel curve, one row per level, alongside TRACK_CURVE and read the same way.
+ *
+ * Nothing before level 4: a tunnel is a colour you cannot see coming, and the first three
+ * levels are where the player learns what the colours are FOR. It arrives one at a time
+ * (levels 4-6), then doubles, then deepens -- count first and depth second, because a second
+ * tunnel adds a second place to watch while a deeper one only adds more of the same gamble.
+ *
+ * The cars in these tunnels come OUT of CARS_PER_LEVEL, not on top of it: `generateLevel`
+ * packs the lot with the remainder. A level's passenger total and its difficulty curve were
+ * both tuned against 60 cars and neither wants to move for this.
+ */
+const TUNNEL_CURVE: TunnelParams[] = [
+    { count: 0, cars: 0 },   // 1
+    { count: 0, cars: 0 },   // 2
+    { count: 0, cars: 0 },   // 3
+    { count: 1, cars: 4 },   // 4
+    { count: 1, cars: 4 },   // 5
+    { count: 1, cars: 4 },   // 6
+    { count: 2, cars: 5 },   // 7
+    { count: 2, cars: 5 },   // 8
+    { count: 2, cars: 6 },   // 9
+    { count: 2, cars: 6 },   // 10
+];
+
+export function tunnelParams(id: number): TunnelParams {
+    const i = Math.min(Math.max(1, id), TUNNEL_CURVE.length) - 1;
+    return TUNNEL_CURVE[i];
+}
+
+/** Placement draws before a tunnel is written off and the whole attempt with it. */
+const PLACE_TRIES = 200;
+
+/**
+ * Scatter `tp.count` tunnels over an EMPTY lot, or return nothing at all.
+ *
+ * Before the cars, deliberately: a tunnel cannot be nudged out of the way the packer nudges
+ * a car (its mouth would move, and with it the car standing outside), so it has to be the
+ * thing everything else is packed around. Each one takes a symmetric reservation -- see
+ * `tunnelReservation` for why -- and must clear the lot's edge and every reservation already
+ * placed.
+ *
+ * `angle` here is an AXIS, not yet a heading. Which of the two ends the mouth opens onto is
+ * decided by `aimTunnels`, after the cars are down and there is something to aim against.
+ *
+ * Colours are drawn flat from the level's palette. There is no cleverness to add: the queue
+ * is derived from the cars (`queueFor`), so any draw is colour-balanced by construction, and
+ * "mixed, and you only see the one at the mouth" is the mechanic rather than a compromise.
+ */
+function placeTunnels(rng: () => number, colors: number, tp: TunnelParams): TunnelSpec[] {
+    const pad = CLEARANCE / 2 + ROUND_MARGIN;
+    const out: TunnelSpec[] = [];
+    for (let i = 0; i < tp.count; i++) {
+        let placed: TunnelSpec | null = null;
+        for (let k = 0; k < PLACE_TRIES && !placed; k++) {
+            const t: TunnelSpec = {
+                id: i + 1,
+                x: (rng() - 0.5) * LOT.w,
+                y: (rng() - 0.5) * LOT.h,
+                angle: rng() * 360,
+                cars: Array.from({ length: tp.cars }, () => ({
+                    color: PALETTE[Math.floor(rng() * colors)],
+                    cap: 'small' as Cap,
+                })),
+            };
+            const box = inflate(tunnelReservation(t), pad);
+            if (!insideRect(box, LOT.w, LOT.h)) continue;
+            if (out.some((o) => overlapMTV(box, inflate(tunnelReservation(o), pad)))) continue;
+            placed = t;
+        }
+        if (!placed) return [];   // a lot this attempt cannot seat; the caller retries
+        out.push(placed);
+    }
+    return out;
 }
 
 /** The track knobs for one level: shape, ring length, and its feeder channels. */

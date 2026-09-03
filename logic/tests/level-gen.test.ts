@@ -337,3 +337,27 @@ test('the shortest legal ring can hold a row of every colour the curve can ask f
   expect(mostColors).toBeGreaterThan(0);          // never pass vacuously
   expect(shortestRing).toBeGreaterThanOrEqual(mostColors);
 });
+
+import { tunnelParams, CARS_PER_LEVEL } from '../../game/assets/scripts/core/level-gen';
+
+test('the tunnel curve: none before level 4, two from level 7', () => {
+  expect(tunnelParams(1)).toEqual({ count: 0, cars: 0 });
+  expect(tunnelParams(3)).toEqual({ count: 0, cars: 0 });
+  expect(tunnelParams(4)).toEqual({ count: 1, cars: 4 });
+  expect(tunnelParams(6)).toEqual({ count: 1, cars: 4 });
+  expect(tunnelParams(7)).toEqual({ count: 2, cars: 5 });
+  expect(tunnelParams(9)).toEqual({ count: 2, cars: 6 });
+  expect(tunnelParams(10)).toEqual({ count: 2, cars: 6 });
+});
+
+test('the tunnel curve clamps past its ends, like levelParams does', () => {
+  expect(tunnelParams(0)).toEqual(tunnelParams(1));
+  expect(tunnelParams(99)).toEqual(tunnelParams(10));
+});
+
+test('no level ever asks for more tunnel cars than it has cars', () => {
+  for (const id of IDS) {
+    const tp = tunnelParams(id);
+    expect(tp.count * tp.cars).toBeLessThan(CARS_PER_LEVEL);
+  }
+});
