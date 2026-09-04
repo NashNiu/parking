@@ -15,6 +15,31 @@ import {
 const DOT_SIZE = 32;
 
 /**
+ * The star, painted at 128 so its points survive being drawn large: a win panel's star is
+ * about 130 design units, which on a 1170-wide phone against a 720-unit canvas is roughly
+ * 210 device pixels. A 32px frame -- the size the dot gets away with, being a circle at 40 --
+ * would be visibly soft at that magnification, and a soft point is not a star.
+ */
+const STAR_SIZE = 128;
+/** Inner radius over outer: 0.475 is the proportion a five-pointed star is normally drawn at. */
+const STAR_WAIST = 0.475;
+
+/**
+ * The sunburst: alternating wedges from the centre, fading out before the rim.
+ *
+ * It is drawn very large and very faint -- a glow behind the win panel, turning slowly -- so it
+ * is painted small and the falloff does the work. A hard-edged wedge scaled 8x would be a
+ * blurry hard edge, which looks like a mistake; a wedge that fades radially scaled 8x looks
+ * like light, which is what it is for.
+ *
+ * BURST_FADE is where the fade starts, as a fraction of the radius, and the alpha runs to zero
+ * at the rim. The centre is left solid: a burst with a hole in it reads as a ring.
+ */
+const BURST_SIZE = 128;
+const BURST_SPOKES = 12;
+const BURST_FADE = 0.30;
+
+/**
  * One rounded frame per corner radius asked for, painted on demand.
  *
  * It used to be a single 32px frame with a radius of 15 -- half its width, so the painted
@@ -31,6 +56,8 @@ const DOT_SIZE = 32;
  */
 const roundFrames = new Map<number, SpriteFrame>();
 let dotFrame: SpriteFrame | null = null;
+let starFrame: SpriteFrame | null = null;
+let burstFrame: SpriteFrame | null = null;
 
 /**
  * White pixels whose alpha comes from `coverage`, evaluated at each pixel centre and
@@ -93,6 +120,78 @@ function dotCoverage(x: number, y: number): number {
     return r - Math.hypot(x - r, y - r);
 }
 
+/**
+ * Coverage for a five-pointed star inscribed in a `size` texture, point up.
+ *
+ * A star is not convex, so the corner-clamp trick `roundedCoverage` uses does not apply. What
+ * DOES apply is that a star is star-shaped about its own centre -- every ray from the centre
+ * crosses the outline exactly once -- so the outline's distance in a pixel's own direction can
+ * be found by intersecting that ray with each of the ten edges and taking the one hit that
+ * lands inside its segment. Coverage is then that distance minus the pixel's, in pixels, which
+ * gives the same one-pixel soft edge every other shape here has.
+ *
+ * Ten intersections per pixel over 128x128 is 164k of them, paid ONCE for the whole game: the
+ * frame is cached like the others.
+ */
+function starCoverage(size: number): (x: number, y: number) => number {
+    const c = size / 2;
+    // A pixel inside the tip still needs somewhere to fade out, hence the inset.
+    const outer = c - 1.5;
+    const pts: [number, number][] = [];
+    for (let k = 0; k < 10; k++) {
+        // First vertex straight up. Texture y runs DOWN, and the shape is symmetric
+        // left-to-right, so the sign here decides only which way the star points.
+        const a = -Math.PI / 2 + k * Math.PI / 5;
+        const rad = k % 2 === 0 ? outer : outer * STAR_WAIST;
+        pts.push([rad * Math.cos(a), rad * Math.sin(a)]);
+    }
+    const cross = (ax: number, ay: number, bx: number, by: number): number => ax * by - ay * bx;
+    return (x, y) => {
+        const px = x - c, py = y - c;
+        const d = Math.hypot(px, py);
+        if (d < 1e-6) return outer;
+        const dx = px / d, dy = py / d;
+        for (let k = 0; k < 10; k++) {
+            const [ax, ay] = pts[k];
+            const [bx, by] = pts[(k + 1) % 10];
+            const ex = bx - ax, ey = by - ay;
+            const den = cross(dx, dy, ex, ey);
+            if (Math.abs(den) < 1e-9) continue;
+            const s = cross(ax, ay, dx, dy) / den;
+            if (s < 0 || s > 1) continue;
+            const t = cross(ax, ay, ex, ey) / den;
+            if (t <= 0) continue;
+            return t - d + 0.5;
+        }
+        // Only reachable on the exact vertex rays, where the loop above can reject both
+        // adjacent edges to floating-point error. Outside by a hair is the safe answer.
+        return -1;
+    };
+}
+
+/**
+ * Coverage for `BURST_SPOKES` wedges of a `size` texture, alternating on and off around the
+ * circle, with a radial falloff from BURST_FADE out to the rim.
+ *
+ * The wedge edges are left HARD in angle and soft in radius. Softening them in angle too would
+ * need a per-pixel angular width, which is what an actual antialiased shader does; at the size
+ * this is drawn -- a faint glow eight times the texture's width -- the magnification is the
+ * antialiasing.
+ */
+function burstCoverage(size: number): (x: number, y: number) => number {
+    const c = size / 2;
+    return (x, y) => {
+        const px = x - c, py = y - c;
+        const d = Math.hypot(px, py) / c;
+        if (d > 1) return 0;
+        const wedge = Math.floor(
+            ((Math.atan2(py, px) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / BURST_SPOKES),
+        );
+        if (wedge % 2 === 1) return 0;
+        return d <= BURST_FADE ? 1 : (1 - d) / (1 - BURST_FADE);
+    };
+}
+
 function spriteNode(
     name: string, w: number, h: number, color: Color, frame: SpriteFrame, type: number,
 ): Node {
@@ -137,4 +236,22 @@ export function roundedSprite(
 export function dotSprite(name: string, d: number, color: Color): Node {
     if (!dotFrame) dotFrame = frameFrom(paint(DOT_SIZE, dotCoverage), DOT_SIZE);
     return spriteNode(name, d, d, color, dotFrame, Sprite.Type.SIMPLE);
+}
+
+/**
+ * A five-pointed star `d` units across, tinted `color`. SIMPLE, not sliced -- a star has no
+ * middle that can be stretched, so it scales as a whole, which is also what lets one frame
+ * serve every size on screen.
+ */
+export function starSprite(name: string, d: number, color: Color): Node {
+    if (!starFrame) starFrame = frameFrom(paint(STAR_SIZE, starCoverage(STAR_SIZE)), STAR_SIZE);
+    return spriteNode(name, d, d, color, starFrame, Sprite.Type.SIMPLE);
+}
+
+/** A radiating sunburst `d` units across, tinted `color`. See `burstCoverage`. */
+export function burstSprite(name: string, d: number, color: Color): Node {
+    if (!burstFrame) {
+        burstFrame = frameFrom(paint(BURST_SIZE, burstCoverage(BURST_SIZE)), BURST_SIZE);
+    }
+    return spriteNode(name, d, d, color, burstFrame, Sprite.Type.SIMPLE);
 }

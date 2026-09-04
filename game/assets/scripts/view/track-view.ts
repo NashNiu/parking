@@ -1,4 +1,5 @@
 import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
+import { BOARD_TILT } from './board-layout';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
@@ -17,14 +18,41 @@ const LANE_STEP = LANE.step;
 const LANE_START = LANE.start;
 
 /**
- * How far a waiting figure turns, in degrees, from facing straight along the lane
- * toward facing the track. Measured against the running game (see `buildLanes`):
- * the geometrically "full" turn is 90, but at 90 the figure is in pure profile, its
- * face isn't visible, and the two channels' profiles are nearly indistinguishable at
- * this zoom. 45 keeps the face visible while the body still reads as angled toward
- * the track.
+ * How far a waiting figure turns, in degrees, out of a FULL turn of 90 -- from facing the
+ * camera toward facing the track it is queueing for.
+ *
+ * A FRACTION of the full turn, and that is what makes it a knob rather than a hand-picked
+ * pair of signs: `faceYaw` interpolates between camera-facing and the real direction, so 90
+ * would be the honest orientation and 45 is the compromise. At the honest 90 a lane figure is
+ * in pure profile -- the camera looks down world -Z and a lane runs along board X, so its face
+ * points straight across the screen and is not visible at all. At 45 the face still reads
+ * while the body is plainly angled toward the track.
+ *
+ * The ring does NOT turn its figures at all, and that is a decision rather than an omission:
+ * a figure has no front to see (pax-figure.ts -- a face was built, shown and rejected), so
+ * turning one costs a rotation per figure per frame and buys nothing. A version of this did
+ * face every ring row along its direction of travel; it went when the face did.
  */
 const FACE_TURN = 45;
+
+/**
+ * The yaw, in degrees, that turns a figure's face onto (fx, fy) in the board plane.
+ *
+ * A figure stands along the board's normal and faces board -Y at rest (`buildPaxFigure`), so
+ * a yaw of `y` about the board normal puts its face on (sin y, -cos y) -- hence the atan2
+ * below, with the arguments in that order and that sign.
+ *
+ * DERIVED, and that matters: the lane figures' turn used to be a hand-chosen `out.x > 0 ?
+ * -FACE_TURN : FACE_TURN`, carrying a note saying the sign had been checked on screen rather
+ * than worked out, that an earlier paper derivation had been wrong, and that the frame under
+ * it had since moved three times. Computing it from the direction the figure should face
+ * removes the choice: get the direction right and the sign follows. (For the record the old
+ * pair was correct -- `faceYaw(-out.x, -out.y) * 0.5` reproduces both of its values exactly
+ * on a lane running along X.)
+ */
+function faceYaw(fx: number, fy: number): number {
+    return Math.atan2(fx, -fy) * 180 / Math.PI;
+}
 
 /**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
@@ -126,7 +154,20 @@ const PAX_HEIGHT = 0.55;
  * measures. It was rejected on gameplay: a row of four balls does not read as FOUR, and how
  * many a group holds is a number the player has to judge to know which car it can fill.
  */
-const PAX_DEPTH = 2.1;
+/**
+ * Fake depth for the crowd: how much board z a row gets per board unit it sits UP the board, so
+ * that a near row draws in front of a far one.
+ *
+ * ZERO ONCE THE BOARD IS TILTED, and not as a compromise -- the tilt does this job properly. A
+ * row further up a board tipped away from the camera IS further from the camera, so the depth
+ * buffer orders the crowd on its own. Keeping the fake as well would be actively wrong: at 2.1
+ * per board unit over a ring about two units deep, it is more than four world units of z, which
+ * a tilt turns into over two units of SHEAR up the screen. That is the one value in the scene
+ * big enough to have wrecked the tilt, and it was only ever free because the board was flat.
+ *
+ * The 2.1 is kept for the flat case so BOARD_TILT 0 still reproduces the old board exactly.
+ */
+const PAX_DEPTH = BOARD_TILT === 0 ? 2.1 : 0;
 
 /**
  * There is no arm swing any more, and the arms are baked into the figure's one mesh (see
@@ -254,6 +295,9 @@ export function leftLaneFloor(path: TrackPath, capacity: number, channels: Chann
  *
  * Called every frame for ring cells, because their across direction is the path normal and
  * turns as they travel; once at build time for the lanes, whose direction is fixed.
+ *
+ * POSITIONS ONLY. It does not set a facing: a ring figure is left at identity, facing down
+ * the screen, because there is nothing on its front to tell it from its back. See FACE_TURN.
  */
 function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
     // A row drawn as one thing sits on its own centre -- there is no block to spread out.
@@ -285,10 +329,17 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
 }
 
 /**
- * A row node holding GROUP_SIZE passenger figures as children. The row's own transform
- * is the group's position on the track; the children carry the across-the-track offsets,
- * which `layoutRow` sets. The row is never rotated — the figures stand along the board's
- * +Y and face +Z, and spinning the row about the board normal would tip them over.
+ * A row node holding GROUP_SIZE passenger figures as children. The row's own transform is
+ * the group's position on the track; the children carry the across-the-track offsets, which
+ * `layoutRow` sets.
+ *
+ * The row is never rotated, but the reason it used to give for that is no longer true and
+ * should not be trusted if this is revisited: it said the figures "stand along the board's +Y
+ * and face +Z, and spinning the row about the board normal would tip them over". They stand
+ * along the board's normal now (`buildPaxFigure`), so rotating the row about it would spin
+ * them on the spot -- and would let the children's offsets be computed ONCE instead of every
+ * frame. Left alone because the per-frame layout is not what costs anything here, and moving
+ * it would touch the boarding flights, which read a figure's world position.
  */
 function makeRow(name: string): Node {
     const row = new Node(name);
@@ -685,33 +736,21 @@ export class TrackView {
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
                 layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
-                // Face the track, not the camera: yaw is per figure (not on the row node,
-                // whose children carry the across-the-lane offsets `layoutRow` just set,
-                // and rotating the parent would swing those out of the board plane) and
-                // about Y only (about Z would tip them over, per makeRow's docstring).
+                // Face the track: INWARD along the lane, which is -out, held back toward the
+                // camera by (1 - FACE_TURN/90). Once at build time -- a lane never turns.
                 //
-                // Base orientation is camera-facing: a figure with no yaw of its own —
-                // like every ring figure — faces +Z, out of the board toward the
-                // camera (pax-figure.ts derives this from the geometry it places, not
-                // from an authored convention). This yaw turns a figure away from that
-                // base, toward the track, following the standard convention
-                // +Z = (sin(yaw), 0, cos(yaw)); facing inward means the yaw's sign is
-                // opposite to `out.x`'s, which is what the expression below does. The
-                // magnitude is FACE_TURN (45), not a full 90, because 90 puts the
-                // figure in pure profile — with no face on the new figure either, that
-                // still means the shoulders/arms, and the two channels' silhouettes
-                // are nearly indistinguishable at this zoom.
+                // Per figure rather than on the row node, whose children carry the
+                // across-the-lane offsets: rotating the parent would swing those round too.
+                // About Z, the board's NORMAL -- a figure stands along it, so this spins it on
+                // the spot; about Y it would tip over.
                 //
-                // This sign was previously justified by comparing a lane figure against
-                // a ring figure "known" to face the camera — but under the old GLB
-                // model that ring figure did NOT face the camera; every ring passenger
-                // was in profile for the whole project (see git history on this file
-                // predating pax-figure.ts). That the sign below still came out right
-                // was luck, not a validated derivation. If this ever needs to change,
-                // measure it again on screen — do not re-derive it on paper; multiple
-                // paper derivations before this one were wrong.
-                const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
-                for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
+                // The sign is no longer chosen, which retires a long-standing worry attached
+                // to this line: it was `out.x > 0 ? -FACE_TURN : FACE_TURN`, justified by
+                // having been eyeballed on screen, under a frame that then moved three times.
+                // `faceYaw` computes it from the direction, so there is nothing left to get
+                // backwards. See its note.
+                const yaw = faceYaw(-out.x, -out.y) * (FACE_TURN / 90);
+                for (const figure of figures) figure.setRotationFromEuler(0, 0, yaw);
                 this.laneFigures[channel.side].push(figures);
                 const ly = first.y + out.y * LANE_STEP * i;
                 n.setPosition(first.x + out.x * LANE_STEP * i, ly, this.depthAt(ly));

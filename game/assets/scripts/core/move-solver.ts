@@ -21,6 +21,15 @@ export function heading(car: CarSpec): { dx: number; dy: number } {
 
 /** The car in `car`'s way, and how far it can go before touching it. */
 export interface Blockage {
+    /**
+     * The car in the way -- or **-1** when what is in the way is not a car but a static
+     * blocker (today: a tunnel body, passed in as an OBB).
+     *
+     * Only the view's refusal message cares about the difference; `pathClear` does not
+     * look at this field at all. It is -1 rather than a fabricated id because a tunnel body
+     * has no id in the car space and inventing one would put a thing that cannot be tapped
+     * into a number that means "tappable car".
+     */
     carId: number;
     /**
      * Board units of clear board ahead. 0 would mean "nowhere to go", which covers more
@@ -50,7 +59,9 @@ export interface Blockage {
  * lot, so any contact happens before the mover has covered the lot's diagonal plus one
  * car length; anything the sweep reports past that is arithmetic noise, not a car.
  */
-export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage | null {
+export function firstBlocker(
+    car: CarSpec, cars: CarSpec[], lot: Lot, blockers?: OBB[],
+): Blockage | null {
     // BARE bodies, no clearance margin: a car goes if its body would clear whatever is
     // beside its lane, however fine the margin. Requiring a margin here was measured and
     // rejected -- with CLEARANCE (0.04 board units, about 2.6 screen px) demanded of the
@@ -90,6 +101,17 @@ export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage 
         if (t === null || t > range) continue;
         if (!best || t < best.gap) best = { carId: other.id, gap: t };
     }
+
+    // Static blockers, after the cars and by the same rule. They never move, never leave,
+    // and cannot be tapped -- so they take no id and get -1. The broad-phase test above is
+    // reused verbatim: it is a statement about two boxes and a lane, not about cars.
+    for (const b of blockers ?? []) {
+        const perp = Math.abs((b.x - car.x) * dy - (b.y - car.y) * dx);
+        if (perp > boxHalfDiag + halfDiag(b)) continue;
+        const t = sweepHit(box, b, dx, dy);
+        if (t === null || t > range) continue;
+        if (!best || t < best.gap) best = { carId: -1, gap: t };
+    }
     return best;
 }
 
@@ -98,6 +120,8 @@ export function firstBlocker(car: CarSpec, cars: CarSpec[], lot: Lot): Blockage 
  * second time: the two used to be separate walks of the same rule, which is one rule
  * too many to keep in agreement.
  */
-export function pathClear(car: CarSpec, cars: CarSpec[], lot: Lot): boolean {
-    return firstBlocker(car, cars, lot) === null;
+export function pathClear(
+    car: CarSpec, cars: CarSpec[], lot: Lot, blockers?: OBB[],
+): boolean {
+    return firstBlocker(car, cars, lot, blockers) === null;
 }

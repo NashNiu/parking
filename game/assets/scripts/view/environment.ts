@@ -3,14 +3,26 @@ import { Node, DirectionalLight, Color, director, Camera, postProcess } from 'cc
 /**
  * Pitch of the key light, in degrees, as a node euler-X.
  *
- * EXPORTED because two other things are now derived from it and must not be allowed to drift:
- * the drop shadow's offset (`car-builder.ts`, which needs the direction the light travels) and
- * the car roof's normal tilts (`car-mesh.ts`, which needs the screen-vertical component to be
- * there at all). At -55 the light travels (0, -0.82, -0.57) in board space: mostly down the
- * screen, partly into the board. Level it out toward the board normal and the cars go flat and
- * lose their shadows, with nothing in the console to say why.
+ * EXPORTED because two other things are derived from it and must not be allowed to drift: the
+ * drop shadow's offset (`car-builder.ts`) and the roof's normal tilts (`car-mesh.ts`).
+ *
+ * -18, DOWN FROM -55, AND THE BOARD'S TILT IS WHAT DECIDES IT. In BOARD space the light is
+ * (0, sin(pitch - tilt), cos(pitch - tilt)), so the sign of the first term decides which side of
+ * the board it comes from -- and the face a player SEES is the near wall, facing board -Y. That
+ * wall gets key light only while the pitch is UNDER the tilt. There is no middle setting: at -55
+ * against a 38-degree board the light is behind the car and its whole visible side is ambient,
+ * 33% of the roof, which came back from a device as "the sides are too dark". At -18 it is 22
+ * degrees on the near side and the wall reads at about 58%.
+ *
+ * The crowd gains the same way: a passenger stands facing board -Y, so its front went from
+ * ambient-only to catching a real share of the key.
+ *
+ * The shadow now throws UP-screen rather than down, which turns out not to matter: the car is
+ * CAR_HEIGHT tall and the shadow lies on the board, so the tilt already separates them by
+ * (CAR_HEIGHT + 0.06) * sin(tilt) -- about 0.25 world units -- and the shadow stays plainly
+ * below the car whichever way it leans.
  */
-export const KEY_LIGHT_PITCH_DEG = -55;
+export const KEY_LIGHT_PITCH_DEG = -18;
 
 /**
  * Adds cartoon lighting attached to the scene.
@@ -28,12 +40,22 @@ export function setupEnvironment(root: Node): void {
         // Soft key light from straight above-front for gentle cartoon shaping.
         lightNode = new Node('KeyLight');
         const dl = lightNode.addComponent(DirectionalLight);
-        // Key light for the 3D car models (real PBR geometry): bright enough that
-        // low-luminance paints like red (244,67,72) read as their true vivid color
-        // rather than a murky dark. (The earlier dim/flat setup existed only to make
-        // the old code-gen boxes' flat faces match — obsolete now that cars are
-        // real models that shade correctly on their own curved geometry.)
-        dl.illuminance = 70000;
+        // 42000, down from 70000, and TILTING THE BOARD is the whole reason.
+        //
+        // Nothing in the scene moved relative to anything else, so this is easy to miss: what
+        // changed is that every up-facing surface turned TOWARD the light. A roof's normal
+        // against the key goes from cos(pitch) to cos(pitch - BOARD_TILT) -- 0.574 to 0.956 --
+        // which is 67% more light on every roof, every passenger's head and the whole lot
+        // floor. The first tilted build came back as "the roofs look white", and it was right.
+        //
+        // Lowering the KEY rather than the ambient is what fixes it without undoing the other
+        // half: the face of a car the viewer sees is its near wall, which faces away from the
+        // light and is lit by ambient alone. Dropping the key brings the roof back to the
+        // brightness it had on the flat board (20000 + 70000*0.574 = 20000 + 42000*0.956) while
+        // leaving the wall where it is -- so the wall goes from 22% of the roof to 33% purely by
+        // the roof coming down. An earlier attempt raised skyIllum to 28000 instead, which lifted
+        // the roof along with the wall and so bought nothing; it is back at 20000.
+        dl.illuminance = 42000;
         dl.color = new Color(255, 250, 240);
         // Real-time ShadowMap is disabled: on the ~52°-tilted board it casts long,
         // offset, hard shadows onto the slanted ground and is expensive. We use
@@ -53,6 +75,9 @@ export function setupEnvironment(root: Node): void {
     const globals = scene.globals;
     if (globals && globals.ambient) {
         globals.ambient.skyColor = new Color(208, 212, 218, 255) as unknown as any;
+        // Back at 20000: raising it to lift the shaded near walls also lifted the roofs, which
+        // is not what was wanted. Lowering the KEY does the same job one-sidedly -- see the note
+        // on `illuminance` above.
         globals.ambient.skyIllum = 20000;
         globals.ambient.groundAlbedo = new Color(150, 145, 138, 255) as unknown as any;
     }

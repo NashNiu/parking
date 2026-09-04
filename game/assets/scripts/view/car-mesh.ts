@@ -1,28 +1,40 @@
 import { Color, Mesh, primitives, utils } from 'cc';
+import { Cap, CAP_BOX } from '../core/index';
 
 /**
  * The car, DRAWN rather than modelled: one flat vertex-coloured mesh per body colour.
  *
- * WHY IT IS DRAWN. The camera is orthographic and looks at the board straight on, so a car IS
- * its top-down plan and nothing else -- every part hidden behind a higher one contributes
- * exactly zero pixels. That was measured on the GLB models this replaces: eight of the nine
- * primitives in the first set were invisible from here, and in the second set the windscreen,
- * the rear window and the hubcaps were all 0%. A model authored for a 3/4 view cannot be
- * rescued by recolouring, and a model authored for THIS view is a plan with extra steps.
+ * WHY IT IS DRAWN. The camera is orthographic, so a car is its ROOF plus however much of its
+ * side the board's tilt reveals -- and nothing else. That was measured on the GLB models this
+ * replaces, back when the board was flat: eight of the nine primitives in the first set were
+ * invisible, and in the second set the windscreen, the rear window and the hubcaps were all 0%.
+ * A model authored for a 3/4 view cannot be rescued by recolouring, and a model authored for
+ * THIS view is a plan with a wall round it.
+ *
+ * THE WALL IS REAL GEOMETRY NOW, and that is the whole point of the board being tilted. Four
+ * rounds went into faking it -- a dark copy of the silhouette offset down the screen -- and it
+ * could not be made to work: the offset had to be in BOARD space, because it stood for the
+ * light's direction, while the wheels and everything else on the car are in the CAR's space, so
+ * their relation changed with the heading. A car lying across the screen looked right; one
+ * pointing up it wore the wall on its tail with the wheels stuck to the back bumper. A real wall
+ * turns with the car, so every part is where it belongs at every heading, and the engine lights
+ * the four sides differently for free.
  *
  * WHAT READS AS A CAR FROM DIRECTLY ABOVE, in the order the cues matter:
  *
- *   1. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- this is the whole depth
- *      cue, and the one thing here that is NOT baked.
- *   2. ONE hue. Dark rim, main colour, and whatever the light does to it. A second hue anywhere
- *      reads as a decal, not as form.
+ *   1. A ROUNDED ROOF THE REAL LIGHT CAN FIND. See DOME_PROFILE -- not baked, unlike the rest.
+ *   2. ONE hue. The paint, and whatever the light does to it. A second hue anywhere reads as a
+ *      decal, not as form.
  *   3. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
  *      hard point off. See the note on BODY_CORNER.
- *   4. Asymmetric glass. A wide windscreen and a narrow rear window say which end is the front
- *      before the arrow does. It wants to be SMALL and PALE: a dark panel at real size reads as
- *      a hole punched in the roof, not as a window.
+ *   4. Glass ON THE WALL, as a band round the car at window height, not panels on the roof. On
+ *      a flat board the roof was the only surface there was, so the windows had to go there and
+ *      read as dark holes punched in it; with a wall to put them on they read as windows. The
+ *      band runs right round rather than stopping at the ends, which is what a vehicle looks
+ *      like from up here and is a great deal simpler than partial rings.
  *   5. Wheels that only just show. Drawn UNDER the body, so all that appears is the sliver
- *      past its silhouette -- which is all a wheel is from above.
+ *      past its silhouette -- which is all a wheel is from above. HOW MANY of them is what
+ *      tells a bus from a car; see `axles`.
  *
  * WHY THE DEPTH HAS TO COME FROM THE LIGHT AND NOT FROM BAKED SHADING. A highlight on one side
  * is a claim about where the light is, and the mesh ROTATES WITH THE CAR -- so anything baked
@@ -81,10 +93,23 @@ const BODY_ACROSS = 0.90;
  */
 const BODY_CORNER = 0.10;
 
-/** The dark rim: the body outline grown a little, more across than along. */
+/**
+ * The car's real silhouette: the body outline grown a little, more across than along. It is the
+ * wall's footprint, and the roof's shoulder now starts on it exactly.
+ *
+ * IT USED TO BE A DARK RIM -- a flat lip of paint at EDGE_SHADE 0.52, filling the gap between
+ * this outline and the roof's outermost ring. That gap existed because the ring sat on the
+ * ungrown body outline, so something had to cap the top of the wall. Growing the ring onto this
+ * outline instead closes the gap, and the lip goes away rather than being recoloured: paint it
+ * the body colour and it would have become a BRIGHT halo instead of a dark one, because it
+ * faces straight up while the shoulder just inside it is tilted away.
+ *
+ * What it cost: two cars of the same colour parked side by side no longer have a dark line
+ * between them. What separates them now is one car's wall against the other's roof, which the
+ * tilt makes about a fifth of a world unit tall -- see WALL_LIFT and CAR_HEIGHT.
+ */
 const EDGE_GROW_ALONG = 1.015;
 const EDGE_GROW_ACROSS = 1.075;
-const EDGE_SHADE = 0.52;
 
 /**
  * The roof, as concentric rings of the body outline whose NORMALS tilt outward.
@@ -100,14 +125,16 @@ const EDGE_SHADE = 0.52;
  * 0.57, AMPLIFIES the tilt by roughly 1.8x on the way to world space: 20 degrees in mesh space
  * arrives as about 33, and past 35 it saturates. Judge these by the render, never by the number.
  *
- * DOME_LIFT is insurance, not design: a small SYMMETRIC lightening toward the crown, so that if
- * the real lighting ever under-delivers -- a changed key light, an exposure change -- the car
- * keeps some form instead of going completely flat. Symmetric, so it survives being rotated.
- * Keep it subtle; it is the fallback, not the effect.
+ * NOTHING IS LIGHTENED HERE, and that is deliberate. The crown is EXACTLY the colour handed in,
+ * so a car and a passenger of the same colour resolve to the same albedo -- verified rather than
+ * assumed: both go through builtin-standard with the same PBR parameters, and both convert sRGB
+ * with the same `x * x` (Cocos uses gamma 2.0 on the CPU for a `linear: true` property and the
+ * identical curve in the shader's `SRGBToLinear`). An earlier version lightened the crown a
+ * little as insurance against the lighting under-delivering; the side wall covers that now, and
+ * it is worth more to have the car's own colour be the palette's colour and nothing else.
  */
 const DOME_NARROW = 0.36;
 const DOME_RISE = 0.03;
-const DOME_LIFT = 0.03;
 const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
     { at: 0.00, tilt: 32 },
     { at: 0.34, tilt: 22 },
@@ -115,32 +142,82 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
     { at: 1.00, tilt: 0 },
 ];
 
-/** Wheels, at (±x, ±y), drawn under the body so only the overhang shows. */
+/**
+ * Wheels, low on the wall so only the overhang past the body shows.
+ *
+ * WHEEL_Y is what decides how much that is: at 0.40 they reached 0.51 against a rim at 0.484,
+ * which was plenty while the car was a flat plan on a pale floor and almost nothing once that
+ * rim became the top of a wall. 0.45 reaches 0.56 and clears it by 0.076 of the car's width.
+ *
+ * IN THE CAR'S OWN FRAME, which is the only frame they can be in. A version of this file put
+ * them in a screen-space side wall so they would sit at the car's foot; that works for a car
+ * lying across the screen and falls apart for one pointing up it, where the wall lands on the
+ * car's TAIL and takes the wheels with it -- two dark blobs stuck to the back bumper. The
+ * parking bay made it obvious, every stall holding a car pointing up. See the README.
+ *
+ * HOW MANY, and why it is per capacity. Only ONE side of a car is ever visible: the camera
+ * looks at the board from up-screen, so a car lying across the screen shows the two wheels on
+ * its near side and nothing of the far pair, while a car pointing up the screen shows both
+ * sides in profile. That is why every vehicle read as a two-wheeler however long it was, and
+ * why "the coach should have four wheels" was a request for four along ONE side -- so the big
+ * cap gets four per side, at the two mirrored offsets below, and its wheels are narrower so
+ * the four read as four rather than as a smear. Small and medium keep one axle at each end.
+ *
+ * The count is now a SIZE CUE, which is worth more than it cost: medium and big are within
+ * 11% of each other in length (1.611 against 1.793, see CAP_BOX) and were hard to tell apart.
+ */
 const WHEEL_X = 0.30;
-const WHEEL_Y = 0.40;
+const BUS_WHEEL_X_OUTER = 0.37;
+const BUS_WHEEL_X_INNER = 0.13;
+const WHEEL_Y = 0.45;
 const WHEEL_W = 0.15;
+const BUS_WHEEL_W = 0.10;
 const WHEEL_H = 0.22;
 const WHEEL_R = 0.35;
 const TYRE = new Color(25, 28, 34);
 
 /**
- * Glass: black at 30% over the plate beneath it, which is the topmost dome step. Composited
- * here rather than blended by the GPU -- the result is identical for a flat opaque stack, and
- * it keeps the whole car on one opaque instanced material.
- *
- * Both the tint and the panel sizes came DOWN after seeing them on a device (42% black over
- * panels a third larger). Scaled to a forty-pixel car, a dark panel that size stops reading as
- * a window and starts reading as a hole punched through the roof -- and it was competing with
- * the arrow, which is the one thing on the car that has to be read instantly.
+ * Where this capacity's wheels sit along the body, as fractions of its length from the centre,
+ * and how wide each one is. Mirrored across the centreline already, so the list IS one side.
  */
-const GLASS_KEEP = 0.70;
-const WINDSCREEN_X = 0.230;
-const WINDSCREEN_W = 0.095;
-const WINDSCREEN_H = 0.42;
-const REAR_WINDOW_X = -0.288;
-const REAR_WINDOW_W = 0.058;
-const REAR_WINDOW_H = 0.32;
-const WINDOW_R = 0.30;
+function axles(cap: Cap): { xs: readonly number[]; w: number } {
+    return cap === 'big'
+        ? {
+            xs: [BUS_WHEEL_X_OUTER, BUS_WHEEL_X_INNER, -BUS_WHEEL_X_INNER, -BUS_WHEEL_X_OUTER],
+            w: BUS_WHEEL_W,
+        }
+        : { xs: [WHEEL_X, -WHEEL_X], w: WHEEL_W };
+}
+
+/**
+ * Glass: a band round the side wall, between GLASS_LOW and GLASS_HIGH of the car's height.
+ *
+ * GROWN A HAIR OUTWARD (GLASS_OUT) so it sits just proud of the wall instead of coplanar with
+ * it, which would z-fight the whole way round. It reaches past the car's silhouette by about
+ * 0.0014 world units, which is nothing.
+ *
+ * The shade is deeper than anything else on the car on purpose: the wall it sits on is already
+ * the car's darkest lit surface, so the glass has to be darker still to read as glass rather
+ * than as a slightly different panel. But only just -- the first version at 0.52 across 46% of
+ * the wall's height came out at 30% of the roof's brightness over most of the visible side, so
+ * the WALL got reported as too dark when the wall itself was fine at 58% and the glass was
+ * covering it. Measured with `tools/car-plan.py`, which prints these percentages.
+ */
+const GLASS_LOW = 0.40;
+const GLASS_HIGH = 0.74;
+const GLASS_OUT = 1.006;
+const GLASS_SHADE = 0.66;
+
+/**
+ * Two thin lines across the roof, at +-RAIL_X, which is clear of the arrow (it spans -0.19 to
+ * +0.15). They read as panel seams, and their job is to give the roof something for the eye to
+ * measure its curve against -- a single flat expanse of colour reads flatter than it is however
+ * well it is shaded.
+ */
+const RAIL_X = 0.34;
+const RAIL_W = 0.020;
+const RAIL_H = 0.50;
+const RAIL_SHADE = 0.84;
 
 /** The exit arrow, pointing +X (the body's own forward). */
 const ARROW_X = -0.02;
@@ -148,6 +225,39 @@ const ARROW_W = 0.34;
 const ARROW_H = 0.54;
 const ARROW_SHAFT = 0.42;
 const ARROW_HEAD = 0.52;
+
+/**
+ * How tall the car stands off the board, in WORLD units.
+ *
+ * WORLD, not a fraction: the node's scale is (len, wid, 1), so Z is the one axis the three caps
+ * share, and all three should stand about the same height anyway -- a small car is not a third
+ * as tall as a truck.
+ *
+ * What it buys on screen is CAR_HEIGHT * sin(BOARD_TILT), so the two have to be judged together.
+ * At the tilt of 38 degrees this ships with, 0.34 shows about 0.21 world units of wall, a bit
+ * over a third of a medium car's width.
+ *
+ * It is also the amount by which the drawn car sits up-screen of the footprint core reasons
+ * about, so `onTap` subtracts it back out; see ROOF_RISE in GameController.
+ */
+export const CAR_HEIGHT = 0.34;
+
+/**
+ * The side wall's paint: lifted toward white, then graded a little darker at the foot.
+ *
+ * WHY IT IS LIFTED AND NOT JUST LEFT AS THE BODY COLOUR. The wall receives 58% of the light the
+ * roof does (measured -- `tools/car-plan.py` prints it), and 58% of the light on a SATURATED
+ * colour is darker than it sounds: red (244,67,72) carries only 41% of white's luminance to
+ * begin with, so the lit wall lands at 24% and reads nearly black. Multiplying is not what a
+ * painter does to a shaded face; they shift it toward the light that is actually falling on it,
+ * which here is a grey-blue sky ambient. WALL_LIFT is that shift, and it is why the side can read
+ * as "the same car, in shade" rather than as a hole -- which is what it was reported as.
+ */
+const WALL_LIFT = 0.24;
+const WALL_FOOT = 0.90;
+
+/** How high up the wall the wheels sit. Low, so they read as touching the ground. */
+const WHEEL_Z = 0.03;
 
 /**
  * Depth steps, in WORLD units and deliberately tiny: they order the plates and nothing else.
@@ -165,17 +275,24 @@ const CORNER_SEGMENTS = 5;
 
 /**
  * Length-to-width ratio the rounded corners are shaped for -- the medium car's, which is the
- * commonest on a board.
+ * commonest on a board. READ OFF CAP_BOX rather than written down: it was a literal 3.126, and
+ * a revision that resized medium would have left it describing the wrong car in silence.
  *
  * A corner radius is only a circle in WORLD space, and the mesh is built in a unit box that
  * then gets stretched by (len, wid). Take the radius as a plain fraction of the normalized
  * shape and the stretch turns it into an ellipse three times wider than tall: the windows come
  * out rounded on their short sides and square on their long ones, which is a brick, not glass.
  * So the radius is worked out at this aspect and divided back out along X, which makes the
- * corners true circles on a medium car and near enough on the other two (2.05 and 3.14 against
- * 3.13). One shared mesh is worth that much error; a mesh per cap would not be.
+ * corners true circles on a medium car and near enough on big (3.15 against 3.13) -- small, at
+ * 2.05, is the one carrying real error, its corners about half again as rounded along X as
+ * across.
+ *
+ * That could now be made exact: the mesh is keyed by CAPACITY as well as colour (see
+ * `carMesh`), so each cap could be shaped at its own aspect. It would mean threading the
+ * aspect through `bodyOutline` and `roundRect` instead of reading a module constant, and the
+ * error it removes has never been reported, so it is recorded here rather than done.
  */
-const REFERENCE_ASPECT = 3.126;
+const REFERENCE_ASPECT = CAP_BOX.medium.len / CAP_BOX.medium.wid;
 
 /**
  * Convert an ACROSS shrink into the ALONG shrink that removes the same distance in world units.
@@ -258,7 +375,7 @@ function outwards(pts: readonly Pt[]): Pt[] {
 }
 
 /** One ring of the roof: an outline, the height it sits at, its colour, and its normal tilt. */
-interface Ring { pts: Pt[]; z: number; c: Color; tilt: number }
+interface Ring { pts: readonly Pt[]; z: number; c: Color; tilt: number }
 
 /** A flat, straight-up-facing piece: the rim, the wheels, the glass, the arrow. */
 interface Flat { pts: readonly Pt[]; c: Color }
@@ -319,43 +436,57 @@ class Plan {
  * Split out from `carMesh` so `tools/car-plan.py` has one description to mirror and the ordering
  * cannot drift between the mesh and the picture used to judge it.
  */
-function design(color: Color): { under: Flat[]; rings: Ring[]; over: Flat[] } {
-    const under: Flat[] = [
-        { pts: bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS), c: shade(color, EDGE_SHADE) },
-    ];
-    for (const sx of [-1, 1]) {
+function design(
+    color: Color, cap: Cap,
+): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring[]; over: Flat[] } {
+    const rim = bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS);
+    const wheels: Flat[] = [];
+    const axle = axles(cap);
+    for (const x of axle.xs) {
         for (const sy of [-1, 1]) {
-            under.push({
-                pts: roundRect(sx * WHEEL_X, sy * WHEEL_Y, WHEEL_W, WHEEL_H, WHEEL_R),
+            wheels.push({
+                pts: roundRect(x, sy * WHEEL_Y, axle.w, WHEEL_H, WHEEL_R),
                 c: TYRE,
             });
         }
     }
 
-    const base = under.length * Z_STEP;
+    // The outermost ring sits ON the silhouette, at exactly the wall's top edge, so the wall
+    // and the roof meet with nothing between them. DOME_NARROW's inset is unchanged: it is
+    // subtracted from the grown outline rather than from the body's.
     const rings: Ring[] = DOME_PROFILE.map(({ at, tilt }) => ({
-        pts: bodyOutline(1 - DOME_NARROW * ACROSS_TO_ALONG * at, 1 - DOME_NARROW * at),
-        z: base + DOME_RISE * at,
-        c: lighten(color, DOME_LIFT * at),
+        pts: bodyOutline(EDGE_GROW_ALONG - DOME_NARROW * ACROSS_TO_ALONG * at,
+            EDGE_GROW_ACROSS - DOME_NARROW * at),
+        z: CAR_HEIGHT + DOME_RISE * at,
+        c: color,
         tilt,
     }));
 
-    const roof = rings[rings.length - 1];
-    const glass = shade(roof.c, GLASS_KEEP);
+    const rail = shade(color, RAIL_SHADE);
     const over: Flat[] = [
-        { pts: roundRect(WINDSCREEN_X, 0, WINDSCREEN_W, WINDSCREEN_H, WINDOW_R), c: glass },
-        { pts: roundRect(REAR_WINDOW_X, 0, REAR_WINDOW_W, REAR_WINDOW_H, WINDOW_R), c: glass },
+        { pts: roundRect(RAIL_X, 0, RAIL_W, RAIL_H, 0.5), c: rail },
+        { pts: roundRect(-RAIL_X, 0, RAIL_W, RAIL_H, 0.5), c: rail },
         ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE }) as Flat),
     ];
-    return { under, rings, over };
+    return { rim, wheels, rings, over };
+}
+
+function colourKey(c: Color, cap: Cap): string {
+    return `${c.r},${c.g},${c.b},${cap}`;
 }
 
 const meshCache = new Map<string, Mesh>();
 
 /**
  * The whole car as ONE mesh, in a unit box (length along X, width along Y, -0.5..0.5), with
- * every plate's colour baked into its vertices. Cached per colour -- there are six car colours
- * in the palette, so six meshes serve a whole lot.
+ * every plate's colour baked into its vertices. Cached per (colour, CAPACITY) -- six colours
+ * in the palette and three capacities, so at most eighteen meshes serve a whole lot.
+ *
+ * It was per colour alone until the wheels stopped being the same on every vehicle (see
+ * `axles`). The cost is draw calls: one instanced draw per (mesh, material) pair, so a lot
+ * went from six to at most eighteen. That is nothing here -- the frame-rate problem this
+ * design solved was ~414 draws for 46 modelled cars, and the JS-side cost of walking a
+ * thousand renderers, neither of which eighteen comes near.
  *
  * Vertex colours, not materials, are what collapse the draw calls. The car needs a white
  * arrow, near-black tyres and several shades of its own paint; as materials that is a dozen
@@ -366,14 +497,35 @@ const meshCache = new Map<string, Mesh>();
  * The roof's SHADING is not baked -- only its colour is. Its normals do that work, and the
  * engine's key light does the rest; see DOME_PROFILE.
  */
-export function carMesh(color: Color): Mesh {
-    const key = `${color.r},${color.g},${color.b}`;
+export function carMesh(color: Color, cap: Cap): Mesh {
+    const key = colourKey(color, cap);
     const hit = meshCache.get(key);
     if (hit) return hit;
 
     const plan = new Plan();
-    const { under, rings, over } = design(color);
-    for (let i = 0; i < under.length; i++) plan.addFlat(under[i].pts, i * Z_STEP, under[i].c);
+    const { rim, wheels, rings, over } = design(color, cap);
+
+    // The wheels first, low on the wall, so the wall's own band draws over whatever part of them
+    // falls inside the body: what shows is the sliver past the silhouette, which is all a wheel
+    // is from up here.
+    for (const wheel of wheels) plan.addFlat(wheel.pts, WHEEL_Z, wheel.c);
+
+    // THE WALL: the body's outline extruded from the board up to the roof, with the vertices'
+    // normals lying flat and pointing outward (tilt 90). That is what makes the engine light the
+    // four sides differently -- and, unlike everything the fake wall tried, it turns with the
+    // car, so the side facing the viewer is always the side facing the viewer.
+    const wall = lighten(color, WALL_LIFT);
+    plan.addBand(
+        { pts: rim, z: 0, c: shade(wall, WALL_FOOT), tilt: 90 },
+        { pts: rim, z: CAR_HEIGHT, c: wall, tilt: 90 },
+    );
+    // The window band, on the same outline grown just enough not to z-fight the wall.
+    const glassPts = bodyOutline(EDGE_GROW_ALONG * GLASS_OUT, EDGE_GROW_ACROSS * GLASS_OUT);
+    const glass = shade(color, GLASS_SHADE);
+    plan.addBand(
+        { pts: glassPts, z: CAR_HEIGHT * GLASS_LOW, c: glass, tilt: 90 },
+        { pts: glassPts, z: CAR_HEIGHT * GLASS_HIGH, c: glass, tilt: 90 },
+    );
     for (let i = 0; i + 1 < rings.length; i++) plan.addBand(rings[i], rings[i + 1]);
     const roof = rings[rings.length - 1];
     plan.addFlat(roof.pts, roof.z, roof.c);            // the crown, inside the innermost ring

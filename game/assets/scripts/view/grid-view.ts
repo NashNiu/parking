@@ -1,5 +1,5 @@
 import { Node, Vec3 } from 'cc';
-import { CLEARANCE, LotSystem } from '../core/index';
+import { CarSpec, CLEARANCE, LotSystem } from '../core/index';
 import { BoardLayout } from './board-layout';
 import { colorOf } from './colors';
 import { buildCar, Cap } from './car-builder';
@@ -21,6 +21,7 @@ interface CarEntry {
 export class GridView {
     private carNodes = new Map<number, Node>();
     private entries: CarEntry[] = [];
+    private pending = new Map<number, CarEntry>();
 
     /** Half a clearance, in world units. See `pickCar`. */
     private readonly slop: number;
@@ -33,20 +34,55 @@ export class GridView {
         this.slop = (CLEARANCE / 2) * layout.scale;
     }
 
+    /** Build one car's node and its pick entry, from core's own numbers. */
+    private build(id: number, car: CarSpec): { root: Node; entry: CarEntry } {
+        const { len, wid } = this.layout.carSize(car.cap as Cap);
+        const built = buildCar(
+            `car-${id}`, len, wid, colorOf(car.color), car.angle, car.cap as Cap,
+        );
+        built.root.setPosition(this.layout.toWorld(car.x, car.y));
+        this.parent.addChild(built.root);
+        this.carNodes.set(id, built.root);
+        return {
+            root: built.root,
+            entry: { id, node: built.root, body: built.body,
+                     len: built.len, wid: built.wid, angle: car.angle },
+        };
+    }
+
     render(): void {
         for (const [id, car] of this.lot.cars) {
-            const { len, wid } = this.layout.carSize(car.cap as Cap);
-            const built = buildCar(
-                `car-${id}`, len, wid, colorOf(car.color), car.angle,
-            );
-            built.root.setPosition(this.layout.toWorld(car.x, car.y));
-            this.parent.addChild(built.root);
-            this.carNodes.set(id, built.root);
-            this.entries.push({
-                id, node: built.root, body: built.body,
-                len: built.len, wid: built.wid, angle: car.angle,
-            });
+            this.entries.push(this.build(id, car).entry);
         }
+    }
+
+    /**
+     * Draw a car that has just APPEARED rather than one the level started with -- today,
+     * the next car out of a tunnel.
+     *
+     * It is deliberately not pickable yet. Core moved the new car up in the same call that
+     * removed the last one, so it is already a legal tap the instant it exists; the view is
+     * still sliding it out of the tunnel mouth, and letting it be tapped mid-slide would
+     * either cut its own animation short or send a car that is visibly still inside. Holding
+     * the pick entry back is the whole of the fix, and it costs core nothing -- see the note
+     * on `LotSystem.removeCar`.
+     *
+     * Returns the node so the caller can animate it, or null if core has no such car.
+     */
+    addCar(id: number): Node | null {
+        const car = this.lot.cars.get(id);
+        if (!car) return null;
+        const made = this.build(id, car);
+        this.pending.set(id, made.entry);
+        return made.root;
+    }
+
+    /** Let `pickCar` see a car that finished emerging. Ignores an unknown id. */
+    activateCar(id: number): void {
+        const entry = this.pending.get(id);
+        if (!entry) return;
+        this.pending.delete(id);
+        this.entries.push(entry);
     }
 
     /**
@@ -109,6 +145,7 @@ export class GridView {
     detachCar(id: number): Node | null {
         const node = this.carNodes.get(id) ?? null;
         this.carNodes.delete(id);
+        this.pending.delete(id);
         this.entries = this.entries.filter((e) => e.id !== id);
         return node;
     }
@@ -117,6 +154,7 @@ export class GridView {
         const node = this.carNodes.get(id);
         if (node) node.destroy();
         this.carNodes.delete(id);
+        this.pending.delete(id);
         this.entries = this.entries.filter((e) => e.id !== id);
     }
 }

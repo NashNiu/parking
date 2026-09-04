@@ -99,15 +99,18 @@ test('the near entry is a quarter lap from the gap and the far one three quarter
 });
 
 test('each shape allows only the capacities whose seam reads', () => {
-  // Exactly one length each: a block is one row, 0.22 long, and the seam band leaves each
-  // perimeter one place to put its cells. The circle's perimeter is 60% of the
-  // quadrilaterals', so it lands one step lower.
+  // A block is one row, 0.22 long, and between the seam ceiling and `clearance` each perimeter
+  // is left with two or three places to put its cells. Where each one stops is its corners:
+  // the rectangle carries 36 at minRowGap 0.212, the hexagon, the trapezoid and the oval carry
+  // 32 (0.221, 0.214, 0.204) and miss 36, and the circle -- whose perimeter is 75% of theirs --
+  // lands a step lower again at 28 (0.213). All against `clearance` 0.20. Levels take the
+  // LONGEST option their shape allows; see TRACK_CURVE.
   const EXPECTED: Record<TrackShape, number[]> = {
-    rect: [28],
-    hex: [28],
-    trap: [28],
-    oval: [28],
-    circle: [24],
+    rect: [28, 32, 36],
+    hex: [28, 32],
+    trap: [28, 32],
+    oval: [28, 32],
+    circle: [24, 28],
   };
   for (const shape of TRACK_SHAPES) {
     expect(capacityOptions(shape)).toEqual(EXPECTED[shape]);
@@ -161,9 +164,15 @@ test('a group is one row of four, and the row is as wide as the band lets it be'
   // the ring cannot simply be packed tighter still: the seam only comes down as far as the
   // row does, and the row stops here.
   expect(BLOCK.acrossStep).toBeGreaterThanOrEqual(BLOCK.arms);
-  // Rows are held to a stricter rule than row-mates: two of them may touch and no closer.
-  expect(BLOCK.clearance).toBeGreaterThan(BLOCK.arms);
-  expect(BLOCK.clearance).toBe(BLOCK.figure);
+  // THE TWO FLOORS HAVE CONVERGED, and that is the end state of "pack the rows as tight as
+  // they go". `clearance` used to be a figure's WIDTH -- two rows may touch and no closer,
+  // stricter than the rule row-mates get -- and it is now the arm span, exactly what a row
+  // holds its own members to. So nothing anywhere on the track comes closer than arms
+  // touching, one floor instead of two, and heads overlap by figure - arms (0.02 board units,
+  // about 1.5px) wherever they meet. Pinned because it is the whole basis of the ring's
+  // density: raise it and every shape loses a capacity step.
+  expect(BLOCK.clearance).toBe(BLOCK.arms);
+  expect(BLOCK.clearance).toBeLessThan(BLOCK.figure);
 });
 
 test('two groups stand further apart than the members of one group', () => {
@@ -203,9 +212,16 @@ test('minRowGap measures the corners, not a constant', () => {
   for (const shape of TRACK_SHAPES) {
     for (const c of CAPACITY_OPTIONS) {
       const gap = minRowGap(shape, c, GROUP_SIZE);
-      expect(gap).toBeGreaterThan(BLOCK.acrossStep);
+      // Never the constant, on any ring -- legal or not. This is the actual regression guard:
+      // returning acrossStep is what the bug did, and it did it everywhere.
+      expect(gap).not.toBeCloseTo(BLOCK.acrossStep, 4);
       seen.add(gap.toFixed(4));
     }
+    // There USED to be a second assertion here -- that a legal ring's corners clear
+    // `acrossStep` outright -- and it has been removed rather than updated, because it became
+    // a restatement of `capacityOptions` when `clearance` came down to equal `acrossStep`.
+    // The `not.toBeCloseTo` above is the actual regression guard and always was; the other
+    // one only ever passed by arithmetic, which is the tautology this test exists to avoid.
   }
   expect(seen.size).toBeGreaterThan(TRACK_SHAPES.length);
 });
@@ -225,16 +241,29 @@ test('a ring one step too short is rejected for seam alone', () => {
 });
 
 test('row overlap is what stops the ring packing tighter still', () => {
-  // Why the seam bottoms out where it does. It is no longer the boarding doorway, which held
-  // this position for two rounds and now sits well under every legal ring; it is the corners.
-  // At 32 cells three of the five shapes bring the row ahead within a figure's width, and no
-  // narrower row can buy that back -- the row is already down to arms touching. That is why
-  // CAPACITY_OPTIONS stops at 28.
-  for (const shape of ['trap', 'oval', 'circle'] as TrackShape[]) {
-    expect(minRowGap(shape, 32, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
+  // Why the seam bottoms out where it does. It is not the boarding doorway and it is not the
+  // seam floor -- both of those have been the binding limit at some point and both have been
+  // moved off it -- it is the corners. Each shape stops in its own place, and no narrower row
+  // can buy the next step back, because a row is already down to arms touching.
+  for (const shape of ['hex', 'trap', 'oval'] as TrackShape[]) {
+    expect(minRowGap(shape, 36, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
   }
-  expect(Math.max(...CAPACITY_OPTIONS)).toBe(28);
-  // ...and the doorway floor really is slack now, on every ring that ships.
+  expect(minRowGap('circle', 32, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
+  // 40 is where the ROOMIEST shape runs out, so no shape can use it. This is the measurement
+  // behind "the ring cannot be packed to a zero seam": on a closed loop, shutting the
+  // straights is the same act as overlapping the corners.
+  for (const shape of TRACK_SHAPES) {
+    expect(minRowGap(shape, 40, GROUP_SIZE)).toBeLessThan(BLOCK.clearance);
+  }
+  // The list runs PAST every reachable capacity on purpose, so that the ceiling is whatever
+  // `capacityOptions` computes and never the length of an array. It has silently been the
+  // binding limit twice.
+  expect(Math.max(...CAPACITY_OPTIONS)).toBe(44);
+  expect(Math.max(...TRACK_SHAPES.flatMap((s) => capacityOptions(s))))
+    .toBeLessThan(Math.max(...CAPACITY_OPTIONS));
+  // The doorway floor is no longer slack -- the tightest ring that ships (a 28-cell circle at
+  // 0.280) clears it by 0.01, which is deliberate: ROW_SPACING_MIN came down to 0.27 to let it
+  // through, and what it still has to protect is GAP_ARC below it.
   for (const shape of TRACK_SHAPES) {
     for (const c of capacityOptions(shape)) {
       expect(new TrackPath(shape).rowSpacing(c)).toBeGreaterThan(ROW_SPACING_MIN);
@@ -298,7 +327,7 @@ test('lookahead tops out where the channel would leave the visible width', () =>
   // hexagon and the trapezoid dock closest to the centre of the four quadrilaterals, so they
   // are the ones that pick up the extra batch each time LANE.step comes down.
   const EXPECTED: Record<TrackShape, number> = {
-    rect: 5, hex: 6, trap: 6, oval: 5, circle: 7,
+    rect: 7, hex: 7, trap: 8, oval: 7, circle: 9,
   };
   for (const shape of TRACK_SHAPES) {
     expect(maxLookahead(shape)).toBe(EXPECTED[shape]);

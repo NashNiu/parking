@@ -1,5 +1,5 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
-import { roundedSprite, dotSprite } from './ui-shapes';
+import { roundedSprite, dotSprite, starSprite, burstSprite } from './ui-shapes';
 
 declare const wx: any;
 
@@ -44,6 +44,42 @@ function canvasSize(canvas: Node): { w: number; h: number } {
     return ct ? { w: ct.width, h: ct.height } : { w: 720, h: 1280 };
 }
 
+/**
+ * The passenger figure as a flat glyph, centred on `parent`: a head over a narrower body.
+ *
+ * The two pieces are positioned so the pair straddles the parent's centre -- the head above
+ * it, the body below -- rather than stacking upward from it, so the glyph is optically
+ * centred in whatever it sits in without the caller doing arithmetic.
+ */
+function paxGlyph(parent: Node): void {
+    const total = PILL_FIG_HEAD + PILL_FIG_BODY_H - PILL_FIG_TUCK;
+    const top = total / 2;
+    const body = roundedSprite('paxBody', PILL_FIG_BODY_W, PILL_FIG_BODY_H, PILL_ICON);
+    parent.addChild(body);
+    body.setPosition(0, top - PILL_FIG_HEAD + PILL_FIG_TUCK - PILL_FIG_BODY_H / 2, 0);
+    // After the body, so the head is the later sibling and draws over the tuck.
+    const head = dotSprite('paxHead', PILL_FIG_HEAD, PILL_ICON);
+    parent.addChild(head);
+    head.setPosition(0, top - PILL_FIG_HEAD / 2, 0);
+}
+
+/**
+ * A readout plate: a white face over a base of the same shape, offset down so it shows as a
+ * lip. Returns both, because callers hang their contents off the FACE (so the contents move
+ * with it) and position the HOLDER.
+ */
+function liftedPill(name: string, w: number, h: number): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(w, h);
+    const base = roundedSprite('base', w, h, PILL_BASE);
+    holder.addChild(base);
+    base.setPosition(0, -PILL_LIFT, 0);
+    const face = roundedSprite('face', w, h, PILL_BG);
+    holder.addChild(face);
+    return { holder, face };
+}
+
 function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 0): Label {
     const n = new Node(name);
     n.layer = Layers.Enum.UI_2D;
@@ -57,9 +93,27 @@ function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 
     return label;
 }
 
-/** The remaining-passenger pill, sized off its own type so it stays in step with the HUD. */
-const PILL_W = 210;
+/**
+ * The remaining-passenger pill, sized off its own type so it stays in step with the HUD.
+ *
+ * 236 wide, up from 210: the count reaches FOUR digits now (a level runs 1200-1350 passengers,
+ * see CARS_PER_LEVEL), and the old width was measured against a three-digit readout.
+ */
+const PILL_W = 240;
 const PILL_H = 88;
+/**
+ * Both readouts are drawn as TWO plates -- a white face over a cool-grey base peeking out
+ * below -- which is the same trick as the unlock button, the padlock rims on the board and the
+ * win panel's stars. They were flat white stadiums, and flat is what "redesign these" was
+ * about: on a HUD where the pressable things have a top face, the readouts having none made
+ * them read as unfinished rather than as a different kind of object.
+ *
+ * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
+ * blue-grey (see GROUND in scene-stage), so a neutral shadow under a white plate reads as
+ * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
+ */
+const PILL_BASE = new Color(202, 211, 231, 255);
+const PILL_LIFT = 6;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
 
@@ -92,7 +146,7 @@ const PILL_MARGIN = 0.03;
  * plate owns, and `fitCamera` frames the board below it -- see `buildBoard`. Centring it and
  * leaving the board where it was is what put the plate behind the Dynamic Island.
  */
-const TITLE_PILL_W = 190;
+const TITLE_PILL_W = 216;
 const TITLE_PILL_H = PILL_H;
 
 /**
@@ -156,6 +210,68 @@ const PROMPT_BTN_LIFT = 8;
 const PROMPT_X_D = 76;
 const PROMPT_X_BG = new Color(232, 236, 246, 255);
 const PROMPT_X_INK = new Color(122, 133, 160, 255);
+
+/**
+ * The win panel, which is the one piece of CELEBRATION on this HUD.
+ *
+ * It replaces two bare Labels floating over the board -- big outlined type plus three star
+ * GLYPHS from the system font -- reported as needing "some cartoon and some depth". Neither
+ * was reachable from where it was: type with a rim has no depth to give, and a star glyph is
+ * a thin outline-weight shape at whatever proportions the device's font happens to draw it.
+ *
+ * So it is built out of the vocabulary the unlock prompt already established -- a scrim, a
+ * card with a darker plate behind it, and a key drawn as two plates so it has a top face --
+ * plus real star SHAPES (`starSprite`) each sitting on its own darker copy, which is the same
+ * two-plate trick a third time. That is where the depth comes from: one light source, implied
+ * by every element being offset the same way against a darker twin, on a HUD that otherwise
+ * has none.
+ *
+ * The MIDDLE star is bigger and higher, and lands last. Three identical stars in a row read as
+ * a progress bar; an arch with the emphasis in the middle reads as a prize.
+ *
+ * A LIGHTER scrim than the prompt's 178. The prompt has to swallow taps and be answered; this
+ * one is a curtain call over a board the player has just emptied, and there is nothing left
+ * behind it worth hiding. It also must NOT behave modally: the level advances on a tap
+ * ANYWHERE (see `onTouchEnd`), so this panel deliberately has no hit test of its own and the
+ * button is a drawing, not a target -- tapping it works only because tapping anything works.
+ */
+const WIN_W = 600;
+const WIN_H = 420;
+const WIN_R = 56;
+const WIN_SCRIM = new Color(10, 14, 26, 110);
+/**
+ * The stars STRADDLE the card's top edge, which is the single thing that stops this reading as
+ * a dialog box with stars in it. Their y is measured from the card's centre, so a side star at
+ * 196 with the card 420 tall sits half in and half out; the middle one is bigger, higher, and
+ * mostly outside.
+ *
+ * The pitch keeps eight units of daylight between a side star and the middle one at these
+ * diameters -- worth checking by hand if any of the three change, because two stars whose
+ * points cross look like a mistake rather than a cluster.
+ */
+const WIN_STAR_D = 120;
+const WIN_STAR_MID_D = 156;
+const WIN_STAR_PITCH = 146;
+const WIN_STAR_Y = 196;
+const WIN_STAR_MID_Y = 224;
+/** How far each star's darker twin peeks out below it. */
+const WIN_STAR_LIFT = 8;
+const WIN_STAR = new Color(255, 201, 52, 255);
+const WIN_STAR_BASE = new Color(206, 140, 18, 255);
+const WIN_STAR_OFF = new Color(219, 224, 236, 255);
+const WIN_STAR_OFF_BASE = new Color(183, 191, 209, 255);
+/**
+ * The sunburst behind the card: very large, very faint, and turning once every forty seconds.
+ *
+ * It is the one thing here that is purely decorative, and it earns its place by being the only
+ * element that MOVES once the entrance is over -- a still panel over a board that has stopped
+ * moving reads as a screenshot. Slow enough that it is not an animation you watch; fast enough
+ * that the screen is alive.
+ */
+const WIN_BURST_D = 980;
+const WIN_BURST = new Color(255, 255, 255, 30);
+const WIN_BURST_TURN = 40;
+const WIN_CAPTION = new Color(140, 150, 175, 255);
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -229,10 +345,55 @@ const PICK_INK = new Color(255, 255, 255, 220);
 const CHIP_W = 88;
 const CHIP_H = 58;
 
+/**
+ * The tunnel count badge, taken off the reference art's blue block: a light blue face over a
+ * deeper blue lip, with a chunky white number. Same lifted-plate construction as `liftedPill`
+ * -- a face with a darker base peeking out below it -- because that is what every other plate
+ * on this HUD is, and the reference's block is built the same way.
+ *
+ * Not in `colors.ts`: that palette is keyed by core's colour STRINGS, and a tunnel has no
+ * colour in core.
+ */
+const TUNNEL_BADGE_FACE = new Color(126, 180, 246);
+const TUNNEL_BADGE_BASE = new Color(64, 116, 190);
+const TUNNEL_BADGE_D = 68;
+const TUNNEL_BADGE_R = 18;
+const TUNNEL_BADGE_LIFT = 5;
+
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
-const PILL_ICON = new Color(255, 150, 66);
+/**
+ * The passenger badge: a saturated disc at the pill's left end with a WHITE figure on it.
+ *
+ * It was three orange dots in a huddle on a pale well, and it came back as "the little
+ * flower" -- which is exactly what three round blobs in a triangle are. The icon on a counter
+ * has to name what is being counted, and three dots name nothing.
+ *
+ * So it is now the game's OWN passenger, drawn flat: a round head over a narrower rounded
+ * body, the proportions this project already settled on for the figures on the track (see
+ * HEAD_RADIUS in pax-figure.ts -- a big head on a small body is what makes that silhouette
+ * read as a person at any size). Two sprites, no new shape needed.
+ *
+ * WHITE ON SATURATED, not saturated on pale. The old pairing was orange ink on a cream well,
+ * a contrast ratio of about 1.4; white on this orange is nearer 2.6, and at the size an icon
+ * on a HUD pill actually occupies, contrast is the only thing that survives.
+ */
+const PILL_ICON = new Color(255, 255, 255, 255);
+const PILL_BADGE = new Color(255, 146, 58, 255);
+const PILL_BADGE_D = 68;
+/**
+ * The flat figure inside the badge: head diameter, then the body's width and height, then how
+ * far the body TUCKS UNDER the head.
+ *
+ * The overlap is not a nicety. The body is a stadium, so its top is a semicircle; butted
+ * against the head it leaves a visible pinch where the two curves meet, which reads as a neck
+ * on a figure that has no neck. Four units of overlap puts the join inside the head.
+ */
+const PILL_FIG_HEAD = 21;
+const PILL_FIG_BODY_W = 17;
+const PILL_FIG_BODY_H = 24;
+const PILL_FIG_TUCK = 4;
 
 /**
  * Ink for the level title and the win/lose banner. The board is a light scene, so white
@@ -251,7 +412,9 @@ export class HudView {
     private levelLabel: Label;
     private progressLabel: Label;
     private bannerLabel: Label;
-    private starLabels: Label[] = [];
+    /** The win panel's scrim and the three star nodes on it, built on first win. */
+    private win: Node | null = null;
+    private winStars: Node[] = [];
     /** The toast pill and its parts, built on first use. See `showToast`. */
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
@@ -262,8 +425,12 @@ export class HudView {
     private promptBtn: Node | null = null;
     private promptClose: Node | null = null;
     private pickNodes: Node[] = [];
+    /** Per-tunnel count readouts, keyed by tunnel id. See `setTunnelCount`. */
+    private tunnelBadges = new Map<number, { holder: Node; label: Label }>();
     private speedNode: Node;
     private speedLabel: Label;
+    /** The level on screen, kept because the win panel's caption names it. See `setLevel`. */
+    private levelId = 1;
 
     constructor(canvas: Node) {
         this.canvas = canvas;
@@ -302,12 +469,6 @@ export class HudView {
         this.bannerLabel.outlineColor = new Color(255, 255, 255, 235);
         this.bannerLabel.outlineWidth = 5;
         this.bannerLabel.node.active = false;
-        for (let i = 0; i < 3; i++) {
-            const label = makeLabel(canvas, `Star${i}`, 60, 100);
-            label.node.setPosition((i - 1) * 80, 100, 0);
-            label.node.active = false;
-            this.starLabels.push(label);
-        }
     }
 
     /**
@@ -332,42 +493,51 @@ export class HudView {
     }
 
     /**
-     * The level title on its own rounded plate, centred at the top (see TITLE_PILL_W for
-     * what makes the centre safe). 42px, not the counter's 52: at three digits a bolder
-     * setting would run past the plate's edge.
+     * The level title on its own lifted plate, centred at the top (see TITLE_PILL_W for what
+     * makes the centre safe). 46px against the counter's 54 -- it is the quieter of the two,
+     * because the number is the one that changes.
      */
     private buildTitlePill(canvas: Node, x: number, line: number): Label {
-        const pill = roundedSprite('TitlePill', TITLE_PILL_W, TITLE_PILL_H, PILL_BG);
-        canvas.addChild(pill);
-        pill.setPosition(x, line, 0);
-        const label = makeLabel(pill, 'LevelLabel', 42, 0);
+        const { holder, face } = liftedPill('TitlePill', TITLE_PILL_W, TITLE_PILL_H);
+        canvas.addChild(holder);
+        holder.setPosition(x, line, 0);
+        const label = makeLabel(face, 'LevelLabel', 46, 0);
         label.color = TITLE_INK;
         label.isBold = true;
         return label;
     }
 
     /**
-     * The remaining-passenger readout: a white rounded pill on the left, one row under the
-     * title, holding a huddle of passenger dots, a small caption, and a big count. It
-     * replaces a bare centred line of text, which read as debug output rather than a HUD.
+     * The remaining-passenger readout: a lifted plate on the left, one row under the title,
+     * with the passenger badge at its left end and the caption over the count beside it.
+     *
+     * The two lines are read as ONE unit -- the caption is the label for the number under it --
+     * so they share an x, and that x is the middle of what the badge leaves rather than a
+     * nudged offset. At four digits and 48px bold the count is about 110 wide, which leaves it
+     * eleven units clear of the badge on one side and of the plate's edge on the other.
+     *
+     * 48 and 24, down from 54 and 22, and the pair moved TOGETHER for one reason: at 54 the
+     * count's line box (1.2x the font) reached up through the caption's. Shrinking the number
+     * a little and growing the caption a little buys both of them room and makes the caption
+     * legible, which at 22 it was not -- it is the smallest type on the screen and it was
+     * carrying the only words that say what the number means.
      */
     private buildPassengerPill(canvas: Node, w: number, margin: number, y: number): Label {
-        const pill = roundedSprite('PaxPill', PILL_W, PILL_H, PILL_BG);
-        canvas.addChild(pill);
-        pill.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
+        const { holder, face } = liftedPill('PaxPill', PILL_W, PILL_H);
+        canvas.addChild(holder);
+        holder.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
 
-        // Three dots in a huddle is all the passenger icon that survives at this size —
-        // a drawn figure would just be a smudge.
-        for (const [dx, dy, d] of [[-13, 6, 24], [13, 6, 24], [0, -12, 27]] as const) {
-            const dot = dotSprite('paxdot', d, PILL_ICON);
-            pill.addChild(dot);
-            dot.setPosition(-68 + dx, dy, 0);
-        }
+        const badge = dotSprite('paxBadge', PILL_BADGE_D, PILL_BADGE);
+        face.addChild(badge);
+        badge.setPosition(-PILL_W / 2 + PILL_BADGE_D / 2 + 12, 0, 0);
+        paxGlyph(badge);
 
-        const caption = makeLabel(pill, 'PaxCaption', 24, 23, 34);
+        const badgeRight = -PILL_W / 2 + 12 + PILL_BADGE_D;
+        const textX = (badgeRight + PILL_W / 2) / 2;
+        const caption = makeLabel(face, 'PaxCaption', 24, 23, textX);
         caption.string = '剩余乘客';
         caption.color = PILL_CAPTION;
-        const count = makeLabel(pill, 'PaxCount', 52, -18, 34);
+        const count = makeLabel(face, 'PaxCount', 48, -19, textX);
         count.color = PILL_INK;
         count.isBold = true;
         return count;
@@ -394,6 +564,69 @@ export class HudView {
     /** Half the chip's height, so the caller can hang it off a stall's bottom edge. */
     get seatChipHalfHeight(): number {
         return CHIP_H / 2;
+    }
+
+    /**
+     * The count on a tunnel: how many cars it still holds, the one at the mouth included.
+     *
+     * It lives in the HUD rather than on the board, and is placed each frame at the tunnel's
+     * projected point -- the same route `placeSpeed` and the seat chips take. A Label on a
+     * 3D node would need a second rendering path for the one piece of text outside the
+     * Canvas; this needs none, and faces the camera for free. What it gives up is being
+     * occluded by anything in the scene, which for a readout that must always be legible is
+     * not a loss.
+     */
+    setTunnelCount(tunnelId: number, n: number): void {
+        let badge = this.tunnelBadges.get(tunnelId);
+        if (!badge) {
+            const d = TUNNEL_BADGE_D;
+            const holder = new Node(`tunnel-${tunnelId}`);
+            holder.layer = Layers.Enum.UI_2D;
+            holder.addComponent(UITransform).setContentSize(d, d);
+            const base = roundedSprite('base', d, d, TUNNEL_BADGE_BASE, TUNNEL_BADGE_R);
+            base.setPosition(0, -TUNNEL_BADGE_LIFT, 0);
+            holder.addChild(base);
+            const face = roundedSprite('face', d, d, TUNNEL_BADGE_FACE, TUNNEL_BADGE_R);
+            holder.addChild(face);
+            this.canvas.addChild(holder);
+            // On the FACE, not the holder, so it rides the plate rather than the lip.
+            const label = makeLabel(face, 'count', 40, 0);
+            badge = { holder, label };
+            this.tunnelBadges.set(tunnelId, badge);
+        }
+        badge.label.string = String(n);
+        badge.holder.active = n > 0;
+    }
+
+    /**
+     * Put a tunnel's badge at a point already converted into UI space.
+     *
+     * `setWorldPosition`, NOT `setPosition`, and that is the whole of a bug that made every
+     * badge invisible: the point comes from `uiCam.screenToWorld`, so it is a WORLD position,
+     * while the holder is a child of the canvas and `setPosition` would read it as a LOCAL
+     * one. The canvas node does not sit at the UI world origin, so the badge landed about
+     * half a screen away and never appeared. `placeSpeed` above and the seat chips in
+     * `GameController.positionChip` both take the same route and both use `setWorldPosition`;
+     * this is the same idiom, not a new one.
+     */
+    placeTunnelBadge(tunnelId: number, ui: Vec3): void {
+        this.tunnelBadges.get(tunnelId)?.holder.setWorldPosition(ui);
+    }
+
+    /**
+     * Drop every tunnel badge. The badges live under this HUD's own Canvas, not under the
+     * board -- `buildBoard`'s `boardRoot.destroy()` never touches them, so a level with no
+     * tunnel at id 3 that follows one that HAD a tunnel 3 would otherwise leave that badge
+     * sitting on screen forever, `active` and showing a stale count, since nothing would ever
+     * call `setTunnelCount(3, ...)` again to hide it.
+     *
+     * Destroys the holders rather than just deactivating them, the same way `switchTo`
+     * retires a departed car's seat chip (`e.chip.destroy()`) rather than hiding it -- one
+     * discipline for both of this HUD's per-id collections, not two.
+     */
+    clearTunnelBadges(): void {
+        for (const badge of this.tunnelBadges.values()) badge.holder.destroy();
+        this.tunnelBadges.clear();
     }
 
     /**
@@ -682,6 +915,7 @@ export class HudView {
     }
 
     setLevel(id: number): void {
+        this.levelId = id;
         // No spaces around the number: the title has a plate to fit inside, and at three
         // digits the spaced form runs past its edge.
         this.levelLabel.string = `第${id}关`;
@@ -696,16 +930,14 @@ export class HudView {
     }
 
     /**
-     * Moves the banner and the stars to the end of the canvas's child list, so they
-     * render on top of every seat chip. `newSeatChip` appends chips at runtime as cars
-     * park, which makes each one a later — and therefore higher-rendering — sibling of
-     * the banner and stars, which are constructed early. Raising both at show time (once
-     * the game is over, no further chip can appear) undoes that ordering.
+     * Moves the banner to the end of the canvas's child list, so it renders on top of every
+     * seat chip. `newSeatChip` appends chips at runtime as cars park, which makes each one a
+     * later — and therefore higher-rendering — sibling of the banner, which is constructed
+     * early. Raising it at show time (once the game is over, no further chip can appear)
+     * undoes that ordering. `showWin` does the same for the win panel's scrim.
      */
     private raiseBannerToFront(): void {
-        const lastIndex = this.canvas.children.length - 1;
-        this.bannerLabel.node.setSiblingIndex(lastIndex);
-        for (const label of this.starLabels) label.node.setSiblingIndex(lastIndex);
+        this.bannerLabel.node.setSiblingIndex(this.canvas.children.length - 1);
     }
 
     showBanner(text: string): void {
@@ -715,26 +947,157 @@ export class HudView {
     }
 
     /**
-     * Victory panel: big banner + a row of 3 stars, filled left-to-right up to
-     * `starCount`, each popping in in turn. `hasNext` switches the call-to-action
-     * between advancing and replaying, matching what the next tap will actually do.
+     * The win panel, built once and kept. See WIN_W for what it is made of and why.
+     *
+     * The star ORDER on screen is left, middle, right; the order in `winStars` is the order
+     * they are ANIMATED in -- left, right, middle -- so `showWin` can just stagger by index.
+     * Filling left-to-right up to `starCount` reads off the x positions, not the array, so
+     * the two are kept separate rather than one being inferred from the other.
+     */
+    private buildWinPanel(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('WinScrim', w * 2, h * 2, WIN_SCRIM, 2);
+        scrim.addComponent(UIOpacity);
+        this.canvas.addChild(scrim);
+
+        // Outside the panel node, so the entrance scale does not scale the glow with it.
+        const burst = burstSprite('WinBurst', WIN_BURST_D, WIN_BURST);
+        scrim.addChild(burst);
+        tween(burst).by(WIN_BURST_TURN, { angle: 360 }).repeatForever().start();
+
+        const panel = new Node('WinPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
+        scrim.addChild(panel);
+
+        const shadow = roundedSprite('shadow', WIN_W, WIN_H, PROMPT_SHADOW, WIN_R);
+        panel.addChild(shadow);
+        shadow.setPosition(0, -PROMPT_SHADOW_DROP, 0);
+        const plate = roundedSprite('plate', WIN_W, WIN_H, PROMPT_BG, WIN_R);
+        panel.addChild(plate);
+
+        // Left, right, middle -- see the note above.
+        const slots: { x: number; y: number; d: number }[] = [
+            { x: -WIN_STAR_PITCH, y: WIN_STAR_Y, d: WIN_STAR_D },
+            { x: WIN_STAR_PITCH, y: WIN_STAR_Y, d: WIN_STAR_D },
+            { x: 0, y: WIN_STAR_MID_Y, d: WIN_STAR_MID_D },
+        ];
+        for (let i = 0; i < slots.length; i++) {
+            const { x, y, d } = slots[i];
+            const holder = new Node(`WinStar${i}`);
+            holder.layer = Layers.Enum.UI_2D;
+            holder.addComponent(UITransform);
+            plate.addChild(holder);
+            holder.setPosition(x, y, 0);
+            const base = starSprite('base', d, WIN_STAR_BASE);
+            holder.addChild(base);
+            base.setPosition(0, -WIN_STAR_LIFT, 0);
+            holder.addChild(starSprite('face', d, WIN_STAR));
+            this.winStars.push(holder);
+        }
+
+        // 84, not 92, and the caption a row lower: at 92 the title's line box (1.2x the font)
+        // reached from 9 up to 119 against the stars' bottom edge at 136 and DOWN through the
+        // caption's box. The three of them now clear each other by 13 to 24 units.
+        const title = makeLabel(plate, 'WinTitle', 84, 72);
+        title.color = TITLE_INK;
+        title.isBold = true;
+        const caption = makeLabel(plate, 'WinCaption', 30, -14);
+        caption.color = WIN_CAPTION;
+
+        const cta = new Node('WinCta');
+        cta.layer = Layers.Enum.UI_2D;
+        cta.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
+        plate.addChild(cta);
+        cta.setPosition(0, -112, 0);
+        const ctaBase = roundedSprite(
+            'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
+        );
+        cta.addChild(ctaBase);
+        ctaBase.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const face = roundedSprite('face', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN, PROMPT_BTN_R);
+        cta.addChild(face);
+        const ctaLabel = makeLabel(face, 'WinCtaLabel', 44, 0);
+        ctaLabel.isBold = true;
+
+        scrim.active = false;
+        this.win = scrim;
+    }
+
+    /**
+     * Victory panel: three stars filled left-to-right up to `starCount`, over a card that
+     * scales in, with the stars popping and spinning into place behind it. `hasNext` switches
+     * the call to action between advancing and replaying, matching what the next tap will
+     * actually do.
+     *
+     * Every tween is stopped before it is restarted and every property it will touch is set
+     * explicitly first: this panel can be shown again without the scene being rebuilt (win,
+     * replay, win), and a half-finished pop from last time would otherwise leave a star at
+     * whatever scale it had got to.
      */
     showWin(starCount: number, hasNext: boolean = false): void {
-        this.bannerLabel.string = hasNext ? '过关!\n点击进入下一关' : '全部通关!\n点击重玩';
-        this.bannerLabel.node.active = true;
-        this.raiseBannerToFront();
-        this.starLabels.forEach((label, i) => {
-            const filled = i < starCount;
-            label.string = filled ? '★' : '☆'; // ★ / ☆
-            label.color = filled ? new Color(255, 210, 60) : new Color(120, 120, 120);
-            label.node.active = true;
-            label.node.setScale(0.01, 0.01, 0.01);
-            tween(label.node)
-                .delay(i * 0.12)
-                .to(0.18, { scale: new Vec3(1.3, 1.3, 1.3) }, { easing: 'backOut' })
-                .to(0.1, { scale: Vec3.ONE }, { easing: 'backOut' })
+        if (!this.win) this.buildWinPanel();
+        const scrim = this.win!;
+        const panel = scrim.children[0];
+        const plate = panel.getChildByName('plate')!;
+        plate.getChildByName('WinTitle')!.getComponent(Label)!.string =
+            hasNext ? '过关!' : '全部通关!';
+        // The caption is the only place the level's own number appears once the board is
+        // cleared, and it is what stops the panel being three words on a card.
+        plate.getChildByName('WinCaption')!.getComponent(Label)!.string =
+            hasNext ? `第 ${this.levelId} 关完成` : '十关全部完成';
+        plate.getChildByName('WinCta')!.getChildByName('face')!
+            .getChildByName('WinCtaLabel')!.getComponent(Label)!.string =
+            hasNext ? '点击进入下一关' : '点击重玩';
+
+        scrim.active = true;
+        // Past every seat chip: chips are appended as cars park, so they are later siblings
+        // than anything built in the constructor. Same reason as the banner and the prompt.
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        const fade = scrim.getComponent(UIOpacity)!;
+        Tween.stopAllByTarget(fade);
+        fade.opacity = 0;
+        tween(fade).to(0.14, { opacity: 255 }).start();
+
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.82, 0.82, 1);
+        tween(panel)
+            .to(0.16, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'backOut' })
+            .to(0.09, { scale: Vec3.ONE })
+            .start();
+
+        for (let i = 0; i < this.winStars.length; i++) {
+            const star = this.winStars[i];
+            // Slot order is left, right, middle (see `buildWinPanel`), and the fill is by
+            // POSITION: the middle star is the third of three, the right one the second.
+            const rank = i === 2 ? 1 : (i === 0 ? 0 : 2);
+            const on = rank < starCount;
+            star.getChildByName('face')!.getComponent(Sprite)!.color =
+                on ? WIN_STAR : WIN_STAR_OFF;
+            star.getChildByName('base')!.getComponent(Sprite)!.color =
+                on ? WIN_STAR_BASE : WIN_STAR_OFF_BASE;
+            Tween.stopAllByTarget(star);
+            star.setScale(0.01, 0.01, 1);
+            star.angle = -50;
+            tween(star)
+                .delay(0.16 + i * 0.11)
+                .to(0.2, { scale: new Vec3(1.22, 1.22, 1), angle: 0 }, { easing: 'backOut' })
+                .to(0.1, { scale: Vec3.ONE })
                 .start();
-        });
+        }
+
+        // The button breathes, and that is the only reason it reads as the thing to do next --
+        // it cannot be a hit target (a tap anywhere advances), so movement is all it has.
+        const cta = plate.getChildByName('WinCta')!;
+        Tween.stopAllByTarget(cta);
+        cta.setScale(Vec3.ONE);
+        tween(cta)
+            .delay(0.5)
+            .to(0.7, { scale: new Vec3(1.04, 1.04, 1) }, { easing: 'sineInOut' })
+            .to(0.7, { scale: Vec3.ONE }, { easing: 'sineInOut' })
+            .union()
+            .repeatForever()
+            .start();
     }
 
     /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */
@@ -742,12 +1105,11 @@ export class HudView {
         this.bannerLabel.string = '游戏失败\n点击重试';
         this.bannerLabel.node.active = true;
         this.raiseBannerToFront();
-        for (const label of this.starLabels) label.node.active = false;
     }
 
-    /** Hides the banner and any win-panel stars; used on restart to clear whichever panel was shown. */
+    /** Takes down whichever end-of-level panel was shown. Safe before either has been built. */
     hideBanner(): void {
         this.bannerLabel.node.active = false;
-        for (const label of this.starLabels) label.node.active = false;
+        if (this.win) this.win.active = false;
     }
 }

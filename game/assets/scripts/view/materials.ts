@@ -151,6 +151,14 @@ export function instancedLitMaterial(color: Color): Material {
             m.initialize({ effectAsset: eff, defines: { USE_INSTANCING: true } });
             if (m.passes && m.passes.length > 0) {
                 m.setProperty('mainColor', color);
+                // ROUGH, 0.9 against the effect's default 0.5, for the same reason the drawn
+                // car's roof is (see `vertexColorMaterial`) and for a symptom that reads quite
+                // differently at this size. The only thing painted with this material is the
+                // crowd, and a passenger is a sphere about nine pixels across: at 0.5 each one
+                // collects a tight specular hotspot, and a couple of hundred hotspots on a
+                // packed ring read as SPECKLE. Reported as the passengers looking grainy,
+                // alongside the aliasing that FXAA answers -- two causes, one symptom.
+                m.setProperty('roughness', 0.9);
                 mat = m;
             }
         } catch {
@@ -202,6 +210,16 @@ export function vertexColorMaterial(color: Color): Material {
             });
             if (m.passes && m.passes.length > 0) {
                 m.setProperty('mainColor', Color.WHITE);
+                // ROUGH, 0.9 against the effect's default 0.5, and this is what answers "the
+                // roofs look a bit white". Clipping a bright albedo cannot whiten it much -- red
+                // (244,67,72) pushed past 1.0 clips in one channel and stays red -- so a surface
+                // reading white has to be getting an ADDITIVE white term, and the only one here
+                // is the specular. A car's roof is close to facing both the light and the
+                // camera, so the specular lobe points more or less straight back: at roughness
+                // 0.5 that is a broad sheen over the whole roof. Roughening it spreads the same
+                // energy wider and drops the peak, which takes the wash off without touching the
+                // paint's brightness the way lowering the key light would.
+                m.setProperty('roughness', 0.9);
                 mat = m;
             }
         } catch {

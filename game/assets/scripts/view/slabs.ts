@@ -9,12 +9,30 @@ export interface MeshPart {
     indices?: number[];
 }
 
-/** Merge several geometries into one mesh, i.e. one draw call for the lot. */
+/**
+ * Merge several geometries into one mesh, i.e. one draw call for the lot.
+ *
+ * EVERY OPTIONAL ATTRIBUTE IS ALL-OR-NOTHING, and it is CHECKED rather than assumed. If one
+ * part carries uvs and another does not, the merged attribute comes out SHORT -- and every
+ * vertex past the gap then reads the wrong entry, silently. It stayed hypothetical for as long
+ * as every part came from the engine's primitives, which all carry uvs; the first hand-built
+ * part that forgot them found it, and this is what says so instead of the picture.
+ *
+ * There is no vertex-colour support here on purpose. It was added for a passenger's face patch
+ * and removed with it (see pax-figure.ts): the one thing in the game painted per vertex is the
+ * drawn car, and `car-mesh.ts` builds that with its own accumulator, which needs none of this.
+ */
 export function mergeParts(parts: MeshPart[]): Mesh {
     const positions: number[] = [], normals: number[] = [], uvs: number[] = [], indices: number[] = [];
+    const mapped = parts.some((g) => g.uvs);
+    const lit = parts.some((g) => g.normals);
     let base = 0;
     for (const g of parts) {
         const vc = g.positions.length / 3;
+        if (mapped && !g.uvs) throw new Error('mergeParts: some parts carry uvs and some do not');
+        if (lit && !g.normals) {
+            throw new Error('mergeParts: some parts carry normals and some do not');
+        }
         for (let i = 0; i < vc; i++) {
             positions.push(g.positions[i * 3], g.positions[i * 3 + 1], g.positions[i * 3 + 2]);
             if (g.normals) normals.push(g.normals[i * 3], g.normals[i * 3 + 1], g.normals[i * 3 + 2]);
