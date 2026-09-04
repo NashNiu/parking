@@ -1775,7 +1775,10 @@ export class GameController extends Component {
         const car = this.core?.lot.cars.get(id);
         if (!car) return;
         const lot = this.core!.lot;
-        const b = firstBlocker(car, Array.from(lot.cars.values()), lot.bounds);
+        // Same blockers `LotSystem.canExit` hands `firstBlocker` -- otherwise a tunnel-blocked
+        // car logs a false CLEAR here while core just refused the tap as blocked.
+        const blockers = lot.tunnels.map(tunnelBox);
+        const b = firstBlocker(car, Array.from(lot.cars.values()), lot.bounds, blockers);
         const who = `car ${id} (${car.cap}) at (${car.x.toFixed(2)}, ${car.y.toFixed(2)}) heading ${angle.toFixed(1)}`;
         if (b) {
             const by = lot.cars.get(b.carId);
@@ -2154,8 +2157,14 @@ export class GameController extends Component {
 
         const car = this.core!.lot.cars.get(id);
         const lot = this.core!.lot;
+        // Same blockers `LotSystem.canExit` hands `firstBlocker`. Without them, a car whose
+        // real blocker is a tunnel body either misses it entirely (falls into the no-blocker
+        // shrug below) or, if another car sits further down the SAME lane past the tunnel,
+        // finds that car instead -- and then tweens the mover THROUGH the solid tunnel to
+        // bump it, a visible clipping artifact on every level with a tunnel.
+        const blockers = lot.tunnels.map(tunnelBox);
         const block = car
-            ? firstBlocker(car, Array.from(lot.cars.values()), lot.bounds)
+            ? firstBlocker(car, Array.from(lot.cars.values()), lot.bounds, blockers)
             : null;
 
         this.busy = true;
