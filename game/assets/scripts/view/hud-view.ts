@@ -580,9 +580,19 @@ export class HudView {
         badge.holder.active = n > 0;
     }
 
-    /** Put a tunnel's badge at a point already converted into UI space. */
+    /**
+     * Put a tunnel's badge at a point already converted into UI space.
+     *
+     * `setWorldPosition`, NOT `setPosition`, and that is the whole of a bug that made every
+     * badge invisible: the point comes from `uiCam.screenToWorld`, so it is a WORLD position,
+     * while the holder is a child of the canvas and `setPosition` would read it as a LOCAL
+     * one. The canvas node does not sit at the UI world origin, so the badge landed about
+     * half a screen away and never appeared. `placeSpeed` above and the seat chips in
+     * `GameController.positionChip` both take the same route and both use `setWorldPosition`;
+     * this is the same idiom, not a new one.
+     */
     placeTunnelBadge(tunnelId: number, ui: Vec3): void {
-        this.tunnelBadges.get(tunnelId)?.holder.setPosition(ui);
+        this.tunnelBadges.get(tunnelId)?.holder.setWorldPosition(ui);
     }
 
     /**
