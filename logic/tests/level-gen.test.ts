@@ -320,18 +320,22 @@ test('the curve keeps producing legal tracks past the authored table', () => {
   // 14 oval, 15 circle. Fifteen ids ran that same cycle three times over, at about a
   // second of packing each.
   //
-  // Honest about what that cost: only the first two assertions are shape-determined. The
-  // third is a spot check on the packer over ids no level file covers, and for that one
-  // the shape period is beside the point -- it went from fifteen samples to five. Ids 1-10
-  // are checked exhaustively by `every generated level passes every rule validateLevel
-  // has`, and no id past 10 ships, so five is a deliberate trade of tail sampling for a
-  // suite that finishes.
+  // ONE id, not all five, for the packer half of this test -- same trade the determinism
+  // test above makes, same reason. Rotating the shapes correctly is shape-determined and
+  // costs nothing to check, so `capacityOptions` still runs for all five ids below. Whether
+  // the PACKER still produces a valid level past the table is a spot check, not a claim
+  // about every id, and past row 10 it is no longer a cheap one: `tunnelParams` clamps
+  // every id here onto row 10, so ids 11-15 are five `2x6` TUNNEL levels at
+  // `TUNNEL_ATTEMPTS` (400) attempts apiece -- about 151s each, 755s of this suite's 1756s
+  // for a claim id 11 already proves. Id 11 exercises that clamp end to end (it IS row 10's
+  // params, read through the clamp rather than directly); ids 12-15 would only re-run the
+  // identical packing search under a different label.
   for (let id = 11; id <= 15; id++) {
     const p = trackParams(id);
     expect(capacityOptions(p.track)).toContain(p.capacity);
-    expect(validateLevel(levelFor(id))).toEqual([]);
-    expect(validateTrack(levelFor(id))).toEqual([]);
   }
+  expect(validateLevel(levelFor(11))).toEqual([]);
+  expect(validateTrack(levelFor(11))).toEqual([]);
 });
 
 test('a degenerate level id still yields a drawable track', () => {

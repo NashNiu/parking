@@ -336,6 +336,15 @@ const PLACE_TRIES = 200;
  * Colours are drawn flat from the level's palette. There is no cleverness to add: the queue
  * is derived from the cars (`queueFor`), so any draw is colour-balanced by construction, and
  * "mixed, and you only see the one at the mouth" is the mechanic rather than a compromise.
+ *
+ * Unlike the cars, `x`/`y`/`angle` here never pass through `round4` -- verified harmless
+ * (JSON round-trips a float bit-exactly, and angle stays inside [0, 360) unrounded), but
+ * that safety depends on nothing rounding them EITHER, ever: rounding only at write time,
+ * after `isSolvable`/`weldedMouths` have already validated the unrounded geometry, would
+ * ship a level different from the one that was checked -- the same trap `scatter`'s
+ * "Rounding happens HERE, before anything validates" comment warns about for the cars. So
+ * this stays unrounded like the rest of this function, or every consumer downstream of
+ * validation would need rounding too; it does not get added here alone.
  */
 function placeTunnels(rng: () => number, colors: number, tp: TunnelParams): TunnelSpec[] {
     const pad = CLEARANCE / 2 + ROUND_MARGIN;
@@ -778,9 +787,12 @@ function aimTunnels(tunnels: TunnelSpec[], pieces: Piece[]): TunnelSpec[] {
  * Hand every piece a heading, in the order the cars will LEAVE. Unchanged in shape
  * from the grid version: a piece may be taken when some legal heading gives it a clear
  * lane past the pieces still down, and whichever is taken frees its space for the next
- * step -- so the returned order is a valid solution by construction: at the moment car
- * k leaves, the cars still parked are exactly the ones that were still down when its
- * lane was checked.
+ * step -- so the returned order is a valid leaving order for the GRID CARS ALONE, checked
+ * only against the tunnel BODIES: at the moment car k leaves (in this order, against
+ * these blockers), the cars still parked are exactly the ones that were still down when
+ * its lane was checked. That is NOT the same claim as "this order plays out on the
+ * finished level" -- see the note on `blockers` below for what it leaves out and why that
+ * is not free.
  *
  * Each blocker is probed at its OWN angle while the mover is probed at that angle or
  * that angle plus 180. Those two agree because a rectangle is identical under a half
@@ -798,9 +810,20 @@ function aimTunnels(tunnels: TunnelSpec[], pieces: Piece[]): TunnelSpec[] {
  *
  * `blockers` are the tunnel bodies, which never leave: a lane that only clears once the
  * tunnel is gone is not a lane. Note what this order does NOT include -- the tunnel CARS.
- * When they come out is decided by the player tapping the mouth, not by this peel, and a
- * tunnel is drainable at the end whatever the lot did (see the spec's solvability argument),
- * so leaving them out costs the order nothing and keeps it a statement about the grid.
+ * Every mouth car stands on the board from frame 0, exactly like a grid car, but it is
+ * never one of `pieces` and never one of `blockers` either: when it comes out is decided
+ * by the player tapping it, not by this peel, so there is no fixed moment to slot it into
+ * an order built around "leaves at step k". Skipping it is NOT free -- a mouth car can and
+ * does block a grid car's turn in this order. Replaying the shipped levels found it doing
+ * exactly that: level 7, 1 violation (car 1 blocked by tunnel 2's mouth car); level 8, 3
+ * (cars 5, 16, 27); level 9, 1 (car 19). The alternative -- feeding mouth cars into
+ * `blockers` as permanent obstacles -- would be strictly MORE conservative than the real
+ * game, since the player can tap a mouth car whenever they like, and it would spend
+ * attempts fighting a restriction the level does not actually have, on exactly the levels
+ * (7-9) that already need close to all of `TUNNEL_ATTEMPTS`. So this order is a proposal,
+ * not a guarantee: `isSolvable` -- run on every candidate, gating every level
+ * `generateLevel` returns (see there, and `repair`'s loop) -- is what actually verifies a
+ * level plays, and it does that by simulation, not by trusting this comment.
  */
 function peel(
     rng: () => number, pieces: Piece[], blockers: OBB[],
@@ -976,7 +999,9 @@ function choosePainting(
  *
  * A PENALTY and not a rejection, because a welded tunnel is not actually unsolvable -- the
  * lot empties around it and it drains at the end (see the spec's solvability argument). If no
- * attempt in ATTEMPTS finds a clear mouth, a playable level is still better than none.
+ * attempt in TUNNEL_ATTEMPTS finds a clear mouth, a playable level is still better than none.
+ * (Not ATTEMPTS: any level that can produce a welded mouth has `tp.count > 0`, and that is
+ * exactly the condition `generateLevel` uses to pick TUNNEL_ATTEMPTS over ATTEMPTS.)
  */
 const WELDED_PENALTY = 100;
 

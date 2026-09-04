@@ -5,7 +5,7 @@ import {
 } from 'cc';
 import {
     GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
-    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX,
+    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -733,6 +733,15 @@ export class GameController extends Component {
     private logStartupDiagnosis(level: LevelData): void {
         const core = this.core!;
         const cars = level.lot.cars;
+        // The world `movable` (below) is measured in: every car core actually holds, mouth
+        // cars included, plus the tunnel bodies as blockers. `cars` (the level JSON) has
+        // neither -- a mouth car is spawned by the LotSystem, not written to the file -- so
+        // asking `firstBlocker` about `cars` with no blockers was answering a question about
+        // a different, smaller lot than the one `movable` describes. This was the bug: on
+        // level 9 it printed `jsonCars: 48, coreCars: 50` and a `blocked` count that could
+        // never agree with `movable` because the two were never the same world.
+        const coreCars = Array.from(core.lot.cars.values());
+        const blockers = core.lot.tunnels.map(tunnelBox);
         const first = cars[0];
         const box = first ? carBox(first) : null;
         // The discriminator. A gap of exactly 0 means the swept test found the pair already
@@ -741,8 +750,8 @@ export class GameController extends Component {
         // blocked, every gap 0" is arithmetic gone bad, while a spread of real positive gaps
         // means the geometry is fine and the lot genuinely is jammed.
         let blocked = 0, zeroGap = 0;
-        for (const c of cars) {
-            const b = firstBlocker(c, cars, core.lot.bounds);
+        for (const c of coreCars) {
+            const b = firstBlocker(c, coreCars, core.lot.bounds, blockers);
             if (!b) continue;
             blocked++;
             if (b.gap === 0 || !Number.isFinite(b.gap)) zeroGap++;
@@ -750,6 +759,9 @@ export class GameController extends Component {
         console.warn('[Game] not playing at load: ' + JSON.stringify({
             jsonCars: cars.length,
             coreCars: core.lot.cars.size,
+            // The gap between the two above: one mouth car per tunnel, spawned by core and
+            // absent from the level file. Equal to `core.lot.tunnels.length` by construction.
+            mouthCars: core.lot.tunnels.length,
             movable: core.lot.movableCarIds().length,
             blocked,
             zeroOrNaNGap: zeroGap,
@@ -759,7 +771,7 @@ export class GameController extends Component {
             capBox: CAP_BOX,
             firstCar: first ? { id: first.id, cap: first.cap, angle: first.angle } : null,
             firstBox: box ? { len: box.len, wid: box.wid } : null,
-            firstBlocker: first ? firstBlocker(first, cars, core.lot.bounds) : null,
+            firstBlocker: first ? firstBlocker(first, coreCars, core.lot.bounds, blockers) : null,
         }));
     }
 
@@ -1043,6 +1055,12 @@ export class GameController extends Component {
             this.tunnelNodes.set(t.id, node);
             this.hud?.setTunnelCount(t.id, this.core!.lot.remainingIn(t.id));
         }
+        // Placed once here, not left for the next `update` tick: a badge holder starts with
+        // no position of its own (see `setTunnelCount`), so without this every level from 4
+        // on could flash a badge at the Canvas origin -- screen centre -- for one frame. Same
+        // reason `HudView`'s constructor gives the speed button an explicit fallback spot
+        // (see the comment there); this is the tunnel badges' equivalent for the same gap.
+        this.placeTunnelBadges();
 
         if (DEBUG_FOOTPRINTS) this.toggleDebugOverlay();
     }
