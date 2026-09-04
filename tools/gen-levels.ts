@@ -21,7 +21,38 @@ import { isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
-const count = Number(process.argv[2] || 10);
+/**
+ * Which level ids to (re)generate.
+ *
+ *   npm run gen                -> 1..10, the shipped set
+ *   npm run gen 5              -> 1..5
+ *   npm run gen -- --only 8    -> level 8 alone
+ *   npm run gen -- --only 4-6  -> levels 4 to 6
+ *
+ * `--only` exists because a tunnel level costs about 150 seconds to pack (TUNNEL_ATTEMPTS is
+ * 400 where a tunnel-free level runs 200), so regenerating all ten to look at one of them is
+ * twenty-odd minutes of waiting. Every id is seeded from the id alone, so writing one level
+ * cannot disturb any other -- the files this does not touch stay exactly as they were.
+ *
+ * The `--` is npm's, not ours: without it npm eats the flag instead of passing it on.
+ */
+function idsToGenerate(argv: string[]): number[] {
+    const flag = argv.indexOf('--only');
+    if (flag === -1) {
+        const count = Number(argv[2] || 10);
+        return Array.from({ length: count }, (_, i) => i + 1);
+    }
+    const spec = argv[flag + 1] ?? '';
+    const [lo, hi] = spec.split('-').map(Number);
+    if (!Number.isInteger(lo) || lo < 1) {
+        console.error(`[gen] --only wants an id or a range, e.g. --only 8 or --only 4-6 (got "${spec}")`);
+        process.exit(1);
+    }
+    const last = Number.isInteger(hi) && hi >= lo ? hi : lo;
+    return Array.from({ length: last - lo + 1 }, (_, i) => lo + i);
+}
+
+const ids = idsToGenerate(process.argv);
 // Run from logic/ (npm sets the cwd to the package), so the repo root is one up.
 const outDir = path.resolve(process.cwd(), '..', 'game', 'assets', 'resources', 'levels');
 
@@ -33,7 +64,7 @@ if (!fs.existsSync(outDir)) {
 const rows: string[] = [];
 let failed = 0;
 
-for (let id = 1; id <= count; id++) {
+for (const id of ids) {
     const level = generateLevel(id);
     const errors = validateLevel(level);
     const want = levelParams(id);
@@ -95,7 +126,7 @@ for (let id = 1; id <= count; id++) {
     );
 }
 
-console.log(`\nwrote ${count - failed} level(s) to ${outDir}\n`);
+console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
 console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun  packing       play');
 console.log(rows.join('\n'));
 console.log('');
