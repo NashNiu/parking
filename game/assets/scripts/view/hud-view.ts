@@ -346,10 +346,19 @@ const CHIP_W = 88;
 const CHIP_H = 58;
 
 /**
- * The tunnel count badge's fill: the blue block from the reference art. Not in `colors.ts` --
- * that palette is keyed by core's colour STRINGS, and a tunnel has no colour in core.
+ * The tunnel count badge, taken off the reference art's blue block: a light blue face over a
+ * deeper blue lip, with a chunky white number. Same lifted-plate construction as `liftedPill`
+ * -- a face with a darker base peeking out below it -- because that is what every other plate
+ * on this HUD is, and the reference's block is built the same way.
+ *
+ * Not in `colors.ts`: that palette is keyed by core's colour STRINGS, and a tunnel has no
+ * colour in core.
  */
-const TUNNEL_BADGE_BG = new Color(92, 168, 250);
+const TUNNEL_BADGE_FACE = new Color(126, 180, 246);
+const TUNNEL_BADGE_BASE = new Color(64, 116, 190);
+const TUNNEL_BADGE_D = 68;
+const TUNNEL_BADGE_R = 18;
+const TUNNEL_BADGE_LIFT = 5;
 
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
@@ -570,9 +579,18 @@ export class HudView {
     setTunnelCount(tunnelId: number, n: number): void {
         let badge = this.tunnelBadges.get(tunnelId);
         if (!badge) {
-            const holder = roundedSprite(`tunnel-${tunnelId}`, 64, 64, TUNNEL_BADGE_BG, 16);
+            const d = TUNNEL_BADGE_D;
+            const holder = new Node(`tunnel-${tunnelId}`);
+            holder.layer = Layers.Enum.UI_2D;
+            holder.addComponent(UITransform).setContentSize(d, d);
+            const base = roundedSprite('base', d, d, TUNNEL_BADGE_BASE, TUNNEL_BADGE_R);
+            base.setPosition(0, -TUNNEL_BADGE_LIFT, 0);
+            holder.addChild(base);
+            const face = roundedSprite('face', d, d, TUNNEL_BADGE_FACE, TUNNEL_BADGE_R);
+            holder.addChild(face);
             this.canvas.addChild(holder);
-            const label = makeLabel(holder, 'count', 34, 0);
+            // On the FACE, not the holder, so it rides the plate rather than the lip.
+            const label = makeLabel(face, 'count', 40, 0);
             badge = { holder, label };
             this.tunnelBadges.set(tunnelId, badge);
         }
