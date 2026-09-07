@@ -346,19 +346,20 @@ const CHIP_W = 88;
 const CHIP_H = 58;
 
 /**
- * The tunnel count badge, taken off the reference art's blue block: a light blue face over a
- * deeper blue lip, with a chunky white number. Same lifted-plate construction as `liftedPill`
- * -- a face with a darker base peeking out below it -- because that is what every other plate
- * on this HUD is, and the reference's block is built the same way.
+ * The tunnel count: a bare number, and nothing behind it.
  *
- * Not in `colors.ts`: that palette is keyed by core's colour STRINGS, and a tunnel has no
- * colour in core.
+ * It used to be a lifted plate here -- a light blue face over a deeper blue lip -- built that
+ * way because every other readout on this HUD is. But the element on the BOARD is now itself a
+ * pale blue tile, so the plate was a second blue tile drawn on top of the first, and the two
+ * together read as a sticker slapped on a block. The board carries the plate; the HUD carries
+ * only the digit that has to sit on top of it.
+ *
+ * Dark navy rather than white: the tile it lands on is deliberately the palest thing on the
+ * board (see `TUNNEL_SHELL`), and white on pale blue is the one combination that would undo
+ * that. The cars' white roof arrows sit on saturated paint, which is a different problem.
  */
-const TUNNEL_BADGE_FACE = new Color(126, 180, 246);
-const TUNNEL_BADGE_BASE = new Color(64, 116, 190);
-const TUNNEL_BADGE_D = 68;
-const TUNNEL_BADGE_R = 18;
-const TUNNEL_BADGE_LIFT = 5;
+const TUNNEL_COUNT_INK = new Color(28, 48, 92);
+const TUNNEL_COUNT_SIZE = 46;
 
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
@@ -569,28 +570,22 @@ export class HudView {
     /**
      * The count on a tunnel: how many cars it still holds, the one at the mouth included.
      *
-     * It lives in the HUD rather than on the board, and is placed each frame at the tunnel's
-     * projected point -- the same route `placeSpeed` and the seat chips take. A Label on a
-     * 3D node would need a second rendering path for the one piece of text outside the
-     * Canvas; this needs none, and faces the camera for free. What it gives up is being
-     * occluded by anything in the scene, which for a readout that must always be legible is
-     * not a loss.
+     * The DIGIT lives in the HUD; the tile it sits on is board geometry (`tunnel-mesh.ts`).
+     * Placed each frame at the tunnel's projected point -- the same route `placeSpeed` and the
+     * seat chips take. A Label on a 3D node would need a second rendering path for the one
+     * piece of text outside the Canvas; this needs none, and faces the camera for free. What it
+     * gives up is being occluded by anything in the scene, which for a readout that must always
+     * be legible is not a loss.
      */
     setTunnelCount(tunnelId: number, n: number): void {
         let badge = this.tunnelBadges.get(tunnelId);
         if (!badge) {
-            const d = TUNNEL_BADGE_D;
             const holder = new Node(`tunnel-${tunnelId}`);
             holder.layer = Layers.Enum.UI_2D;
-            holder.addComponent(UITransform).setContentSize(d, d);
-            const base = roundedSprite('base', d, d, TUNNEL_BADGE_BASE, TUNNEL_BADGE_R);
-            base.setPosition(0, -TUNNEL_BADGE_LIFT, 0);
-            holder.addChild(base);
-            const face = roundedSprite('face', d, d, TUNNEL_BADGE_FACE, TUNNEL_BADGE_R);
-            holder.addChild(face);
+            holder.addComponent(UITransform).setContentSize(TUNNEL_COUNT_SIZE, TUNNEL_COUNT_SIZE);
             this.canvas.addChild(holder);
-            // On the FACE, not the holder, so it rides the plate rather than the lip.
-            const label = makeLabel(face, 'count', 40, 0);
+            const label = makeLabel(holder, 'count', TUNNEL_COUNT_SIZE, 0);
+            label.color = TUNNEL_COUNT_INK.clone();
             badge = { holder, label };
             this.tunnelBadges.set(tunnelId, badge);
         }

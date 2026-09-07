@@ -2,8 +2,7 @@ import { Color, MeshRenderer, Node, primitives, utils } from 'cc';
 import { vertexColorMaterial } from './materials';
 
 /**
- * The underground garage exit, drawn: a low blue plate whose TOP FACE carries the whole
- * identity -- a dark opening with a white arrow driving out of it.
+ * The underground garage exit, drawn: a low SQUARE tile in pale blue. That is the whole model.
  *
  * WHAT IT IS. A fixed-heading queue of cars lives inside; the head car stands just outside the
  * mouth and is an ordinary car in every other respect. Core still calls it a TUNNEL
@@ -11,75 +10,114 @@ import { vertexColorMaterial } from './materials';
  * either word, and renaming would churn the level schema and all ten level files for nothing.
  * This file is the only place the two vocabularies meet.
  *
- * WHY IT IS FLAT, after two goes at making it a solid.
+ * WHY IT IS A BARE TILE, after three goes at making it look like a tunnel.
  *
- * The camera is ORTHOGRAPHIC and square onto the board, so an object here IS its plan view --
- * the same finding that turned the cars from models into drawn geometry (README: of the first
- * car model's nine parts, eight were invisible at this camera; of the second's, the
- * windscreen, rear window and all four hubs were each 0%). Two solid versions of this element
- * were built and both failed for reasons that are all the same reason:
+ * An arch, then a domed hood, then a plate with a dark opening and a white arrow -- all three
+ * came back as "看不出来". The reason they failed is not that they were not detailed enough. It
+ * is that the reference game DOES NOT DRAW A TUNNEL ON ITS BOARD EITHER: the chunky 3D tunnel
+ * everyone was picturing lives in its tutorial popup, an illustration drawn at three-quarters.
+ * On its actual board the element is a pale rounded square with a big number on it, and
+ * measured against a small car in the same screenshot it is 0.73 x 0.71 board units -- SQUARE,
+ * and SHORTER than a small car.
  *
- *  - A HALF-TUBE with its opening facing local +X. For a heading along the board's +X that is
- *    exactly edge-on -- the board tilts about world X, so a board-plane +X vector is untouched
- *    by the tilt and its dot with the view direction is zero. Level 8's two horizontal tunnels
- *    showed no opening at all.
- *  - A DOMED HOOD over a ramp. From above you see almost entirely the crown, which was the part
- *    lifted hardest toward white, and an up-facing surface already takes 67% more key light on
- *    a tilted board -- so it washed out to grey. Worse, a 0.47-high hood shifts 0.29 up-screen
- *    under this projection, which is over half the footprint: on some headings the hood's own
- *    silhouette covered the ramp that was supposed to be the readable part.
+ * That is also what this camera has been saying all along. It is orthographic and square onto
+ * the board, so an object here IS its plan view -- the same finding that turned the cars from
+ * models into drawn geometry (README: of the first car model's nine parts, eight were invisible
+ * at this camera; of the second's, the windscreen, rear window and all four hubs were each 0%).
+ * Every earlier attempt spent its effort on form the camera cannot see, on a body shaped like
+ * the sixty other rounded boxes it had to be told apart from.
  *
- * So the height came down to a plate and the identity moved to the top face, which is the one
- * surface this camera always sees square on. That is not a compromise, it is the same rule
- * every readable thing here already follows: a car is legible because of the white arrow on its
- * ROOF, not because of its geometry. This element had nothing on its roof at all.
+ * So the read is carried by SHAPE and COLOUR, not by modelling: nothing else on this board is
+ * square, and nothing else is this pale. An opening and an arrow were both tried on the tile's
+ * face and both made it worse -- they are the cars' own vocabulary, and wearing it is what made
+ * it look like a car with a sticker on it.
  *
  * Knows nothing about core: `GameController` passes `len`/`wid` in world units, having taken
  * them from `TUNNEL_BOX` the same way it takes a car's size from `CAP_BOX`.
  */
 
-/** Height as a share of the width. Low: under half a car, so it occludes nothing behind it. */
-const RISE = 0.2;
+/**
+ * Height as a share of the width. TALLER THAN A CAR, which is what buys the depth: a car stands
+ * 0.34 world units and this lands near 0.40, so the block's side walls are the tallest thing on
+ * the lot and read as walls rather than as a bevel on a sticker. At 0.28 it was two thirds of a
+ * car and the reports were "扁" -- a plate, not a building.
+ *
+ * The ceiling on this is occlusion, not taste: height shifts up-screen by h * tan(38deg), so
+ * 0.40 covers 0.31 of board behind it, against a car's own 0.27. One notch more than the things
+ * it stands among, which is the most it can take before it starts hiding arrows.
+ *
+ * The number that goes on top is drawn by the HUD, not by this mesh (`HudView.setTunnelCount`),
+ * so nothing here has to leave room for it.
+ */
+const RISE = 0.52;
 
-/** Corner rounding of the plate, as a share of the width. */
-const CORNER = 0.34;
+/**
+ * Corner rounding, as a share of the shorter side.
+ *
+ * 0.14, down from 0.34, and the doorway is why. On a SQUARE block 0.34 of the side is 0.68 of
+ * the half-width, which leaves each edge's straight run only 0.24 long -- narrower than the
+ * doorway has to be, so the bite would have eaten into both front corners and the outline would
+ * have crossed itself. `doorHalfWidth` clamps against exactly that; this keeps the clamp from
+ * ever having to bite.
+ */
+const CORNER = 0.14;
 
 /** Arc segments per rounded corner. Four is plenty at the size this is drawn. */
 const CORNER_SEG = 4;
-
-/**
- * How much of the plate the dark opening covers, measured from the mouth end, and how far it is
- * inset from the sides. The opening runs to the mouth edge itself: it has to read as something
- * cars come OUT of, not as a panel painted in the middle.
- */
-const MOUTH_SHARE = 0.6;
-const MOUTH_INSET = 0.16;
-
-/** Arrow proportions inside the opening, as shares of the opening's own length and width. */
-const ARROW_LEN = 0.72;
-const ARROW_WID = 0.52;
-const ARROW_HEAD = 0.46;
-const ARROW_SHAFT = 0.42;
-
-/**
- * Depth steps between the coplanar plates, in world units and deliberately tiny -- they order
- * the draw and nothing else. Same trick and same reason as `car-mesh.ts`'s Z_STEP: coplanar
- * faces z-fight.
- */
-const Z_STEP = 0.006;
 
 /** How much darker the side wall sits than the top face. */
 const WALL_SHADE = 0.72;
 
 /**
- * The colours, from the reference art: a periwinkle top, a near-black opening. Not in
- * `colors.ts` -- that palette is keyed by core's colour STRINGS, and this element has none.
+ * The doorway, as shares of the block's own length and half-width.
+ *
+ * It is cut RIGHT THROUGH to the board, not recessed into the top face -- a recess would be
+ * hidden by its own lip at this camera's 52-degree elevation, and a dark patch painted on the
+ * top face was tried and read as a sticker. A slot open to the ground has its two jambs lit as
+ * real walls, and the mouth car stands one CLEARANCE outside it, so the car genuinely reads as
+ * having come out of the hole rather than as parked next to a decorated box.
+ *
+ * It opens on +X, the heading cars leave along, so it also says which way this thing faces --
+ * which the square tile on its own could not.
  */
-export const TUNNEL_SHELL = new Color(120, 168, 240);
-export const TUNNEL_MOUTH = new Color(24, 32, 58);
+const DOOR_LEN = 0.46;
+const DOOR_HALF_WID = 0.66;
 
-/** The arrow, matching the white the cars carry on their roofs. */
-const ARROW_PAINT = new Color(255, 255, 255);
+/** How dark the floor of the doorway sits against the block's own paint. */
+const DOOR_FLOOR_SHADE = 0.34;
+
+/** Lifts the doorway floor clear of the board so the lot's grid does not z-fight through it. */
+const FLOOR_LIFT = 0.004;
+
+/**
+ * The doorway's half-width, in world units, given the block's own half-width and corner radius.
+ *
+ * Two things bound it and they pull opposite ways, so it is worked out rather than authored:
+ *
+ *  - It must be WIDER THAN A CAR, or the mouth car looks wedged in a slot it could not have come
+ *    through. A small car is 0.471 board units across against this block's 0.74, so the car
+ *    takes 0.636 of the block's width -- most of it.
+ *  - It must be NARROWER THAN THE FRONT EDGE'S STRAIGHT RUN (`hw - r`), or the bite reaches into
+ *    the rounded corners and the outline crosses itself. That failure is silent: the mesh still
+ *    builds, and the jambs come out inside-out.
+ *
+ * The clamp is what makes the second one impossible to trip by tuning CORNER or DOOR_HALF_WID,
+ * and `MIN_JAMB` keeps a sliver of straight edge outside it so the corner arc still has
+ * somewhere to sit.
+ */
+const MIN_JAMB = 0.02;
+
+function doorHalfWidth(hw: number, r: number): number {
+    return Math.min(hw * DOOR_HALF_WID, Math.max(0, hw - r - hw * MIN_JAMB));
+}
+
+/**
+ * The tile's paint, sampled off the reference game's own board. PALER than any car in the
+ * palette, on purpose: shape says "not a car" at a glance and colour says it again a moment
+ * later. Not in `colors.ts` -- that palette is keyed by core's colour STRINGS, and this element
+ * has none.
+ */
+export const TUNNEL_SHELL = new Color(150, 190, 245);
 
 function shade(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
@@ -142,96 +180,104 @@ function outwards(pts: readonly Pt[]): Pt[] {
     });
 }
 
-/** A rounded rectangle, counter-clockwise from the bottom-right corner. */
-function roundRect(cx: number, cy: number, w: number, h: number, r: number): Pt[] {
-    const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
-    const hw = w / 2 - rr;
-    const hh = h / 2 - rr;
+/** One rounded corner's arc, centred on (`ox`,`oy`), swept a quarter turn from `a0`. */
+function corner(ox: number, oy: number, a0: number, r: number): Pt[] {
     const pts: Pt[] = [];
-    const corners: Array<[number, number, number]> = [
-        [cx + hw, cy - hh, -Math.PI / 2],
-        [cx + hw, cy + hh, 0],
-        [cx - hw, cy + hh, Math.PI / 2],
-        [cx - hw, cy - hh, Math.PI],
-    ];
-    for (const [ox, oy, a0] of corners) {
-        for (let s = 0; s <= CORNER_SEG; s++) {
-            const a = a0 + (s / CORNER_SEG) * (Math.PI / 2);
-            pts.push([ox + Math.cos(a) * rr, oy + Math.sin(a) * rr]);
-        }
+    for (let s = 0; s <= CORNER_SEG; s++) {
+        const a = a0 + (s / CORNER_SEG) * (Math.PI / 2);
+        pts.push([ox + Math.cos(a) * r, oy + Math.sin(a) * r]);
     }
     return pts;
 }
 
 /**
- * The arrow, pointing +X: a shaft rectangle and a head triangle, as one convex-enough fan.
+ * The block's outline: a rounded rectangle with a rectangular DOORWAY bitten out of its +X
+ * edge, as one closed counter-clockwise loop.
  *
- * Emitted as TWO polygons rather than one concave outline, because `addFlat` fans from the
- * first point and a fan of a concave shape folds over itself. Same reason `car-mesh` splits
- * its arrow into pieces.
+ * One loop, not an outline plus a hole, because that is what lets `addWall` raise the jambs and
+ * the outer walls in a single band. The bite is traversed the other way round from the rest,
+ * which is exactly what makes `outwards` hand the jambs normals pointing INTO the doorway --
+ * so the engine lights them as the inside of an opening rather than as more outer wall. Nothing
+ * here needs the loop to be convex; only the top-face pieces do, and those are cut separately.
  */
-function arrowPieces(cx: number, cy: number, len: number, wid: number): Pt[][] {
-    const half = len / 2;
-    const headLen = len * ARROW_HEAD;
-    const shaftHalf = (wid * ARROW_SHAFT) / 2;
-    const shaftFront = cx + half - headLen;
+function notchedOutline(len: number, wid: number, r: number, doorLen: number, doorHalf: number): Pt[] {
+    const hl = len / 2;
+    const hw = wid / 2;
+    const xm = hl - doorLen;
     return [
-        [
-            [cx - half, cy - shaftHalf],
-            [shaftFront, cy - shaftHalf],
-            [shaftFront, cy + shaftHalf],
-            [cx - half, cy + shaftHalf],
-        ],
-        [
-            [shaftFront, cy - wid / 2],
-            [cx + half, cy],
-            [shaftFront, cy + wid / 2],
-        ],
+        // bottom edge, left to right, then round up the front-right corner
+        [xm, -hw],
+        ...corner(hl - r, -hw + r, -Math.PI / 2, r),
+        // into the doorway: in along its right jamb, across its back, out along its left jamb
+        [hl, -doorHalf],
+        [xm, -doorHalf],
+        [xm, doorHalf],
+        [hl, doorHalf],
+        // front-left corner, top edge right to left, then the two back corners
+        ...corner(hl - r, hw - r, 0, r),
+        [xm, hw],
+        ...corner(-hl + r, hw - r, Math.PI / 2, r),
+        ...corner(-hl + r, -hw + r, Math.PI, r),
     ];
 }
 
 /**
- * `len` runs along +X, the direction cars leave; `wid` across it; the plate rises in +Z. The
- * node's own z-rotation puts it on the heading, exactly as a car's does.
+ * `len` runs along +X, the direction cars leave; `wid` across it; the block rises in +Z. The
+ * node's own z-rotation puts it on the heading, and unlike the plain tile this shape SHOWS that
+ * heading -- the doorway faces the way its cars go.
  */
-export function buildTunnel(
-    name: string, len: number, wid: number, shell: Color, mouth: Color,
-): Node {
+export function buildTunnel(name: string, len: number, wid: number, shell: Color): Node {
     const h = wid * RISE;
-    const body = roundRect(0, 0, len, wid, wid * CORNER);
+    const hl = len / 2;
+    const hw = wid / 2;
+    const r = Math.min(len, wid) * CORNER;
+    const doorLen = len * DOOR_LEN;
+    const doorHalf = doorHalfWidth(hw, r);
+    const xm = hl - doorLen;
 
     const p = new Plate();
 
-    // The wall first, then the top over it: the same order and the same idiom as a car, whose
-    // outline is extruded from the board to the roof and capped.
-    p.addWall(body, 0, h, shade(shell, WALL_SHADE * 0.86), shade(shell, WALL_SHADE));
-    p.addFlat(body, h, shell);
+    // The walls: outer faces and both jambs of the doorway in one band, graded darker at the
+    // foot the way a car's side wall is. Normals lie flat and point outward (out of the material,
+    // hence INTO the doorway on the jambs), which is what lets the engine light each face
+    // differently and what makes the lit side turn with the block.
+    const outline = notchedOutline(len, wid, r, doorLen, doorHalf);
+    p.addWall(outline, 0, h, shade(shell, WALL_SHADE * 0.86), shade(shell, WALL_SHADE));
 
-    // THE OPENING. Runs to the mouth edge, so it reads as something cars come out of rather
-    // than a panel painted in the middle. Its far end is rounded and its near end square --
-    // square because it is cut off by the plate's edge, which is exactly what a hole running
-    // out of a wall looks like from above.
-    const mouthLen = len * MOUTH_SHARE;
-    const mouthWid = wid * (1 - MOUTH_INSET * 2);
-    const mouthCx = len / 2 - mouthLen / 2;
-    const opening = roundRect(mouthCx, 0, mouthLen, mouthWid, mouthWid * 0.42);
-    p.addFlat(opening, h + Z_STEP, mouth);
+    // The roof, in three convex pieces around the doorway: the slab behind it and a rail down
+    // each side of it. Three pieces rather than one, because a roof with a bite out of it is
+    // concave and `addFlat` fans from its first point -- a fan of a concave outline folds over
+    // itself. Same reason `car-mesh` splits its arrow.
+    const back: Pt[] = [
+        [xm, -hw],
+        [xm, hw],
+        ...corner(-hl + r, hw - r, Math.PI / 2, r),
+        ...corner(-hl + r, -hw + r, Math.PI, r),
+    ];
+    const rail = (lo: number, hi: number): Pt[] => [
+        [xm, lo], [hl, lo], [hl, hi], [xm, hi],
+    ];
+    p.addFlat(back, h, shell);
+    p.addFlat(rail(-hw, -doorHalf), h, shell);
+    p.addFlat(rail(doorHalf, hw), h, shell);
 
-    // THE ARROW, inside the opening and pointing out. This is the piece that makes the element
-    // legible at a glance, and it is legible for exactly the reason a car is: a white mark on
-    // the one face this camera always sees square on.
-    for (const piece of arrowPieces(mouthCx, 0, mouthLen * ARROW_LEN, mouthWid * ARROW_WID)) {
-        p.addFlat(piece, h + Z_STEP * 2, ARROW_PAINT);
-    }
+    // The doorway's floor, just clear of the board: without it the lot's grid shows through the
+    // slot and the opening reads as a gap between two rails rather than as somewhere that has an
+    // inside.
+    p.addFlat(
+        [[xm, -doorHalf], [hl, -doorHalf], [hl, doorHalf], [xm, doorHalf]],
+        FLOOR_LIFT,
+        shade(shell, DOOR_FLOOR_SHADE),
+    );
 
     const geometry: primitives.IGeometry = {
         positions: p.positions,
         normals: p.normals,
         colors: p.colors,
         indices: p.indices,
-        minPos: { x: -len / 2, y: -wid / 2, z: 0 },
-        maxPos: { x: len / 2, y: wid / 2, z: h + Z_STEP * 2 },
-        boundingRadius: Math.hypot(len / 2, wid / 2, h),
+        minPos: { x: -hl, y: -hw, z: 0 },
+        maxPos: { x: hl, y: hw, z: h },
+        boundingRadius: Math.hypot(hl, hw, h),
     };
 
     const node = new Node(name);

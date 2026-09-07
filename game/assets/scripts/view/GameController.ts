@@ -11,7 +11,7 @@ import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
-import { buildTunnel, TUNNEL_SHELL, TUNNEL_MOUTH } from './tunnel-mesh';
+import { buildTunnel, TUNNEL_SHELL } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
@@ -1048,7 +1048,7 @@ export class GameController extends Component {
         for (const t of this.core!.lot.tunnels) {
             const len = TUNNEL_BOX.len * layout.scale;
             const wid = TUNNEL_BOX.wid * layout.scale;
-            const node = buildTunnel(`tunnel-${t.id}`, len, wid, TUNNEL_SHELL, TUNNEL_MOUTH);
+            const node = buildTunnel(`tunnel-${t.id}`, len, wid, TUNNEL_SHELL);
             node.setPosition(layout.toWorld(t.x, t.y));
             node.setRotationFromEuler(0, 0, t.angle);
             this.gridRoot!.addChild(node);
