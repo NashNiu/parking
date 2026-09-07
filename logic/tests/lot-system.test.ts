@@ -1,5 +1,7 @@
 import { LotSystem } from '../../game/assets/scripts/core/lot-system';
-import { CarSpec, TunnelSpec } from '../../game/assets/scripts/core/types';
+import {
+  CAP_BOX, CAR_SCALE, CarSpec, CLEARANCE, TunnelSpec, TUNNEL_BOX,
+} from '../../game/assets/scripts/core/types';
 
 const LOT = { w: 9, h: 6 };
 const car = (over: Partial<CarSpec>): CarSpec => ({
@@ -63,8 +65,17 @@ const tunnel = (over: Partial<TunnelSpec> = {}): TunnelSpec => ({
   ...over,
 });
 
-// 1 + 1.2/2 + 0.04 + 0.964/2
-const MOUTH_X = 2.122;
+/**
+ * Where the mouth car of a tunnel at x = 1 stands: one CLEARANCE in front of the body's front
+ * face, so its own centre is half a car further on again.
+ *
+ * DERIVED, not written down. It was the literal 2.122 that 1.2/2 + 0.04 + 0.964/2 came to, and
+ * resizing TUNNEL_BOX to a 0.74 square broke both tests that used it -- the assertion still
+ * described the old constant while the thing under test had moved. `tunnel.test.ts` computes
+ * its own offsets the same way and needed no edit across that change, which is the whole
+ * argument for doing it here too.
+ */
+const MOUTH_X = 1 + TUNNEL_BOX.len / 2 + CLEARANCE + (CAP_BOX.small.len * CAR_SCALE) / 2;
 
 test('a tunnel puts its first car at the mouth', () => {
   const g = new LotSystem(LOT, [], [tunnel()]);

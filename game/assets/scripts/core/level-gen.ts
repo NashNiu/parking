@@ -87,18 +87,23 @@ const CAP_MIX: { cap: Cap; weight: number }[] = [
 const ATTEMPTS = 200;
 
 /**
- * Attempts a level WITH tunnels gets instead, and why it needs its own number.
+ * Whole-level attempts for a level that has tunnels, against ATTEMPTS for one that does not.
  *
- * A tunnel level throws attempts away that a plain one never had to: the packer has to
- * settle around an immovable reservation (about one attempt in four does, against four in
- * five on an empty lot), and on top of that both mouths have to come out unwelded, which is
- * roughly the same coin toss an ordinary car's exit lane is. Measured on level 9 at 200
- * attempts the search found NO packing inside the blocked tolerance and shipped a nearest
- * miss that the one-line rule then won; at 400 it found two and the painting search bit on
- * the first. The extra attempts are only spent where they are needed -- levels 1 to 3 stop
- * at PACKINGS long before either number binds, so nothing about them changes.
+ * A tunnel level is harder to pack (a reservation is an obstacle nothing can be shoved out of)
+ * AND harder to aim at the blocked-car target, because its cars are off the board and its body
+ * blocks fewer lanes than the cars it replaced.
+ *
+ * 1200, measured, not guessed. It was 400, which held while the body was 1.2 board units long;
+ * shrinking it to a 0.74 square (see TUNNEL_BOX) took level 10 down to 36 blocked against a
+ * target of 39 -- outside BLOCKED_TOLERANCE, so no packing reached `onTarget`, so the painting
+ * search never ran and the level shipped round-robin painted, which is exactly the painting the
+ * one-line rule beats. At 1200 the same level finds 38/39 and paints hard.
+ *
+ * It costs the other tunnel levels NOTHING: the search stops as soon as it has PACKINGS
+ * on-target packings, and levels 4-9 reach that inside 400 -- their files come out byte for
+ * byte the same at either ceiling. Only a level that would otherwise fail pays for the raise.
  */
-const TUNNEL_ATTEMPTS = 400;
+const TUNNEL_ATTEMPTS = 1200;
 /** Relaxation passes before an attempt is written off. */
 const RELAX_ITERS = 60;
 /** Share of cars whose angle is snapped to a right angle. See `pack`. */

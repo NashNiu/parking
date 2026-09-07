@@ -142,15 +142,23 @@ export interface TunnelSpec {
 /**
  * The tunnel body's own size in board units, the same units and the same role as CAP_BOX.
  *
- * `wid` 0.76 is a small car's 0.471 plus a 0.145 wall each side, so a car emerging has
- * visible wall beside it rather than appearing to squeeze out of a slot. `len` 1.2 is a
- * little over one car length: enough that the roof reads as a solid thing under the count
- * badge instead of a wafer.
+ * SQUARE, and SHORTER THAN A SMALL CAR. Both of those are the point, and both were measured
+ * off the reference game rather than chosen: with a small car (0.471 x 0.964) as the ruler in
+ * the same screenshot, its count tile comes out 0.73 x 0.71 board units.
+ *
+ * This started at 1.2 x 0.76 -- longer than a small car and half as wide -- and the reports
+ * were all the same: it reads as another car. It was a long rounded box among sixty long
+ * rounded boxes, in a blue the cars also come in. What separates this element from a car is
+ * not fidelity, it is SHAPE: nothing else on this board is square, so a square is legible at a
+ * glance in a way no amount of modelling on a car-shaped body ever was.
+ *
+ * Being smaller also buys packing room back: the reservation is symmetric about the body (see
+ * `tunnelReservation`), so this takes it from 3.208 board units long to 2.748.
  *
  * core owns this number and the view reads it, the same direction CAP_BOX runs. Do not
  * re-derive it from whatever `tunnel-mesh.ts` draws.
  */
-export const TUNNEL_BOX: Box = { len: 1.2, wid: 0.76 };
+export const TUNNEL_BOX: Box = { len: 0.74, wid: 0.74 };
 
 export interface QueueGroup {
   color: string;
