@@ -346,20 +346,29 @@ const CHIP_W = 88;
 const CHIP_H = 58;
 
 /**
- * The tunnel count: a bare number, and nothing behind it.
+ * The tunnel count: a WHITE DISC floating over the vault's crown, dark navy digits on it.
  *
- * It used to be a lifted plate here -- a light blue face over a deeper blue lip -- built that
- * way because every other readout on this HUD is. But the element on the BOARD is now itself a
- * pale blue tile, so the plate was a second blue tile drawn on top of the first, and the two
- * together read as a sticker slapped on a block. The board carries the plate; the HUD carries
- * only the digit that has to sit on top of it.
+ * It was a bare navy number printed straight onto the roof, and it came back as 不清晰. Two
+ * reasons, and only one of them is size. Navy on pale blue is a weak pair to begin with; then
+ * the roof is the face most turned toward the key light (see BOARD_TILT: a tilted roof takes
+ * 67% more light than a flat one), so the ground under the digits is the brightest and least
+ * predictable surface on the board. The digits were being asked to hold contrast against a
+ * highlight.
  *
- * Dark navy rather than white: the tile it lands on is deliberately the palest thing on the
- * board (see `TUNNEL_SHELL`), and white on pale blue is the one combination that would undo
- * that. The cars' white roof arrows sit on saturated paint, which is a different problem.
+ * A disc of its own settles both: the number now sits on paint this file controls, and lifting
+ * it clear of the crown (see `tunnelCrown`) puts it above the roof rather than on it, so no
+ * heading and no lighting can wash it out.
+ *
+ * It is the same object as the level chips along the bottom of the screen -- disc, dark ink,
+ * one number -- which is deliberate. This HUD already taught the player what a round number
+ * chip means; a count badge is that, not a new vocabulary.
  */
-const TUNNEL_COUNT_INK = new Color(28, 48, 92);
-const TUNNEL_COUNT_SIZE = 46;
+const TUNNEL_CHIP_D = 52;
+const TUNNEL_CHIP_BG = new Color(253, 253, 255);
+const TUNNEL_CHIP_SHADOW = new Color(20, 36, 68, 54);
+const TUNNEL_CHIP_DROP = 3;
+const TUNNEL_COUNT_INK = new Color(24, 44, 88);
+const TUNNEL_COUNT_SIZE = 32;
 
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
@@ -582,10 +591,18 @@ export class HudView {
         if (!badge) {
             const holder = new Node(`tunnel-${tunnelId}`);
             holder.layer = Layers.Enum.UI_2D;
-            holder.addComponent(UITransform).setContentSize(TUNNEL_COUNT_SIZE, TUNNEL_COUNT_SIZE);
+            holder.addComponent(UITransform).setContentSize(TUNNEL_CHIP_D, TUNNEL_CHIP_D);
             this.canvas.addChild(holder);
+            // Shadow first, then face, then digits: children draw in the order they are added,
+            // and the shadow is what keeps a white disc from dissolving into the pale roof it
+            // floats over -- the one surface on the board close to its own colour.
+            const shadow = dotSprite('chipShadow', TUNNEL_CHIP_D, TUNNEL_CHIP_SHADOW);
+            shadow.setPosition(0, -TUNNEL_CHIP_DROP, 0);
+            holder.addChild(shadow);
+            holder.addChild(dotSprite('chipFace', TUNNEL_CHIP_D, TUNNEL_CHIP_BG));
             const label = makeLabel(holder, 'count', TUNNEL_COUNT_SIZE, 0);
             label.color = TUNNEL_COUNT_INK.clone();
+            label.isBold = true;
             badge = { holder, label };
             this.tunnelBadges.set(tunnelId, badge);
         }

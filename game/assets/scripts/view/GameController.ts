@@ -11,7 +11,7 @@ import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
-import { buildTunnel, TUNNEL_SHELL } from './tunnel-mesh';
+import { buildTunnel, tunnelCrown, TUNNEL_SHELL } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
@@ -198,6 +198,17 @@ const ARRIVE_TURN_TIME = 0.1;
  * as a departure reads as the tunnel having jammed rather than as the next car being drawn.
  */
 const EMERGE_TIME = 0.28;
+
+/**
+ * How far above the vault's own crown the count chip floats, as a share of that crown height.
+ *
+ * Small, and bounded from both sides. Too little and the chip sits ON the roof, which is what
+ * it was drawn on the roof to stop being. Too much and it starts covering whatever is parked
+ * behind the tunnel -- the chip is a Canvas node, so it is drawn over the scene whatever its
+ * depth, and at this tilt every world unit of lift eats 0.62 of a board unit up the screen.
+ * At 0.22 the chip clears the crown by about a third of its own diameter.
+ */
+const TUNNEL_CHIP_FLOAT = 0.22;
 
 /**
  * Bare board between a car driving down the side of the lot and the outermost parked cars, in
@@ -1208,12 +1219,26 @@ export class GameController extends Component {
     }
 
     /** Tunnel counts hang off board points, so they move with the framing like the speed button. */
+    /**
+     * Hang each tunnel's count chip over its crown.
+     *
+     * The lift is what makes the chip read as floating ABOVE the vault rather than printed on
+     * it, and it is taken through the tunnel node's own world matrix rather than added to its
+     * world position: local +Z there is the board's up, which is not world up -- `boardRoot`
+     * carries the 38-degree tilt. Adding to `worldPosition` would push the chip straight up the
+     * screen instead of up off the roof, and the two part company by exactly the tilt.
+     *
+     * The node's z-rotation does not affect a (0, 0, h) offset, so heading plays no part: the
+     * chip sits over the crown at every angle, which is the point of putting the number on a
+     * chip in the first place (see `setTunnelCount`).
+     */
     private placeTunnelBadges(): void {
-        if (!this.cam || !this.uiCam || !this.gridRoot || !this.hud || !this.core) return;
+        if (!this.cam || !this.uiCam || !this.gridRoot || !this.hud || !this.core || !this.layout) return;
+        const lift = tunnelCrown(TUNNEL_BOX.wid * this.layout.scale) * (1 + TUNNEL_CHIP_FLOAT);
         for (const t of this.core.lot.tunnels) {
             const node = this.tunnelNodes.get(t.id);
             if (!node) continue;
-            const world = node.worldPosition;
+            const world = Vec3.transformMat4(new Vec3(), new Vec3(0, 0, lift), node.worldMatrix);
             const screen = this.cam.worldToScreen(world, new Vec3());
             this.hud.placeTunnelBadge(t.id, this.uiCam.screenToWorld(screen, new Vec3()));
         }
