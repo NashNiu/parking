@@ -80,7 +80,7 @@ export class GameCore {
   }
 
   stepLoop(): BoardResult {
-    if (this.state !== 'playing') return { boardedColor: null, boardedCount: 0, departedCarIds: [], boardedSlots: [] };
+    if (this.state !== 'playing') return { flights: [], boardedCount: 0, departedCarIds: [] };
     const res = this.boarding.tick();
     this.updateState();
     return res;

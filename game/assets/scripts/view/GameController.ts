@@ -4,7 +4,7 @@ import {
     EffectAsset, Material, screen,
 } from 'cc';
 import {
-    GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
+    GameCore, validateLevel, LevelData, firstBlocker, Flight, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
@@ -73,27 +73,30 @@ function levelStamp(level: LevelData, uuid: string): string {
 }
 
 /**
- * Delay between the boarding flights of one block. Small enough that the block is clearly
- * one event, large enough that eight people read as eight rather than one blob.
+ * Delay between one boarding flight and the next. Small enough that a tick's boarding is
+ * clearly one event, large enough that twelve people read as twelve rather than one blob.
  *
- * What actually pins it is a RATIO, not a duration. The whole flight takes
- * boardingDuration(), and the departure of the car that just filled waits for it (see the
- * tick loop) -- so what matters is how many ticks that wait spans. A row of four spans about
- * 1.5 of them; push it near three and the core has time to hand the same stall to another
- * car while the view still holds the old one, and two view entries share a slot.
+ * It used to be pinned by a RATIO rather than by how it looked: the departure of the car
+ * that just filled waited for the whole flight, so a long flight let the core hand the same
+ * stall to another car while the view still held the old one, and two view entries shared a
+ * slot. The departure no longer works that way -- `releaseDeparted` hands the stall back on
+ * the tick core reports it and only the car's exit animation waits (`driveDeparted`) -- so
+ * the ratio is not load-bearing any more and these two are free to be chosen for the eye.
  *
- * So when TICK halved, these halved with it: 0.04 -> 0.02 and 0.40 -> 0.20 keeps
- * boardingDuration(4)/TICK at 1.53, exactly what it was before the carousel sped up. The
- * speed button divides all three by the same number again, for the same reason.
+ * 0.05 and 0.32, up from 0.02 and 0.20. With a doorway BOARD_CELLS wide a tick can board
+ * twelve people instead of four, and at the old timing twelve figures crossed the screen in
+ * 0.42s -- too fast to see as people rather than as a smear. Now a row of four takes 0.47s
+ * and a full three-row burst 0.87s, which is about five ticks of overlap with the carousel.
+ * The speed button still divides both, so x2 is a proportionally brisker boarding too.
  */
-const BOARD_STAGGER = 0.02;
+const BOARD_STAGGER = 0.05;
 
 /** How long one boarding figure's flight arc takes — shared with `playBoarding`'s tween. */
-const BOARD_FLIGHT_TIME = 0.2;
+const BOARD_FLIGHT_TIME = 0.32;
 
 /**
- * How long a row of `count` boarding flights takes from the first figure leaving to the
- * last one landing: the last flight starts after `count - 1` staggers and then takes
+ * How long `count` boarding flights take from the first figure leaving to the last one
+ * landing: the last flight starts after `count - 1` staggers and then takes
  * `BOARD_FLIGHT_TIME` itself. Shared by `playBoarding` (which starts the flights) and the
  * tick loop (which must not tear a car down before its own boarding flights land), so the
  * two can't drift apart.
@@ -189,26 +192,58 @@ const DRIVE_SPEED_MAX_MULT = 1.6;
 const ARRIVE_TURN_TIME = 0.1;
 
 /**
- * How long the tunnel's next car takes to slide from the mouth out to where core has already
- * put it, once its predecessor is tapped away. Short on purpose: `busy` is already holding
- * taps off for the departing car's own drive (see `playDriveToSlot`), and this has to be well
- * inside that window or a second tap would land on a still-emerging car and read as ignored.
- * It also has to be SHORT on its own terms -- unlike a drive to a stall, there is no route to
- * watch, just a car appearing out of a hole, and a mouth that stays visibly empty for as long
- * as a departure reads as the tunnel having jammed rather than as the next car being drawn.
+ * How long the tunnel's next car takes to arrive at the mouth, once its predecessor is tapped
+ * away. Short on purpose: `busy` is already holding taps off for the departing car's own drive
+ * (see `playDriveToSlot`), and this has to be well inside that window or a second tap would
+ * land on a still-emerging car and read as ignored. It also has to be SHORT on its own terms --
+ * unlike a drive to a stall there is no route to watch, and a mouth that stays visibly empty
+ * for as long as a departure reads as the tunnel having jammed rather than as the next car
+ * being drawn.
  */
 const EMERGE_TIME = 0.28;
 
 /**
- * How far above the vault's own crown the count chip floats, as a share of that crown height.
+ * The scale the emerging car grows from.
  *
- * Small, and bounded from both sides. Too little and the chip sits ON the roof, which is what
- * it was drawn on the roof to stop being. Too much and it starts covering whatever is parked
- * behind the tunnel -- the chip is a Canvas node, so it is drawn over the scene whatever its
- * depth, and at this tilt every world unit of lift eats 0.62 of a board unit up the screen.
- * At 0.22 the chip clears the crown by about a third of its own diameter.
+ * IT USED TO SLIDE, out from the tunnel's centre to where core had put it, and that stopped
+ * working the moment the garage exit became a solid arch (see tunnel-mesh.ts): with no slot cut
+ * through its front, a car sliding out has to pass THROUGH the front wall, and it was reported
+ * as exactly that -- 穿模. The two are not reconcilable by tuning. A solid shell cannot be slid
+ * through, and the closest a slide could legally start is with the car's rear flush against the
+ * face, which leaves one CLEARANCE of travel: 0.06 world units, well under a pixel of motion.
+ *
+ * So the arrival is carried by growth instead, at the one position that is guaranteed clear of
+ * the mesh -- the one core already chose, a full clearance off the front face. Scaling shrinks a
+ * car toward its own centre, which moves it AWAY from the arch, so no value here can reintroduce
+ * the overlap.
+ *
+ * 0.55 with `backOut`: big enough to be a distinct event at 0.28s, small enough that the
+ * overshoot stays inside the clearance and the car never appears to touch the arch.
  */
-const TUNNEL_CHIP_FLOAT = 0.22;
+const EMERGE_SCALE = 0.55;
+
+/**
+ * Where up the vault the count chip is anchored, as a share of the crown height.
+ *
+ * HALF, and that is a derivation rather than a taste call. Height projects up the screen: at
+ * this tilt a world unit of it eats 0.62 of a board unit, and the chip and the roof are both
+ * subject to it. The roof sits at the crown, so the dome's projected silhouette runs from the
+ * footprint's near edge up to its far edge shifted by crown * k -- putting the CENTRE of what
+ * you see at crown * k / 2. A chip anchored at crown / 2 lands at (crown / 2) * k, the same
+ * point. The k cancels, so this centres the chip on the dome at any tilt, and would still do
+ * it if BOARD_TILT changed.
+ *
+ * It replaces a float of 0.22 ABOVE the crown, which was 1.22 * crown of lift and 0.336 board
+ * units of drift up the screen -- against a footprint only 0.37 wide, so the chip was hanging
+ * off the dome's upper edge rather than sitting on it, and was reported as not centred.
+ *
+ * What the old float was FOR does not need it. It was there so the number would not read as
+ * printed on the roof, back when it was painted onto the roof geometry and washed out by the
+ * lighting; the chip is a Canvas node now and is drawn over the scene whatever its depth, so
+ * legibility no longer depends on where it is anchored. What is left is only where it looks
+ * right, and that is the middle.
+ */
+const TUNNEL_CHIP_HEIGHT = 0.5;
 
 /**
  * Bare board between a car driving down the side of the lot and the outermost parked cars, in
@@ -377,10 +412,11 @@ interface ParkedCar {
     /** Seats this car has. Captured on park, so reusing its slot can't confuse the display. */
     capacity: number;
     /**
-     * Seat count the chip currently SHOWS, which lags the core on purpose. A
-     * whole row boards in one tick, and jumping the number down by four while four
-     * passengers are still in the air reads as the car emptying before anyone arrives.
-     * `seatBoarded` walks this down one seat per landing flight instead.
+     * Seat count the chip currently SHOWS, which lags the core on purpose. Up to
+     * BOARD_CELLS whole rows board in one tick, and jumping the number down by twelve while
+     * twelve passengers are still in the air reads as the car emptying before anyone
+     * arrives. `seatBoarded` walks this down one seat per landing flight instead, so the
+     * number falls at exactly the rate the figures land.
      */
     shown: number;
 }
@@ -536,9 +572,12 @@ export class GameController extends Component {
      * (passengers appearing to vanish) was flying the same figure the track itself draws, one
      * per seat taken, staggered by BOARD_STAGGER. With that in, the slow tick was only slow.
      *
-     * BOARD_STAGGER and BOARD_FLIGHT_TIME halved along with it -- see their note; the ratio
-     * between a boarding flight and a tick is load-bearing and a bare speed-up would have
-     * broken it.
+     * BOARD_STAGGER and BOARD_FLIGHT_TIME halved along with it at the time, because the
+     * ratio between a boarding flight and a tick was then load-bearing. It is not any more
+     * (see `releaseDeparted`), and those two have since been LENGTHENED past what the old
+     * ratio allowed -- so a boarding burst now deliberately overlaps several ticks of
+     * rotation. What still has to hold is only that a flight lands before the board it flies
+     * over is torn down, which `driveDeparted` and the `isValid` guards handle.
      */
     private readonly TICK = 0.17;
     /**
@@ -547,12 +586,11 @@ export class GameController extends Component {
      * follows -- the ring's rotation, the lane slides, a new row's entry, and the boarding
      * flights.
      *
-     * The boarding flights have to come along, and that is not decoration. A row of four
-     * takes 0.52s to fly (see boardingDuration), already longer than one 0.34 tick, and the
-     * departure of the car it fills is DEFERRED by that long so the flights are not torn
-     * down mid-air. At half a tick and unscaled flights that deferral spans three ticks --
-     * long enough for the core to hand the same stall to another car, which is exactly the
-     * failure BOARD_STAGGER's docblock was written about.
+     * The boarding flights have to come along, and that is not decoration: a three-row burst
+     * takes 0.87s to fly (see boardingDuration), five times one tick, and the exit animation
+     * of the car it fills is DEFERRED by that long so the flights are not torn down mid-air.
+     * Leaving the flights unscaled at x2 would double that overlap again, and the burst would
+     * still be in the air when the rows behind it had come round.
      *
      * Kept across levels: it is a preference, not a property of a level, and a player who
      * chose x2 does not want to choose it again ten times.
@@ -1224,11 +1262,12 @@ export class GameController extends Component {
     /**
      * Hang each tunnel's count chip over its crown.
      *
-     * The lift is what makes the chip read as floating ABOVE the vault rather than printed on
-     * it, and it is taken through the tunnel node's own world matrix rather than added to its
-     * world position: local +Z there is the board's up, which is not world up -- `boardRoot`
-     * carries the 38-degree tilt. Adding to `worldPosition` would push the chip straight up the
-     * screen instead of up off the roof, and the two part company by exactly the tilt.
+     * The lift puts the chip at the middle of the dome's projected silhouette rather than over
+     * its crown -- see TUNNEL_CHIP_HEIGHT for why half the crown height is what does that. It
+     * is taken through the tunnel node's own world matrix rather than added to its world
+     * position: local +Z there is the board's up, which is not world up -- `boardRoot` carries
+     * the 38-degree tilt. Adding to `worldPosition` would push the chip straight up the screen
+     * instead of up into the vault, and the two part company by exactly the tilt.
      *
      * The node's z-rotation does not affect a (0, 0, h) offset, so heading plays no part: the
      * chip sits over the crown at every angle, which is the point of putting the number on a
@@ -1236,7 +1275,7 @@ export class GameController extends Component {
      */
     private placeTunnelBadges(): void {
         if (!this.cam || !this.uiCam || !this.gridRoot || !this.hud || !this.core || !this.layout) return;
-        const lift = tunnelCrown(TUNNEL_BOX.wid * this.layout.scale) * (1 + TUNNEL_CHIP_FLOAT);
+        const lift = tunnelCrown(TUNNEL_BOX.wid * this.layout.scale) * TUNNEL_CHIP_HEIGHT;
         for (const t of this.core.lot.tunnels) {
             const node = this.tunnelNodes.get(t.id);
             if (!node) continue;
@@ -1283,23 +1322,22 @@ export class GameController extends Component {
             this.tickMsView += afterView - afterCore;
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.syncSeatCounts();
-            if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedSlots);
+            if (res.flights.length > 0) this.playBoarding(res.flights);
             if (res.departedCarIds.length > 0) {
-                if (res.boardedColor) {
-                    // This tick both boarded and departed: the departing car is exactly
-                    // the one that just filled, so its passengers are still mid-flight
-                    // (see playBoarding). Tearing it down now would destroy the seat
-                    // chip they are about to land on and drive the car out from under
-                    // them. Wait for the flights this tick actually started to land.
-                    const ids = res.departedCarIds;
+                // The stall is released NOW, whether or not anything is mid-flight: core has
+                // already freed it, and a view entry that lingered could collide with the
+                // next car parked there. Only the car's exit animation waits for the flights
+                // this tick started, because they land on the car and its seat chip.
+                const leaving = this.releaseDeparted(res.departedCarIds);
+                if (res.flights.length > 0) {
                     this.scheduleOnce(
-                        () => this.onDeparted(ids),
-                        boardingDuration(res.boardedSlots.length) / this.speed,
+                        () => this.driveDeparted(leaving),
+                        boardingDuration(res.flights.length) / this.speed,
                     );
                 } else {
                     // No boarding this tick (e.g. a zero-capacity car parked already
                     // full), so there is no flight to wait for — depart at once.
-                    this.onDeparted(res.departedCarIds);
+                    this.driveDeparted(leaving);
                 }
             }
             // Before the early exits below, so a tick that ends the level is still counted.
@@ -1379,20 +1417,45 @@ export class GameController extends Component {
         this.hud?.showUnlockPrompt();
     }
 
-    private onDeparted(ids: number[]): void {
+    /**
+     * Hand the departing cars' stalls back on the tick core reports them, and return the
+     * entries whose cars still have to drive away.
+     *
+     * The split from `driveDeparted` is what frees the boarding animation to be as long as
+     * it looks best. Core removes a full car and frees its stall in one tick; if the view
+     * held its entry until the flights landed, the player could park another car in that
+     * stall in the meantime and `playBoarding`'s slot -> entry map would have two entries
+     * claiming it -- the failure the old BOARD_STAGGER docblock was written about, and the
+     * reason the flight time used to be bounded by a ratio against TICK.
+     *
+     * The seat chip goes with the stall, for the same reason: the next car's chip hangs off
+     * the same anchor, and two would sit on top of each other. In-flight boardings are
+     * unaffected -- they close over the entry itself, and `bumpSeat` already tolerates a
+     * chip that has been destroyed under it.
+     */
+    private releaseDeparted(ids: number[]): ParkedCar[] {
         if (ids.length > 0) {
             this.sfx?.play('depart');
             vibrate('medium');
         }
+        const leaving: ParkedCar[] = [];
         for (const id of ids) {
             const e = this.parked.get(id);
             if (!e) continue;
             this.parked.delete(id);
             if (e.chip) e.chip.destroy();
-            // The departure this fires for can be deferred past a boarding flight (see
-            // the tick loop), and by the time it runs the human may have tapped through
-            // the win banner and switchTo rebuilt the board — which destroys this car's
-            // node out from under the deferred call. Bail rather than touch it.
+            leaving.push(e);
+        }
+        return leaving;
+    }
+
+    /** Flash, burst and drive away the cars `releaseDeparted` already un-parked. */
+    private driveDeparted(leaving: ParkedCar[]): void {
+        for (const e of leaving) {
+            // This can be deferred past a boarding flight (see the tick loop), and by the
+            // time it runs the human may have tapped through the win banner and switchTo
+            // rebuilt the board — which destroys this car's node out from under the
+            // deferred call. Bail rather than touch it.
             if (!e.node.isValid) continue;
             // A departing car is exactly one that just filled up (the core boards +
             // removes a full car in the same tick), so the "full" highlight belongs
@@ -1614,17 +1677,21 @@ export class GameController extends Component {
     }
 
     /**
-     * Fly the passengers that just boarded from the gap to their matching parked car,
-     * one arc each, staggered so a row of four reads as four people getting on rather
-     * than one thing moving. `slots` comes from the core (`BoardResult.boardedSlots`):
-     * one parking slot per boarded passenger, in boarding order. A row can be partly
-     * boarded when a car runs out of seats mid-row, and can legitimately split across
-     * two cars of the same colour, so each figure flies to the car it actually boarded
-     * rather than all of them flying to one shared match — and a car that fills (and
-     * departs) on this very tick is still resolvable, because we read it from the
-     * view's own `this.parked`, which core's departure this tick has not touched yet.
+     * Fly the passengers that just boarded from the doorway to their matching parked car,
+     * one arc each, staggered so a burst of twelve reads as twelve people getting on rather
+     * than one thing moving. `flights` comes from the core (`BoardResult.flights`): one
+     * entry per boarded passenger, in boarding order, each naming its colour, its stall, and
+     * the ring cell and seat it stood in.
+     *
+     * Every one of those four is needed. A tick can board up to BOARD_CELLS rows at once, so
+     * the CELL is no longer implied and neither is the COLOUR -- three cells inside the
+     * doorway can be three different colours. A row can be partly boarded when a car runs
+     * out of seats mid-row, and can legitimately split across two cars of the same colour,
+     * so each figure flies to the car it actually boarded rather than to one shared match --
+     * and a car that fills (and departs) on this very tick is still resolvable, because we
+     * read it from the view's own `this.parked` before `releaseDeparted` touches it.
      */
-    private playBoarding(color: string, slots: number[]): void {
+    private playBoarding(flights: Flight[]): void {
         // Slot -> the view's own parked entry. Built once per call: `this.parked` is
         // keyed by car id, not slot, and several figures can resolve to the same car.
         const bySlot = new Map<number, ParkedCar>();
@@ -1632,27 +1699,28 @@ export class GameController extends Component {
 
         this.sfx?.play('board');
         // Without a track to fly from, nothing will land to walk the count down, so
-        // apply the whole row at once rather than leaving the number stale.
+        // apply the whole tick's boarding at once rather than leaving the numbers stale.
         if (!this.loopView || !this.boardRoot) {
-            for (const slot of slots) {
-                const e = bySlot.get(slot);
+            for (const f of flights) {
+                const e = bySlot.get(f.slot);
                 if (e) this.seatBoarded(e);
             }
             return;
         }
 
-        const count = slots.length;
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i < flights.length; i++) {
+            const f = flights[i];
             // A slot with no view entry means the view already lost track of that car
             // (shouldn't happen) — skip that one figure rather than abandon the row, but
             // warn, since a silently dropped figure is otherwise the only symptom of a
             // view/core desync.
-            const e = bySlot.get(slots[i]);
-            if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${slots[i]}`); continue; }
+            const e = bySlot.get(f.slot);
+            if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${f.slot}`); continue; }
             const end = e.node.worldPosition.clone();
-            // Leave from where this figure actually stood in the row, not the row centre.
-            const start = this.loopView.boardingFigureWorldPos(i);
-            const p = this.loopView.spawnPassenger(color);
+            // Leave from where this figure actually stood, not the row centre: its own seat
+            // in its own cell of the doorway.
+            const start = this.loopView.boardingFigureWorldPos(f.cell, f.seat);
+            const p = this.loopView.spawnPassenger(f.color);
             p.setWorldPosition(start);
             const ctrl = new Vec3(
                 (start.x + end.x) / 2, Math.max(start.y, end.y) + 1.2, (start.z + end.z) / 2,
@@ -2044,7 +2112,7 @@ export class GameController extends Component {
     }
 
     /**
-     * Bring every tunnel's view back in line with core: redraw the count, and slide out any
+     * Bring every tunnel's view back in line with core: redraw the count, and bring in any
      * mouth car core has already put on the board but the lot has not drawn yet.
      *
      * Idempotent, and deliberately so -- it is called after every successful tap and does
@@ -2052,7 +2120,7 @@ export class GameController extends Component {
      * tunnel the departing car came from, which means the view keeping its own copy of a
      * mapping core already has.
      *
-     * The slide starts at the same moment the departing car pulls away, not after it. `busy`
+     * The arrival starts at the same moment the departing car pulls away, not after it. `busy`
      * is already holding taps off for the drive, and a mouth that stays visibly empty for a
      * second and a half reads as the tunnel having jammed.
      */
@@ -2069,12 +2137,14 @@ export class GameController extends Component {
             if (mouth === null || this.gridView.getCarNode(mouth)) continue;
             const node = this.gridView.addCar(mouth);
             if (!node) continue;
-            const to = node.position.clone();
-            // Start inside the tunnel and slide out to where core says the car stands.
-            const from = this.tunnelNodes.get(t.id)?.position ?? to;
-            node.setPosition(from);
+            // Grown in place, not slid out of the tunnel: the arch is solid now and a slide
+            // would pass through its front wall. See EMERGE_SCALE for why there is no position
+            // left to animate.
+            node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE);
             tween(node)
-                .to(EMERGE_TIME / this.speed, { position: to }, { easing: 'quadOut' })
+                // A fresh Vec3, not `Vec3.ONE`: handing a shared engine constant to a tween
+                // as its target value is one in-place lerp away from corrupting it globally.
+                .to(EMERGE_TIME / this.speed, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
                 .call(() => this.gridView?.activateCar(mouth))
                 .start();
         }

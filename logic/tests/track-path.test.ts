@@ -1,11 +1,11 @@
 import {
   TrackPath, entryIndex, maxLookahead, capacityOptions,
   LANE, ROW_SPACING_MIN, SEAM_MIN, SEAM_MAX, CAPACITY_OPTIONS, ENTRY_NORMAL_MAX,
-  MIN_CURVE_RADIUS, GAP_ARC, BLOCK, blockOffset, blockRanks, blockLength, blockSpan,
+  MIN_CURVE_RADIUS, GAP_ARC, boardArc, BLOCK, blockOffset, blockRanks, blockLength, blockSpan,
   minRowGap,
 } from '../../game/assets/scripts/core/track-path';
 import { TRACK_SHAPES, TrackShape } from '../../game/assets/scripts/core/track-shapes';
-import { GROUP_SIZE } from '../../game/assets/scripts/core/types';
+import { BOARD_CELLS, GROUP_SIZE } from '../../game/assets/scripts/core/types';
 
 /**
  * The closest pair of figures on a full ring, split by whether the two come from the SAME
@@ -307,9 +307,33 @@ test('a second rank, if there ever is one, stands staggered and not in column', 
   expect(gap(0, BLOCK.across)).toBeGreaterThan(BLOCK.rankStep);
 });
 
-test('the boarding gap never swallows a neighbouring row', () => {
+test('an entry gap never swallows a neighbouring row', () => {
   // The gap is an absolute arc length now, so the tightest legal spacing has to clear it.
   expect(GAP_ARC).toBeLessThan(ROW_SPACING_MIN);
+});
+
+test('the boarding doorway opens exactly the cells the core boards from', () => {
+  // The doorway is the one gap that is MEANT to span several cells, so it is measured in
+  // cells rather than bounded by ROW_SPACING_MIN: wide enough to clear the BOARD_CELLS - 1
+  // cells between its ends, and short of the two cells just outside the window, which are
+  // not boarded and must still read as standing on the track.
+  for (const shape of TRACK_SHAPES) {
+    const p = new TrackPath(shape);
+    for (const c of capacityOptions(shape)) {
+      const spacing = p.rowSpacing(c);
+      const arc = boardArc(p.perimeter, c);
+      expect(arc).toBeGreaterThan((BOARD_CELLS - 1) * spacing);
+      expect(arc).toBeLessThan(BOARD_CELLS * spacing);
+    }
+  }
+});
+
+test('a one-cell doorway is exactly the gap the game shipped with', () => {
+  // The form of `boardArc` is pinned by the old behaviour rather than chosen freely: strip
+  // the extra cells out and it must come back to GAP_ARC to the last decimal.
+  const p = new TrackPath('rect');
+  const c = capacityOptions('rect')[0];
+  expect(boardArc(p.perimeter, c) - (BOARD_CELLS - 1) * p.rowSpacing(c)).toBeCloseTo(GAP_ARC, 12);
 });
 
 test('every shape has room for the five batches the curve opens with', () => {

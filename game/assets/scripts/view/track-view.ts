@@ -5,7 +5,7 @@ import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPaxDot, buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
-    BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
+    BLOCK, blockOffset, blockRanks, blockSpan, boardArc, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
     PaxGroup, TrackPath,
 } from '../core/index';
 
@@ -434,7 +434,6 @@ export class TrackView {
     private readonly flierOwns: Record<FeedSide, number | null> = { far: null, near: null };
 
     private readonly capacity: number;
-    private readonly boardIndex: number;
     /**
      * The level's feeder channels, already normalised by `LoopSystem` -- side, drain
      * order, entry cell and lookahead all resolved there. This is the only copy of that
@@ -459,8 +458,12 @@ export class TrackView {
      * already is. NOT readonly: the speed button changes it (see `setTick`).
      */
     private tick: number;
-    /** Path parameters where the band opens up: the boarding gap and each entry. */
-    private gapTs: number[] = [];
+    /**
+     * Where the band opens up: one entry per `{ t, halfLap }`, plus the boarding doorway --
+     * which is WIDER than an entry (it spans BOARD_CELLS cells), so a single shared width
+     * no longer describes them all.
+     */
+    private gaps: { t: number; halfLap: number }[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
     private clusters: Node[] = [];
     /** The GROUP_SIZE figures inside each ring row; `count` of them are shown. */
@@ -494,15 +497,23 @@ export class TrackView {
     ) {
         this.path = path;
         this.capacity = capacity;
-        this.boardIndex = boardIndex;
         this.channels = channels;
         this.root = parent;
         this.cy = y;
         this.feetTop = y + trackReach(path).top - PAX_HEIGHT;
         this.tick = tick;
-        this.gapTs = [
-            boardIndex / capacity,
-            ...channels.map((c) => c.entry / capacity),
+        // As a FRACTION of the lap, since that is what the band's sampling works in. The
+        // doorway's own arc comes from core (`boardArc`), so the band opens over exactly the
+        // cells `LoopSystem` boards from.
+        this.gaps = [
+            {
+                t: boardIndex / capacity,
+                halfLap: boardArc(path.perimeter, capacity) / 2 / path.perimeter,
+            },
+            ...channels.map((c) => ({
+                t: c.entry / capacity,
+                halfLap: GAP_ARC / 2 / path.perimeter,
+            })),
         ];
         this.buildBand(parent);
         this.buildClusters(parent);
@@ -566,16 +577,13 @@ export class TrackView {
      */
     private buildBand(parent: Node): void {
         const SAMPLES = 96;
-        // The gap is an absolute arc length, not half a slot: as a fraction of the lap it
-        // shrank with the ring, and at 20 slots the doorway was 0.37 long and stopped
-        // reading as a doorway at all.
-        const halfLap = GAP_ARC / 2 / this.path.perimeter;
         const parts: MeshPart[] = [];
         const p = new Vec3(), q = new Vec3();
         for (let i = 0; i < SAMPLES; i++) {
             const t = i / SAMPLES;
-            // Skip the samples that fall inside a gap.
-            if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < halfLap)) continue;
+            // Skip the samples that fall inside a gap. Each gap carries its own width: an
+            // entry is one row wide, the boarding doorway is BOARD_CELLS cells wide.
+            if (this.gaps.some((g) => Math.abs(((t - g.t + 1.5) % 1) - 0.5) < g.halfLap)) continue;
             this.point(t, p);
             this.point(t + 1 / SAMPLES, q);
             const dx = q.x - p.x, dy = q.y - p.y;
@@ -947,13 +955,19 @@ export class TrackView {
     }
 
     /**
-     * Where figure `i` of the block at the boarding gap stands, in world space. A boarding
+     * Where figure `seat` of the row in RING CELL `cell` stands, in world space. A boarding
      * flight has to start from a spot a figure actually occupied, not from the cell's
      * centre — with four abreast in two ranks, a flight from the middle reads as the wrong
      * passenger lifting off.
+     *
+     * `cell` is a ring index, not a cluster index, and it is turned straight into a path
+     * parameter: at rest the phase is 0 by definition, so ring cell c is drawn at
+     * `c / capacity` (see `repositionAll`). That is why a doorway BOARD_CELLS wide needs no
+     * extra bookkeeping here — each of its cells has its own fixed spot on the track, and
+     * `Flight.cell` says which one the passenger left from.
      */
-    boardingFigureWorldPos(i: number): Vec3 {
-        const t = this.boardIndex / this.capacity;
+    boardingFigureWorldPos(cell: number, seat: number): Vec3 {
+        const t = ((cell % this.capacity) + this.capacity) % this.capacity / this.capacity;
         const local = this.point(t, new Vec3());
         const n = this.normal(t);
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
@@ -961,7 +975,7 @@ export class TrackView {
         // as one dot (ROW_AS_DOT), in which case the centreline IS where it stood.
         const o = ROW_AS_DOT
             ? OFFSET_SCRATCH_ZERO
-            : blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
+            : blockOffset(seat % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
         const fy = local.y + o.across * n.y - o.along * n.x;
         // Its depth too, or the flight starts at z = 0 while the figure it replaces was
         // several units nearer -- which reads as the passenger jumping backwards on takeoff.

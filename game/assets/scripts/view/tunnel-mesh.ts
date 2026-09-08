@@ -66,14 +66,24 @@ import { vertexColorMaterial } from './materials';
 
 /**
  * Crown height as a share of the width. TALLER THAN A CAR, which is what buys the depth: a car
- * stands 0.34 world units and this lands near 0.38, so the vault is the tallest thing on the lot.
- * At 0.28 of the width it was two thirds of a car and the reports were "扁" -- a plate.
+ * stands 0.34 world units and this lands near 0.44, so the vault is comfortably the tallest
+ * thing on the lot. At 0.28 of the width it was two thirds of a car and the reports were
+ * "扁" -- a plate.
  *
- * The ceiling on this is occlusion, not taste: height shifts up-screen by h * tan(38deg), so
- * this covers 0.30 of board behind it against a car's own 0.27. One notch more than the things
- * it stands among, which is the most it can take before it starts hiding arrows.
+ * 0.60, up from 0.52, asked for as "a bit taller, and read as more solid".
+ *
+ * AND IT IS PAST THE LIMIT THE PREVIOUS REVISION SET ITSELF, deliberately, so the number is
+ * worth writing down rather than quietly moving. The ceiling on this is occlusion, not taste:
+ * height shifts the silhouette up-screen by h * tan(38deg), so this covers 0.35 board units of
+ * board behind it where 0.52 covered 0.30 and a car covers 0.27. The old comment called 0.30
+ * "the most it can take before it starts hiding arrows"; this is 0.05 board units past that,
+ * which is a sixteenth of a small car's length. What makes it affordable is where the risk
+ * lands: a tunnel carries a reservation a whole car length deep along its own axis
+ * (`tunnelReservation`), so there is nothing immediately behind it to hide unless the heading
+ * happens to point the up-screen direction across that axis. If an arrow does go missing
+ * behind one of these, this constant is the first thing to look at.
  */
-const CROWN = 0.52;
+const CROWN = 0.60;
 
 /**
  * The vertical skirt the vault springs from, as a share of the width.
@@ -81,9 +91,18 @@ const CROWN = 0.52;
  * Not decoration. A semicircular vault meets the board TANGENTIALLY -- its surface is vertical
  * where it lands, so its silhouette fades out instead of ending, and the whole thing reads as a
  * blister rather than as a building. Lifting the springing line clear of the board gives the
- * outline one hard edge all the way round, at the cost of 0.13 of the height being a plain wall.
+ * outline one hard edge all the way round, at the cost of that share of the height being a
+ * plain wall.
+ *
+ * 0.18, up from 0.13, and this is the OTHER half of "read as more solid" -- the half that is
+ * free. The skirt is the only surface RIM_SHADE is ever seen on, so its height is the width of
+ * the pale band under the rim, and widening that band by 39% costs no occlusion at all: the
+ * total height is CROWN's to set, and raising SPRING inside it only trades vault curvature for
+ * wall. The trade has a floor -- take too much and the arch's lighting gradient, which is the
+ * whole read of the arch from most headings, flattens out. At 0.18 of 0.60 the bow still owns
+ * 70% of the height.
  */
-const SPRING = 0.13;
+const SPRING = 0.18;
 
 /**
  * The one shade anything that is not the roof is painted in -- the springing band and the

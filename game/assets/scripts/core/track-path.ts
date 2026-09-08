@@ -1,5 +1,5 @@
 import { buildShape, Pt, Seg, TrackShape } from './track-shapes';
-import { FeedSide, GROUP_SIZE } from './types';
+import { BOARD_CELLS, FeedSide, GROUP_SIZE } from './types';
 
 /**
  * Lane geometry, in board units. These were view constants; they live here because
@@ -129,9 +129,12 @@ export function blockSpan(groupSize: number): number {
 }
 
 /**
- * Floor on a ring cell's arc length: it keeps the boarding doorway (GAP_ARC) from swallowing
- * a whole neighbouring cell. The test in track-path.test.ts pins that ordering. There is no
- * matching ceiling -- how the ring READS is the seam's job, below.
+ * Floor on a ring cell's arc length: it keeps an ENTRY gap (GAP_ARC) from swallowing a whole
+ * neighbouring cell. The test in track-path.test.ts pins that ordering. There is no matching
+ * ceiling -- how the ring READS is the seam's job, below.
+ *
+ * It does NOT bound the boarding doorway any more: `boardArc` is a multiple of the cell
+ * spacing by construction and is MEANT to span BOARD_CELLS of them.
  *
  * It went two rounds as the thing that capped the ring's density, and it is not that any
  * more: `clearance` overtook it once the rows got close enough to touch on the corners.
@@ -139,7 +142,7 @@ export function blockSpan(groupSize: number): number {
  * 0.27, down from 0.30, and it is back to being what it says it is. At 0.30 it was AGAIN the
  * binding limit rather than the floor -- the tightest ring `clearance` 0.20 allows is a
  * 28-cell circle at a pitch of 0.280, which 0.30 rejected outright. What it has to protect is
- * GAP_ARC (0.26): the doorway must not swallow a whole neighbouring cell, so this has to stay
+ * GAP_ARC (0.26): an entry gap must not swallow a whole neighbouring cell, so this has to stay
  * above it, and 0.27 leaves the 0.01 that ordering needs. The test in track-path.test.ts pins
  * it, so the pair cannot drift into each other.
  */
@@ -186,15 +189,37 @@ export const SEAM_MIN = 0.05;
 export const SEAM_MAX = 0.16;
 
 /**
- * Boarding and entry gaps, as an ABSOLUTE arc length. It used to be half a ring slot, which
- * shrank with the ring: at 20 slots the doorway was 0.37 long and stopped reading as a
- * doorway. Must stay under ROW_SPACING_MIN so a gap never eats its neighbours, which is
- * what has walked it down from 0.55 to 0.45 to 0.38 as the cells have got shorter.
+ * The ENTRY gaps, as an ABSOLUTE arc length. It used to be half a ring slot, which shrank
+ * with the ring: at 20 slots the gap was 0.37 long and stopped reading as a gap. Must stay
+ * under ROW_SPACING_MIN so a gap never eats its neighbours, which is what has walked it down
+ * from 0.55 to 0.45 to 0.38 as the cells have got shorter.
  *
- * 0.26 against a cell of 0.33-0.38 means the doorway is a little wider than one row of
- * passengers, which is the right size for a door they leave through one row at a time.
+ * 0.26 against a cell of 0.33-0.38 means an entry is a little wider than one row of
+ * passengers, which is the right size for a door they come in through one row at a time.
+ *
+ * It used to size the BOARDING doorway too. That one is `boardArc` now, because the doorway
+ * deliberately spans BOARD_CELLS cells and this bound -- "never eat a neighbouring cell" --
+ * is the opposite of what a multi-cell door needs.
  */
 export const GAP_ARC = 0.26;
+
+/**
+ * The BOARDING doorway's arc length, on a track of this perimeter and capacity.
+ *
+ * A function rather than a constant because it has to span BOARD_CELLS whole cells, and a
+ * cell's length is `perimeter / capacity` -- which differs per shape (0.33 to 0.38 across
+ * the five). Sizing it absolutely, the way GAP_ARC is sized, would open three cells on one
+ * shape and two and a bit on another.
+ *
+ * The form is `(BOARD_CELLS - 1) * spacing + GAP_ARC`: the middle cells are opened whole,
+ * and each END of the door keeps exactly the margin a single-cell doorway had, so the door's
+ * edges land in the seams between rows instead of cutting through the row at the window's
+ * edge. At BOARD_CELLS 1 it reduces to GAP_ARC exactly, which is what the shipped doorway
+ * was -- so the shape of this is pinned by the old behaviour, not chosen freely.
+ */
+export function boardArc(perimeter: number, capacity: number): number {
+    return (BOARD_CELLS - 1) * (perimeter / capacity) + GAP_ARC;
+}
 
 /**
  * A block stands `blockSpan` (0.88) across the path, so on an arc tighter than half of that

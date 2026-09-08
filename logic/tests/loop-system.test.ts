@@ -1,5 +1,7 @@
-import { LoopSystem } from '../../game/assets/scripts/core/loop-system';
-import { DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup } from '../../game/assets/scripts/core/types';
+import { LoopSystem, toClusters } from '../../game/assets/scripts/core/loop-system';
+import {
+  BOARD_CELLS, CLUSTER_ROWS, DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup,
+} from '../../game/assets/scripts/core/types';
 
 /**
  * A full group, as a number. Every passenger count below is written as a multiple of it
@@ -284,5 +286,95 @@ test('feeds with no recognised side fall back to the default channels, not zero'
     const loop = new LoopSystem(8, 0, [g('a', 16 * G)], feeds);
     expect(loop.channels.map((c) => c.side)).toEqual(['far', 'near']);
     expect(loop.remainingCount()).toBe(16 * G);
+  }
+});
+
+/** Lengths of the runs of one colour along `ring`, in order. Nulls end a run. */
+function colorRuns(ring: (PaxGroup | null)[]): number[] {
+  const runs: number[] = [];
+  let last: string | null = null;
+  for (const grp of ring) {
+    if (grp && grp.color === last) runs[runs.length - 1]++;
+    else runs.push(1);
+    last = grp ? grp.color : null;
+  }
+  return runs;
+}
+
+test('a cluster is a run of one colour, at most CLUSTER_ROWS long', () => {
+  // The mechanism, tested directly, because CLUSTER_ROWS is 1 right now and at 1 a cluster
+  // is a single row -- so the dealt order alone cannot show whether clustering works.
+  const rows = [
+    g('a', G), g('a', G), g('a', G), g('a', G), g('a', 2),   // five rows of one colour
+    g('b', G), g('b', 1),
+  ];
+  const clusters = toClusters(rows);
+  for (const c of clusters) {
+    expect(c.length).toBeGreaterThan(0);
+    expect(c.length).toBeLessThanOrEqual(CLUSTER_ROWS);
+    expect(new Set(c.map((r) => r.color)).size).toBe(1);      // never mixed
+  }
+  expect(clusters.flat()).toEqual(rows);                     // a partition, in order
+  // A colour change cuts a cluster even when the open one had room.
+  const cut = toClusters([g('a', 1), g('b', 1)]);
+  expect(cut.length).toBe(2);
+});
+
+test('the shuffle deals same-coloured rows in clusters, not one by one', () => {
+  // Three colours of exactly CLUSTER_ROWS rows each, on a ring that holds all twelve: the
+  // only orders this can produce are the three clusters in some order, so the ring MUST be
+  // three solid bands of four. A per-row shuffle would almost never manage that.
+  const rows = CLUSTER_ROWS;
+  const loop = new LoopSystem(3 * rows, 6, [
+    { color: 'a', count: rows * G }, { color: 'b', count: rows * G }, { color: 'c', count: rows * G },
+  ], DEFAULT_FEEDS, 11);
+  expect(colorRuns(loop.ring)).toEqual([rows, rows, rows]);
+  expect(new Set(loop.ring.map((x) => x!.color))).toEqual(new Set(['a', 'b', 'c']));
+});
+
+test('clustering is a reordering: it moves rows without changing the colour mix', () => {
+  const odd = 6 * G;   // six rows per colour -> a cluster of CLUSTER_ROWS plus a short one
+  const loop = new LoopSystem(12, 6, [
+    { color: 'a', count: odd }, { color: 'b', count: odd }, { color: 'c', count: odd },
+  ], DEFAULT_FEEDS, 5);
+  expect(counts(loop)).toEqual({ a: odd, b: odd, c: odd });
+  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
+    if (!grp) continue;
+    expect(grp.count).toBeGreaterThan(0);
+    expect(grp.count).toBeLessThanOrEqual(G);
+  }
+});
+
+test('a cluster never mixes colours, however ragged the counts', () => {
+  // A colour change ends a cluster even mid-cluster, so every run the shuffle emits is one
+  // colour. Checked by walking the dealt order and requiring each run to be at most
+  // CLUSTER_ROWS long OR to be two clusters of the same colour that happened to adjoin --
+  // which is to say: no run may straddle a colour change, which is what `colorRuns` sees.
+  const loop = new LoopSystem(16, 8, [
+    { color: 'a', count: 3 * G + 1 }, { color: 'b', count: 2 * G + 3 }, { color: 'c', count: G },
+  ], DEFAULT_FEEDS, 3);
+  const dealt = [...loop.ring, ...loop.channels.flatMap((c) => c.queue)].filter((x) => x !== null);
+  for (const grp of dealt) expect(grp!.count).toBeLessThanOrEqual(G);
+  expect(counts(loop)).toEqual({ a: 3 * G + 1, b: 2 * G + 3, c: G });
+});
+
+test('the doorway window is symmetric about boardIndex and wraps the ring', () => {
+  const loop = new LoopSystem(28, 14, [{ color: 'a', count: 28 * G }]);
+  expect(loop.boardHalf).toBe((BOARD_CELLS - 1) >> 1);
+  expect(loop.boardIndices()).toEqual([15, 14, 13]);
+
+  // boardIndex 0 puts the window across the seam, which must not produce a negative index.
+  const wrapped = new LoopSystem(28, 0, [{ color: 'a', count: 28 * G }]);
+  expect(wrapped.boardIndices()).toEqual([1, 0, 27]);
+});
+
+test('the doorway never reaches an entry cell', () => {
+  // A row boarded on the tick it entered would have the entry animation flying a figure
+  // that is already gone.
+  for (const capacity of [4, 8, 12, 28, 32, 36]) {
+    const boardIndex = capacity / 2;
+    const loop = new LoopSystem(capacity, boardIndex, [{ color: 'a', count: capacity * G }]);
+    const entries = new Set(loop.channels.map((c) => c.entry));
+    for (const cell of loop.boardIndices()) expect(entries.has(cell)).toBe(false);
   }
 });

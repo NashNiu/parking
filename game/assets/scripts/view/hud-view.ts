@@ -363,12 +363,27 @@ const CHIP_H = 58;
  * one number -- which is deliberate. This HUD already taught the player what a round number
  * chip means; a count badge is that, not a new vocabulary.
  */
-const TUNNEL_CHIP_D = 52;
+/*
+ * The disc and the digit on it, both up: 52 -> 58 and 32 -> 40, asked for as "make the number
+ * bigger".
+ *
+ * The digit can take it because of something that changed elsewhere. This readout is
+ * `remainingIn`, the cars a tunnel still holds, and TUNNEL_CURVE's depth is now flat at 4 for
+ * every level that has a tunnel at all -- so the string here is ONE character, always, and a
+ * large glyph has nothing to overflow into. It was two characters' worth of room when tunnels
+ * ran six deep, which is what kept 32 modest.
+ *
+ * The disc grows by less than the digit (12% against 25%) on purpose: what was asked for is a
+ * bigger NUMBER, and letting the glyph take more of the disc is most of how that reads. At 40
+ * in 58 a single digit keeps about 9px of white on each side, which is still a ring rather
+ * than a rim.
+ */
+const TUNNEL_CHIP_D = 58;
 const TUNNEL_CHIP_BG = new Color(253, 253, 255);
 const TUNNEL_CHIP_SHADOW = new Color(20, 36, 68, 54);
 const TUNNEL_CHIP_DROP = 3;
 const TUNNEL_COUNT_INK = new Color(24, 44, 88);
-const TUNNEL_COUNT_SIZE = 32;
+const TUNNEL_COUNT_SIZE = 40;
 
 const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
@@ -603,6 +618,15 @@ export class HudView {
             const label = makeLabel(holder, 'count', TUNNEL_COUNT_SIZE, 0);
             label.color = TUNNEL_COUNT_INK.clone();
             label.isBold = true;
+            // Centred in the line box, not sitting at the top of it. `makeLabel` gives every
+            // label a lineHeight of 1.2x its font size, and Cocos defaults a Label's vertical
+            // align to TOP -- so a single line is pinned to the top of a box a fifth taller
+            // than the glyph, and rides that much high inside the disc. It is a couple of
+            // pixels at the old 32 and four at 40, which is what "as centred as you can get
+            // it" was about. Set here and not in `makeLabel`, because every other caller is
+            // laying text out against a box it sized itself and reads correctly as it is.
+            label.verticalAlign = Label.VerticalAlign.CENTER;
+            label.horizontalAlign = Label.HorizontalAlign.CENTER;
             badge = { holder, label };
             this.tunnelBadges.set(tunnelId, badge);
         }

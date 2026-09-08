@@ -1,4 +1,6 @@
-import { DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup } from './types';
+import {
+  BOARD_CELLS, CLUSTER_ROWS, DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup,
+} from './types';
 import { entryIndex } from './track-path';
 
 /**
@@ -23,6 +25,50 @@ function shuffleInPlace<T>(arr: T[], next: () => number): void {
     arr[i] = arr[j];
     arr[j] = tmp;
   }
+}
+
+/**
+ * Chop a colour-ordered row list into CLUSTERS: runs of at most CLUSTER_ROWS consecutive
+ * rows of ONE colour. A colour change always ends a cluster, so a cluster is never mixed.
+ *
+ * `toGroups` hands over the rows grouped by colour already (the queue is authored one entry
+ * per colour), so this walks that order and cuts it up rather than sorting anything.
+ *
+ * Exported for its test: CLUSTER_ROWS is 1 at the moment, which makes the clustering
+ * invisible in the dealt order (one row per cluster is just a per-row shuffle), so testing
+ * it through `LoopSystem` alone would assert nothing about the mechanism.
+ */
+export function toClusters(rows: PaxGroup[]): PaxGroup[][] {
+  const clusters: PaxGroup[][] = [];
+  let open: PaxGroup[] | null = null;
+  for (const row of rows) {
+    if (open === null || open[0].color !== row.color || open.length >= CLUSTER_ROWS) {
+      open = [];
+      clusters.push(open);
+    }
+    open.push(row);
+  }
+  return clusters;
+}
+
+/**
+ * Shuffle CLUSTERS of same-coloured rows rather than rows, and flatten the result.
+ *
+ * At CLUSTER_ROWS 1 -- where it stands, and see that constant for the measurements that put
+ * it there -- a cluster is one row and this is exactly the per-row Fisher-Yates the game
+ * shipped with. Above 1 each colour arrives as a band of up to CLUSTER_ROWS rows, which pays
+ * out through the doorway in one burst instead of several; it also collapses the ring's
+ * colour mix, which is why the knob is at 1.
+ *
+ * Two clusters of the same colour can land next to each other, giving a band longer than
+ * CLUSTER_ROWS. That is left alone deliberately: it is rare, it is not wrong, and rejecting
+ * it would mean a shuffle that is no longer uniform over the clusters -- and no longer
+ * reproducible from the seed alone by anything as simple as this.
+ */
+function shuffleClusters(rows: PaxGroup[], next: () => number): PaxGroup[] {
+  const clusters = toClusters(rows);
+  shuffleInPlace(clusters, next);
+  return clusters.flat();
 }
 
 /**
@@ -64,6 +110,11 @@ export class LoopSystem {
   ring: (PaxGroup | null)[];
   /** Feeder channels in drain order; 1 or 2 of them. */
   channels: Channel[];
+  /**
+   * Cells either side of `boardIndex` that are also inside the doorway, so the window is
+   * `2 * boardHalf + 1` cells wide. See BOARD_CELLS for why it is clamped.
+   */
+  readonly boardHalf: number;
 
   constructor(
     capacity: number,
@@ -74,12 +125,20 @@ export class LoopSystem {
   ) {
     this.capacity = capacity;
     this.boardIndex = boardIndex;
-    const all = toGroups(queue);
+    // Never so wide that the window swallows an entry cell (boardIndex +- capacity/4);
+    // see BOARD_CELLS. The floor of 0 is what leaves the toy rings in the tests with the
+    // single-cell doorway they were written against.
+    this.boardHalf = Math.max(0, Math.min(
+      (BOARD_CELLS - 1) >> 1, Math.floor(capacity / 4) - 1,
+    ));
+    let all = toGroups(queue);
     // Shuffle before the ring is filled so the track shows a mix instead of one
     // solid colour block per queue group. Optional and seeded: callers that pass
-    // no seed (the unit tests) keep the authored order. Whole ROWS move, never
-    // individual passengers, so every row stays one colour.
-    if (shuffleSeed !== undefined) shuffleInPlace(all, rng(shuffleSeed));
+    // no seed (the unit tests) keep the authored order. Whole CLUSTERS of same-coloured
+    // rows move, never individual passengers and never the rows inside a cluster, so
+    // every row stays one colour. At CLUSTER_ROWS 1, where the knob stands, a cluster is
+    // one row and this is the per-row shuffle the game shipped with.
+    if (shuffleSeed !== undefined) all = shuffleClusters(all, rng(shuffleSeed));
     this.ring = new Array(capacity).fill(null);
     for (let i = 0; i < capacity && all.length > 0; i++) this.ring[i] = all.shift()!;
 
@@ -107,21 +166,59 @@ export class LoopSystem {
     }));
   }
 
-  /** Colour of the row sitting at the boarding gap, or null when the cell is empty. */
-  passengerAtBoard(): string | null {
-    return this.ring[this.boardIndex]?.color ?? null;
+  /**
+   * The ring cells inside the doorway, in the order they must be offered seats: the cell
+   * about to LEAVE the window first, then upstream from it.
+   *
+   * Order is not cosmetic. Contents travel from index i to i + 1 (see `step`), so the cell
+   * at `boardIndex + boardHalf` is on its last tick inside the door while the one at
+   * `boardIndex - boardHalf` still has `2 * boardHalf` ticks to come. Serving the leaving
+   * edge first means a scarce run of seats goes to the row that will not get another
+   * chance, instead of to one that would have boarded two ticks later anyway. It also
+   * reads the way a door reads: whoever is nearest the exit gets on first.
+   */
+  boardIndices(): number[] {
+    const out: number[] = [];
+    for (let d = this.boardHalf; d >= -this.boardHalf; d--) {
+      out.push((this.boardIndex + d + this.capacity) % this.capacity);
+    }
+    return out;
+  }
+
+  /** Colour of the row in ring cell `cell`, or null when the cell is empty. */
+  passengerAt(cell: number): string | null {
+    return this.ring[cell]?.color ?? null;
+  }
+
+  /** How many are still standing in ring cell `cell`; 0 when it is empty. */
+  countAt(cell: number): number {
+    return this.ring[cell]?.count ?? 0;
   }
 
   /**
-   * Board ONE passenger out of the row at the gap. The row stays put, one figure
-   * shorter, until its last passenger leaves and the cell opens up — so a row only
-   * frees its cell (and lets a waiting row in) once it is fully aboard.
+   * Board ONE passenger out of ring cell `cell`. The row stays put, one figure shorter,
+   * until its last passenger leaves and the cell opens up — so a row only frees its cell
+   * (and lets a waiting row in) once it is fully aboard.
    */
-  boardPassenger(): void {
-    const group = this.ring[this.boardIndex];
+  boardPassengerAt(cell: number): void {
+    const group = this.ring[cell];
     if (!group) return;
     group.count--;
-    if (group.count <= 0) this.ring[this.boardIndex] = null;
+    if (group.count <= 0) this.ring[cell] = null;
+  }
+
+  /**
+   * Colour of the row at the MIDDLE of the doorway. Kept because the middle cell is still
+   * the one the ring is indexed from, and reading it is how a caller asks "is anything at
+   * the gap" without caring about the window's width.
+   */
+  passengerAtBoard(): string | null {
+    return this.passengerAt(this.boardIndex);
+  }
+
+  /** Board one passenger out of the middle cell. See `boardPassengerAt`. */
+  boardPassenger(): void {
+    this.boardPassengerAt(this.boardIndex);
   }
 
   step(): void {
