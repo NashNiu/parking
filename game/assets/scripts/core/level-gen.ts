@@ -1,6 +1,6 @@
 import { inflate, insideRect, obbCorners, overlapMTV, OBB } from './geometry';
 import {
-    CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, CLEARANCE, Feed, LevelData, Lot, QueueGroup,
+    CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, CLEARANCE, Feed, GROUP_SIZE, LevelData, Lot, QueueGroup,
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
@@ -697,6 +697,90 @@ function queueFor(cars: CarSpec[], tunnels: TunnelSpec[]): QueueGroup[] {
     return PALETTE.filter((c) => seats.has(c)).map((color) => ({
         color, count: seats.get(color) as number,
     }));
+}
+
+/**
+ * The passenger queue as an ORDERED list of bands: one entry per car, in the order the cars
+ * can leave in, each holding exactly that car's seats.
+ *
+ * This replaces `queueFor`'s one-total-per-colour summary, and the difference is the whole
+ * point. `LoopSystem` consumes this order verbatim, so the ARRAY ORDER is now arrival order:
+ * a colour reaches the doorway as a band of 4, 6 or 8 rows and boards in one burst, instead
+ * of four people at a time out of a shuffled ring.
+ *
+ * Why a band may exist at all: the ring drains SELECTIVELY -- a colour the bay covers boards
+ * and frees its cells, a colour nothing wants cannot leave -- so bands dealt at random pile
+ * the homeless colours up four cells at a time and seal the track. Dealing them along the
+ * LEAVING order is what gives every band a car that is actually coming. `cars` arrives in
+ * that order already (`scatter` numbers them along `peel`), so this only has to walk it.
+ *
+ * `offset` is the difficulty dial, in ROWS, and it rotates LEFT: the first `offset` rows move
+ * to the back, so the queue opens with rows belonging to cars deeper in the lot and those
+ * bands reach the doorway while their cars are still buried. It dials TOWARD the pile-up
+ * above -- that is what makes it difficulty and not decoration, and it means the dial has a
+ * cliff rather than a ceiling. Measured: at offset 0 all ten levels fall to the one-line
+ * rule, so 0 is the free end and belongs only to the teaching levels.
+ *
+ * `interleave` deals that many cars' rows round robin instead of car by car, so one car's
+ * passengers arrive separated by other colours and its stall stays occupied for several
+ * laps. A feel knob; see the plan's Task 4 for whether it is also a difficulty one.
+ *
+ * The tunnel cars go last, all of them, after every grid band. When a tunnel car reaches the
+ * bay is the player's choice rather than `peel`'s, so no position in the leaving order would
+ * be honest about it -- and last is the right end, because by then the lot is nearly empty
+ * and the player has few cars left to choose between anyway.
+ */
+export function bandedQueue(
+    cars: CarSpec[], tunnels: TunnelSpec[], offset: number, interleave: number,
+): QueueGroup[] {
+    // Rows carry a BAND id, not just a colour, so the grouping at the end can tell "one car's
+    // eight rows" from "two same-coloured cars that happen to adjoin" -- and so a rotation
+    // that lands inside a band produces two entries rather than silently merging into the
+    // neighbour it now touches.
+    const rows: { color: string; band: number }[] = [];
+    const step = Math.max(1, Math.trunc(interleave));
+    let band = 0;
+    for (let base = 0; base < cars.length; base += step) {
+        const group = cars.slice(base, base + step);
+        const ids = group.map(() => band++);
+        const left = group.map((c) => CAP_SIZE[c.cap] / GROUP_SIZE);
+        // Round robin over the group until every car in it is dealt out. At interleave 1 the
+        // group is one car and this is the plain car-by-car walk.
+        for (let dealing = true; dealing;) {
+            dealing = false;
+            for (let i = 0; i < group.length; i++) {
+                if (left[i] <= 0) continue;
+                rows.push({ color: group[i].color, band: ids[i] });
+                left[i]--;
+                dealing = true;
+            }
+        }
+    }
+
+    const n = rows.length;
+    const shift = n === 0 ? 0 : ((Math.trunc(offset) % n) + n) % n;
+    const ordered = rows.slice(shift).concat(rows.slice(0, shift));
+
+    // After the rotation, so a level's closing stretch is its least demand-matched.
+    for (const t of tunnels) {
+        for (const c of t.cars) {
+            const id = band++;
+            for (let r = CAP_SIZE[c.cap] / GROUP_SIZE; r > 0; r--) {
+                ordered.push({ color: c.color, band: id });
+            }
+        }
+    }
+
+    const queue: QueueGroup[] = [];
+    let open = -1;
+    for (const row of ordered) {
+        if (row.band === open) queue[queue.length - 1].count += GROUP_SIZE;
+        else {
+            queue.push({ color: row.color, count: GROUP_SIZE });
+            open = row.band;
+        }
+    }
+    return queue;
 }
 
 function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): LevelData {

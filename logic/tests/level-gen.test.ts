@@ -1,8 +1,8 @@
-import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE } from '../../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, bandedQueue } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
-import { CAP_BOX, CAP_SIZE, CAR_SCALE, LevelData } from '../../game/assets/scripts/core/types';
+import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -506,5 +506,107 @@ test('tunnel cars only ever use the level palette', () => {
     for (const t of lvl.lot.tunnels ?? []) {
       for (const c of t.cars) expect(onBoard.has(c.color)).toBe(true);
     }
+  }
+});
+
+/** A car at a given place in the leaving order. Position is irrelevant to `bandedQueue`. */
+const bq = (id: number, color: string, cap: Cap): CarSpec => ({
+  id, x: 0, y: 0, angle: 90, color, cap,
+});
+
+/** Total people per colour, which is the invariant `validateLevel` checks. */
+function perColor(q: QueueGroup[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const g of q) out[g.color] = (out[g.color] ?? 0) + g.count;
+  return out;
+}
+
+test('bandedQueue deals one band per car, in leaving order, sized by that car seats', () => {
+  // The whole idea in one assertion: a band is a car's worth of passengers, and the bands
+  // arrive in the order the cars can leave. 16/24/32 seats is 4/6/8 rows.
+  const cars = [bq(1, 'green', 'small'), bq(2, 'red', 'big'), bq(3, 'blue', 'medium')];
+  expect(bandedQueue(cars, [], 0, 1)).toEqual([
+    { color: 'green', count: 16 },
+    { color: 'red', count: 32 },
+    { color: 'blue', count: 24 },
+  ]);
+});
+
+test('bandedQueue puts the tunnel cars last, after every grid band', () => {
+  // When a tunnel car reaches the bay is the player's choice, not `peel`'s, so there is no
+  // position in the leaving order that would be honest about it.
+  const tunnels: TunnelSpec[] = [
+    { id: 1, x: 0, y: 0, angle: 0, cars: [{ color: 'purple', cap: 'small' }, { color: 'red', cap: 'small' }] },
+  ];
+  expect(bandedQueue([bq(1, 'green', 'small')], tunnels, 0, 1)).toEqual([
+    { color: 'green', count: 16 },
+    { color: 'purple', count: 16 },
+    { color: 'red', count: 16 },
+  ]);
+});
+
+test('bandedQueue rotates left by ROWS, and may cut a band in two', () => {
+  // Left is the direction that mistimes: the first `offset` rows move to the back, so the
+  // queue opens with rows belonging to cars deeper in the lot. Row granularity means the
+  // rotation can land inside a band, and the cut piece rejoins its colour at the far end.
+  const cars = [bq(1, 'green', 'small'), bq(2, 'red', 'big')];   // 4 rows then 8 rows
+  expect(bandedQueue(cars, [], 2, 1)).toEqual([
+    { color: 'green', count: 8 },     // rows 2..3 of the green car
+    { color: 'red', count: 32 },
+    { color: 'green', count: 8 },     // rows 0..1, now at the back
+  ]);
+  // A rotation that lands exactly on a boundary cuts nothing.
+  expect(bandedQueue(cars, [], 4, 1)).toEqual([
+    { color: 'red', count: 32 },
+    { color: 'green', count: 16 },
+  ]);
+});
+
+test('bandedQueue offset 0 and offset one-whole-lap are the same queue', () => {
+  const cars = [bq(1, 'green', 'small'), bq(2, 'red', 'big'), bq(3, 'blue', 'medium')];
+  const rows = (16 + 32 + 24) / GROUP_SIZE;
+  expect(bandedQueue(cars, [], rows, 1)).toEqual(bandedQueue(cars, [], 0, 1));
+  expect(bandedQueue(cars, [], 3 * rows, 1)).toEqual(bandedQueue(cars, [], 0, 1));
+});
+
+test('bandedQueue interleave separates one car rows with another colour', () => {
+  // The assertion the throwaway probe was missing. Its `split` emitted a car halves
+  // ADJACENT, and two adjacent same-coloured bands are one band -- which is why splitting
+  // measured as a no-op. Separation is the thing that has to be asserted.
+  const cars = [bq(1, 'green', 'small'), bq(2, 'red', 'big')];   // 4 rows then 8 rows
+  expect(bandedQueue(cars, [], 0, 2)).toEqual([
+    { color: 'green', count: 4 }, { color: 'red', count: 4 },
+    { color: 'green', count: 4 }, { color: 'red', count: 4 },
+    { color: 'green', count: 4 }, { color: 'red', count: 4 },
+    { color: 'green', count: 4 }, { color: 'red', count: 20 },
+  ]);
+});
+
+test('bandedQueue moves people around without changing how many of each colour there are', () => {
+  // Every knob here is a REORDERING. If any of them changed a colour total, `validateLevel`
+  // would reject the level for car capacity not matching its passengers.
+  const cars = [
+    bq(1, 'green', 'small'), bq(2, 'red', 'big'), bq(3, 'blue', 'medium'), bq(4, 'red', 'small'),
+  ];
+  const tunnels: TunnelSpec[] = [
+    { id: 1, x: 0, y: 0, angle: 0, cars: [{ color: 'purple', cap: 'medium' }] },
+  ];
+  const want = { green: 16, red: 48, blue: 24, purple: 24 };
+  for (const offset of [0, 1, 5, 17, 100]) {
+    for (const interleave of [1, 2, 3]) {
+      expect(perColor(bandedQueue(cars, tunnels, offset, interleave))).toEqual(want);
+    }
+  }
+});
+
+test('no band is bigger than the biggest car', () => {
+  // What `validateLevel` will check in Task 2, asserted here at the source: a queue written
+  // in the OLD collapsed form has one entry per colour running into the hundreds, so this
+  // bound is what tells the two forms apart.
+  const cars = [
+    bq(1, 'red', 'big'), bq(2, 'red', 'big'), bq(3, 'red', 'big'),   // same colour, adjacent
+  ];
+  for (const g of bandedQueue(cars, [], 0, 1)) {
+    expect(g.count).toBeLessThanOrEqual(CAP_SIZE.big);
   }
 });
