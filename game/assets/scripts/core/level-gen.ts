@@ -432,8 +432,23 @@ export function tunnelParams(id: number): TunnelParams {
  * `offset` is rows of mistiming between a band and the car it fills, and it is the difficulty
  * dial this milestone adds. It is CALIBRATED, not derived: the effective mistiming at any
  * moment is this value plus however far the player has strayed from `peel`'s order, and how
- * far they stray is the game, so no arithmetic predicts it. Every value here was chosen by
- * running `npm run sweep` and keeping what `isHardButFair` passed.
+ * far they stray is the game, so no arithmetic predicts it. Every value here was checked
+ * against a sweep of the grid 0, 4, 8, ..., 40 rows (`tools/band-sweep.ts`, results in
+ * sweep-round1.txt): each row below is an offset that passed both `hard` (the one-line rule
+ * loses) and `fair` (a careful policy still wins) on that grid.
+ *
+ * Three of the ten -- ids 3, 8 and 10 -- are ISLANDS: the offset shipped passes, but BOTH
+ * neighbours four rows either side fail. That is knife-edge by construction, not a margin of
+ * safety, and any change that shifts which rows are hard or fair -- the doorway, the bay
+ * size, the colour curve -- must re-sweep those three before shipping again.
+ *
+ * The curve is kept as a non-decreasing ramp rather than re-picked to maximise each id's own
+ * robustness, because level 4 admits exactly one passing offset in the whole grid -- 12 --
+ * and every other row has to fall on one side of it or the other. Picking the middle of each
+ * level's own passing range independently produces a curve where a later level asks for LESS
+ * mistiming than an earlier one, which inverts the reason the dial exists. Holding the
+ * sequence non-decreasing through that single fixed point costs two rows their room to move
+ * (ids 3 and 5 are pinned under it) but keeps the ramp meaning what it says.
  *
  * ZERO ON THE TEACHING LEVELS, deliberately. Measured over the ten shipped levels: at offset
  * 0 every one of them falls to `keepDistinct`, the one-line rule ("keep the stalls all
@@ -444,16 +459,16 @@ export function tunnelParams(id: number): TunnelParams {
  * `interleave` is 1 throughout until measured; see the plan's Task 4.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    { offset: 0, interleave: 1 },    // 1  teaching level
-    { offset: 0, interleave: 1 },    // 2  teaching level
-    { offset: 8, interleave: 1 },    // 3  PROVISIONAL -- replaced in Step 10
-    { offset: 12, interleave: 1 },   // 4  PROVISIONAL
-    { offset: 16, interleave: 1 },   // 5  PROVISIONAL
-    { offset: 20, interleave: 1 },   // 6  PROVISIONAL
-    { offset: 24, interleave: 1 },   // 7  PROVISIONAL
-    { offset: 28, interleave: 1 },   // 8  PROVISIONAL
-    { offset: 32, interleave: 1 },   // 9  PROVISIONAL
-    { offset: 36, interleave: 1 },   // 10 PROVISIONAL
+    { offset: 0, interleave: 1 },    // 1  teaching level; no offset passes for it, by construction
+    { offset: 0, interleave: 1 },    // 2  teaching level; 0 and 4 both pass
+    { offset: 8, interleave: 1 },    // 3  8, 28-36 pass; 8 is an ISLAND (12-24 fail) -- taken over the run to stay non-decreasing into level 4's fixed 12
+    { offset: 12, interleave: 1 },   // 4  the only offset in the grid that passes at all
+    { offset: 16, interleave: 1 },   // 5  12, 16 pass; 16 is taken over 12 so the ramp keeps climbing past level 4
+    { offset: 20, interleave: 1 },   // 6  20-40 pass; 20 is the low edge, keeping the +4 step from level 5's 16
+    { offset: 24, interleave: 1 },   // 7  0, 4, 12, 20, 24, 28, 32 pass; 24 is near the middle of the 20-32 run, above the low outliers
+    { offset: 28, interleave: 1 },   // 8  8, 12, 28 pass; 28 is an ISLAND -- 24 and 32 fail
+    { offset: 32, interleave: 1 },   // 9  16, 28-36 pass; 32 is the middle of the 28-36 run
+    { offset: 36, interleave: 1 },   // 10 8, 12, 36 pass; 36 is an ISLAND -- 32 and 40 fail
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
