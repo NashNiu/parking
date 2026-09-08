@@ -434,8 +434,11 @@ export function tunnelParams(id: number): TunnelParams {
  * moment is this value plus however far the player has strayed from `peel`'s order, and how
  * far they stray is the game, so no arithmetic predicts it. Every value here was checked
  * against a sweep of the grid 0, 4, 8, ..., 40 rows (`tools/band-sweep.ts`, results in
- * sweep-round1.txt): each row below is an offset that passed both `hard` (the one-line rule
- * loses) and `fair` (a careful policy still wins) on that grid.
+ * sweep-round1.txt). For ids 3 through 10, each row below is an offset that passed both `hard`
+ * (the one-line rule loses) and `fair` (a careful policy still wins) on that grid. Ids 1 and 2
+ * are exceptions, and different ones from each other: id 1 passes `hard` at NO offset anywhere
+ * in the grid (see "ZERO ON THE TEACHING LEVELS" below), while id 2 genuinely passes both
+ * `hard` and `fair`, at offset 0 and again at offset 4.
  *
  * Three of the ten -- ids 3, 8 and 10 -- are ISLANDS: the offset shipped passes, but BOTH
  * neighbours four rows either side fail. That is knife-edge by construction, not a margin of
@@ -446,9 +449,13 @@ export function tunnelParams(id: number): TunnelParams {
  * robustness, because level 4 admits exactly one passing offset in the whole grid -- 12 --
  * and every other row has to fall on one side of it or the other. Picking the middle of each
  * level's own passing range independently produces a curve where a later level asks for LESS
- * mistiming than an earlier one, which inverts the reason the dial exists. Holding the
- * sequence non-decreasing through that single fixed point costs two rows their room to move
- * (ids 3 and 5 are pinned under it) but keeps the ramp meaning what it says.
+ * mistiming than an earlier one, which inverts the reason the dial exists. Holding the sequence
+ * non-decreasing through that single fixed point has a real cost on exactly one other row: id
+ * 3's passing set also has a 28-36 run, more robust than the island at 8, but the run sits
+ * above 12 and id 3 must not exceed id 4, so it is pinned to the island instead. Id 5, right
+ * after the fixed point, pays nothing for the same rule -- its whole passing set, {12, 16}, is
+ * already at or above 12, so requiring id 5 >= id 4 excludes no option it would otherwise have
+ * taken.
  *
  * ZERO ON THE TEACHING LEVELS, deliberately. Measured over the ten shipped levels: at offset
  * 0 every one of them falls to `keepDistinct`, the one-line rule ("keep the stalls all
