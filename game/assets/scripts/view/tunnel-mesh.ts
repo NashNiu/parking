@@ -2,8 +2,8 @@ import { Color, MeshRenderer, Node, primitives, utils } from 'cc';
 import { vertexColorMaterial } from './materials';
 
 /**
- * The underground garage exit, drawn: a VAULT on a D-shaped footprint, with a slot cut through
- * its front and out through its roof for the cars to leave by.
+ * The underground garage exit, drawn: a solid VAULT on a D-shaped footprint. No opening, no
+ * dark interior -- the arch itself is the whole element.
  *
  * WHAT IT IS. A fixed-heading queue of cars lives inside; the head car stands just outside the
  * mouth and is an ordinary car in every other respect. Core still calls it a TUNNEL
@@ -40,14 +40,22 @@ import { vertexColorMaterial } from './materials';
  *  - The SPRINGING BAND, a short vertical skirt the vault rises from. A vault that met the
  *    board tangentially had no silhouette edge at all and came back as a soft blob (see the
  *    domed hood in the history). This is what gives it a hard outline again.
- *  - The SLOT, cut through the front face AND through the roof, as one cut. The front half
- *    reads when the mouth faces the camera; the roof half is a gap in the always-visible face,
- *    so the two rails flanking it read as piers from any heading. A recess in the top face was
- *    tried and is hidden by its own lip at this camera's 52 degrees of elevation; a dark patch
- *    painted on the top face was tried and read as a sticker. A slot open to both sky and front
- *    is neither.
- *  - The slot's BACK WALL follows the vault profile, so what you see through the mouth is an
- *    arch -- the only place in this model where an arch is drawn as an arch rather than implied.
+ *  - The FRONT FACE, the vault's cross-section: an arch, and the one place in this model where
+ *    an arch is drawn as an arch rather than implied. It is not decoration but closure -- the
+ *    vault's level lines stop at the front edge, and without this the shell would be open from
+ *    the springing line up to the crown.
+ *
+ * THE DOORWAY IS GONE, and with it every dark surface this file used to have. It was a slot cut
+ * through the front and out through the roof, floored with a shade gradient and backed by a
+ * dark wall, and the report on it was that the dark patch looked wrong -- the element reads as
+ * a piece of architecture, and a black rectangle in the middle of it reads as a hole in the
+ * render. So the arch is now unbroken and everything that is not the roof carries ONE pale
+ * shade (RIM_SHADE). At this camera that pale band is only ever visible on the down-screen
+ * side, so what it draws is a single semicircular shadow under the rim, whatever the heading.
+ *
+ * What the slot was FOR was showing where the cars come out, and that read is not lost with
+ * it: the mouth car stands one clearance off the front face (core's `mouthCar`), against the
+ * flat edge of a shape whose whole silhouette points the way its cars go.
  *
  * The count that goes on top is drawn by the HUD, not by this mesh (`HudView.setTunnelCount`),
  * so nothing here has to leave room for it.
@@ -78,38 +86,22 @@ const CROWN = 0.52;
 const SPRING = 0.13;
 
 /**
- * The doorway: how far back into the block it cuts, as a share of the length, and how wide it
- * opens, as a share of the half-width.
+ * The one shade anything that is not the roof is painted in -- the springing band and the
+ * front face alike.
  *
- * The width is bounded on BOTH sides and there is not much room between them:
+ * ONE value, deliberately. This file used to carry five (an outer wall at 0.72 and its foot at
+ * 0.86 of that, jambs at 0.50, a floor graded 0.44 to 0.24, a back wall at 0.28) and four of
+ * them existed to make the inside of a doorway read as an inside. With the doorway gone the
+ * only job left is to separate the vertical surfaces from the roof they rise to, and a second
+ * value would just be a second band for the eye to wonder about.
  *
- *  - Wider than a car, or the mouth car looks wedged in a slot it could not have come through.
- *    A small car is 0.471 board units across against this block's 0.74 -- 0.636 of it, so the
- *    door has to be at least 0.636 of the width and the two rails share what is left.
- *  - Narrow enough to leave rails worth drawing. `MIN_RAIL` is the floor on each one; at 0.68
- *    of the half-width the door clears the car by 0.03 board units and each rail is 0.16 of the
- *    half-width, which at the size this is drawn is about a car's own wall thickness.
+ * 0.84, which is PALE -- a step of 16%, against the 28% the old outer wall took and the 72%
+ * the old back wall took. That is the whole of "keep only one light shadow": at this camera
+ * the +-X faces have no projected area and the +Y side is hidden, so the only part of this
+ * band ever on screen is the down-screen arc of it, and what that draws is one soft
+ * semicircular shadow tucked under the rim.
  */
-const DOOR_LEN = 0.42;
-const DOOR_HALF_WID = 0.68;
-const MIN_RAIL = 0.14;
-
-/** How much darker the outer wall sits than the roof, and its foot against its top. */
-const WALL_SHADE = 0.72;
-const FOOT_SHADE = 0.86;
-
-/**
- * Inside the doorway, from the mouth inwards. The floor is graded along its length rather than
- * flat: one colour reads as a painted patch, two ends of a gradient read as somewhere that
- * continues past what can be seen.
- */
-const JAMB_SHADE = 0.50;
-const FLOOR_NEAR_SHADE = 0.44;
-const FLOOR_FAR_SHADE = 0.24;
-const BACK_SHADE = 0.28;
-
-/** Lifts the doorway floor clear of the board so the lot's grid does not z-fight through it. */
-const FLOOR_LIFT = 0.004;
+const RIM_SHADE = 0.84;
 
 /** Arc segments around the half-round back, and profile steps from springing to crown. */
 const ARC_SEG = 14;
@@ -169,12 +161,6 @@ class Shell {
         return base;
     }
 
-    /** One convex polygon at height `z`, fanned from its first point, facing straight up. */
-    addFlat(pts: readonly Pt[], z: number, c: Color): void {
-        const base = this.ring(pts, z, c, null);
-        for (let i = 1; i < pts.length - 1; i++) this.indices.push(base, base + i, base + i + 1);
-    }
-
     /**
      * The wall between the same outline at two heights, normals lying flat and pointing
      * outward -- which is what lets the engine light the four sides differently, and what makes
@@ -211,8 +197,9 @@ function outwards(pts: readonly Pt[]): Pt[] {
  *
  * The vault's height depends only on that distance, so its level sets are these: a straight run
  * down each side at y = +-rho, joined round the back by an arc of radius rho. `xFront` is where
- * the run stops -- the front edge for a line outside the doorway, the back of the doorway for
- * one inside it, which is how the slot gets cut without a second surface.
+ * the runs stop, which is the front edge for every line -- it stays a parameter rather than
+ * being read off `hl` here because it is what the doorway used to vary to cut its slot, and a
+ * future opening would vary it again.
  *
  * Counter-clockwise seen from above (starts on the +Y side, runs back, comes out on -Y), so the
  * quads woven between two consecutive lines face up. `ux`/`uy` is the outward plan direction at
@@ -250,8 +237,6 @@ export function buildTunnel(name: string, len: number, wid: number, shell: Color
     // Centre of the half-round back, and therefore the near end of the spine the vault rises
     // over. On a square footprint this lands on the origin.
     const xc = -hl + hw;
-    const doorHalf = Math.min(hw * DOOR_HALF_WID, hw * (1 - MIN_RAIL));
-    const xm = hl - len * DOOR_LEN;
 
     /** The vault's height and normal tilt at a plan distance from the spine. */
     const profile = (rho: number) => {
@@ -266,25 +251,19 @@ export function buildTunnel(name: string, len: number, wid: number, shell: Color
     // height changes fastest near the springing, and uniform steps in rho would put all the
     // detail at the crown where the surface is flattest.
     //
-    // The pair at exactly `doorHalf` is what cuts the slot. Both lines sit at the same height;
-    // the outer one still runs out to the front edge and the inner one stops at the back of the
-    // doorway, so the quads between them have zero width and draw nothing, leaving a clean seam
-    // where the roof ends and the jamb takes over.
-    const lines: { rho: number; xFront: number }[] = [];
-    let prev = hw;
+    // Every line now runs the full way out to the front edge. They used to split around the
+    // doorway -- an outer set reaching the front and an inner set stopping at the back of the
+    // slot, with a zero-width seam between them where the roof was cut -- and removing the
+    // doorway is exactly this list becoming uniform.
+    const rhos: number[] = [];
     for (let s = 0; s <= PROFILE_SEG; s++) {
-        const rho = hw * Math.sin((1 - s / PROFILE_SEG) * (Math.PI / 2));
-        if (prev > doorHalf && rho < doorHalf) {
-            lines.push({ rho: doorHalf, xFront: hl }, { rho: doorHalf, xFront: xm });
-        }
-        lines.push({ rho, xFront: rho > doorHalf ? hl : xm });
-        prev = rho;
+        rhos.push(hw * Math.sin((1 - s / PROFILE_SEG) * (Math.PI / 2)));
     }
 
     let prevRow: number[] | null = null;
-    for (const line of lines) {
-        const { z, ns, nz } = profile(line.rho);
-        const row = levelLine(line.rho, line.xFront, xc).map((q) => {
+    for (const rho of rhos) {
+        const { z, ns, nz } = profile(rho);
+        const row = levelLine(rho, hl, xc).map((q) => {
             const l = Math.hypot(ns * q.ux, ns * q.uy, nz) || 1;
             return p.vertex(q.x, q.y, z, (ns * q.ux) / l, (ns * q.uy) / l, nz / l, shell);
         });
@@ -296,93 +275,50 @@ export function buildTunnel(name: string, len: number, wid: number, shell: Color
         prevRow = row;
     }
 
+    const rim = shade(shell, RIM_SHADE);
+
     // ---- the springing band ----------------------------------------------------------------
-    // The footprint as one closed counter-clockwise loop: flat front, half-round back, with the
-    // doorway bitten out of the front edge. The bite is traversed the other way round from the
-    // rest, which is exactly what makes `outwards` hand the jambs normals pointing INTO the
-    // doorway -- so the engine lights them as the inside of an opening rather than as more
-    // outer wall.
+    // The footprint as one closed counter-clockwise loop: flat front, half-round back. The
+    // doorway used to be bitten out of the front edge here, which is what gave `outwards` a
+    // stretch of inward-facing normals to light as the inside of an opening; with the bite gone
+    // every normal points out and the band is the plain skirt it looks like.
+    //
+    // Both ends of the wall take the same colour. A gradient down the skirt was tried while it
+    // was dark and read as a second, lower band; at RIM_SHADE the whole thing is one step off
+    // the roof and gradients inside it are invisible.
     const outline: Pt[] = [[hl, hw]];
     for (let s = 0; s <= ARC_SEG; s++) {
         const a = Math.PI / 2 + (s / ARC_SEG) * Math.PI;
         outline.push([xc + Math.cos(a) * hw, Math.sin(a) * hw]);
     }
-    outline.push([hl, -hw], [hl, -doorHalf], [xm, -doorHalf], [xm, doorHalf], [hl, doorHalf]);
-    p.addWall(outline, 0, spring, shade(shell, WALL_SHADE * FOOT_SHADE), shade(shell, WALL_SHADE));
+    outline.push([hl, -hw]);
+    p.addWall(outline, 0, spring, rim, rim);
 
-    // ---- the doorway -----------------------------------------------------------------------
-    const doorTop = profile(doorHalf).z;
-    const jamb = shade(shell, JAMB_SHADE);
-    // Both jambs, from the top of the springing band up to where the roof was cut away. Wound
-    // so each faces across the slot at the other.
-    const jambWall = (y: number, sign: number) => {
-        const n = -sign;
-        const a = p.vertex(sign > 0 ? xm : hl, y, spring, 0, n, 0, jamb);
-        const b = p.vertex(sign > 0 ? hl : xm, y, spring, 0, n, 0, jamb);
-        const c = p.vertex(sign > 0 ? hl : xm, y, doorTop, 0, n, 0, jamb);
-        const d = p.vertex(sign > 0 ? xm : hl, y, doorTop, 0, n, 0, jamb);
-        p.quad(a, b, c, d);
-    };
-    jambWall(doorHalf, 1);
-    jambWall(-doorHalf, -1);
-
-    // The back of the slot, its top edge following the vault profile -- so what the player sees
-    // through the mouth is an arch, and it meets the cut roof exactly, because both are sampled
-    // off the same level lines.
-    const inner = lines.filter((l) => l.rho <= doorHalf && l.xFront === xm);
-    const back = shade(shell, BACK_SHADE);
-    // Left jamb to right jamb in one ascending run. `inner` is ordered crown-wards, so its own
-    // order mirrors to the -Y half and its reverse gives the +Y half; the spine line (rho 0)
-    // belongs to both and is taken once.
-    const backSpan: { y: number; z: number }[] = [];
-    for (const l of inner) backSpan.push({ y: -l.rho, z: profile(l.rho).z });
-    for (let i = inner.length - 1; i >= 0; i--) {
-        if (inner[i].rho > 0) backSpan.push({ y: inner[i].rho, z: profile(inner[i].rho).z });
+    // ---- the front face --------------------------------------------------------------------
+    // The vault's cross-section, closing the shell from the springing line up to the profile.
+    // This is the arch drawn AS an arch -- and it is structural, not decorative: the level
+    // lines above stop at x = hl, so without this the roof would end in mid-air and the model
+    // would be see-through from the front.
+    //
+    // Sampled off the same `rhos` the vault is, mirrored to both sides, so its top edge meets
+    // the roof's front edge vertex for vertex and no seam can open between them. It runs
+    // ascending in y (-hw through 0 to +hw), which is the winding that leaves the +X normal
+    // facing out.
+    const span: { y: number; z: number }[] = [];
+    for (const rho of rhos) span.push({ y: -rho, z: profile(rho).z });
+    for (let i = rhos.length - 1; i >= 0; i--) {
+        if (rhos[i] > 0) span.push({ y: rhos[i], z: profile(rhos[i]).z });
     }
-    for (let i = 0; i < backSpan.length - 1; i++) {
-        const s0 = backSpan[i];
-        const s1 = backSpan[i + 1];
+    for (let i = 0; i < span.length - 1; i++) {
+        const s0 = span[i];
+        const s1 = span[i + 1];
         p.quad(
-            p.vertex(xm, s0.y, spring, 1, 0, 0, back),
-            p.vertex(xm, s1.y, spring, 1, 0, 0, back),
-            p.vertex(xm, s1.y, s1.z, 1, 0, 0, back),
-            p.vertex(xm, s0.y, s0.z, 1, 0, 0, back),
+            p.vertex(hl, s0.y, spring, 1, 0, 0, rim),
+            p.vertex(hl, s1.y, spring, 1, 0, 0, rim),
+            p.vertex(hl, s1.y, s1.z, 1, 0, 0, rim),
+            p.vertex(hl, s0.y, s0.z, 1, 0, 0, rim),
         );
     }
-
-    // The front face of each rail, its top edge the same profile: seen head-on these are the
-    // two piers the arch springs from, and seen from any other heading they are what keeps the
-    // slot from looking like a groove scratched in the roof.
-    const outer = lines.filter((l) => l.rho >= doorHalf && l.xFront === hl);
-    const face = shade(shell, WALL_SHADE);
-    for (let i = 0; i < outer.length - 1; i++) {
-        const a0 = profile(outer[i].rho);
-        const a1 = profile(outer[i + 1].rho);
-        for (const sign of [1, -1]) {
-            const y0 = outer[i].rho * sign;
-            const y1 = outer[i + 1].rho * sign;
-            const q = [
-                p.vertex(hl, y0, spring, 1, 0, 0, face),
-                p.vertex(hl, y1, spring, 1, 0, 0, face),
-                p.vertex(hl, y1, a1.z, 1, 0, 0, face),
-                p.vertex(hl, y0, a0.z, 1, 0, 0, face),
-            ];
-            if (sign > 0) p.quad(q[3], q[2], q[1], q[0]);
-            else p.quad(q[0], q[1], q[2], q[3]);
-        }
-    }
-
-    // The doorway's floor, just clear of the board and graded from mouth to back. Without it the
-    // lot's grid shows through the slot and the opening reads as a gap between two rails rather
-    // than as somewhere that has an inside.
-    const near = shade(shell, FLOOR_NEAR_SHADE);
-    const far = shade(shell, FLOOR_FAR_SHADE);
-    p.quad(
-        p.vertex(hl, -doorHalf, FLOOR_LIFT, 0, 0, 1, near),
-        p.vertex(hl, doorHalf, FLOOR_LIFT, 0, 0, 1, near),
-        p.vertex(xm, doorHalf, FLOOR_LIFT, 0, 0, 1, far),
-        p.vertex(xm, -doorHalf, FLOOR_LIFT, 0, 0, 1, far),
-    );
 
     const geometry: primitives.IGeometry = {
         positions: p.positions,
