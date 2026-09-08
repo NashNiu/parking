@@ -72,8 +72,8 @@ export class LoopSystem {
 
     // Channels in drain order, then the remaining rows dealt out in that same order.
     // With two channels this is the even split M6 shipped; with one, everything goes
-    // to it. The split never reorders anything — a seed, when given, is what changes
-    // the order (via the shuffle above).
+    // to it. The split never reorders anything: what a channel gets is a contiguous
+    // slice of the authored queue, in the order it arrived in.
     let ordered = DRAIN_ORDER.filter((side) => feeds.some((f) => f.side === side))
       .map((side) => feeds.find((f) => f.side === side) as Feed);
     // A `feeds` with no recognised side (empty, or a hand-edited level JSON with a

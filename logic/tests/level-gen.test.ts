@@ -272,7 +272,7 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     const level = levelFor(id);
     const pax = level.loop.queue.reduce((n, g) => n + g.count, 0);
     // Seats from EVERY car in the level, the ones still inside a tunnel included. The queue
-    // is derived from all of them (`queueFor`) because all of them reach the bay -- a tunnel
+    // is derived from all of them (`bandedQueue`) because all of them reach the bay -- a tunnel
     // car is one tap further away, not exempt. Counting only the board would make this the
     // assertion that the queue is four to twelve cars' worth too big, which is the opposite
     // of the balance it is here to pin.
