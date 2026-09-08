@@ -463,7 +463,21 @@ export function tunnelParams(id: number): TunnelParams {
  * is the free end of this dial -- which is exactly what levels 1 and 2 want and what nothing
  * after them may have.
  *
- * `interleave` is 1 throughout until measured; see the plan's Task 4.
+ * `interleave` was swept alongside offset over ids 5-8, the full OFFSETS grid, depths {1, 2, 3}
+ * (`tools/band-sweep.ts`, sweep-interleave.txt). It is not inert: comparing each offset's
+ * hard/fair verdict at il=2 or il=3 against il=1, 12 of the 88 (level, offset, depth) cells
+ * checked flip -- 7 turn a failing offset passing (id 7 at offset 8, 16, 36; id 8 at offset 20,
+ * 24) and 5 turn a passing offset failing (id 6 at offset 20, 32; id 7 at offset 20, 32). Id 5
+ * is untouched at every offset and every depth. But at the four offsets this table actually
+ * ships for ids 5-8 -- 16, 20, 24, 28 -- only one of those twelve flips lands: id 6's offset 20
+ * goes hard=Y to hard=n at il=2, then back to hard=Y at il=3, which is non-monotone rather than
+ * a trend worth following. So the knob does move difficulty -- it holds a car's stall occupied
+ * across several laps instead of releasing its whole band at once -- but it moves no verdict
+ * that BAND_CURVE currently depends on. It stays pinned at 1: giving any id a nonzero depth
+ * would mean re-searching that id's painting at the new depth and re-running the regeneration
+ * this task is explicitly scoped not to trigger, to chase a change that is inconsistent in
+ * direction and measured on 4 of the 10 ids. What would make it earn a place on the curve is a
+ * bay sized for the longer occupancy it creates, and that is named out of scope in the plan.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
     { offset: 0, interleave: 1 },    // 1  teaching level; no offset passes for it, by construction

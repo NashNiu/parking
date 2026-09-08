@@ -25,6 +25,9 @@ import { LevelData } from '../game/assets/scripts/core/types';
 /** Offsets to try, in rows. 0 is included because it is the measured free end. */
 const OFFSETS = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 
+/** Interleave depths to try. 1 is car-by-car, the shipped behaviour. */
+const INTERLEAVES = [1, 2, 3];
+
 function idsToSweep(argv: string[]): number[] {
     const flag = argv.indexOf('--only');
     if (flag < 0) return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
@@ -43,14 +46,16 @@ for (const id of idsToSweep(process.argv.slice(2))) {
     const tunnels = level.lot.tunnels ?? [];
     const curve = bandParams(id);
     for (const offset of OFFSETS) {
-        const probe: LevelData = JSON.parse(JSON.stringify(level));
-        probe.loop.queue = bandedQueue(level.lot.cars, tunnels, offset, curve.interleave);
-        const v = isHardButFair(probe);
-        const mark = offset === curve.offset ? ' <- curve' : '';
-        process.stdout.write(
-            `L${id} offset=${String(offset).padStart(3)} `
-            + `hard=${v.hard ? 'Y' : 'n'} fair=${v.fair ? 'Y' : 'n'} `
-            + `careless=${v.carelessLoss.toFixed(1)}${mark}\n`,
-        );
+        for (const interleave of INTERLEAVES) {
+            const probe: LevelData = JSON.parse(JSON.stringify(level));
+            probe.loop.queue = bandedQueue(level.lot.cars, tunnels, offset, interleave);
+            const v = isHardButFair(probe);
+            const mark = offset === curve.offset && interleave === curve.interleave ? ' <- curve' : '';
+            process.stdout.write(
+                `L${id} offset=${String(offset).padStart(3)} il=${interleave} `
+                + `hard=${v.hard ? 'Y' : 'n'} fair=${v.fair ? 'Y' : 'n'} `
+                + `careless=${v.carelessLoss.toFixed(1)}${mark}\n`,
+            );
+        }
     }
 }
