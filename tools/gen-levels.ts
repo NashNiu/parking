@@ -15,7 +15,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, blockedTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
@@ -117,17 +117,30 @@ for (const id of ids) {
         : v.hard && v.fair ? `hard  (careless ${Math.round(v.carelessLoss * 100)}%)`
         : v.hard ? 'NO WAY THROUGH'
         : 'FREE: the one-line rule wins';
+    // Holes, because a level can hit every difficulty number and still ship with a
+    // car-shaped patch of bare asphalt in it -- which is a bug you can only see. See
+    // `fillableHoles`; the search ranks its candidates on this, so this column is how you
+    // check the ranking is doing anything.
+    const h = fillableHoles(level);
+    // big/medium/small, in that order, because they do not read the same: one BIG hole is a
+    // car-shaped rectangle of bare asphalt and looks broken, while three small ones look
+    // like a car park with room in it. The search ranks on exactly this order.
+    const holes = `${h.big}/${h.medium}/${h.small}`;
+    // Cars driving ACROSS the lot rather than off the nearest edge -- the other thing the
+    // candidate ranking chooses on, and the one that silently regressed when it did not.
+    const inward = `${Math.round(inwardCars(level) / level.lot.cars.length * 100)}%`;
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
+        + ` ${holes.padStart(7)} ${inward.padStart(6)}`
         + `  ${(onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 

@@ -106,11 +106,34 @@ export const CAR_SCALE = 1.0;
  * axis-aligned and parted company the moment angles became free. Add a reader, split it in
  * half.
  *
- * 0.04 is today's TIGHTEST gap (a small car nose to tail: pitch 1 minus body 0.964),
- * not the average. M7 spent several rounds tightening these gaps and this must not
- * quietly give that back.
+ * 0.08, and this is the TIGHTEST gap a parked pair may have, not their average -- the
+ * measured mean nearest-neighbour gap that comes out of it is 0.103.
+ *
+ * Doubled from 0.04, asked for as "a bit more room between the cars". At 0.04 (about 2.6
+ * screen px) adjacent bodies read as touching; 0.08 is about 5.2 px, which is a seam the eye
+ * actually resolves. It costs nothing anywhere it was feared it might:
+ *
+ *  - THE PACKER still seats all 60 cars, and the body coverage is unchanged (0.494 against
+ *    0.491). The gap is bought out of air the lot already had, not out of cars.
+ *  - THE LOT GETS MORE EVEN, NOT PATCHIER, which is the opposite of the obvious worry.
+ *    `pack` settles by pushing overlapping pairs apart, so a larger demanded gap is a
+ *    stronger mutual repulsion and the arrangement spreads out instead of clumping.
+ *    Measured on level 2 as the radius of the largest empty disc that fits between the
+ *    cars: 0.847 board units at 0.04, 0.720 at 0.08. The old tight lot was the one with a
+ *    blank patch in it.
+ *  - THE DIFFICULTY does not move: level 2 comes out at 38 blocked cars either way, which
+ *    is its target. That follows from the split above -- this margin never governed driving,
+ *    so widening it cannot hand a car a lane it did not have.
+ *
+ * It does not go further than 0.08 for one measured reason: at 0.10 the blocked count starts
+ * to drift (level 2 falls to 37), and levels 7 to 10 are already asking for every blocked car
+ * their geometry can produce (see BLOCKED_LAST in level-gen.ts), so a drift of one would take
+ * them off target and flatten the back of the curve.
+ *
+ * This does give back some of what M7 spent several rounds tightening. That was deliberate
+ * then and this is deliberate now; what must not happen is it moving again by accident.
  */
-export const CLEARANCE = 0.04;
+export const CLEARANCE = 0.08;
 
 /** One car waiting in a tunnel. Everything else about it -- where it stands, which way
  * it leaves, what id it gets -- belongs to the tunnel, not to the car. */

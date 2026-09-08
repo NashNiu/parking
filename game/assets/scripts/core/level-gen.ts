@@ -5,7 +5,7 @@ import {
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
 import { isHardButFair } from './play-sim';
-import { pathClear } from './move-solver';
+import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
@@ -106,8 +106,28 @@ const ATTEMPTS = 200;
 const TUNNEL_ATTEMPTS = 1200;
 /** Relaxation passes before an attempt is written off. */
 const RELAX_ITERS = 60;
-/** Share of cars whose angle is snapped to a right angle. See `pack`. */
-const SNAP_SHARE = 0.25;
+/**
+ * The only headings a car or a tunnel may sit on: multiples of 45 degrees, the eight
+ * compass points.
+ *
+ * This replaces free angles plus a SNAP_SHARE of 0.25 that rounded a quarter of them to a
+ * right angle. That mix existed because uniformly random angles read as uniform noise and
+ * the eye needed something to hold on to -- but a quarter tidy against three quarters
+ * arbitrary reads as a mistake rather than as a choice, and the arbitrary three quarters
+ * were never doing any work the diagonals do not do better.
+ *
+ * Eight is the coarsest set that keeps what the free angles were worth. The blocked-car
+ * band was re-measured for free angles precisely because a diagonal lane is a diagonal
+ * swath that clips more cars than a straight column does (see the note on `levelParams`),
+ * and the four diagonals here keep every bit of that. What goes away is only the
+ * distinction between 37 and 41 degrees, which no player can see and no lane cares about.
+ *
+ * Quantising the AXIS is enough to quantise the heading: `peel` hands a piece its own axis
+ * or that axis plus 180, and 45 divides 180.
+ */
+const HEADING_STEP = 45;
+const HEADINGS = 360 / HEADING_STEP;
+
 /** Draws a piece gets at finding a seat clear of the tunnel reservations. See `pack`. */
 const SEED_TRIES = 8;
 
@@ -123,7 +143,7 @@ const SEED_TRIES = 8;
  * so the loop runs out its RELAX_ITERS and the attempt is written off -- it cannot hang,
  * it just burns every iteration on a pair that was, physically, already done.
  * 1e-9 sits far above the noise this is built to catch (observed around 1e-15) and far
- * below CLEARANCE (0.04), so it cannot paper over an overlap the game would show.
+ * below CLEARANCE (0.08), so it cannot paper over an overlap the game would show.
  */
 const SETTLED_GAP = 1e-9;
 
@@ -141,7 +161,7 @@ const SETTLED_GAP = 1e-9;
  * The wall rule never had this problem because `clampInside` clamps the INFLATED box, so
  * it already leaves half a clearance of margin against the lot edge. This gives the
  * pairwise rule the equivalent. 1.5e-4 covers the worst rounding drift with room to spare
- * and is three hundred times smaller than CLEARANCE, so it cannot hide a real gap.
+ * and is five hundred times smaller than CLEARANCE, so it cannot hide a real gap.
  */
 const ROUND_MARGIN = 1.5e-4;
 
@@ -187,8 +207,30 @@ export interface GenParams {
  * LOOSER packing than shipped, on a lot half again as roomy, which is the safe direction: the
  * count is bounded by whether the packer can still separate everything, and the gate is the
  * generator's own test that every car asked for is placed.
+ *
+ * 63 AS OF THIS REVISION, and the three cars are aimed at specific holes rather than at
+ * density in general. At 60 the shipped level 2 had room to park five more cars in the gaps
+ * the scatter left (see `fillableHoles`), one of them a big car standing at the left edge --
+ * a car-shaped rectangle of bare asphalt, which is what "fill the blank patches" was about.
+ *
+ * Three, and not the five that fit, because BOTH ceilings named above are close now:
+ *
+ *  - THE PACKER. Measured over 40 candidate packings for level 2: all 60 cars settle in 20
+ *    of them, 63 in 11, 66 in 9. The search can afford that -- it runs 200 attempts and needs
+ *    only PACKINGS on-target ones -- but the trend is the wall this paragraph warns about, and
+ *    66 is where a tunnel level, which is harder to pack and already spends most of
+ *    TUNNEL_ATTEMPTS, would start failing to fill its quota.
+ *  - THE PASSENGERS, which bind first and are the real reason for 63. The budget is 1400
+ *    (`a level is short enough to finish`), and it is a budget on TIME wearing passengers as
+ *    its unit. Per car the ten levels run 19.5 to 21.3 passengers, so 63 cars is at worst
+ *    1345 and 65 would be 1387 -- 13 passengers of headroom, less than a single small car,
+ *    on a figure that moves with every capacity draw. Going past 63 means raising the budget,
+ *    which means longer levels, which is a different decision from this one.
+ *
+ * The other three holes are handled by ranking rather than by filling: `generateLevel` now
+ * picks the tidiest of its on-target candidates instead of the first.
  */
-export const CARS_PER_LEVEL = 60;
+export const CARS_PER_LEVEL = 63;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -224,13 +266,17 @@ export const BLOCKED_TOLERANCE = 1;
  * generator takes the first hit, so it does not bias within it) and the floor of 21, which
  * came from ids 1-10 whose old windows reached down to 15 and so was not clipped.
  *
- * 0.78 is the measured upper quartile. 0.61 is NOT a quartile -- the quartiles are about 0.70
- * to 0.78, and a band that narrow is barely a ramp, so the low end is set at the observed
- * floor instead. The cost is real and named: level 1's target of 22 sits at the very edge of
- * what the packer produces, eight of the ten levels land at or above their target, and a
- * future geometry change that lifts the floor by two cars breaks ids 1 to 3. What makes that
- * acceptable is that it breaks LOUDLY -- `the curve actually sets the blocked-car count`
- * fails the moment it happens.
+ * 0.78 is the measured upper quartile. The low end is NOT a quartile -- the quartiles are
+ * about 0.70 to 0.78, and a band that narrow is barely a ramp, so it is set at the observed
+ * FLOOR instead. The cost was real, was named, and then arrived exactly as written: "a future
+ * geometry change that lifts the floor by two cars breaks ids 1 to 3 ... what makes that
+ * acceptable is that it breaks LOUDLY".
+ *
+ * It broke loudly. Raising CARS_PER_LEVEL to 63 lifted the floor by two cars and level 1 came
+ * out NEAREST MISS at 40 blocked against a target of 38. So the low end is re-anchored to
+ * 0.635, the floor a 63-car lot produces -- and note what that is NOT: level 1 did not get
+ * harder. It was blocking 38 of 60 before (0.633) and blocks 40 of 63 now (0.635), the same
+ * share of a fuller lot. The number moved because the denominator did.
  *
  * `minRounds` IS re-measured, because its trigger fired: the ten levels' solver rounds run 6
  * to 12, median 9, all of them at or above the old cap of 5. That cap binds from id 13
@@ -239,10 +285,27 @@ export const BLOCKED_TOLERANCE = 1;
  * endless tail asking for fewer rounds than the geometry comfortably supports.
  *
  * BLOCKED_FIRST and BLOCKED_LAST below are the level-1 and level-10 targets as a share of
- * the lot; everything above is why they are those numbers.
+ * the cars on the board; everything above is why they are those numbers.
+ *
+ * THE TOP OF THE BAND IS MEASURED, NOT CHOSEN, and it is worth writing down how because the
+ * obvious way to make a late level harder is to ask this for more and it does not work.
+ * Forcing the target out of reach makes the search return its nearest miss, which is the most
+ * blocked cars any of its attempts reached -- the ceiling the geometry offers. Measured that
+ * way against the cars each level has ON THE BOARD, now that a tunnel holds back four rather
+ * than six: levels 7, 8 and 10 top out at 44 of 57 (0.772) and level 9 at 42 (0.737).
+ *
+ * 0.75 is set by level 9, the outlier: it puts level 9's target at 42, which is exactly its
+ * ceiling, so BLOCKED_TOLERANCE is what makes it reachable and 0.76 would not be. The other
+ * three land at 41, 41 and 43 with real headroom.
+ *
+ * It came DOWN from 0.78 and the tail did not get easier -- the denominator moved. At 0.78 of
+ * a 53-car board level 10 asked for 41 blocked cars; at 0.75 of a 57-car board it asks for 43.
+ * A lower share of a fuller lot is more cars, not fewer. (See TUNNEL_CURVE for why the board
+ * grew: 0.78 was measured when a tunnel swallowed six cars, and it was never a taste
+ * judgement then either.)
  */
-const BLOCKED_FIRST = 0.61;
-const BLOCKED_LAST = 0.78;
+const BLOCKED_FIRST = 0.635;
+const BLOCKED_LAST = 0.75;
 
 export function levelParams(id: number): GenParams {
     // Linear from first to last across the authored ten, then held. The old curve stepped by
@@ -251,9 +314,9 @@ export function levelParams(id: number): GenParams {
     const t = Math.min(1, Math.max(0, (id - 1) / 9));
     return {
         cars: CARS_PER_LEVEL,
-        // 4, 4, 5, 5, then 6 from level 5 on. The floor of 4 and the early climb are both
-        // forced, and by the same rule: a level is only capable of difficulty when it has
-        // MORE colours than the bay has open stalls.
+        // 4, then 5, 5, 5, then 6 from level 5 on. The floor of 4 and the early climb are
+        // both forced, and by the same rule: a level is only capable of difficulty when it
+        // has MORE colours than the bay has open stalls.
         //
         // Why -- a bay covering every colour in play cannot jam. Every row reaching the gap
         // boards, every boarding frees a ring cell, so the track never seals, and a sealed
@@ -268,12 +331,30 @@ export function levelParams(id: number): GenParams {
         // 0 to 2 at five, and 4 to 7 at six. Four colours is not a hard band the search
         // missed; it is provably empty.
         //
-        // Levels 1 and 2 therefore stay teaching levels, deliberately and unavoidably. They
-        // are where the colour match is learnt, and no painting can make them bite.
+        // Level 1 therefore stays a teaching level, deliberately and unavoidably: it is where
+        // the colour match is learnt, and no painting can make it bite.
+        //
+        // It used to be levels 1 AND 2, because the ramp opened 4, 4, 5, 5, 6. Level 2 is now
+        // the first level with five, which is the whole point of the shift: the second level
+        // was the last one that was free BY CONSTRUCTION, and one teaching level is enough.
+        //
+        // Why `ceil((id - 1) / 3)` and not the tidier `floor(id / 2)`, which also gives level
+        // 2 its fifth colour. Both are one step earlier than the old ramp, but they pay for
+        // it in different places: `floor(id / 2)` opens 4, 5, 5, 6 and brings level 4 up too,
+        // while this opens 4, 5, 5, 5, 6 and leaves every level after the second exactly the
+        // colour count it had.
+        //
+        // That is not tidiness, it is the invariant. `the second half of the curve is harder
+        // than the first` is carried almost entirely by this term -- the blocked count is at
+        // its ceiling in the back half (see `BLOCKED_LAST`) and actually runs slightly
+        // DOWNHILL across the halves. Summed over halves, the old ramp put 24 colours in the
+        // front against 30 in the back; this puts 25 against 30, and `floor(id / 2)` would
+        // have put 26. So moving level 4 as well would have spent a third of the test's whole
+        // margin to change a level that is not the one being made harder.
         //
         // 6 is the ceiling because PALETTE has six entries and the view has exactly those six
         // in `colors.ts`. A seventh would draw grey (see `colorOf`).
-        colors: Math.min(6, 4 + Math.floor((id - 1) / 2)),
+        colors: Math.min(6, 4 + Math.ceil((id - 1) / 3)),
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
@@ -287,12 +368,33 @@ export interface TunnelParams { count: number; cars: number }
  *
  * Nothing before level 4: a tunnel is a colour you cannot see coming, and the first three
  * levels are where the player learns what the colours are FOR. It arrives one at a time
- * (levels 4-6), then doubles, then deepens -- count first and depth second, because a second
- * tunnel adds a second place to watch while a deeper one only adds more of the same gamble.
+ * (levels 4-6), then doubles -- count and not depth, because a second tunnel adds a second
+ * place to watch while a deeper one only adds more of the same gamble.
  *
  * The cars in these tunnels come OUT of CARS_PER_LEVEL, not on top of it: `generateLevel`
  * packs the lot with the remainder. A level's passenger total and its difficulty curve were
- * both tuned against 60 cars and neither wants to move for this.
+ * both tuned against a flat car count and neither wants to move for this.
+ *
+ * DEPTH IS FLAT AT 4 AS OF THIS REVISION, down from 5 at levels 7-8 and 6 at 9-10, and the
+ * depth ramp is gone rather than reduced. Two measured reasons, and it is the same number
+ * behind both -- every car a tunnel holds is a car missing from the BOARD:
+ *
+ *  - THE LATE LEVELS LOOKED HALF EMPTY. At 2x6 level 10 put 51 of its 63 cars on the board
+ *    and its bodies covered 39.3% of the lot, against 51.3% on level 1. Its ten small
+ *    fillable holes (see `fillableHoles`) were not a packing failure; they were twelve cars'
+ *    worth of missing traffic. At 2x4 the board carries 57.
+ *  - IT CAPPED THE BACK OF THE DIFFICULTY CURVE. `blockedRatio` is a share of the cars ON
+ *    THE BOARD, so a smaller board buys fewer blocked cars out of the same share, and the
+ *    back half could not out-count the front however hard the curve pushed it. The
+ *    arithmetic had been running against the tunnels since they were introduced -- summed
+ *    over halves, the shipped levels' blocked counts were 193 in front against 192 behind,
+ *    the term already contributing NOTHING and the second-half test passing on colours
+ *    alone. Denser packing tipped it over.
+ *
+ * What this costs is named in the paragraph above it: depth was the cheaper of the two levers
+ * by the curve's own argument, so if a late level needs more gamble it should get a third
+ * tunnel and not a deeper one. Passengers do not move at all -- the cars are the same 63,
+ * parked on the board instead of queued behind a mouth.
  */
 const TUNNEL_CURVE: TunnelParams[] = [
     { count: 0, cars: 0 },   // 1
@@ -301,10 +403,10 @@ const TUNNEL_CURVE: TunnelParams[] = [
     { count: 1, cars: 4 },   // 4
     { count: 1, cars: 4 },   // 5
     { count: 1, cars: 4 },   // 6
-    { count: 2, cars: 5 },   // 7
-    { count: 2, cars: 5 },   // 8
-    { count: 2, cars: 6 },   // 9
-    { count: 2, cars: 6 },   // 10
+    { count: 2, cars: 4 },   // 7
+    { count: 2, cars: 4 },   // 8
+    { count: 2, cars: 4 },   // 9
+    { count: 2, cars: 4 },   // 10
 ];
 
 export function tunnelParams(id: number): TunnelParams {
@@ -361,7 +463,7 @@ function placeTunnels(rng: () => number, colors: number, tp: TunnelParams): Tunn
                 id: i + 1,
                 x: (rng() - 0.5) * LOT.w,
                 y: (rng() - 0.5) * LOT.h,
-                angle: rng() * 360,
+                angle: (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP,
                 cars: Array.from({ length: tp.cars }, () => ({
                     color: PALETTE[Math.floor(rng() * colors)],
                     cap: 'small' as Cap,
@@ -483,10 +585,6 @@ function mulberry32(seed: number): () => number {
         t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
-}
-
-function pick<T>(rng: () => number, items: T[]): T {
-    return items[Math.floor(rng() * items.length) % items.length];
 }
 
 /** Capacity for one car, drawn from CAP_MIX. */
@@ -648,9 +746,8 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * leftover from the reject-sampling version this replaced, where placement order was
  * load-bearing.
  *
- * A quarter of the angles snap to a right angle. Uniformly random angles read as
- * uniform noise -- the reference the design came from has a tidy outer band, and
- * without some axis-aligned cars the eye has nothing to hold on to.
+ * Every angle is one of the eight compass points -- see HEADING_STEP for why that is the
+ * whole set rather than a tidy minority of it.
  *
  * Each overlapping pair is pushed apart by the FULL minimum translation vector on
  * EACH side, not split in half between them. `overlapMTV` already reports the least
@@ -689,8 +786,7 @@ function pack(rng: () => number, want: number, tunnels: TunnelSpec[]): Piece[] {
     const pieces: Piece[] = caps.map((cap) => {
         let p: Piece;
         for (let k = 0; ; k++) {
-            let angle = rng() * 360;
-            if (rng() < SNAP_SHARE) angle = Math.round(angle / 90) * 90;
+            const angle = (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP;
             p = { x: (rng() - 0.5) * LOT.w, y: (rng() - 0.5) * LOT.h, angle, cap };
             clampInside(p);
             if (k + 1 >= SEED_TRIES) break;
@@ -750,6 +846,81 @@ function headingsFor(p: Piece): number[] {
 }
 
 /**
+ * Does driving off along `angle` take this piece toward the middle of the lot?
+ *
+ * The lot is centred on the origin (`pack` scatters over +/- LOT.w/2 by +/- LOT.h/2), so
+ * the direction of the centre from a piece is just its own position negated, and this is
+ * the sign of the dot product of the two. A piece sitting exactly on the centre has no
+ * inward direction and reads as outbound, which is the harmless answer: there is nothing
+ * to prefer, and at the centre both headings cross the same amount of lot anyway.
+ */
+function headsInward(p: { x: number; y: number }, angle: number): boolean {
+    const rad = (angle * Math.PI) / 180;
+    return Math.cos(rad) * -p.x + Math.sin(rad) * -p.y > 0;
+}
+
+/**
+ * Cars whose heading takes them across the lot rather than off the nearest edge.
+ *
+ * The same predicate `peel` steers on, asked of a finished level -- exported because three
+ * places need it and must not disagree: `generateLevel` ranks its candidates on it, the
+ * offline tool prints it, and the test that pins it would otherwise carry its own copy of
+ * the dot product.
+ */
+export function inwardCars(level: LevelData): number {
+    return level.lot.cars.filter(
+        // A car sitting exactly on the centre has no inward direction; see `headsInward`.
+        (c) => Math.hypot(c.x, c.y) > 1e-9 && headsInward(c, c.angle),
+    ).length;
+}
+
+/**
+ * One of `moves`, drawn evenly from the inbound ones if there are any and from all of them
+ * if there are not.
+ *
+ * This is where `peel` prefers a heading that drives INTO the lot over one that drives off
+ * it, and the numbers behind that preference are worth keeping.
+ *
+ * Left to itself the peel is a starburst. It takes the onion from the outside in, so an
+ * outer-ring car is offered its outbound heading almost every time and its inbound one only
+ * once the ring beyond it is already gone. Measured over the ten shipped levels, 18% of cars
+ * faced inward -- 13% on level 2, the lowest of the ten -- which is what "every car just
+ * drives off the nearest edge" looked like.
+ *
+ * A car pointing inward has to cross the whole lot to reach an edge, so its lane clips far
+ * more neighbours than a short hop off the nearest side. That makes this the cheapest lever
+ * on tangle there is: it changes no geometry, seats no extra car, and cannot fail a packing
+ * -- it only re-decides which of two headings an already-settled body is handed.
+ *
+ * WEIGHTING was tried first and abandoned, measured: a preference of 3 to 1 lifted level 2
+ * from 13% to 15%, and raising it did nothing at all -- 8 and 40 both landed on 17%. The
+ * weight saturates because it can only choose among the headings the geometry ALREADY
+ * offers, and early in the peel an inbound lane (clear across the whole lot) is offered to
+ * nobody. So the pool is tiered instead of weighted: if any car can go inward, the draw is
+ * over those cars only. That reaches 28% on level 2 and 33% on level 1, and takes the
+ * solver's digging rounds from 8 to 11 -- which is the difficulty this was for.
+ *
+ * It stays a preference and not a quota. Nothing here targets a share, nothing rejects a
+ * packing for missing one, and a step where no car has an inbound lane just draws from all
+ * the legal moves as before. What comes out is whatever the geometry allows.
+ *
+ * The draw is over (piece, heading) PAIRS, so this steers which car leaves next as well as
+ * which way it faces -- and both halves are wanted. A heading is only on this list while
+ * the cars that would block it are still parked, so "prefer inbound" and "take the car
+ * whose inbound lane happens to be open right now" are the same instruction; deferring that
+ * car costs it the heading. Measured: drawing the CAR evenly first and then preferring its
+ * inbound heading gives up half the gain (17% against 28% on level 2), because the cars that
+ * could have gone inward get taken on an outbound heading before their turn comes round.
+ */
+function pickMove(
+    rng: () => number, moves: { i: number; angle: number }[], remaining: Piece[],
+): { i: number; angle: number } {
+    const inward = moves.filter((m) => headsInward(remaining[m.i], m.angle));
+    const pool = inward.length > 0 ? inward : moves;
+    return pool[Math.floor(rng() * pool.length) % pool.length];
+}
+
+/**
  * Point each tunnel down whichever of its two axis headings leaves the mouth car a clear
  * lane; keep the axis it was placed on when neither does.
  *
@@ -798,6 +969,10 @@ function aimTunnels(tunnels: TunnelSpec[], pieces: Piece[]): TunnelSpec[] {
  * its lane was checked. That is NOT the same claim as "this order plays out on the
  * finished level" -- see the note on `blockers` below for what it leaves out and why that
  * is not free.
+ *
+ * Which of the legal moves is taken is a WEIGHTED draw, not an even one: see `pickMove`,
+ * which prefers a heading pointing into the lot. That is the level's tangle being steered
+ * here rather than in the packer -- the bodies are already settled and none of them moves.
  *
  * Each blocker is probed at its OWN angle while the mover is probed at that angle or
  * that angle plus 180. Those two agree because a rectangle is identical under a half
@@ -849,7 +1024,7 @@ function peel(
             }
         }
         if (moves.length === 0) break;
-        const move = pick(rng, moves);
+        const move = pickMove(rng, moves, remaining);
         order.push({ piece: remaining.splice(move.i, 1)[0], angle: move.angle });
     }
     return order;
@@ -958,9 +1133,21 @@ function* paintings(n: number, colors: number, rand: () => number): Generator<st
     }
 }
 
-/** Paintings tried per packing, and packings tried, before the search gives up. */
+/**
+ * Paintings tried per packing, and packings tried, before the search gives up.
+ *
+ * PACKINGS is 6, up from 3, and it is the tidiness search rather than the difficulty one:
+ * every candidate here already hits the blocked target, and `generateLevel` now ranks them
+ * on how car-shaped a hole they leave (see `holeRank`). Level 2's candidates spread from 1
+ * hole to 8, so best-of-3 was leaving most of that spread on the table.
+ *
+ * It costs attempts, not correctness: the loop stops at whichever comes first, PACKINGS
+ * on-target candidates or the attempt ceiling, so a level that cannot find six simply
+ * proceeds with what it found. What it buys is paid for in generation wall-clock on the
+ * tunnel levels, which already spend most of TUNNEL_ATTEMPTS to find three.
+ */
 const PAINTINGS = 400;
-const PACKINGS = 3;
+const PACKINGS = 6;
 
 /**
  * Repaint `cars` until the level is hard but fair, or return null if the search runs out.
@@ -1031,6 +1218,101 @@ function weldedMouths(level: LevelData): number {
 }
 
 /**
+ * How many more cars would still fit in a finished lot's leftover holes.
+ *
+ * This is the packing-quality number, and it exists because the packer had no notion of one.
+ * `pack` scatters cars at random and pushes overlapping pairs apart until nothing overlaps --
+ * and then it stops, because nothing overlapping IS its whole success condition. Where the
+ * random scatter happened to leave a car-shaped gap, that gap survives to the shipped level:
+ * a rectangle of bare asphalt in the middle of a car park, which reads as a level that
+ * failed to load rather than as a level with room in it.
+ *
+ * Counted the only way that matches the complaint: by trying to PARK a car in the hole. A
+ * disc or an area measure cannot tell a wide gap that no body fits down from a car-sized
+ * square, and it is the second one that looks wrong. Big bodies are tried first so that a
+ * hole is reported at the largest thing it could hold rather than as three small cars.
+ *
+ * The scan is deterministic (a fixed lattice, a fixed angle order), so two runs on the same
+ * cars agree -- this ranks candidate packings inside `generateLevel`, and a metric that
+ * wobbled would make the choice wobble with it.
+ *
+ * Measured on level 2 across 40 candidate packings at 60 cars: 2 holes at best, 6 at the
+ * median, 9 at worst -- and the shipped level had 5. That spread is what makes ranking worth
+ * doing: the generator was taking the first packing that hit its difficulty target and had no
+ * opinion at all about which of them looked like a car park.
+ */
+const HOLE_STEP = 0.1;
+
+/** Holes a lot has room for, counted by the largest car each one would take. */
+export interface Holes { big: number; medium: number; small: number }
+
+export function fillableHoles(level: LevelData): Holes {
+    const pad = CLEARANCE / 2;
+    const taken: OBB[] = level.lot.cars.map((c) => inflate(carBox(c), pad));
+    for (const t of level.lot.tunnels ?? []) taken.push(inflate(tunnelReservation(t), pad));
+    const found: Holes = { big: 0, medium: 0, small: 0 };
+    for (const cap of ['big', 'medium', 'small'] as Cap[]) {
+        const box = CAP_BOX[cap];
+        // Restart the scan after every hit: a seated car changes what fits around it, and
+        // resuming mid-lattice would count a hole the new car has just filled.
+        for (let seated = true; seated;) {
+            seated = false;
+            for (let x = -level.lot.w / 2; x <= level.lot.w / 2 && !seated; x += HOLE_STEP) {
+                for (let y = -level.lot.h / 2; y <= level.lot.h / 2 && !seated; y += HOLE_STEP) {
+                    for (const angle of [0, 45, 90, 135]) {
+                        const cand = inflate(
+                            { x, y, angle, len: box.len * CAR_SCALE, wid: box.wid * CAR_SCALE },
+                            pad,
+                        );
+                        if (!insideRect(cand, level.lot.w, level.lot.h)) continue;
+                        if (taken.some((q) => overlapMTV(cand, q))) continue;
+                        taken.push(cand);
+                        found[cap]++;
+                        seated = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    return found;
+}
+
+/** A candidate packing, with the two things `generateLevel` chooses between them on. */
+interface Ranked { cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward: number }
+
+/**
+ * Order for `generateLevel`'s candidates: fewest CAR-SHAPED holes, then most cars facing
+ * inward, then fewest small holes.
+ *
+ * Lexicographic, and the order of the three keys is the whole content of this function.
+ *
+ * BIG AND MEDIUM TOGETHER FIRST, summed, because the failure being ranked out is a hole the
+ * eye reads as a MISSING CAR rather than as space, and both sizes do that: a medium body is
+ * 1.61 board units long against a big one's 1.79, so a hole that would take either is the
+ * shape of the cars around it. A small body is 0.96 by 0.47 and a hole that size reads as a
+ * gap. The hole this was all about, circled in a screenshot of level 2, measured roughly
+ * 1 by 2 board units -- bigger than a big car.
+ *
+ * INWARD SECOND, ahead of the small holes, and this ordering is measured rather than
+ * assumed. Ranking on holes alone took the inward share from 29% down to 22% and level 2
+ * from 28% to 17%: the ranking was quietly spending a gameplay property to buy small
+ * cosmetic gaps. Cars driving across the lot are what makes a lot tangled (see INWARD_WEIGHT)
+ * and they were asked for; a scattering of small gaps is what a car park looks like anyway.
+ *
+ * SMALL HOLES LAST, where they belong -- worth breaking a tie on, not worth spending
+ * anything else on.
+ *
+ * All three are free. Every candidate here already hits the difficulty target and cost a
+ * packing that was paid for; this only decides which of them ships.
+ */
+function better(a: Ranked, b: Ranked): number {
+    return (a.holes.big + a.holes.medium) - (b.holes.big + b.holes.medium)
+        || b.inward - a.inward
+        || a.holes.small - b.holes.small;
+}
+
+/**
  * The blocked-car count the curve asks of `id`.
  *
  * Measured against what is actually ON THE BOARD at the opening position -- the grid cars
@@ -1081,7 +1363,12 @@ export function generateLevel(id: number): LevelData {
     const gridCars = p.cars - tp.count * tp.cars;
     const attempts = tp.count > 0 ? TUNNEL_ATTEMPTS : ATTEMPTS;
     const wantBlocked = blockedTarget(id);
-    let best: { cars: CarSpec[]; tunnels: TunnelSpec[]; miss: number } | null = null;
+    // Every candidate tied at the best miss so far, not just the first one seen. A level that
+    // finds nothing on target still gets to pick a TIDY nearest miss -- level 9 shipped with
+    // four big holes in it because this used to keep whichever equally-close attempt happened
+    // to arrive first, and the hole ranking below never saw the other ties.
+    let bestMiss = Infinity;
+    let tied: { cars: CarSpec[]; tunnels: TunnelSpec[] }[] = [];
     const onTarget: { cars: CarSpec[]; tunnels: TunnelSpec[] }[] = [];
 
     for (let attempt = 0; attempt < attempts && onTarget.length < PACKINGS; attempt++) {
@@ -1101,19 +1388,54 @@ export function generateLevel(id: number): LevelData {
             continue;
         }
         // Keep the nearest miss: distance in blocked cars, then in rounds, then -- dwarfing
-        // both -- a welded mouth.
+        // both -- a welded mouth. Ties are all kept, so tidiness can break them later; a
+        // strictly better miss clears the list, because difficulty outranks tidiness.
         const miss = Math.abs(d.blocked - wantBlocked)
             + Math.max(0, p.minRounds - d.rounds)
             + welded * WELDED_PENALTY;
-        if (!best || miss < best.miss) best = { cars, tunnels, miss };
+        if (miss < bestMiss) {
+            bestMiss = miss;
+            tied = [{ cars, tunnels }];
+        } else if (miss === bestMiss && tied.length < PACKINGS) {
+            // Capped at PACKINGS for the same reason the on-target list is: `fillableHoles`
+            // costs a lattice scan per candidate, and on a tunnel level a hundred attempts
+            // can tie at the same miss. Ranking six of them buys nearly all of the tidiness
+            // that ranking a hundred would, at a fraction of a second instead of half a minute.
+            tied.push({ cars, tunnels });
+        }
     }
 
-    for (const { cars, tunnels } of onTarget) {
+    // Tidiest first. Every candidate here already hits the difficulty target, so this is
+    // choosing between levels that are equally hard and only one of which looks like a car
+    // park -- see `fillableHoles`. It is a sort and not a filter: the painting search still
+    // gets every candidate, so a level is never made uglier OR easier by this, it just gets
+    // first refusal on the tidiest packing that can be painted hard.
+    //
+    // Ranking rather than generating: the candidates cost a packing each and were paid for
+    // already, so this is nearly free -- what it costs is PACKINGS being raised from 3 to 6,
+    // because best-of-three out of a spread running 1 to 8 holes was worth only about half
+    // of the spread. What ranking cannot do is manufacture a tidy packing the attempts never
+    // found; it can only decline the untidy ones it was going to take by arrival order.
+    const rank = (cs: { cars: CarSpec[]; tunnels: TunnelSpec[] }[]): Ranked[] => cs
+        .map((c) => {
+            const level = assemble(id, c.cars, c.tunnels);
+            return { ...c, holes: fillableHoles(level), inward: inwardCars(level) };
+        })
+        .sort(better);
+
+    const ranked = rank(onTarget);
+    for (const { cars, tunnels } of ranked) {
         const painted = choosePainting(id, cars, tunnels, p);
         if (painted) return assemble(id, painted, tunnels);
     }
-    if (onTarget.length > 0) return assemble(id, onTarget[0].cars, onTarget[0].tunnels);
-    if (best) return assemble(id, best.cars, best.tunnels);
+    if (ranked.length > 0) return assemble(id, ranked[0].cars, ranked[0].tunnels);
+    // Nothing on target. The ties are all equally far off the difficulty the curve asked
+    // for, so there is nothing left to choose them on but how they look -- and one of them
+    // being untidy is not a reason to ship the untidiest.
+    if (tied.length > 0) {
+        const fallback = rank(tied)[0];
+        return assemble(id, fallback.cars, fallback.tunnels);
+    }
     const fallback = scatter(mulberry32(id * 7919), p, tp);
     return assemble(id, repair(id, fallback.cars, fallback.tunnels), fallback.tunnels);
 }

@@ -179,8 +179,14 @@ test('a car parked behind you is not your blocker, on a lot the level rule accep
   // So a pair the level rule calls legal could still overlap under the lane test -- and
   // sweepHit answers 0 for boxes that already overlap WHATEVER the heading, which is how a
   // car behind you ends up named as the thing in your way.
+  // The pair is level 1's, moved 0.022 apart when CLEARANCE doubled to 0.08: at the original
+  // spacing it is no longer a pair the level rule accepts, so the premise below would fail and
+  // the test would be asserting nothing. Both halves were re-checked at the new spacing rather
+  // than assumed -- it is still legal under the split rule AND still overlapping under the old
+  // whole-clearance-on-the-mover rule, which is the combination the regression lives in. Of the
+  // 340 nearby placements with that property this is the closest to where the bug was found.
   const mover = car({ id: 27, x: 0.7237, y: 2.4712, angle: 29.7888, cap: 'small' });
-  const behind = car({ id: 26, x: -0.5793, y: 1.8721, angle: 58.3434, cap: 'big' });
+  const behind = car({ id: 26, x: -0.5993, y: 1.8821, angle: 58.3434, cap: 'big' });
 
   // The pair is legal -- this line is exactly what validateLevel enforces.
   expect(overlapMTV(

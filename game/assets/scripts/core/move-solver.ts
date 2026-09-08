@@ -64,10 +64,13 @@ export function firstBlocker(
 ): Blockage | null {
     // BARE bodies, no clearance margin: a car goes if its body would clear whatever is
     // beside its lane, however fine the margin. Requiring a margin here was measured and
-    // rejected -- with CLEARANCE (0.04 board units, about 2.6 screen px) demanded of the
-    // lane, 18 of the 250 blocked cars across the ten levels would actually have squeezed
-    // past, the widest real daylight refused being 2.7 px. A threshold that fine cannot be
-    // seen, so every car sitting near it looked passable and was not.
+    // rejected -- with CLEARANCE demanded of the lane (0.04 board units when this was
+    // measured, about 2.6 screen px; it is 0.08 now), 18 of the 250 blocked cars across the
+    // ten levels would actually have squeezed past, the widest real daylight refused being
+    // 2.7 px. A threshold that fine cannot be seen, so every car sitting near it looked
+    // passable and was not. Doubling the parked margin since has not changed the argument:
+    // it applies the margin to the LOT and still not to the lane, so a car goes on exactly
+    // the same test -- it just starts out with more daylight around it.
     //
     // The trade is deliberate and runs the other way now: a car may thread a gap with a
     // margin too fine to see, which can read as scraping. What it will never do is refuse a

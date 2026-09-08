@@ -1,4 +1,4 @@
-import { generateLevel, levelParams, LOT, BLOCKED_TOLERANCE } from '../../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
@@ -69,6 +69,56 @@ test('every level uses the one lot shape the camera frames', () => {
     expect(level.lot.w).toBe(LOT.w);
     expect(level.lot.h).toBe(LOT.h);
   }
+});
+
+test('every heading is one of the eight compass points', () => {
+  // The level format's angles are quantised to 45 degrees, cars and tunnel axes alike.
+  // Free angles read as uniform noise -- the reference the design came from has cars sitting
+  // on a small set of headings, and eight of them is the coarsest set that still keeps the
+  // diagonals a diagonal lane clips its neighbours along.
+  //
+  // Asserted on the FINISHED level rather than on `pack`, because that is the claim: `peel`
+  // hands a piece its own axis or that axis plus 180, and `scatter` normalises and rounds
+  // what comes back. A quantisation applied at placement time and lost somewhere in that
+  // chain would be a quantisation the level files do not actually carry.
+  for (const id of IDS) {
+    const level = levelFor(id);
+    const angles = [
+      ...level.lot.cars.map((c) => c.angle),
+      ...(level.lot.tunnels ?? []).map((t) => t.angle),
+    ];
+    expect(angles.filter((a) => a % 45 !== 0)).toEqual([]);
+  }
+});
+
+test('the lot is not one big outbound starburst: some cars drive INTO it', () => {
+  // What `peel`'s inward weighting buys, and the reason it exists. Peeling an onion from the
+  // outside in hands every car the heading that happens to be clear when its turn comes, and
+  // for an outer-ring car that is almost always the one pointing off the board -- so the lot
+  // came out as a starburst where even the middle cars faced out and left on the first tap.
+  //
+  // A car pointing inward has to cross the whole lot to reach an edge, so it is the single
+  // cheapest way to make a placement tangled rather than bigger. Asserted as a floor on the
+  // whole set, not per level: `pickMove` is a preference over whatever headings are legal at
+  // that step, so any one level's share is partly luck -- the same target ratio drew a 17%
+  // level and a 45% one out of level 2 depending on which packing the search settled on.
+  //
+  // 0.25 against a measured 18% before the change and around a third after it. The floor is
+  // set below what the levels produce, not at it, because there is no quota anywhere in the
+  // generator that could defend a tighter number: an inbound heading has to have a clear
+  // lane across the whole lot, and how many cars ever get offered one is the geometry's
+  // answer, not the curve's. What this pins is that the preference is WIRED UP -- delete it
+  // and the share falls straight back to 18%.
+  // Through core's own `inwardCars` rather than a second copy of the dot product here: the
+  // candidate ranking in `generateLevel` chooses on this number, so a test measuring it a
+  // slightly different way could pass while the thing being ranked went the other way.
+  let inward = 0, total = 0;
+  for (const id of IDS) {
+    const level = levelFor(id);
+    inward += inwardCars(level);
+    total += level.lot.cars.length;
+  }
+  expect(inward / total).toBeGreaterThan(0.25);
 });
 
 test('car ids are unique and the level carries the id it was asked for', () => {
@@ -371,14 +421,20 @@ test('the shortest legal ring can hold a row of every colour the curve can ask f
 
 import { tunnelParams, CARS_PER_LEVEL } from '../../game/assets/scripts/core/level-gen';
 
-test('the tunnel curve: none before level 4, two from level 7', () => {
+test('the tunnel curve: none before level 4, two from level 7, never deeper than four', () => {
   expect(tunnelParams(1)).toEqual({ count: 0, cars: 0 });
   expect(tunnelParams(3)).toEqual({ count: 0, cars: 0 });
   expect(tunnelParams(4)).toEqual({ count: 1, cars: 4 });
   expect(tunnelParams(6)).toEqual({ count: 1, cars: 4 });
-  expect(tunnelParams(7)).toEqual({ count: 2, cars: 5 });
-  expect(tunnelParams(9)).toEqual({ count: 2, cars: 6 });
-  expect(tunnelParams(10)).toEqual({ count: 2, cars: 6 });
+  expect(tunnelParams(7)).toEqual({ count: 2, cars: 4 });
+  expect(tunnelParams(9)).toEqual({ count: 2, cars: 4 });
+  expect(tunnelParams(10)).toEqual({ count: 2, cars: 4 });
+  // Depth is FLAT, and this is the half of the row worth pinning: every car a tunnel holds
+  // is a car missing from the board, which showed up twice over -- late levels covering 39%
+  // of the lot where level 1 covers 51%, and a back half that could not out-count the front
+  // on blocked cars because its board was smaller. See TUNNEL_CURVE. A late level that needs
+  // more gamble gets another tunnel, not a deeper one.
+  for (const id of IDS) expect(tunnelParams(id).cars).toBeLessThanOrEqual(4);
 });
 
 test('the tunnel curve clamps past its ends, like levelParams does', () => {

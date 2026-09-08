@@ -1,5 +1,5 @@
 import { validateLevel, validateTrack } from '../../game/assets/scripts/core/level-data';
-import { LevelData, Feed, CarSpec } from '../../game/assets/scripts/core/types';
+import { LevelData, Feed, CarSpec, CLEARANCE } from '../../game/assets/scripts/core/types';
 import { TrackShape } from '../../game/assets/scripts/core/track-shapes';
 
 function baseLevel(): LevelData {
@@ -72,7 +72,10 @@ test('two cars closer than the clearance is an error', () => {
 });
 
 test('two cars exactly the clearance apart is not an error', () => {
-  const d = (0.964 + 0.04) / 2;
+  // Derived from CLEARANCE, not written out: this test is about the boundary being INCLUSIVE,
+  // so a literal here would stop testing that the moment the constant moved -- which is
+  // exactly what happened when it went from 0.04 to 0.08.
+  const d = (0.964 + CLEARANCE) / 2;
   const errs = validateLevel(okLevel([c({ id: 1, x: -d }), c({ id: 2, x: d })]));
   expect(errs.some((e) => e.includes('clearance'))).toBe(false);
 });

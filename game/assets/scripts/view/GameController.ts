@@ -330,11 +330,12 @@ const PRELOAD_DEADLINE = 8;
  * at the obstacle, which is the one piece of information the player is missing.
  *
  * BUMP is how far past the reported stopping point it presses, and it has to stay under the
- * bare board between two cars nose to tail. That distance is core's CLEARANCE, 0.04 board
- * units or 0.030 world -- and `firstBlocker` measures its gap from a mover already inflated
+ * bare board between two cars nose to tail. That distance is core's CLEARANCE, 0.08 board
+ * units or 0.060 world -- and `firstBlocker` measures its gap from a mover already inflated
  * by CLEARANCE, so the car stops a clearance short of touching and BUMP eats into that.
- * At 0.020 it still leaves 0.010 of daylight; anything over 0.030 would drive one car into
- * the other. It was 0.06 back when cars were drawn at 90% of a grid cell and the slack was
+ * At 0.020 it leaves 0.040 of daylight; anything over 0.060 would drive one car into
+ * the other. CLEARANCE was half this when BUMP was chosen, where the same 0.020 left only
+ * 0.010 -- so this constant has more room than it was tuned with, not less. It was 0.06 back when cars were drawn at 90% of a grid cell and the slack was
  * 0.22. The jolt is what sells the impact anyway -- see JOLT.
  *
  * The forward leg is capped: with a three-cell run-up, honest speed would make a refused tap
@@ -1099,8 +1100,9 @@ export class GameController extends Component {
             // centred at y = -2.73 while the axis is at y = 0, so the whole lot is off-axis
             // and the bottom of it is ~5 units out. Measured over the ten shipped levels the
             // roof landed a MEDIAN of 0.109 board units from the footprint core was reasoning
-            // about, peaking at 0.187. CLEARANCE is 0.04, so the picture was lying by two to
-            // five times the entire gap budget, and it broke three things at once:
+            // about, peaking at 0.187. CLEARANCE was 0.04 then and is 0.08 now, so the
+            // picture was lying by more than the whole gap budget either way -- two to five
+            // times it as measured -- and it broke three things at once:
             //
             //  - blocked/clear. Re-running core's own sweep on the projected boxes disagreed
             //    with core on 13 of 360 cars, 10 of them "core says you may go, the eye says
