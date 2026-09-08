@@ -479,6 +479,11 @@ export function tunnelParams(id: number): TunnelParams {
  * inconsistent in direction and measured on 4 of the 10 ids. What would make it earn a place on
  * the curve is a bay sized for the longer occupancy it creates, and that is named out of scope
  * in the plan.
+ *
+ * Of the ten shipped offsets, id 6's 20 is the one sensitive to this knob: it passes at depth
+ * 1, fails at depth 2, and passes again at depth 3 (the non-monotone flip named above). Whoever
+ * turns `interleave` on for real should re-sweep id 6 first, before any other id, on exactly
+ * that account.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
     { offset: 0, interleave: 1 },    // 1  teaching level; no offset passes for it, by construction

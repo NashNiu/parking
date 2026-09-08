@@ -1,4 +1,6 @@
-import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, bandedQueue } from '../../game/assets/scripts/core/level-gen';
+import * as fs from 'fs';
+import * as path from 'path';
+import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
@@ -136,6 +138,56 @@ test('the curve never asks a later level for less than an earlier one', () => {
     expect(cur.cars).toBeGreaterThanOrEqual(prev.cars);
     expect(cur.colors).toBeGreaterThanOrEqual(prev.colors);
     expect(cur.blockedRatio).toBeGreaterThanOrEqual(prev.blockedRatio);
+  }
+});
+
+test('the band curve never asks a later level for less mistiming than an earlier one', () => {
+  // BAND_CURVE is not in GenParams, so the monotonicity test above ("the curve never asks a
+  // later level for less than an earlier one") never touches it -- this is the only thing
+  // that pins the ramp `offset` is calibrated to hold.
+  //
+  // What breaks without it: the docblock over BAND_CURVE itself names a fragile trade -- id
+  // 3 ships on the isolated passing offset 8 instead of its wider, more robust 28-36 run,
+  // purely to stay non-decreasing into level 4's single fixed point (offset 12, the only
+  // value in the whole grid that passes for that level). That trade is only worth paying if
+  // something enforces the ramp it was paid for. Without this test, someone re-picking each
+  // id's own most robust offset (which the docblock explicitly invites doing, and warns
+  // against) inverts the sequence, and nothing else here would notice: `isHardButFair`
+  // judges each generated level independently, so a level that is locally hard-and-fair
+  // still passes even when its offset is smaller than the level before it.
+  for (let id = 2; id <= 10; id++) {
+    expect(bandParams(id).offset).toBeGreaterThanOrEqual(bandParams(id - 1).offset);
+  }
+  // Every measurement the docblock cites -- the ramp, the islands, the ids 1/2 exceptions --
+  // was made at depth 1 (see the note on `interleave` above BAND_CURVE). A nonzero row here
+  // would ship a knob nothing has swept, silently invalidating every "X passes" claim above.
+  for (let id = 1; id <= 10; id++) {
+    expect(bandParams(id).interleave).toBe(1);
+  }
+});
+
+/** Where `npm run gen` writes the shipped level files -- see tools/gen-levels.ts. */
+const LEVELS_DIR = path.resolve(__dirname, '..', '..', 'game', 'assets', 'resources', 'levels');
+
+test('the shipped level files carry the queue the curve currently produces', () => {
+  // Nothing else reads game/assets/resources/levels/*.json at all. Every other test in this
+  // suite calls `generateLevel`/`bandedQueue` directly and checks the result against
+  // `bandParams` in memory -- which proves the FUNCTION is consistent with the curve, not
+  // that the FILES on disk are. Those are two different claims: the balance gate regenerates
+  // levels from BAND_CURVE and never opens a shipped JSON, so a curve value edited without
+  // also running `npm run gen` would leave the gate green while the game ships a queue the
+  // gate never measured.
+  //
+  // Ids 3, 6 and 10 legitimately carry one more band than they have cars: `bandedQueue`
+  // rotates whole ROWS, not whole bands, so a rotation that lands inside a band cuts it into
+  // two entries at the front and the back of the queue -- one extra QueueGroup, same
+  // passenger totals, by design (see `bandedQueue`'s "rotates left by ROWS" test above).
+  for (let id = 1; id <= 10; id++) {
+    const raw = fs.readFileSync(path.join(LEVELS_DIR, `level-${id}.json`), 'utf8');
+    const level = JSON.parse(raw) as LevelData;
+    const bp = bandParams(id);
+    const want = bandedQueue(level.lot.cars, level.lot.tunnels ?? [], bp.offset, bp.interleave);
+    expect(level.loop.queue).toEqual(want);
   }
 });
 
@@ -539,6 +591,21 @@ test('bandedQueue puts the tunnel cars last, after every grid band', () => {
     { id: 1, x: 0, y: 0, angle: 0, cars: [{ color: 'purple', cap: 'small' }, { color: 'red', cap: 'small' }] },
   ];
   expect(bandedQueue([bq(1, 'green', 'small')], tunnels, 0, 1)).toEqual([
+    { color: 'green', count: 16 },
+    { color: 'purple', count: 16 },
+    { color: 'red', count: 16 },
+  ]);
+  // Same claim at a NONZERO offset, which the case above cannot cover: the rotation in
+  // `bandedQueue` is applied to the grid rows before the tunnel bands are appended, so "last"
+  // has to survive the shift too. Every level from id 4 on ships both a tunnel and a nonzero
+  // offset (see TUNNEL_CURVE, BAND_CURVE), and nothing until now asserted the ordering holds
+  // once the rotation has actually moved something. Offset 4 is a whole car's worth of rows
+  // (both cars below are 4-row small bands), so the rotation swaps the two grid bands
+  // wholesale instead of also cutting one -- that is a separate claim, already covered by
+  // "bandedQueue rotates left by ROWS, and may cut a band in two" above.
+  const cars = [bq(1, 'green', 'small'), bq(2, 'blue', 'small')];   // 4 rows then 4 rows
+  expect(bandedQueue(cars, tunnels, 4, 1)).toEqual([
+    { color: 'blue', count: 16 },
     { color: 'green', count: 16 },
     { color: 'purple', count: 16 },
     { color: 'red', count: 16 },
