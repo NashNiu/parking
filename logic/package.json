@@ -5,6 +5,7 @@
   "scripts": {
     "test": "jest",
     "gen": "tsc -p tsconfig.gen.json && node ../.tmp/gen/tools/gen-levels.js",
+    "sweep": "tsc -p tsconfig.gen.json && node ../.tmp/gen/tools/band-sweep.js",
     "typecheck:view": "tsc -p tsconfig.view.json",
     "preview": "node ../tools/preview.mjs",
     "preview:nobuild": "node ../tools/preview.mjs --no-build"

@@ -425,6 +425,43 @@ export function tunnelParams(id: number): TunnelParams {
     return TUNNEL_CURVE[i];
 }
 
+/**
+ * The band curve, one row per level, alongside TRACK_CURVE and TUNNEL_CURVE and read the
+ * same way -- clamped past both ends, so an id past the authored ten gets the last row.
+ *
+ * `offset` is rows of mistiming between a band and the car it fills, and it is the difficulty
+ * dial this milestone adds. It is CALIBRATED, not derived: the effective mistiming at any
+ * moment is this value plus however far the player has strayed from `peel`'s order, and how
+ * far they stray is the game, so no arithmetic predicts it. Every value here was chosen by
+ * running `npm run sweep` and keeping what `isHardButFair` passed.
+ *
+ * ZERO ON THE TEACHING LEVELS, deliberately. Measured over the ten shipped levels: at offset
+ * 0 every one of them falls to `keepDistinct`, the one-line rule ("keep the stalls all
+ * different colours") the whole difficulty apparatus exists to defeat. Perfect correspondence
+ * is the free end of this dial -- which is exactly what levels 1 and 2 want and what nothing
+ * after them may have.
+ *
+ * `interleave` is 1 throughout until measured; see the plan's Task 4.
+ */
+const BAND_CURVE: { offset: number; interleave: number }[] = [
+    { offset: 0, interleave: 1 },    // 1  teaching level
+    { offset: 0, interleave: 1 },    // 2  teaching level
+    { offset: 8, interleave: 1 },    // 3  PROVISIONAL -- replaced in Step 10
+    { offset: 12, interleave: 1 },   // 4  PROVISIONAL
+    { offset: 16, interleave: 1 },   // 5  PROVISIONAL
+    { offset: 20, interleave: 1 },   // 6  PROVISIONAL
+    { offset: 24, interleave: 1 },   // 7  PROVISIONAL
+    { offset: 28, interleave: 1 },   // 8  PROVISIONAL
+    { offset: 32, interleave: 1 },   // 9  PROVISIONAL
+    { offset: 36, interleave: 1 },   // 10 PROVISIONAL
+];
+
+/** This level's band parameters, clamped past both ends of BAND_CURVE. */
+export function bandParams(id: number): { offset: number; interleave: number } {
+    const i = Math.min(Math.max(1, Math.trunc(id)), BAND_CURVE.length) - 1;
+    return BAND_CURVE[i];
+}
+
 /** Placement draws before a tunnel is written off and the whole attempt with it. */
 const PLACE_TRIES = 200;
 
@@ -441,7 +478,7 @@ const PLACE_TRIES = 200;
  * decided by `aimTunnels`, after the cars are down and there is something to aim against.
  *
  * Colours are drawn flat from the level's palette. There is no cleverness to add: the queue
- * is derived from the cars (`queueFor`), so any draw is colour-balanced by construction, and
+ * is derived from the cars (`bandedQueue`), so any draw is colour-balanced by construction, and
  * "mixed, and you only see the one at the mouth" is the mechanic rather than a compromise.
  *
  * Unlike the cars, `x`/`y`/`angle` here never pass through `round4` -- verified harmless
@@ -675,31 +712,6 @@ function settle(p: Piece, reserved: OBB[]): void {
 }
 
 /**
- * Passenger queue implied by EVERY car in the level: per colour, exactly the seats that
- * colour offers -- on the board AND inside a tunnel.
- *
- * The tunnel cars are not an optional extra here. They reach the bay exactly as a grid car
- * does, one at a time as the player empties the mouth, so a queue that did not seat them
- * would leave the level a tunnel's worth of passengers short and `validateLevel`'s colour
- * balance would say so. That the player cannot see them yet is a fact about the VIEW.
- */
-function queueFor(cars: CarSpec[], tunnels: TunnelSpec[]): QueueGroup[] {
-    const seats = new Map<string, number>();
-    for (const car of cars) {
-        seats.set(car.color, (seats.get(car.color) ?? 0) + CAP_SIZE[car.cap]);
-    }
-    for (const t of tunnels) {
-        for (const c of t.cars) {
-            seats.set(c.color, (seats.get(c.color) ?? 0) + CAP_SIZE[c.cap]);
-        }
-    }
-    // Palette order, so the file reads consistently; the loop shuffles the ring anyway.
-    return PALETTE.filter((c) => seats.has(c)).map((color) => ({
-        color, count: seats.get(color) as number,
-    }));
-}
-
-/**
  * The passenger queue as an ORDERED list of bands: one entry per car, in the order the cars
  * can leave in, each holding exactly that car's seats.
  *
@@ -785,6 +797,7 @@ export function bandedQueue(
 
 function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): LevelData {
     const track = trackParams(id);
+    const bands = bandParams(id);
     return {
         id,
         // The key is omitted entirely when there are none, rather than written as `[]`, so
@@ -799,7 +812,7 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
             boardIndex: track.capacity / 2,
             track: track.track,
             feeds: track.feeds,
-            queue: queueFor(cars, tunnels),
+            queue: bandedQueue(cars, tunnels, bands.offset, bands.interleave),
         },
         powerups: { refresh: 3, hardClear: 1, magnet: 1 },
     };
@@ -1237,7 +1250,7 @@ const PACKINGS = 6;
  * Repaint `cars` until the level is hard but fair, or return null if the search runs out.
  *
  * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
- * cars (`queueFor`), so every painting is colour-balanced by construction and cannot fail
+ * cars (`bandedQueue`), so every painting is colour-balanced by construction and cannot fail
  * `validateLevel`. The lot's geometry -- the blocked count and solver rounds the curve was
  * tuned against -- is untouched.
  *
@@ -1250,7 +1263,7 @@ const PACKINGS = 6;
  * to play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
  * verdict reached without them is a verdict about a different level. The tunnel cars are not
  * themselves repainted: they are not in the leaving order (when they come out is the player's
- * choice, not `peel`'s) and `queueFor` derives the queue from whatever colours they carry, so
+ * choice, not `peel`'s) and `bandedQueue` derives the queue from whatever colours they carry, so
  * no painting of the grid can unbalance them.
  */
 function choosePainting(

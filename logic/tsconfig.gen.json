@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["../tools/gen-levels.ts", "../game/assets/scripts/core/**/*.ts"]
+  "include": ["../tools/gen-levels.ts", "../tools/band-sweep.ts", "../game/assets/scripts/core/**/*.ts"]
 }

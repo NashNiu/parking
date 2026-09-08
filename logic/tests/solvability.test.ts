@@ -87,7 +87,13 @@ function drainableTunnel(): LevelData {
       }],
     },
     parking: { slots: 4, unlocked: 4 },
-    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 48 }] },
+    // 1 grid car + 2 tunnel cars, all small = 3 * 16, written as one band per car so no
+    // band exceeds the biggest car (see the oversized-band check in `validateLevel`).
+    loop: {
+      capacity: 4,
+      boardIndex: 2,
+      queue: [{ color: 'red', count: 16 }, { color: 'red', count: 16 }, { color: 'red', count: 16 }],
+    },
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
 }

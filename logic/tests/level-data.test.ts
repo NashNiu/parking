@@ -26,6 +26,17 @@ test('color imbalance is reported', () => {
   expect(errors[0]).toContain('red');
 });
 
+test('a queue written as one total per colour is rejected as an oversized band', () => {
+  // The old collapsed form. Under the order-respecting ring it is one band per colour, which
+  // is the failure the banding exists to avoid, so it has to be an error and not a warning.
+  const lvl = baseLevel();
+  lvl.loop.queue = [{ color: 'red', count: 160 }];
+  lvl.lot.cars = Array.from({ length: 10 }, (_, i) => ({
+    id: i + 1, x: 0.5 + i, y: 0.5, angle: 90, color: 'red', cap: 'small' as const,
+  }));
+  expect(validateLevel(lvl).some((e) => e.includes('bigger than the biggest car'))).toBe(true);
+});
+
 test('unlocked greater than slots is reported', () => {
   const lvl = baseLevel();
   lvl.parking.unlocked = 5; // > slots 4
@@ -226,8 +237,13 @@ function tunnelLevel(): LevelData {
       }],
     },
     parking: { slots: 4, unlocked: 4 },
-    // 1 grid car + 2 tunnel cars, all small = 3 * 16
-    loop: { capacity: 4, boardIndex: 2, queue: [{ color: 'red', count: 48 }] },
+    // 1 grid car + 2 tunnel cars, all small = 3 * 16, written as one band per car so no
+    // band exceeds the biggest car (see the oversized-band check in `validateLevel`).
+    loop: {
+      capacity: 4,
+      boardIndex: 2,
+      queue: [{ color: 'red', count: 16 }, { color: 'red', count: 16 }, { color: 'red', count: 16 }],
+    },
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
 }

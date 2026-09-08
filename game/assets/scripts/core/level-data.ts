@@ -32,6 +32,17 @@ export function validateLevel(level: LevelData): string[] {
     }
   }
 
+  // A band is one car's worth of passengers, so nothing in the queue may exceed the biggest
+  // car. This is what tells the current form apart from the OLD one, which wrote a single
+  // entry per colour holding that colour's whole total -- hundreds of people. Under the
+  // order-respecting reader that form is not merely stale, it is one enormous band per
+  // colour: the exact shape that seals the ring (see `bandedQueue`).
+  for (const g of level.loop.queue) {
+    if (g.count > CAP_SIZE.big) {
+      errors.push(`queue band ${g.color} x${g.count} is bigger than the biggest car (${CAP_SIZE.big})`);
+    }
+  }
+
   // Geometry. The old grid made both of these true by construction -- an integer cell
   // is inside the lot and two cars cannot share one. Free placement makes them things
   // that have to be checked, and the relaxation packer's output is only trustworthy
