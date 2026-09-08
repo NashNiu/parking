@@ -1,6 +1,6 @@
-import { LoopSystem, toClusters } from '../../game/assets/scripts/core/loop-system';
+import { LoopSystem } from '../../game/assets/scripts/core/loop-system';
 import {
-  BOARD_CELLS, CLUSTER_ROWS, DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup,
+  BOARD_CELLS, DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup,
 } from '../../game/assets/scripts/core/types';
 
 /**
@@ -14,15 +14,6 @@ const G = GROUP_SIZE;
 /** Terse group literal, so the expectations below stay readable. */
 function g(color: string, count: number): PaxGroup {
   return { color, count };
-}
-
-/** People per colour across the whole system, for the shuffle invariants. */
-function counts(loop: LoopSystem): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
-    if (grp) out[grp.color] = (out[grp.color] || 0) + grp.count;
-  }
-  return out;
 }
 
 test('the queue splits into same-colour groups of GROUP_SIZE', () => {
@@ -151,38 +142,26 @@ test('reachable colors span the far-to-near channel boundary', () => {
   expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
 });
 
-test('without a seed the queue keeps its authored order', () => {
+test('the queue is consumed in the order it was authored', () => {
+  // The queue's ORDER is level data now. There is no shuffle and no seed: ring cell i holds
+  // authored row i, so a band the generator put at the front of the queue is a band the
+  // player sees at the front of the track.
   const loop = new LoopSystem(4, 0, [{ color: 'a', count: 4 * G }, { color: 'b', count: 4 * G }]);
   expect(loop.ring).toEqual([g('a', G), g('a', G), g('a', G), g('a', G)]);
+  expect(loop.channels.flatMap((c) => c.queue)).toEqual([
+    g('b', G), g('b', G), g('b', G), g('b', G),
+  ]);
 });
 
-test('a seed mixes the colors without changing how many of each there are', () => {
-  const loop = new LoopSystem(12, 6, [{ color: 'a', count: 12 * G }, { color: 'b', count: 12 * G }], DEFAULT_FEEDS, 7);
-  expect(counts(loop)).toEqual({ a: 12 * G, b: 12 * G });
-  const onTrack = new Set(loop.ring.filter((x) => x !== null).map((x) => x!.color));
-  expect(onTrack.size).toBe(2); // both colors on the track
-});
-
-test('shuffling keeps every group single-coloured', () => {
-  // The shuffle reorders whole groups, never individual passengers -- a row that mixed
-  // colours would break the whole point of drawing a group as one row.
-  // Counts that are NOT multiples of G on purpose, so every colour ends in a remainder
-  // group and the shuffle has ragged blocks to move around.
-  const odd = 3 * G + 3;
+test('a band of one colour lands on neighbouring ring cells', () => {
+  // What the whole design is for: an authored band of six rows occupies six adjacent cells,
+  // so the BOARD_CELLS doorway can take three of them in one burst.
   const loop = new LoopSystem(12, 6, [
-    { color: 'a', count: odd }, { color: 'b', count: odd }, { color: 'c', count: odd },
-  ], DEFAULT_FEEDS, 3);
-  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
-    if (!grp) continue;
-    expect(grp.count).toBeGreaterThan(0);
-    expect(grp.count).toBeLessThanOrEqual(G);
-  }
-  expect(counts(loop)).toEqual({ a: odd, b: odd, c: odd });
-});
-
-test('the same seed always shuffles the same way', () => {
-  const build = () => new LoopSystem(12, 6, [{ color: 'a', count: 12 * G }, { color: 'b', count: 12 * G }], DEFAULT_FEEDS, 7);
-  expect(build().ring).toEqual(build().ring);
+    { color: 'a', count: 6 * G }, { color: 'b', count: 6 * G },
+  ]);
+  expect(loop.ring.map((x) => x!.color)).toEqual([
+    'a', 'a', 'a', 'a', 'a', 'a', 'b', 'b', 'b', 'b', 'b', 'b',
+  ]);
 });
 
 test('the default feeds reproduce two channels split down the middle', () => {
@@ -287,75 +266,6 @@ test('feeds with no recognised side fall back to the default channels, not zero'
     expect(loop.channels.map((c) => c.side)).toEqual(['far', 'near']);
     expect(loop.remainingCount()).toBe(16 * G);
   }
-});
-
-/** Lengths of the runs of one colour along `ring`, in order. Nulls end a run. */
-function colorRuns(ring: (PaxGroup | null)[]): number[] {
-  const runs: number[] = [];
-  let last: string | null = null;
-  for (const grp of ring) {
-    if (grp && grp.color === last) runs[runs.length - 1]++;
-    else runs.push(1);
-    last = grp ? grp.color : null;
-  }
-  return runs;
-}
-
-test('a cluster is a run of one colour, at most CLUSTER_ROWS long', () => {
-  // The mechanism, tested directly, because CLUSTER_ROWS is 1 right now and at 1 a cluster
-  // is a single row -- so the dealt order alone cannot show whether clustering works.
-  const rows = [
-    g('a', G), g('a', G), g('a', G), g('a', G), g('a', 2),   // five rows of one colour
-    g('b', G), g('b', 1),
-  ];
-  const clusters = toClusters(rows);
-  for (const c of clusters) {
-    expect(c.length).toBeGreaterThan(0);
-    expect(c.length).toBeLessThanOrEqual(CLUSTER_ROWS);
-    expect(new Set(c.map((r) => r.color)).size).toBe(1);      // never mixed
-  }
-  expect(clusters.flat()).toEqual(rows);                     // a partition, in order
-  // A colour change cuts a cluster even when the open one had room.
-  const cut = toClusters([g('a', 1), g('b', 1)]);
-  expect(cut.length).toBe(2);
-});
-
-test('the shuffle deals same-coloured rows in clusters, not one by one', () => {
-  // Three colours of exactly CLUSTER_ROWS rows each, on a ring that holds all twelve: the
-  // only orders this can produce are the three clusters in some order, so the ring MUST be
-  // three solid bands of four. A per-row shuffle would almost never manage that.
-  const rows = CLUSTER_ROWS;
-  const loop = new LoopSystem(3 * rows, 6, [
-    { color: 'a', count: rows * G }, { color: 'b', count: rows * G }, { color: 'c', count: rows * G },
-  ], DEFAULT_FEEDS, 11);
-  expect(colorRuns(loop.ring)).toEqual([rows, rows, rows]);
-  expect(new Set(loop.ring.map((x) => x!.color))).toEqual(new Set(['a', 'b', 'c']));
-});
-
-test('clustering is a reordering: it moves rows without changing the colour mix', () => {
-  const odd = 6 * G;   // six rows per colour -> a cluster of CLUSTER_ROWS plus a short one
-  const loop = new LoopSystem(12, 6, [
-    { color: 'a', count: odd }, { color: 'b', count: odd }, { color: 'c', count: odd },
-  ], DEFAULT_FEEDS, 5);
-  expect(counts(loop)).toEqual({ a: odd, b: odd, c: odd });
-  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
-    if (!grp) continue;
-    expect(grp.count).toBeGreaterThan(0);
-    expect(grp.count).toBeLessThanOrEqual(G);
-  }
-});
-
-test('a cluster never mixes colours, however ragged the counts', () => {
-  // A colour change ends a cluster even mid-cluster, so every run the shuffle emits is one
-  // colour. Checked by walking the dealt order and requiring each run to be at most
-  // CLUSTER_ROWS long OR to be two clusters of the same colour that happened to adjoin --
-  // which is to say: no run may straddle a colour change, which is what `colorRuns` sees.
-  const loop = new LoopSystem(16, 8, [
-    { color: 'a', count: 3 * G + 1 }, { color: 'b', count: 2 * G + 3 }, { color: 'c', count: G },
-  ], DEFAULT_FEEDS, 3);
-  const dealt = [...loop.ring, ...loop.channels.flatMap((c) => c.queue)].filter((x) => x !== null);
-  for (const grp of dealt) expect(grp!.count).toBeLessThanOrEqual(G);
-  expect(counts(loop)).toEqual({ a: 3 * G + 1, b: 2 * G + 3, c: G });
 });
 
 test('the doorway window is symmetric about boardIndex and wraps the ring', () => {

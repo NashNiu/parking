@@ -1,75 +1,7 @@
 import {
-  BOARD_CELLS, CLUSTER_ROWS, DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup,
+  BOARD_CELLS, DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup,
 } from './types';
 import { entryIndex } from './track-path';
-
-/**
- * Deterministic PRNG (mulberry32). The shuffle must be reproducible: a level has to
- * look the same every time it is replayed, and the tests need a fixed answer.
- */
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** In-place Fisher-Yates driven by `next`. */
-function shuffleInPlace<T>(arr: T[], next: () => number): void {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(next() * (i + 1));
-    const tmp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = tmp;
-  }
-}
-
-/**
- * Chop a colour-ordered row list into CLUSTERS: runs of at most CLUSTER_ROWS consecutive
- * rows of ONE colour. A colour change always ends a cluster, so a cluster is never mixed.
- *
- * `toGroups` hands over the rows grouped by colour already (the queue is authored one entry
- * per colour), so this walks that order and cuts it up rather than sorting anything.
- *
- * Exported for its test: CLUSTER_ROWS is 1 at the moment, which makes the clustering
- * invisible in the dealt order (one row per cluster is just a per-row shuffle), so testing
- * it through `LoopSystem` alone would assert nothing about the mechanism.
- */
-export function toClusters(rows: PaxGroup[]): PaxGroup[][] {
-  const clusters: PaxGroup[][] = [];
-  let open: PaxGroup[] | null = null;
-  for (const row of rows) {
-    if (open === null || open[0].color !== row.color || open.length >= CLUSTER_ROWS) {
-      open = [];
-      clusters.push(open);
-    }
-    open.push(row);
-  }
-  return clusters;
-}
-
-/**
- * Shuffle CLUSTERS of same-coloured rows rather than rows, and flatten the result.
- *
- * At CLUSTER_ROWS 1 -- where it stands, and see that constant for the measurements that put
- * it there -- a cluster is one row and this is exactly the per-row Fisher-Yates the game
- * shipped with. Above 1 each colour arrives as a band of up to CLUSTER_ROWS rows, which pays
- * out through the doorway in one burst instead of several; it also collapses the ring's
- * colour mix, which is why the knob is at 1.
- *
- * Two clusters of the same colour can land next to each other, giving a band longer than
- * CLUSTER_ROWS. That is left alone deliberately: it is rare, it is not wrong, and rejecting
- * it would mean a shuffle that is no longer uniform over the clusters -- and no longer
- * reproducible from the seed alone by anything as simple as this.
- */
-function shuffleClusters(rows: PaxGroup[], next: () => number): PaxGroup[] {
-  const clusters = toClusters(rows);
-  shuffleInPlace(clusters, next);
-  return clusters.flat();
-}
 
 /**
  * Chop the authored queue into rows of at most GROUP_SIZE. A colour change always
@@ -121,7 +53,6 @@ export class LoopSystem {
     boardIndex: number,
     queue: QueueGroup[],
     feeds: Feed[] = DEFAULT_FEEDS,
-    shuffleSeed?: number,
   ) {
     this.capacity = capacity;
     this.boardIndex = boardIndex;
@@ -131,14 +62,11 @@ export class LoopSystem {
     this.boardHalf = Math.max(0, Math.min(
       (BOARD_CELLS - 1) >> 1, Math.floor(capacity / 4) - 1,
     ));
-    let all = toGroups(queue);
-    // Shuffle before the ring is filled so the track shows a mix instead of one
-    // solid colour block per queue group. Optional and seeded: callers that pass
-    // no seed (the unit tests) keep the authored order. Whole CLUSTERS of same-coloured
-    // rows move, never individual passengers and never the rows inside a cluster, so
-    // every row stays one colour. At CLUSTER_ROWS 1, where the knob stands, a cluster is
-    // one row and this is the per-row shuffle the game shipped with.
-    if (shuffleSeed !== undefined) all = shuffleClusters(all, rng(shuffleSeed));
+    // The queue's ORDER is level data: the generator authored it along the order the cars can
+    // leave in (see `bandedQueue`), so it is consumed verbatim. There used to be a seeded
+    // shuffle here, and it is gone rather than made optional -- a shuffle would destroy
+    // exactly the correspondence the order exists to carry.
+    const all = toGroups(queue);
     this.ring = new Array(capacity).fill(null);
     for (let i = 0; i < capacity && all.length > 0; i++) this.ring[i] = all.shift()!;
 

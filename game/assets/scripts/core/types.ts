@@ -219,10 +219,11 @@ export const GROUP_SIZE = 4;
  * bottom of the ring where the bay is. An even width would put the door's centre half a cell
  * off the lowest point of the track, which reads as a door hung crooked.
  *
- * 3, against rows that come in clusters of CLUSTER_ROWS. The pair is the whole point: one
- * cluster is four same-coloured rows, so a window of three takes eight to twelve people out
- * of it in one flight instead of four, and a colour the player set a car up for pays off in
- * one visible burst rather than four separate ones. That burst is what the width buys; it is
+ * 3, against rows that come in BANDS -- `bandedQueue` deals one band per car, a car's worth of
+ * rows. The pair is the whole point: a band is four same-coloured rows, so a window of three
+ * takes eight to twelve people out of it in one flight instead of four, and a colour the
+ * player set a car up for pays off in one visible burst rather than four separate ones. That
+ * burst is what the width buys; it is
  * NOT extra throughput, because the ring is still fed one row per tick at the live entrance
  * (see `LoopSystem.step`), so what changes is how lumpy the boarding is, not how long a
  * level runs.
@@ -234,46 +235,6 @@ export const GROUP_SIZE = 4;
  * against; every legal capacity (28 and up) has room for the full 3.
  */
 export const BOARD_CELLS = 3;
-
-/**
- * How many rows of ONE colour the shuffle keeps together on the track. 1 means no
- * clustering: every row is dealt on its own, which is what the game shipped with.
- *
- * OFF, AND THIS IS WHY. The intent was a satisfying payout: deal four same-coloured rows
- * side by side so a colour arrives as a band of 16 people and leaves through the BOARD_CELLS
- * doorway in one or two bursts instead of four separate ones. It works, and it makes the
- * game unwinnable.
- *
- * The ring drains SELECTIVELY. A colour the bay currently covers is boarded, so its cells
- * empty and refill from the channels; a colour no parked car wants cannot leave, so it stays.
- * With four stalls and up to six colours, two colours are homeless at any moment and their
- * rows pile up. Dealt one row at a time, a homeless colour adds ONE cell per lap and the
- * ring's colour mix decays slowly enough for the player to react -- that slack IS the game.
- * Dealt in clusters of four it adds FOUR, and the ring seals in a few laps: measured at the
- * deadlock on level 8, thirty of thirty-two cells held just cyan and yellow while the bay
- * sat on blue, green and red.
- *
- * Measured over the ten shipped levels, as (hard AND fair) verdicts from `isHardButFair`
- * (level 1 is a teaching level and cannot be hard, so 9 is the ceiling):
- *
- *   CLUSTER_ROWS 1, BOARD_CELLS 1   9/10   what shipped
- *   CLUSTER_ROWS 1, BOARD_CELLS 3   8/10   the wide doorway alone: level 10 turns easy
- *   CLUSTER_ROWS 2, BOARD_CELLS 3   4/10
- *   CLUSTER_ROWS 3, BOARD_CELLS 3   1/10
- *   CLUSTER_ROWS 4, BOARD_CELLS 3   2/10   five levels unwinnable by ANY policy tried
- *
- * Regenerating the levels does not rescue it, which is why the numbers above are the end of
- * the matter rather than the start of a search: what a painting decides is which colours the
- * player is forced to park, and the collapse is driven by which colours the bay is NOT
- * covering. Nor does opening more stalls -- at six unlocked instead of four, levels 2, 8 and
- * 9 are still unwinnable, because a blocked lot means the player cannot always reach the
- * colour the bay is missing.
- *
- * Kept as a knob, with `shuffleClusters` behind it, because the payout it buys is real and
- * the thing that would pay for it is a bigger bay or a longer ring -- a design change, not a
- * number. Raising this without one of those is how the ten levels above were lost.
- */
-export const CLUSTER_ROWS = 1;
 
 /** One row of same-coloured passengers. `count` falls as they board, 1..GROUP_SIZE. */
 export interface PaxGroup {

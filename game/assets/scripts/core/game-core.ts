@@ -42,10 +42,6 @@ export class GameCore {
       level.loop.boardIndex,
       level.loop.queue,
       level.loop.feeds ?? DEFAULT_FEEDS,
-      // Seeded by level id: mixed colours, but the same mix on every replay. `?? 0`
-      // guards against a level JSON missing `id` (validateLevel doesn't check it) --
-      // a level must never silently fall back to the unshuffled authored order.
-      level.id ?? 0,
     );
     this.boarding = new BoardingSystem(this.loop, this.parking);
     this.updateState();
