@@ -168,8 +168,8 @@ const PROMPT_W = 560;
  * Laid out from the top edge down, plate spanning y -230..230, each line's box being 1.2x
  * its font size (`makeLabel`):
  *
- *   title  y  154 +/- 32   ->  122..186   (44 off the top edge)
- *   sub    y   92 +/- 18   ->   74..110   (12 clear of the title)
+ *   title  y  154 +/- 29   ->  125..183   (47 off the top edge)
+ *   sub    y   92 +/- 18   ->   74..110   (15 clear of the title)
  *   rule   y   50          ->   49..51    (24 clear of the sub)
  *   button y  -26 +/- 56   ->  -82..30    (20 clear of the rule)
  *   cost   y -112 +/- 16   -> -128..-96   (14 clear of the button)
@@ -1077,7 +1077,11 @@ export class HudView {
         // are not blocked, they are full, and a player who reads it goes looking for
         // something to unblock. What has actually happened is that no car on the bay can
         // take a passenger any more, and the sub line says what to do about it.
-        const title = makeLabel(plate, 'PromptTitle', 54, PROMPT_TITLE_Y);
+        // 48, not the 54 the old three-word title wore. This one is seven characters, and
+        // Chinese glyphs run about one em wide: at 54 it reaches x +/-189 against the close
+        // button's left edge at 192, which is a coincidence rather than a margin. At 48 it
+        // reaches 168 and clears it by 24.
+        const title = makeLabel(plate, 'PromptTitle', 48, PROMPT_TITLE_Y);
         title.color = PROMPT_INK;
         title.isBold = true;
         title.string = '没有车能上客了';
