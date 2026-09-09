@@ -22,6 +22,17 @@ export interface WinStats {
 }
 
 /**
+ * What opening a stall costs, for the prompt that offers it. Assembled by the caller for the
+ * same reason WinStats is: both numbers are core's (`ParkingSystem.locked`, `GameCore.stars`).
+ */
+export interface UnlockCost {
+    /** Stalls still shut, this one included. */
+    left: number;
+    /** Whether opening one would actually cost a star, or the rating has already bottomed. */
+    losesStar: boolean;
+}
+
+/**
  * The passenger figure as a flat glyph, centred on `parent`: a head over a narrower body.
  *
  * The two pieces are positioned so the pair straddles the parent's centre -- the head above
@@ -150,7 +161,38 @@ const TOAST_INK = new Color(255, 255, 255, 255);
  * white. The panel is 520 of a 720-wide canvas, so it clears the level pills either side.
  */
 const PROMPT_W = 560;
-const PROMPT_H = 430;
+/**
+ * 460, up from 430. The prompt carries two things it did not: what opening a stall COSTS,
+ * under the button, and a second way out that is not the close button.
+ *
+ * Laid out from the top edge down, plate spanning y -230..230, each line's box being 1.2x
+ * its font size (`makeLabel`):
+ *
+ *   title  y  154 +/- 32   ->  122..186   (44 off the top edge)
+ *   sub    y   92 +/- 18   ->   74..110   (12 clear of the title)
+ *   rule   y   50          ->   49..51    (24 clear of the sub)
+ *   button y  -26 +/- 56   ->  -82..30    (20 clear of the rule)
+ *   cost   y -112 +/- 16   -> -128..-96   (14 clear of the button)
+ *   replay y -167 +/- 18   -> -185..-149  (21 clear of the cost, 45 off the bottom)
+ */
+const PROMPT_H = 460;
+/** Where each line sits. The arithmetic that spaces them is under PROMPT_H. */
+const PROMPT_TITLE_Y = 154;
+const PROMPT_SUB_Y = 92;
+const PROMPT_RULE_Y = 50;
+const PROMPT_BTN_Y = -26;
+const PROMPT_COST_Y = -112;
+const PROMPT_REPLAY_Y = -167;
+/**
+ * The cost line, smaller than the sub and directly under the button it applies to.
+ *
+ * It is the line this redesign is really for. Opening a stall was free, unlimited as far as
+ * anything on screen said, and the only alternative offered was an X that lost the level --
+ * so the "choice" was between a free rescue and suicide, and nobody reads a prompt like that
+ * twice. With the star rating metering unlocks and this line naming both what is left and
+ * what it costs, it becomes a decision.
+ */
+const PROMPT_COST_SIZE = 26;
 const PROMPT_R = 44;
 const PROMPT_BG = new Color(252, 253, 255, 255);
 /** The panel's own drop shadow: a second plate behind it, offset down. */
@@ -299,18 +341,20 @@ const WIN_BAR_OFF = new Color(222, 227, 238, 255);
 const WIN_TALLY_SIZE = 27;
 
 /**
- * The second answer, as TEXT rather than a second slab.
+ * A card's quiet second answer, as TEXT rather than a second slab. Both cards use it: the
+ * win card's replay, and the blocked-stall prompt's.
  *
  * Two buttons of equal weight is a question the player did not ask -- nearly everyone wants
- * the next level -- so the replay is a text button under the main one: reachable, obviously
- * tappable, and clearly the quieter of the two. It matters because the star rating gives
- * replaying a point for the first time.
+ * the obvious one -- so the other answer is text under the main button: reachable, plainly
+ * tappable, and clearly the quieter of the two.
+ *
+ * The hit box is much bigger than the ink, because a text button sized to its own glyphs is
+ * a text button nobody can hit.
  */
-const WIN_REPLAY_SIZE = 30;
-const WIN_REPLAY_INK = new Color(122, 133, 160, 255);
-/** The text button's hit box, which is bigger than its ink. */
-const WIN_REPLAY_W = 240;
-const WIN_REPLAY_H = 72;
+const TEXT_BTN_SIZE = 30;
+const TEXT_BTN_INK = new Color(122, 133, 160, 255);
+const TEXT_BTN_W = 240;
+const TEXT_BTN_H = 72;
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -540,10 +584,13 @@ export class HudView {
     private toastFade: UIOpacity | null = null;
     private toastTitle: Label | null = null;
     private buildTag: Label | null = null;
-    /** The unlock prompt's scrim, its two hit targets, and whether it is up. */
+    /** The unlock prompt's scrim and its three hit targets. */
     private prompt: Node | null = null;
     private promptBtn: Node | null = null;
     private promptClose: Node | null = null;
+    private promptReplay: Node | null = null;
+    /** The only line on the prompt that changes. See `showUnlockPrompt`. */
+    private promptCost: Label | null = null;
     private pickNodes: Node[] = [];
     /**
      * The two readout plates, by their HOLDERS rather than their labels: `setPlayVisible`
@@ -929,10 +976,15 @@ export class HudView {
     }
 
     /**
-     * Raise the "open a stall or lose" prompt. Idempotent -- the controller asks on every
-     * tick the condition holds, not only on the edge.
+     * Raise the "nothing can board" prompt. Idempotent -- the controller asks on every tick
+     * the condition holds, not only on the edge.
+     *
+     * `cost` is read only when the prompt is actually raised, which is safe because the state
+     * behind it is frozen: the bay is full, nothing on it can board, so no stall opens or
+     * frees itself while this is up. The only things that change these numbers are the
+     * player's own answers, and all three of them take the prompt down first.
      */
-    showUnlockPrompt(): void {
+    showUnlockPrompt(cost: UnlockCost): void {
         if (!this.prompt) this.buildUnlockPrompt();
         const scrim = this.prompt!;
         if (scrim.active) return;
@@ -941,6 +993,13 @@ export class HudView {
         // later siblings than anything built in the constructor. Same reason as the banner.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
         this.syncHomeBtn();
+        // Both halves of the price, because either one alone reads as a smaller decision than
+        // it is: how many are left, and what this one takes off the rating. At one star the
+        // rating has bottomed out and there is nothing left to lose, so saying so is more
+        // honest than repeating a threat that no longer applies.
+        this.promptCost!.string = cost.losesStar
+            ? `还能开 ${cost.left} 个 · 少一颗星`
+            : `还能开 ${cost.left} 个 · 星级已到底`;
         // By name, for the reason `showWin` now does: this happens to be children[0] today,
         // and would quietly become whatever decoration is added in front of it tomorrow.
         // Here the failure would be milder than showWin's -- the panel still shows, because
@@ -967,18 +1026,28 @@ export class HudView {
     }
 
     /**
-     * Which of the prompt's two answers `ui` landed on, or null for the panel and the
-     * scrim -- a tap that hits neither button is SWALLOWED, not passed through, because
-     * closing this by tapping the board would be the same as choosing to lose.
+     * Which of the prompt's three answers `ui` landed on, or null for the panel and the
+     * scrim -- a tap that hits neither button is SWALLOWED, not passed through, because the
+     * board behind it has no move left in it and tapping around would just look broken.
+     *
+     * The close button means 'home' here, and it did NOT before: it used to end the level in
+     * a loss, on a position that still had a legal move in it. An X is the one control on a
+     * phone whose meaning is not up for grabs -- it dismisses -- and wiring the harshest
+     * outcome in the game to it made the prompt a trap, on a state the player reaches in 59
+     * of 80 runs. Leaving for the menu is what dismissing this actually means, now that
+     * there is a menu to leave for.
      */
-    hitsUnlockPrompt(ui: Vec3): 'unlock' | 'close' | null {
+    hitsUnlockPrompt(ui: Vec3): 'unlock' | 'replay' | 'home' | null {
         if (!this.promptOpen()) return null;
         const c = this.promptClose!.worldPosition;
         const r = PROMPT_X_D / 2 + 12;
-        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
         const b = this.promptBtn!.worldPosition;
         if (Math.abs(ui.x - b.x) <= PROMPT_BTN_W / 2 + 8
             && Math.abs(ui.y - b.y) <= PROMPT_BTN_H / 2 + 8) return 'unlock';
+        const p = this.promptReplay!.worldPosition;
+        if (Math.abs(ui.x - p.x) <= TEXT_BTN_W / 2
+            && Math.abs(ui.y - p.y) <= TEXT_BTN_H / 2) return 'replay';
         return null;
     }
 
@@ -1004,26 +1073,30 @@ export class HudView {
         const plate = roundedSprite('plate', PROMPT_W, PROMPT_H, PROMPT_BG, PROMPT_R);
         panel.addChild(plate);
 
-        const title = makeLabel(plate, 'PromptTitle', 54, 116);
+        // NAMES THE STATE, not a guess at it. "车位堵住了" was wrong twice over: the stalls
+        // are not blocked, they are full, and a player who reads it goes looking for
+        // something to unblock. What has actually happened is that no car on the bay can
+        // take a passenger any more, and the sub line says what to do about it.
+        const title = makeLabel(plate, 'PromptTitle', 54, PROMPT_TITLE_Y);
         title.color = PROMPT_INK;
         title.isBold = true;
-        title.string = '车位堵住了';
+        title.string = '没有车能上客了';
 
-        const sub = makeLabel(plate, 'PromptSub', 30, 52);
+        const sub = makeLabel(plate, 'PromptSub', 30, PROMPT_SUB_Y);
         sub.color = PROMPT_SUB;
-        sub.string = '解锁一个车位才能继续';
+        sub.string = '开一个车位，让新的车进来';
 
         // A hairline between the message and the choice, so the panel reads as two parts
-        // rather than four stacked things.
+        // rather than five stacked things.
         const rule = roundedSprite('rule', PROMPT_W - 96, 2, PROMPT_X_BG, 1);
         plate.addChild(rule);
-        rule.setPosition(0, 8, 0);
+        rule.setPosition(0, PROMPT_RULE_Y, 0);
 
         const btn = new Node('PromptBtn');
         btn.layer = Layers.Enum.UI_2D;
         btn.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
         plate.addChild(btn);
-        btn.setPosition(0, -92, 0);
+        btn.setPosition(0, PROMPT_BTN_Y, 0);
         const base = roundedSprite(
             'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
         );
@@ -1036,6 +1109,23 @@ export class HudView {
         const btnLabel = makeLabel(face, 'PromptBtnLabel', 46, 0);
         btnLabel.isBold = true;
         btnLabel.string = '解锁车位';
+
+        // Under the button, not on it: it is the price of pressing that button, and a price
+        // printed inside a button competes with the button's own word. See PROMPT_COST_SIZE.
+        this.promptCost = makeLabel(plate, 'PromptCost', PROMPT_COST_SIZE, PROMPT_COST_Y);
+        this.promptCost.color = PROMPT_SUB;
+
+        // See TEXT_BTN_SIZE. The same control the win card wears, and the same reason: this
+        // is the answer for a player who would rather start the level over than pay, and it
+        // must be reachable without being as loud as the offer.
+        const replay = new Node('PromptReplay');
+        replay.layer = Layers.Enum.UI_2D;
+        replay.addComponent(UITransform).setContentSize(TEXT_BTN_W, TEXT_BTN_H);
+        plate.addChild(replay);
+        replay.setPosition(0, PROMPT_REPLAY_Y, 0);
+        const replayLabel = makeLabel(replay, 'PromptReplayLabel', TEXT_BTN_SIZE, 0);
+        replayLabel.color = TEXT_BTN_INK;
+        replayLabel.string = '重玩本关';
 
         const close = dotSprite('PromptClose', PROMPT_X_D, PROMPT_X_BG);
         plate.addChild(close);
@@ -1051,6 +1141,7 @@ export class HudView {
         this.prompt = scrim;
         this.promptBtn = btn;
         this.promptClose = close;
+        this.promptReplay = replay;
     }
 
     /** See PICK_LEVELS for why this exists and how to remove it. */
@@ -1286,16 +1377,14 @@ export class HudView {
         ctaLabel.isBold = true;
         this.winCta = cta;
 
-        // A node with a hit box, holding a label: the ink is 30px of text but the target is
-        // WIN_REPLAY_W by WIN_REPLAY_H, because a text button sized to its own glyphs is a
-        // text button nobody can hit.
+        // See TEXT_BTN_SIZE: a node with a hit box, holding a label.
         const replay = new Node('WinReplay');
         replay.layer = Layers.Enum.UI_2D;
-        replay.addComponent(UITransform).setContentSize(WIN_REPLAY_W, WIN_REPLAY_H);
+        replay.addComponent(UITransform).setContentSize(TEXT_BTN_W, TEXT_BTN_H);
         plate.addChild(replay);
         replay.setPosition(0, WIN_REPLAY_Y, 0);
-        const replayLabel = makeLabel(replay, 'WinReplayLabel', WIN_REPLAY_SIZE, 0);
-        replayLabel.color = WIN_REPLAY_INK;
+        const replayLabel = makeLabel(replay, 'WinReplayLabel', TEXT_BTN_SIZE, 0);
+        replayLabel.color = TEXT_BTN_INK;
         replayLabel.string = '重玩本关';
         this.winReplay = replay;
 
@@ -1444,8 +1533,8 @@ export class HudView {
         const r = PROMPT_X_D / 2 + 12;
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
         const p = this.winReplay!.worldPosition;
-        if (Math.abs(ui.x - p.x) <= WIN_REPLAY_W / 2
-            && Math.abs(ui.y - p.y) <= WIN_REPLAY_H / 2) return 'replay';
+        if (Math.abs(ui.x - p.x) <= TEXT_BTN_W / 2
+            && Math.abs(ui.y - p.y) <= TEXT_BTN_H / 2) return 'replay';
         return 'next';
     }
 

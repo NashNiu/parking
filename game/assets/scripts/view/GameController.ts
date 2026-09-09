@@ -1546,7 +1546,12 @@ export class GameController extends Component {
      */
     private syncUnlockUrge(): void {
         if (!this.core?.needsUnlock() || this.busy || this.arriving > 0) return;
-        this.hud?.showUnlockPrompt();
+        this.hud?.showUnlockPrompt({
+            left: this.core.parking.locked(),
+            // At one star there is nothing left to lose, and a prompt that keeps threatening
+            // a star it cannot take is a prompt the player learns to stop reading.
+            losesStar: this.core.stars() > 1,
+        });
     }
 
     /**
@@ -2077,20 +2082,24 @@ export class GameController extends Component {
             return;
         }
         // The unlock prompt owns every tap while it is up -- see `showUnlockPrompt`. Before
-        // the level picker too: this is a question with a losing answer, and being able to
-        // duck it by tapping something else would make it optional, which it is not.
+        // the level picker and before the home button, because it is a modal and the board
+        // behind it has no move in it: a tap that misses its three answers is swallowed
+        // rather than doing something else somewhere else.
+        //
+        // All three answers RESOLVE the state, which is why none of them needs the prompt to
+        // come back afterwards: open a stall and the board moves again, replay and the level
+        // restarts, leave and there is no level. That is what replaced the old X -- it ended
+        // the level in a loss on a position that still had a legal move in it.
         if (this.uiCam && this.hud?.promptOpen()) {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             const hit = this.hud.hitsUnlockPrompt(ui);
             if (hit === 'unlock') {
                 this.hud.hideUnlockPrompt();
                 this.unlockNextSlot();
-            } else if (hit === 'close') {
-                this.hud.hideUnlockPrompt();
-                // Core decides, not the view: `declineUnlock` re-checks the position and
-                // refuses if it has started moving again. `update` picks up the state
-                // change and raises the banner.
-                this.core?.declineUnlock();
+            } else if (hit === 'replay') {
+                this.switchTo(this.levelName);
+            } else if (hit === 'home') {
+                this.showHome();
             }
             return;   // anything else on this screen is swallowed
         }

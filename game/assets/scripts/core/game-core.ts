@@ -170,9 +170,17 @@ export class GameCore {
    * in it.
    *
    * Deliberately gated on `needsUnlock` rather than trusting the caller: a level must not
-   * be endable from a position the player could still have played out, and the view asking
-   * twice (a double tap on the prompt's close button, say) must be idempotent rather than
-   * able to kill a level that has since started moving again.
+   * be endable from a position the player could still have played out, and a caller asking
+   * twice must be idempotent rather than able to kill a level that has since started moving
+   * again.
+   *
+   * NOTHING CALLS THIS TODAY, and that is deliberate rather than rot. The prompt's close
+   * button used to: an X that lost the level on a position with a free legal move still in
+   * it, on a state the player reaches in 59 of 80 runs. Its three answers now all resolve
+   * the position instead -- open a stall, replay, or leave for the menu -- so a level ends
+   * in a loss only on a real deadlock. This stays because giving up is a real transition a
+   * settings menu may well offer later, and it is the only safe way to make it: it re-checks
+   * the position rather than believing the caller.
    */
   declineUnlock(): boolean {
     if (!this.needsUnlock()) return false;

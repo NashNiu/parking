@@ -212,3 +212,21 @@ test('parking and departing cars leave unlocksUsed alone', () => {
   expect(p.removeFull()).toEqual([1]);
   expect(p.unlocksUsed()).toBe(0);
 });
+/**
+ * `locked` is what the blocked-stall prompt tells the player they have left, so it counts
+ * stalls STILL SHUT -- the mirror of `unlocksUsed`, and the number `canUnlock` reduces to a
+ * yes or no.
+ */
+test('locked counts the stalls still shut', () => {
+  const p = new ParkingSystem(7, 4);
+  expect(p.locked()).toBe(3);
+  p.unlock();
+  expect(p.locked()).toBe(2);
+  p.unlock();
+  p.unlock();
+  expect(p.locked()).toBe(0);
+  expect(p.canUnlock()).toBe(false);
+  // Refused, so it must not go negative -- the prompt would print "剩 -1 次".
+  p.unlock();
+  expect(p.locked()).toBe(0);
+});

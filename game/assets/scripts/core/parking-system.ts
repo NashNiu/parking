@@ -83,6 +83,18 @@ export class ParkingSystem {
     return this.parked.length - this.unlocked;
   }
 
+  /**
+   * How many stalls are still shut -- the mirror of `unlocksUsed`, and what `canUnlock`
+   * reduces to a yes or no.
+   *
+   * The blocked-stall prompt prints this, which is the whole reason it exists as a count:
+   * "open a stall" is a very different offer when it is the last one, and until now nothing
+   * anywhere told the player how many they had.
+   */
+  locked(): number {
+    return this.slots - this.parked.length;
+  }
+
   park(car: CarSpec): number {
     const idx = this.parked.findIndex((p) => p === null);
     if (idx === -1) throw new Error('no free parking slot');
