@@ -255,3 +255,147 @@ export function burstSprite(name: string, d: number, color: Color): Node {
     }
     return spriteNode(name, d, d, color, burstFrame, Sprite.Type.SIMPLE);
 }
+
+/**
+ * THE THREE GLYPH ICONS: a gear for the settings button, a speaker and a buzzing phone for
+ * the two switches inside it.
+ *
+ * They exist because the settings button used to say the WORD 设置, over an argument that is
+ * written down at GEAR_D in hud-view: a gear from the system font is one substitution away
+ * from a hollow box on a device whose font lacks it, and every other string on the HUD is
+ * Chinese text known to render. That argument holds -- against a FONT glyph. It says nothing
+ * about a shape this file paints itself, which is the same thing the stars and the padlock
+ * already are, and which cannot be substituted because no font is consulted.
+ *
+ * Each is described in the unit square, y DOWN, and scaled to the texture on the way out --
+ * so the numbers below read as fractions of the icon rather than as pixels of whatever size
+ * it happens to be painted at.
+ *
+ * Painted at 96 rather than the dot's 32: these are drawn at 44 to 68 design units, which on
+ * a 1170-wide phone against a 720-unit canvas is up to 110 device pixels, and a gear tooth
+ * has corners a circle does not.
+ */
+const ICON_SIZE = 96;
+
+/** Positive INSIDE a box centred on the origin: the distance to its nearest edge. */
+function boxIn(px: number, py: number, hx: number, hy: number): number {
+    return Math.min(hx - Math.abs(px), hy - Math.abs(py));
+}
+
+/** Signed distance to a rounded box centred on the origin, positive OUTSIDE. */
+function roundBoxSd(
+    px: number, py: number, hx: number, hy: number, r: number,
+): number {
+    const qx = Math.abs(px) - hx + r;
+    const qy = Math.abs(py) - hy + r;
+    return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - r;
+}
+
+/**
+ * Positive inside a CONVEX polygon, as the smallest of its edges' signed distances.
+ *
+ * Exact inside, conservative outside (a point past a corner reports the nearer of the two
+ * edge planes, which is further than the true distance) -- and outside is where coverage is
+ * clamped to zero anyway, so the only place it shows is the one-pixel fade at a corner.
+ *
+ * The winding matters: these are wound so that the interior is to the LEFT of each edge in
+ * this file's y-down frame. Reversed, every distance flips sign and the shape disappears --
+ * which is exactly what the speaker's cone did on the first attempt.
+ */
+function polyIn(px: number, py: number, pts: [number, number][]): number {
+    let best = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+        const [ax, ay] = pts[i];
+        const [bx, by] = pts[(i + 1) % pts.length];
+        const ex = bx - ax, ey = by - ay;
+        const len = Math.hypot(ex, ey);
+        best = Math.min(best, ((px - ax) * ey - (py - ay) * ex) / len);
+    }
+    return best;
+}
+
+/**
+ * A cogwheel: a round body, eight teeth, a hole through the middle.
+ *
+ * The teeth are one test rather than eight shapes -- the angle to the NEAREST tooth centre,
+ * folded into a single wedge -- and the wedge's angular half-width is turned into a length by
+ * multiplying by the radius, so a tooth has parallel sides instead of widening outward.
+ */
+function gearCoverage(size: number): (x: number, y: number) => number {
+    const span = Math.PI / 8;
+    return (x, y) => {
+        const px = x / size - 0.5, py = y / size - 0.5;
+        const d = Math.hypot(px, py);
+        // The exact centre has no angle, and it is inside the hole regardless.
+        if (d < 1e-6) return -1;
+        const a = ((Math.atan2(py, px) + span) % (2 * span)) - span;
+        const tooth = Math.min(0.46 - d, (span * 0.46 - Math.abs(a)) * d);
+        return (Math.min(Math.max(0.33 - d, tooth), d - 0.13)) * size + 0.5;
+    };
+}
+
+/** A speaker: a stem, a cone, and two arcs of sound coming off it. */
+function speakerCoverage(size: number): (x: number, y: number) => number {
+    return (x, y) => {
+        const u = x / size, v = y / size;
+        // The arcs' centre, which is the cone's throat rather than the icon's middle.
+        const px = u - 0.34, py = v - 0.5;
+        let cov = boxIn(u - 0.23, py, 0.07, 0.095);
+        cov = Math.max(cov, polyIn(u, v, [
+            [0.30, 0.595], [0.50, 0.80], [0.50, 0.20], [0.30, 0.405],
+        ]));
+        const d = Math.hypot(px, py);
+        for (const r of [0.28, 0.40]) {
+            // A ring, then cut to the right-hand side and to a wedge -- a full ring would
+            // circle the cone, and half a ring would still curl round its mouth.
+            let arc = 0.026 - Math.abs(d - r);
+            arc = Math.min(arc, px - 0.19, px * 1.05 - Math.abs(py));
+            cov = Math.max(cov, arc);
+        }
+        return cov * size + 0.5;
+    };
+}
+
+/** A phone shaking: the body as an outline, with two motion ticks either side of it. */
+function buzzCoverage(size: number): (x: number, y: number) => number {
+    return (x, y) => {
+        const px = x / size - 0.5, py = y / size - 0.5;
+        // The body is a rounded box's OUTLINE: its distance field, banded about zero.
+        let cov = 0.026 - Math.abs(roundBoxSd(px, py, 0.135, 0.245, 0.055));
+        cov = Math.max(cov, boxIn(px, py + 0.155, 0.055, 0.016));
+        cov = Math.max(cov, boxIn(px, py - 0.175, 0.030, 0.030));
+        for (const side of [-1, 1]) {
+            cov = Math.max(cov, boxIn(px - side * 0.245, py, 0.019, 0.100));
+            cov = Math.max(cov, boxIn(px - side * 0.335, py, 0.019, 0.070));
+        }
+        return cov * size + 0.5;
+    };
+}
+
+/**
+ * One cached frame per icon, and one factory instead of three copies of the caching.
+ *
+ * SIMPLE, not sliced, for the same reason the star is: an icon has no middle that can be
+ * stretched, so it scales as a whole and one frame serves every size it is drawn at.
+ */
+const iconFrames = new Map<string, SpriteFrame>();
+
+function iconSprite(
+    kind: string, coverage: (size: number) => (x: number, y: number) => number,
+): (name: string, d: number, color: Color) => Node {
+    return (name, d, color) => {
+        let frame = iconFrames.get(kind);
+        if (!frame) {
+            frame = frameFrom(paint(ICON_SIZE, coverage(ICON_SIZE)), ICON_SIZE);
+            iconFrames.set(kind, frame);
+        }
+        return spriteNode(name, d, d, color, frame, Sprite.Type.SIMPLE);
+    };
+}
+
+/** A cogwheel `d` units across, tinted `color`. */
+export const gearSprite = iconSprite('gear', gearCoverage);
+/** A speaker with sound coming off it, `d` units across, tinted `color`. */
+export const speakerSprite = iconSprite('speaker', speakerCoverage);
+/** A shaking phone `d` units across, tinted `color`. */
+export const buzzSprite = iconSprite('buzz', buzzCoverage);

@@ -1,6 +1,8 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
-import { roundedSprite, dotSprite, starSprite, burstSprite } from './ui-shapes';
-import { canvasSize, makeLabel, safeInsets } from './ui-layout';
+import {
+    roundedSprite, dotSprite, starSprite, burstSprite, gearSprite, speakerSprite, buzzSprite,
+} from './ui-shapes';
+import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
 import { STAR_MAX } from '../core/index';
 
 /**
@@ -21,10 +23,21 @@ export interface WinStats {
     stars: number;
 }
 
-/** A switch's two moving parts. The knob is a child of the track, so it travels with it. */
+/**
+ * A switch: its row and its two moving parts. The knob is a child of the track, so it
+ * travels with it.
+ *
+ * `row` is the WHOLE row as one node -- icon, label and track inside it, sized to the page --
+ * and it exists so the hit test can be `inBox(row)` like every button here. The arithmetic it
+ * replaces measured out from the track and reached 150 units past the card, so a tap on the
+ * dim scrim beside the panel toggled the sound.
+ */
 interface SwitchParts {
-    track: Node;
+    row: Node;
+    /** The holder that travels: the white ring and the coloured face are inside it. */
     knob: Node;
+    /** The knob's coloured face, which is the sprite `paintSwitch` tints. */
+    face: Node;
 }
 
 /**
@@ -154,66 +167,172 @@ const TOAST_BG = new Color(26, 32, 50, 236);
 const TOAST_INK = new Color(255, 255, 255, 255);
 
 /**
+ * THE CARD: the shape both of this HUD's dialogs are cut from -- a thick coloured rim, a
+ * cream page inside it, and the title on the RIM rather than on the page.
+ *
+ * It replaced a white rounded rectangle with dark grey type in it, reported as 太丑了 beside
+ * a screenshot of the game this borrows from. That game's panels are not better because they
+ * carry more detail; they are better because a panel there is drawn as an OBJECT -- something
+ * with an edge, a face and a lit top -- where ours was drawn as a region of the screen with
+ * text on it. Three things carry that, and all three are cheap:
+ *
+ *   the rim      a border wide enough to be a frame rather than a stroke, in a saturated
+ *                colour, with a darker copy under it so the frame has a bottom edge
+ *   the page     a warm off-white inside the rim, so the panel has an inside and an outside
+ *   rimmed type  white glyphs with a coloured outline (`rimLabel`), which is the one trick
+ *                that makes a label read as part of a toy and not as text laid over one
+ *
+ * CARD_HEAD is how much rim shows ABOVE the page, and it is where the title goes. CARD_RIM is
+ * how much shows down the sides and along the bottom. Everything a panel puts inside itself
+ * is positioned in PAGE coordinates, so a card's own layout arithmetic never mentions the rim
+ * again.
+ */
+const CARD_R = 56;
+const CARD_RIM = 24;
+const CARD_HEAD = 116;
+/** How far the rim's darker copy peeks out below it: the frame's bottom edge. */
+const CARD_LIFT = 12;
+const CARD_PAGE_R = 36;
+const CARD_TITLE_SIZE = 54;
+const CARD_RIM_FACE = new Color(64, 172, 236, 255);
+const CARD_RIM_BASE = new Color(28, 112, 176, 255);
+const CARD_PAGE = new Color(253, 246, 232, 255);
+/**
+ * Ink on the cream page, and the quieter ink under it.
+ *
+ * Browns rather than the greys this HUD uses on white, because a cool grey on a warm ground
+ * reads as dirty. Measured against CARD_PAGE these are 8.8:1 and 4.9:1, so even the
+ * secondary line clears 4.5:1 at the 26px it is set in -- the grey it replaces managed 2.6
+ * on this ground, which is a cost line nobody can read.
+ */
+const CARD_INK = new Color(86, 66, 44, 255);
+const CARD_SUB = new Color(128, 104, 78, 255);
+/**
+ * The close button, centred ON the page's top-right corner rather than tucked inside it: a
+ * disc that overlaps the frame belongs to the whole card, and one inside the page competes
+ * with the page's own contents for that corner.
+ *
+ * A white ring around it, then the same face-over-base pair as every other pressable thing
+ * here. The ring is what separates a blue disc from the blue rim it half sits on.
+ */
+const CARD_X_D = 84;
+const CARD_X_RING = 7;
+const CARD_X_LIFT = 5;
+/** The rim colour for white type on a green button -- the frame's blue would fight the green. */
+const CARD_BTN_RIM = new Color(48, 132, 40, 255);
+
+/**
+ * The primary action: a green key drawn as two plates, the darker one peeking out below the
+ * lighter, which is what makes a flat rectangle read as something with a top face to press.
+ * The same trick as the padlock's rim on the board, and as the card's own rim.
+ *
+ * Declared here rather than with the win card it is also used by, because the settings
+ * panel derives SET_BTN_Y from this height and a const initialiser cannot reach forward.
+ */
+const PROMPT_BTN_W = 400;
+const PROMPT_BTN_H = 112;
+const PROMPT_BTN_R = 38;
+const PROMPT_BTN = new Color(86, 199, 104, 255);
+const PROMPT_BTN_BASE = new Color(56, 156, 76, 255);
+const PROMPT_BTN_LIFT = 8;
+
+/**
  * The "open a stall or lose" prompt: the one MODAL thing on this HUD.
  *
  * Everything else here either reports (the pills, the toast) or can be ignored (the speed
  * button). This asks a question the level cannot go on without an answer to -- the bay is
  * full, nothing on it can board, and opening a stall is the only move left -- so it takes
- * the screen, dims the board behind it, and swallows every tap that is not one of its two
- * buttons. Answering it with the close button ENDS the level (`GameCore.declineUnlock`),
- * which is the only way a level ends on a position that still had a move in it.
+ * the screen, dims the board behind it, and swallows every tap that is not one of its three
+ * answers. See `hitsUnlockPrompt` for what each of those means.
  *
- * A dark scrim rather than a light one: the board underneath is pale, and the panel is
- * white. The panel is 520 of a 720-wide canvas, so it clears the level pills either side.
+ * A dark scrim rather than a light one: the board underneath is pale and the card is pale.
+ * The card is 620 of a 720-wide canvas, which is as wide as it can be and still leave the
+ * close button room to overhang into.
  */
-const PROMPT_W = 560;
+const PROMPT_W = 620;
 /**
- * 460, up from 430. The prompt carries two things it did not: what opening a stall COSTS,
- * under the button, and a second way out that is not the close button.
+ * 520: CARD_HEAD 116 + a 380-tall page + CARD_RIM 24. The title is no longer part of this
+ * stack -- it sits on the rim -- so the page holds four things where it held five.
  *
- * Laid out from the top edge down, plate spanning y -230..230, each line's box being 1.2x
+ * Laid out in PAGE coordinates, the page spanning y -190..190, each line's box being 1.2x
  * its font size (`makeLabel`):
  *
- *   title  y  154 +/- 29   ->  125..183   (47 off the top edge)
- *   sub    y   92 +/- 18   ->   74..110   (15 clear of the title)
- *   rule   y   50          ->   49..51    (24 clear of the sub)
- *   button y  -26 +/- 56   ->  -82..30    (20 clear of the rule)
- *   cost   y -112 +/- 16   -> -128..-96   (14 clear of the button)
- *   replay y -167 +/- 18   -> -185..-149  (21 clear of the cost, 45 off the bottom)
+ *   sub    y  132 +/- 18  ->  114..150   (40 off the page's top edge)
+ *   button y   22 +/- 56  ->  -34..78    (36 clear of the sub)
+ *   cost   y  -68 +/- 16  ->  -84..-52   (18 clear of the button)
+ *   replay y -138 +/- 18  -> -156..-120  (36 clear of the cost, 34 off the bottom)
+ *
+ * The close button's disc spans y 148..232 of the page and x 202..286, so the only line it
+ * shares a band with is the sub -- whose twelve glyphs at 30 reach x 180 and clear it by 22.
  */
-const PROMPT_H = 460;
-/**
- * The settings panel. Its stack's arithmetic is in `buildSettings`, which is also where the
- * reason it exists at all is written down.
- */
-const SET_W = 560;
-const SET_H = 480;
-const SET_TITLE_Y = 176;
-const SET_RULE_TOP_Y = 126;
-const SET_ROW1_Y = 76;
-const SET_ROW2_Y = -4;
-const SET_RULE_BOTTOM_Y = -62;
-const SET_BTN_Y = -140;
-const SET_BTN_H = 96;
-const SET_BTN_R = 30;
-const SET_WIDE_W = 252;
-const SET_SIDE_W = 112;
-const SET_BTN_GAP = 18;
-/** The two quieter answers: the same slab, in the HUD's blue rather than its green. */
-const SET_SIDE = new Color(74, 144, 226, 255);
-const SET_SIDE_BASE = new Color(44, 96, 165, 255);
-const SET_SW_W = 120;
-const SET_SW_H = 56;
-const SET_SW_ON = new Color(86, 199, 104, 255);
-const SET_SW_OFF = new Color(214, 219, 232, 255);
+const PROMPT_H = 520;
+/** Where each line sits, in page coordinates. The arithmetic is under PROMPT_H. */
+const PROMPT_SUB_Y = 132;
+const PROMPT_BTN_Y = 22;
+const PROMPT_COST_Y = -68;
+const PROMPT_REPLAY_Y = -138;
 
-/** Where each line sits. The arithmetic that spaces them is under PROMPT_H. */
-const PROMPT_TITLE_Y = 154;
-const PROMPT_SUB_Y = 92;
-const PROMPT_RULE_Y = 50;
-const PROMPT_BTN_Y = -26;
-const PROMPT_COST_Y = -112;
-const PROMPT_REPLAY_Y = -167;
+/**
+ * The settings panel: the same card, with its three answers BELOW it rather than on it.
+ *
+ * Outside the card because they are answers about the LEVEL rather than about the panel --
+ * the reference art does the same, and it is also what lets the middle button be as wide as
+ * it is. The panel node is raised by SET_RAISE so that the card and the button row TOGETHER
+ * centre on the screen; without it the composition hangs low by half a button.
+ *
+ *   card    y  291 .. 71     (SET_H 440: CARD_HEAD 116 + a 300-tall page + CARD_RIM 24)
+ *   buttons y -179 .. -291   (SET_BTN_GAP_Y 30 below the card)
+ */
+const SET_W = 620;
+const SET_H = 440;
+const SET_PAGE_W = SET_W - CARD_RIM * 2;
+const SET_PAGE_H = SET_H - CARD_HEAD - CARD_RIM;
+/**
+ * The two switch rows, in page coordinates: 92 tall each, 144 apart, on a 300-tall page.
+ *
+ * That leaves 32 clear above the first and below the second and 52 between them. The two
+ * rows are the only things on this page, and rows crammed against a frame read as a list
+ * that has been cut off.
+ */
+const SET_ROW_H = 92;
+const SET_ROW1_Y = 72;
+const SET_ROW2_Y = -72;
+/** Icon, then label, then track, measured in from the page's own edges. */
+const SET_ICON_D = 62;
+const SET_ICON_X = -SET_PAGE_W / 2 + 56;
+const SET_LABEL_SIZE = 40;
+const SET_LABEL_X = SET_ICON_X + SET_ICON_D / 2 + 22;
+const SET_SW_W = 150;
+const SET_SW_H = 68;
+const SET_SW_X = SET_PAGE_W / 2 - 56 - SET_SW_W / 2;
+/**
+ * The knob: a rounded square, not a circle, with a white ring around it.
+ *
+ * RED for off against green for on, which is the one thing here taken straight from the
+ * reference art. Position alone is ambiguous on a control this small and colour alone fails
+ * for a player who cannot tell green from grey -- but red against green at opposite ENDS of
+ * the track is two independent signals, and a red knob also reads as "switched off" to
+ * somebody who has never seen the control before.
+ */
+const SET_SW_KNOB = 64;
+const SET_SW_KNOB_R = 22;
+const SET_SW_RING = 5;
+const SET_SW_TRACK = new Color(228, 214, 190, 255);
+const SET_SW_ON = new Color(112, 200, 60, 255);
+const SET_SW_OFF = new Color(230, 82, 78, 255);
+/**
+ * The answers under the card. The middle one is the wide green one -- see `buildSettings`.
+ *
+ * They take the CTA's own height and radius (PROMPT_BTN_H, PROMPT_BTN_R) rather than sizes of
+ * their own: they are the same control as the prompt's 解锁车位 button, and two button heights
+ * four units apart is a difference nobody can see and everybody has to maintain.
+ */
+const SET_WIDE_W = 300;
+const SET_SIDE_W = 128;
+const SET_BTN_GAP = 20;
+const SET_BTN_GAP_Y = 30;
+const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
+const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
 /**
  * The cost line, smaller than the sub and directly under the button it applies to.
  *
@@ -224,25 +343,16 @@ const PROMPT_REPLAY_Y = -167;
  * what it costs, it becomes a decision.
  */
 const PROMPT_COST_SIZE = 26;
-const PROMPT_R = 44;
+/**
+ * The win card's plate and its drop shadow. The two dialogs that used to share this white
+ * plate are cards now (see CARD_R) and bring their own; the win card is next in line for the
+ * same treatment and is deliberately untouched here -- it is a panel the player has already
+ * seen and accepted, and restyling it belongs in its own change.
+ */
 const PROMPT_BG = new Color(252, 253, 255, 255);
-/** The panel's own drop shadow: a second plate behind it, offset down. */
 const PROMPT_SHADOW = new Color(8, 12, 24, 90);
 const PROMPT_SHADOW_DROP = 10;
-const PROMPT_INK = new Color(34, 42, 64, 255);
-const PROMPT_SUB = new Color(122, 133, 160, 255);
 const SCRIM = new Color(10, 14, 26, 178);
-/**
- * The primary action: a green key drawn as two plates, the darker one peeking out below the
- * lighter, which is what makes a flat rectangle read as something with a top face to press.
- * The same trick as the padlock's rim on the board.
- */
-const PROMPT_BTN_W = 400;
-const PROMPT_BTN_H = 112;
-const PROMPT_BTN_R = 38;
-const PROMPT_BTN = new Color(86, 199, 104, 255);
-const PROMPT_BTN_BASE = new Color(56, 156, 76, 255);
-const PROMPT_BTN_LIFT = 8;
 /** The way out: a plain disc tucked into the panel's top-right corner. */
 const PROMPT_X_D = 76;
 const PROMPT_X_BG = new Color(232, 236, 246, 255);
@@ -331,14 +441,13 @@ const WIN_BURST = new Color(255, 255, 255, 30);
 const WIN_BURST_TURN = 40;
 const WIN_CAPTION = new Color(140, 150, 175, 255);
 /**
- * How far the win card's close button is pulled in from its corner, against the unlock
- * prompt's PROMPT_R + 6.
+ * How far the win card's close button is pulled in from its corner.
  *
- * Further in, because on this card the corner is not empty: the right-hand star's box
- * reaches x 206, and a 76 button at the prompt's inset of 62 would span 200..276 -- straight
- * through it. At 44 it spans 218..294, which clears the star by 12 and still leaves 6 units
- * of plate outside it. The two overlap in y whatever happens (star 226..346 against button
- * 218..294), so x is the only separation there is.
+ * It has to come further in than a dialog's normally would, because on this card the corner
+ * is not empty: the right-hand star's box reaches x 206, and a 76 button at a 62 inset would
+ * span 200..276 -- straight through it. At 44 it spans 218..294, which clears the star by 12
+ * and still leaves 6 units of plate outside it. The two overlap in y whatever happens (star
+ * 226..346 against button 218..294), so x is the only separation there is.
  */
 const WIN_CLOSE_INSET = 44;
 
@@ -504,15 +613,22 @@ const PICK_INK = new Color(255, 255, 255, 220);
  * only thing a player wants from that corner, and a bare exit invites a mis-tap that throws
  * a level away.
  *
- * Words, not a glyph. A gear or a chevron is one font substitution away from a hollow box on
- * a device whose system font lacks it, and every other string on this HUD is already Chinese
- * text that is known to render.
+ * A DRAWN cogwheel, not the word 设置 and not a font glyph. It said 设置 first, over an
+ * argument that was sound as far as it went -- a gear from the system font is one
+ * substitution away from a hollow box on a device whose font lacks it -- but that argument is
+ * about fonts, and `gearSprite` paints the shape here, the way the stars and the padlock are
+ * already painted here. Nothing is looked up, so nothing can be missing. Two characters at 30
+ * inside a 76 disc were also the smallest type on the HUD, in the corner most likely to be
+ * read at a glance.
+ *
+ * In the card's blue, with the same face-over-base pair: it is the only control on the board
+ * that opens a dialog, and it now looks like the dialog it opens.
  */
 const GEAR_D = 76;
 /** Between the gear and the counter beside it. */
 const PILL_GAP = 12;
-const GEAR_BG = new Color(252, 253, 255, 235);
-const GEAR_INK = new Color(84, 96, 124, 255);
+/** The cogwheel inside the disc, as a fraction of it. */
+const GEAR_GLYPH = 0.62;
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -749,22 +865,19 @@ export class HudView {
         return { holder, label };
     }
 
-    /** See GEAR_D for where this sits and why it says what it says. */
+    /** See GEAR_D for where this sits and why it is a drawn cogwheel. */
     private buildGear(canvas: Node, x: number, y: number): Node {
         const holder = new Node('GearBtn');
         holder.layer = Layers.Enum.UI_2D;
         holder.addComponent(UITransform).setContentSize(GEAR_D, GEAR_D);
         canvas.addChild(holder);
         holder.setPosition(x, y, 0);
-        const base = dotSprite('base', GEAR_D, PILL_BASE);
+        const base = dotSprite('base', GEAR_D, CARD_RIM_BASE);
         holder.addChild(base);
         base.setPosition(0, -PILL_LIFT, 0);
-        const face = dotSprite('face', GEAR_D, GEAR_BG);
+        const face = dotSprite('face', GEAR_D, CARD_RIM_FACE);
         holder.addChild(face);
-        const label = makeLabel(face, 'GearLabel', 30, 0);
-        label.color = GEAR_INK;
-        label.isBold = true;
-        label.string = '设置';
+        face.addChild(gearSprite('glyph', GEAR_D * GEAR_GLYPH, Color.WHITE));
         return holder;
     }
 
@@ -1098,7 +1211,7 @@ export class HudView {
     hitsUnlockPrompt(ui: Vec3): 'unlock' | 'replay' | 'home' | null {
         if (!this.promptOpen()) return null;
         const c = this.promptClose!.worldPosition;
-        const r = PROMPT_X_D / 2 + 12;
+        const r = CARD_X_D / 2 + 12;
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
         const b = this.promptBtn!.worldPosition;
         if (Math.abs(ui.x - b.x) <= PROMPT_BTN_W / 2 + 8
@@ -1107,6 +1220,95 @@ export class HudView {
         if (Math.abs(ui.x - p.x) <= TEXT_BTN_W / 2
             && Math.abs(ui.y - p.y) <= TEXT_BTN_H / 2) return 'replay';
         return null;
+    }
+
+    /**
+     * The card every dialog here is built on: rim, page, title, close button. See CARD_R for
+     * what it looks like and why.
+     *
+     * Returns the three things a caller needs and nothing else -- the node to animate, the
+     * page to hang content on, and the close button to hit-test. The rim, its darker copy, the
+     * drop shadow and the title are inside it and no caller touches them again.
+     *
+     * The card is NOT the modal: the caller owns the scrim, because a scrim's size and colour
+     * are decisions about the screen behind it rather than about the card.
+     */
+    private buildCard(
+        parent: Node, name: string, w: number, h: number, title: string,
+    ): { card: Node; page: Node; close: Node } {
+        const card = new Node(name);
+        card.layer = Layers.Enum.UI_2D;
+        card.addComponent(UITransform).setContentSize(w, h);
+        parent.addChild(card);
+
+        // Shadow, then the rim's darker copy, then its face: three plates offset down by
+        // different amounts is the whole of the depth here.
+        const shadow = roundedSprite('shadow', w, h, PROMPT_SHADOW, CARD_R);
+        card.addChild(shadow);
+        shadow.setPosition(0, -CARD_LIFT - PROMPT_SHADOW_DROP, 0);
+        const rimBase = roundedSprite('rimBase', w, h, CARD_RIM_BASE, CARD_R);
+        card.addChild(rimBase);
+        rimBase.setPosition(0, -CARD_LIFT, 0);
+        const rim = roundedSprite('rim', w, h, CARD_RIM_FACE, CARD_R);
+        card.addChild(rim);
+
+        const pageH = h - CARD_HEAD - CARD_RIM;
+        const pageW = w - CARD_RIM * 2;
+        const page = roundedSprite('page', pageW, pageH, CARD_PAGE, CARD_PAGE_R);
+        card.addChild(page);
+        page.setPosition(0, h / 2 - CARD_HEAD - pageH / 2, 0);
+
+        // On the rim, centred in the band the page leaves above itself.
+        const label = makeLabel(rim, 'title', CARD_TITLE_SIZE, h / 2 - CARD_HEAD / 2);
+        rimLabel(label, CARD_RIM_BASE, 5);
+        label.string = title;
+
+        // A child of the PAGE, so its corner is the page's corner whatever the card's size.
+        const close = new Node('close');
+        close.layer = Layers.Enum.UI_2D;
+        close.addComponent(UITransform).setContentSize(CARD_X_D, CARD_X_D);
+        page.addChild(close);
+        close.setPosition(pageW / 2, pageH / 2, 0);
+        close.addChild(dotSprite('ring', CARD_X_D + CARD_X_RING * 2, Color.WHITE));
+        const xBase = dotSprite('base', CARD_X_D, CARD_RIM_BASE);
+        close.addChild(xBase);
+        xBase.setPosition(0, -CARD_X_LIFT, 0);
+        const xFace = dotSprite('face', CARD_X_D, CARD_RIM_FACE);
+        close.addChild(xFace);
+        const x = makeLabel(xFace, 'x', 52, 2);
+        x.isBold = true;
+        x.string = '×';
+
+        return { card, page, close };
+    }
+
+    /**
+     * One chunky button: a coloured face over a darker copy of itself, with rimmed white type
+     * on it. The same two-plate trick as the card's rim, the stars and the padlock.
+     *
+     * The node returned is the HIT BOX -- `setContentSize` is what `inBox` measures -- and the
+     * plates are drawn inside it, so a button's target is its face and not a guess at it.
+     */
+    private buildCardBtn(parent: Node, spec: {
+        x: number; y: number; w: number; text: string;
+        face: Color; base: Color; rim: Color; size: number;
+    }): Node {
+        const btn = new Node(`btn-${spec.text}`);
+        btn.layer = Layers.Enum.UI_2D;
+        btn.addComponent(UITransform).setContentSize(spec.w, PROMPT_BTN_H);
+        parent.addChild(btn);
+        btn.setPosition(spec.x, spec.y, 0);
+        const under = roundedSprite(
+            'base', spec.w, PROMPT_BTN_H, spec.base, PROMPT_BTN_R,
+        );
+        btn.addChild(under);
+        under.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const top = roundedSprite('face', spec.w, PROMPT_BTN_H, spec.face, PROMPT_BTN_R);
+        btn.addChild(top);
+        const label = makeLabel(top, 'l', spec.size, 0);
+        rimLabel(label, spec.rim, Math.round(spec.size / 10));
+        label.string = spec.text;
+        return btn;
     }
 
     private buildUnlockPrompt(): void {
@@ -1118,64 +1320,30 @@ export class HudView {
         this.canvas.addChild(scrim);
         scrim.setPosition(0, 0, 0);
 
-        // Panel and its shadow under one node, so `showUnlockPrompt` scales them together.
-        const panel = new Node('UnlockPanel');
-        panel.layer = Layers.Enum.UI_2D;
-        panel.addComponent(UITransform);
-        scrim.addChild(panel);
+        // The card is named UnlockPanel because `showUnlockPrompt` finds it by that name to
+        // bounce it, and the bounce should scale the card and its shadow together.
+        //
+        // The title NAMES THE STATE, and it is on the card's rim. "车位堵住了" was wrong twice
+        // over: the stalls are not blocked, they are full, and a player who reads it goes
+        // looking for something to unblock. What has actually happened is that no car on the
+        // bay can take a passenger any more, and the sub line says what to do about it.
+        const { page, close } = this.buildCard(
+            scrim, 'UnlockPanel', PROMPT_W, PROMPT_H, '没有车能上客了',
+        );
 
-        const shadow = roundedSprite('shadow', PROMPT_W, PROMPT_H, PROMPT_SHADOW, PROMPT_R);
-        panel.addChild(shadow);
-        shadow.setPosition(0, -PROMPT_SHADOW_DROP, 0);
-
-        const plate = roundedSprite('plate', PROMPT_W, PROMPT_H, PROMPT_BG, PROMPT_R);
-        panel.addChild(plate);
-
-        // NAMES THE STATE, not a guess at it. "车位堵住了" was wrong twice over: the stalls
-        // are not blocked, they are full, and a player who reads it goes looking for
-        // something to unblock. What has actually happened is that no car on the bay can
-        // take a passenger any more, and the sub line says what to do about it.
-        // 48, not the 54 the old three-word title wore. This one is seven characters, and
-        // Chinese glyphs run about one em wide: at 54 it reaches x +/-189 against the close
-        // button's left edge at 192, which is a coincidence rather than a margin. At 48 it
-        // reaches 168 and clears it by 24.
-        const title = makeLabel(plate, 'PromptTitle', 48, PROMPT_TITLE_Y);
-        title.color = PROMPT_INK;
-        title.isBold = true;
-        title.string = '没有车能上客了';
-
-        const sub = makeLabel(plate, 'PromptSub', 30, PROMPT_SUB_Y);
-        sub.color = PROMPT_SUB;
+        const sub = makeLabel(page, 'PromptSub', 30, PROMPT_SUB_Y);
+        sub.color = CARD_INK;
         sub.string = '开一个车位，让新的车进来';
 
-        // A hairline between the message and the choice, so the panel reads as two parts
-        // rather than five stacked things.
-        const rule = roundedSprite('rule', PROMPT_W - 96, 2, PROMPT_X_BG, 1);
-        plate.addChild(rule);
-        rule.setPosition(0, PROMPT_RULE_Y, 0);
-
-        const btn = new Node('PromptBtn');
-        btn.layer = Layers.Enum.UI_2D;
-        btn.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
-        plate.addChild(btn);
-        btn.setPosition(0, PROMPT_BTN_Y, 0);
-        const base = roundedSprite(
-            'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
-        );
-        btn.addChild(base);
-        base.setPosition(0, -PROMPT_BTN_LIFT, 0);
-        const face = roundedSprite(
-            'face', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN, PROMPT_BTN_R,
-        );
-        btn.addChild(face);
-        const btnLabel = makeLabel(face, 'PromptBtnLabel', 46, 0);
-        btnLabel.isBold = true;
-        btnLabel.string = '解锁车位';
+        const btn = this.buildCardBtn(page, {
+            x: 0, y: PROMPT_BTN_Y, w: PROMPT_BTN_W, text: '解锁车位',
+            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: 48,
+        });
 
         // Under the button, not on it: it is the price of pressing that button, and a price
         // printed inside a button competes with the button's own word. See PROMPT_COST_SIZE.
-        this.promptCost = makeLabel(plate, 'PromptCost', PROMPT_COST_SIZE, PROMPT_COST_Y);
-        this.promptCost.color = PROMPT_SUB;
+        this.promptCost = makeLabel(page, 'PromptCost', PROMPT_COST_SIZE, PROMPT_COST_Y);
+        this.promptCost.color = CARD_SUB;
 
         // See TEXT_BTN_SIZE. The same control the win card wears, and the same reason: this
         // is the answer for a player who would rather start the level over than pay, and it
@@ -1183,21 +1351,11 @@ export class HudView {
         const replay = new Node('PromptReplay');
         replay.layer = Layers.Enum.UI_2D;
         replay.addComponent(UITransform).setContentSize(TEXT_BTN_W, TEXT_BTN_H);
-        plate.addChild(replay);
+        page.addChild(replay);
         replay.setPosition(0, PROMPT_REPLAY_Y, 0);
         const replayLabel = makeLabel(replay, 'PromptReplayLabel', TEXT_BTN_SIZE, 0);
-        replayLabel.color = TEXT_BTN_INK;
+        replayLabel.color = CARD_SUB;
         replayLabel.string = '重玩本关';
-
-        const close = dotSprite('PromptClose', PROMPT_X_D, PROMPT_X_BG);
-        plate.addChild(close);
-        // Inside the corner now that the corner is real -- with the old stretched-ellipse
-        // panel there was no corner to sit in and it floated off the edge.
-        close.setPosition(PROMPT_W / 2 - PROMPT_R - 6, PROMPT_H / 2 - PROMPT_R - 6, 0);
-        const x = makeLabel(close, 'PromptCloseLabel', 46, 2);
-        x.color = PROMPT_X_INK;
-        x.isBold = true;
-        x.string = '×';
 
         scrim.active = false;
         this.prompt = scrim;
@@ -1234,97 +1392,96 @@ export class HudView {
         this.canvas.addChild(scrim);
         scrim.setPosition(0, 0, 0);
 
+        // The card and the answer row under ONE node, raised by SET_RAISE so the pair of them
+        // centres on the screen. `showSettings` finds this node by name to bounce it, and the
+        // bounce should take the buttons with it.
         const panel = new Node('SetPanel');
         panel.layer = Layers.Enum.UI_2D;
         panel.addComponent(UITransform);
         scrim.addChild(panel);
+        panel.setPosition(0, SET_RAISE, 0);
 
-        const shadow = roundedSprite('shadow', SET_W, SET_H, PROMPT_SHADOW, PROMPT_R);
-        panel.addChild(shadow);
-        shadow.setPosition(0, -PROMPT_SHADOW_DROP, 0);
-        const plate = roundedSprite('plate', SET_W, SET_H, PROMPT_BG, PROMPT_R);
-        panel.addChild(plate);
+        const { page, close } = this.buildCard(panel, 'SetCard', SET_W, SET_H, '设置');
+        this.setClose = close;
 
-        const title = makeLabel(plate, 'SetTitle', 48, SET_TITLE_Y);
-        title.color = PROMPT_INK;
-        title.isBold = true;
-        title.string = '设置';
-
-        const rule1 = roundedSprite('rule1', SET_W - 96, 2, PROMPT_X_BG, 1);
-        plate.addChild(rule1);
-        rule1.setPosition(0, SET_RULE_TOP_Y, 0);
-
-        this.sfxSwitch = this.buildSwitch(plate, '音效', SET_ROW1_Y);
-        this.hapticSwitch = this.buildSwitch(plate, '震动', SET_ROW2_Y);
-
-        const rule2 = roundedSprite('rule2', SET_W - 96, 2, PROMPT_X_BG, 1);
-        plate.addChild(rule2);
-        rule2.setPosition(0, SET_RULE_BOTTOM_Y, 0);
+        this.sfxSwitch = this.buildSwitch(page, 'Sfx', '音效', SET_ROW1_Y, speakerSprite);
+        this.hapticSwitch = this.buildSwitch(page, 'Buzz', '震动', SET_ROW2_Y, buzzSprite);
 
         // Three answers in one row, the middle one wide and green: carrying on is what nearly
         // every visit to this panel ends in, so it is the one that looks like a button.
-        this.setResume = this.buildSetBtn(
-            plate, 0, SET_BTN_Y, SET_WIDE_W, '继续游戏', PROMPT_BTN, PROMPT_BTN_BASE, 42,
-        );
+        this.setResume = this.buildCardBtn(panel, {
+            x: 0, y: SET_BTN_Y, w: SET_WIDE_W, text: '继续游戏',
+            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: 44,
+        });
         const side = SET_WIDE_W / 2 + SET_BTN_GAP + SET_SIDE_W / 2;
-        this.setHome = this.buildSetBtn(
-            plate, -side, SET_BTN_Y, SET_SIDE_W, '主页', SET_SIDE, SET_SIDE_BASE, 34,
-        );
-        this.setReplay = this.buildSetBtn(
-            plate, side, SET_BTN_Y, SET_SIDE_W, '重玩', SET_SIDE, SET_SIDE_BASE, 34,
-        );
-
-        const close = dotSprite('SetClose', PROMPT_X_D, PROMPT_X_BG);
-        plate.addChild(close);
-        close.setPosition(SET_W / 2 - PROMPT_R - 6, SET_H / 2 - PROMPT_R - 6, 0);
-        const x = makeLabel(close, 'SetCloseLabel', 46, 2);
-        x.color = PROMPT_X_INK;
-        x.isBold = true;
-        x.string = '×';
-        this.setClose = close;
+        this.setHome = this.buildCardBtn(panel, {
+            x: -side, y: SET_BTN_Y, w: SET_SIDE_W, text: '主页',
+            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: 36,
+        });
+        this.setReplay = this.buildCardBtn(panel, {
+            x: side, y: SET_BTN_Y, w: SET_SIDE_W, text: '重玩',
+            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: 36,
+        });
 
         scrim.active = false;
         this.settings = scrim;
     }
 
     /**
-     * One switch: a label on the left, a track and a knob on the right.
+     * One switch row: an icon, a label, and a track with a knob on it.
      *
-     * The knob moves AND the track changes colour, on purpose. Colour alone fails for a
-     * player who cannot tell the green from the grey, and position alone is ambiguous on a
-     * control this small -- either one on its own is a switch you have to test to read.
+     * The label used to render the word "label" -- the engine's placeholder for a Label whose
+     * string was never set, which is what shipped and what got photographed. `makeLabel` now
+     * blanks it, so the only way to get that word on screen again is to type it.
+     *
+     * `icon` is passed in rather than chosen from `text`, so this function has no table of
+     * strings to keep in step with `ui-shapes`; the caller names both.
      */
-    private buildSwitch(plate: Node, text: string, y: number): SwitchParts {
-        const label = makeLabel(plate, `sw-${text}`, 34, y, -SET_W / 2 + 64);
-        label.color = PROMPT_INK;
-        label.horizontalAlign = Label.HorizontalAlign.LEFT;
+    private buildSwitch(
+        page: Node, name: string, text: string, y: number,
+        icon: (name: string, d: number, color: Color) => Node,
+    ): SwitchParts {
+        const row = new Node(`Row${name}`);
+        row.layer = Layers.Enum.UI_2D;
+        row.addComponent(UITransform).setContentSize(SET_PAGE_W, SET_ROW_H);
+        page.addChild(row);
+        row.setPosition(0, y, 0);
 
-        const track = roundedSprite(`track-${text}`, SET_SW_W, SET_SW_H, SET_SW_OFF, SET_SW_H / 2);
-        plate.addChild(track);
-        track.setPosition(SET_W / 2 - 64 - SET_SW_W / 2, y, 0);
-        const knob = dotSprite(`knob-${text}`, SET_SW_H - 8, PROMPT_BG);
-        track.addChild(knob);
-        return { track, knob };
-    }
+        const glyph = icon('icon', SET_ICON_D, CARD_RIM_FACE);
+        row.addChild(glyph);
+        glyph.setPosition(SET_ICON_X, 0, 0);
 
-    private buildSetBtn(
-        plate: Node, x: number, y: number, wid: number, text: string,
-        face: Color, base: Color, size: number,
-    ): Node {
-        const btn = new Node(`set-${text}`);
-        btn.layer = Layers.Enum.UI_2D;
-        btn.addComponent(UITransform).setContentSize(wid, SET_BTN_H);
-        plate.addChild(btn);
-        btn.setPosition(x, y, 0);
-        const under = roundedSprite('base', wid, SET_BTN_H, base, SET_BTN_R);
-        btn.addChild(under);
-        under.setPosition(0, -PROMPT_BTN_LIFT, 0);
-        const top = roundedSprite('face', wid, SET_BTN_H, face, SET_BTN_R);
-        btn.addChild(top);
-        const label = makeLabel(top, 'l', size, 0);
-        label.isBold = true;
+        const label = makeLabel(row, 'label', SET_LABEL_SIZE, 0, SET_LABEL_X);
+        rimLabel(label, CARD_RIM_BASE, 4);
         label.string = text;
-        return btn;
+        // Anchored at its LEFT edge, so SET_LABEL_X is where the text starts rather than
+        // where its middle happens to land. Both rows say two characters today and centring
+        // them would look identical -- and would quietly misalign the moment one of them
+        // says three.
+        label.node.getComponent(UITransform)!.setAnchorPoint(0, 0.5);
+
+        const track = roundedSprite('track', SET_SW_W, SET_SW_H, SET_SW_TRACK, SET_SW_H / 2);
+        row.addChild(track);
+        track.setPosition(SET_SW_X, 0, 0);
+
+        // The knob is a holder with the white ring behind its coloured face, so `paintSwitch`
+        // moves one node and tints one sprite. With the ring the knob is 74 across against a
+        // 68 track, so it overhangs by 3 top and bottom, on purpose: a knob that stands proud
+        // of its track reads as a thing ON the track rather than a hole cut in it.
+        const knob = new Node('knob');
+        knob.layer = Layers.Enum.UI_2D;
+        knob.addComponent(UITransform);
+        track.addChild(knob);
+        const ringD = SET_SW_KNOB + SET_SW_RING * 2;
+        knob.addChild(roundedSprite(
+            'ring', ringD, ringD, Color.WHITE, SET_SW_KNOB_R + SET_SW_RING,
+        ));
+        const face = roundedSprite(
+            'face', SET_SW_KNOB, SET_SW_KNOB, SET_SW_ON, SET_SW_KNOB_R,
+        );
+        knob.addChild(face);
+
+        return { row, knob, face };
     }
 
     /**
@@ -1357,8 +1514,10 @@ export class HudView {
     }
 
     private paintSwitch(sw: SwitchParts, on: boolean): void {
-        sw.track.getComponent(Sprite)!.color = on ? SET_SW_ON : SET_SW_OFF;
-        const travel = (SET_SW_W - SET_SW_H) / 2;
+        sw.face.getComponent(Sprite)!.color = on ? SET_SW_ON : SET_SW_OFF;
+        // The ring is the knob's real width, so it is the ring that has to stay inside the
+        // track's ends -- see SET_SW_KNOB.
+        const travel = (SET_SW_W - SET_SW_KNOB - SET_SW_RING * 2) / 2;
         sw.knob.setPosition(on ? travel : -travel, 0, 0);
     }
 
@@ -1373,40 +1532,31 @@ export class HudView {
     }
 
     /**
-     * What `ui` chose on the settings panel, or null for the plate and the scrim -- a tap
+     * What `ui` chose on the settings panel, or null for the card and the scrim -- a tap
      * that hits nothing is SWALLOWED rather than closing the panel, because the board behind
      * it is mid-level and a stray tap there would move a car.
      */
     hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | null {
         if (!this.settingsOpen()) return null;
         const c = this.setClose!.worldPosition;
-        const r = PROMPT_X_D / 2 + 12;
+        const r = CARD_X_D / 2 + 12;
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
-        if (this.inBox(ui, this.setResume!, SET_WIDE_W, SET_BTN_H)) return 'close';
-        if (this.inBox(ui, this.setHome!, SET_SIDE_W, SET_BTN_H)) return 'home';
-        if (this.inBox(ui, this.setReplay!, SET_SIDE_W, SET_BTN_H)) return 'replay';
-        if (this.inRow(ui, this.sfxSwitch!)) return 'sfx';
-        if (this.inRow(ui, this.hapticSwitch!)) return 'haptics';
+        if (this.inBox(ui, this.setResume!, SET_WIDE_W, PROMPT_BTN_H)) return 'close';
+        if (this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
+        if (this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
+        // The whole ROW is the switch's target, icon and label included: a 150-wide track is
+        // a small thing to ask of a thumb when the row it sits in is 572 wide and holds
+        // nothing else. The row is a node with that size on it, so this is the same `inBox`
+        // every button here uses -- the arithmetic it replaces measured out from the track
+        // and reached past the card, so a tap on the scrim beside the panel toggled the sound.
+        if (this.inBox(ui, this.sfxSwitch!.row, SET_PAGE_W, SET_ROW_H)) return 'sfx';
+        if (this.inBox(ui, this.hapticSwitch!.row, SET_PAGE_W, SET_ROW_H)) return 'haptics';
         return null;
     }
 
     private inBox(ui: Vec3, node: Node, wid: number, hgt: number): boolean {
         const p = node.worldPosition;
         return Math.abs(ui.x - p.x) <= wid / 2 + 8 && Math.abs(ui.y - p.y) <= hgt / 2 + 8;
-    }
-
-    /**
-     * The whole ROW is the switch's target, label included: a 120-wide track is a small thing
-     * to ask of a thumb when the row it sits in is 430 wide and holds nothing else.
-     *
-     * Bounded by the PLATE, not by the track: measured from the track it reached 150 units
-     * past the panel's right edge, so a tap on the dim scrim beside the panel toggled the
-     * sound. `setResume` is the node centred on the plate, which is what makes it the anchor.
-     */
-    private inRow(ui: Vec3, sw: SwitchParts): boolean {
-        const mid = this.setResume!.worldPosition.x;
-        return Math.abs(ui.y - sw.track.worldPosition.y) <= SET_SW_H / 2 + 14
-            && Math.abs(ui.x - mid) <= SET_W / 2 - 32;
     }
 
     /** See PICK_LEVELS for why this exists and how to remove it. */

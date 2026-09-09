@@ -66,7 +66,29 @@ export function makeLabel(
     label.fontSize = fontSize;
     label.lineHeight = Math.round(fontSize * 1.2);
     label.color = Color.WHITE.clone();
+    // BLANK, EXPLICITLY. A fresh Label's `string` is the engine's placeholder -- the literal
+    // word "label" -- so a caller that forgets to set one puts that word on screen, which is
+    // exactly what shipped on both switches in the settings panel. Blank is not a good
+    // outcome either, but a missing line is a hole in a layout, and a hole gets found and
+    // fixed; "label" in a shipped build gets photographed.
+    label.string = '';
     parent.addChild(n);
     n.setPosition(x, y, 0);
+    return label;
+}
+
+/**
+ * White type with a coloured rim around it, which is most of what makes a label read as part
+ * of a toy UI rather than as text laid over one.
+ *
+ * `width` is in the font's own pixels, so it wants to scale with the type: about a tenth of
+ * the font size holds the rim visible without closing up the counters of a Chinese glyph,
+ * which have far less room in them than a Latin letter's.
+ */
+export function rimLabel(label: Label, rim: Color, width: number): Label {
+    label.isBold = true;
+    label.enableOutline = true;
+    label.outlineColor = rim;
+    label.outlineWidth = width;
     return label;
 }

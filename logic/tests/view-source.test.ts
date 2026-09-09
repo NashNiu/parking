@@ -58,6 +58,26 @@ test.each(FILES)('%s never locates a child node by sibling index', (file) => {
 });
 
 /**
+ * `makeLabel` blanks the string on every label it makes.
+ *
+ * WHAT IT CAUGHT. A fresh Cocos `Label` arrives with its `string` already set to the literal
+ * word "label" -- the engine's placeholder for the editor's inspector -- so a caller that
+ * builds a label and forgets to give it text does not get an empty space, it gets that word
+ * on screen. Both switches in the settings panel shipped that way and were photographed
+ * reading "label", twice, in the middle of a panel about sound and vibration.
+ *
+ * WHAT IT DOES NOT DO, and this is the honest limit of it: it cannot tell whether any given
+ * label was ever given text. That would need the engine loaded and every panel built. What it
+ * pins is the one line that decides what a FORGOTTEN string looks like -- blank rather than
+ * "label" -- so the same mistake costs a hole in a layout, which gets found, instead of a word
+ * in a shipped build, which gets photographed.
+ */
+test('makeLabel blanks the engine placeholder string', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'ui-layout.ts'), 'utf8');
+  expect(src).toMatch(/^\s*label\.string = '';$/m);
+});
+
+/**
  * The guard can still see the defect it was written for.
  *
  * Without this, "no offenders" is indistinguishable from "the regex stopped matching" -- and a
