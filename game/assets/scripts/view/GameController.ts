@@ -371,6 +371,15 @@ const PRELOAD_DEADLINE = 8;
 const HOLD_SECONDS = 3;
 
 /**
+ * How far the finger may stray and still be holding rather than swiping, in design units.
+ *
+ * 24, against the rail's own DRAG_SLOP of 14: a gesture can be a drag before it stops being
+ * a hold. The gap is deliberate -- the two questions are different, and a thumb resting for
+ * three seconds drifts further than one deciding whether to swipe.
+ */
+const HOLD_SLOP = 24;
+
+/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -460,6 +469,13 @@ export class GameController extends Component {
      * and this keeps the second one from arming a timer the release cannot see.
      */
     private holdArmed = false;
+    /** Where the press that armed the hold landed, so a swipe off it can cancel the hold. */
+    private holdFromX = 0;
+    /**
+     * Whether the release about to arrive was a rail DRAG rather than a tap. Set by
+     * `onPressEnd`, read once by `handleTap`; see there for why the order matters.
+     */
+    private slidHome = false;
     /**
      * Held as a field because `unschedule` matches on the callback's identity -- an inline
      * arrow would arm a timer that nothing could ever cancel.
@@ -778,8 +794,10 @@ export class GameController extends Component {
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.off(Input.EventType.KEY_UP, this.onKeyUp, this);
         input.off(Input.EventType.TOUCH_START, this.onPressStart, this);
+        input.off(Input.EventType.TOUCH_MOVE, this.onPressMove, this);
         input.off(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
         input.off(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
+        input.off(Input.EventType.MOUSE_MOVE, this.onPressMove, this);
         this.unschedule(this.holdWipe);
     }
 
@@ -1484,6 +1502,9 @@ export class GameController extends Component {
         this.placeSpeedButton();
         this.placeTunnelBadges();
         this.tickFps(dt);
+        // BEFORE the core guard: the level rail glides on the home screen, where there is no
+        // core at all.
+        if (this.screen === 'home') this.home?.tick(dt);
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
         // level (nothing left to fill the parked cars, nothing left that can move).
@@ -2074,8 +2095,10 @@ export class GameController extends Component {
         // Presses, for the one control in the game that is a HOLD rather than a tap. Nothing
         // else reads them, so they only ever arm and disarm the wipe.
         input.on(Input.EventType.TOUCH_START, this.onPressStart, this);
+        input.on(Input.EventType.TOUCH_MOVE, this.onPressMove, this);
         input.on(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
         input.on(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
+        input.on(Input.EventType.MOUSE_MOVE, this.onPressMove, this);
     }
 
     /**
@@ -2141,16 +2164,49 @@ export class GameController extends Component {
      * let go leaves you unsure whether you held it long enough.
      */
     private onPressStart(e: EventTouch | EventMouse): void {
-        if (this.holdArmed || this.screen !== 'home' || !this.uiCam || !this.home) return;
+        if (this.screen !== 'home' || !this.uiCam || !this.home) return;
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
-        if (!this.home.hitsTitle(ui)) return;
+        this.slidHome = false;
+        this.home.beginDrag(ui.x, nowMs() / 1000);
+        if (this.holdArmed || !this.home.hitsTitle(ui)) return;
         this.holdArmed = true;
+        this.holdFromX = ui.x;
         this.scheduleOnce(this.holdWipe, HOLD_SECONDS);
     }
 
-    /** Disarm it. Runs on release and on a cancelled touch, and is safe when nothing is armed. */
+    /**
+     * Carry the drag, and cancel the press-and-hold once the finger has really moved: a hold
+     * is a hold, and a swipe that happens to start on the title is not one.
+     */
+    private onPressMove(e: EventTouch | EventMouse): void {
+        if (this.screen !== 'home' || !this.uiCam || !this.home) return;
+        // MOUSE_MOVE fires on every desktop mouse move, button or no button, so the cheap
+        // check comes before the projection rather than after it. A press always begins a
+        // drag on this screen, so "not dragging" also means "no hold can be armed".
+        if (!this.home.isDragging()) return;
+        const p = e.getLocation();
+        const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
+        this.home.moveDrag(ui.x, nowMs() / 1000);
+        if (this.holdArmed && Math.abs(ui.x - this.holdFromX) > HOLD_SLOP) this.cancelHold();
+    }
+
+    /**
+     * End the gesture. Runs on release and on a cancelled touch, and is safe when there was
+     * no gesture at all.
+     *
+     * `slidHome` has to be settled HERE rather than in `handleTap`, because the touch-end
+     * handler runs this first and `handleTap` second -- that ordering is the only thing that
+     * lets a tap be told from the end of a swipe.
+     */
     private onPressEnd(): void {
+        this.cancelHold();
+        if (this.screen === 'home' && this.home) {
+            this.slidHome = this.home.endDrag(nowMs() / 1000) === 'slid';
+        }
+    }
+
+    private cancelHold(): void {
         if (!this.holdArmed) return;
         this.holdArmed = false;
         this.unschedule(this.holdWipe);
@@ -2192,17 +2248,25 @@ export class GameController extends Component {
         // neither the start button nor a chip is swallowed rather than falling through.
         if (this.screen === 'home') {
             if (!this.uiCam || !this.home) return;
+            // A release that DRAGGED the rail is not also a tap -- otherwise every swipe
+            // would end by selecting whatever it happened to stop over. `endDrag` already
+            // ran, from `onPressEnd`, and said which it was.
+            if (this.slidHome) return;
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
-            // The save decides where this goes -- the furthest level unlocked, capped at the
-            // last that exists (`HomeView.continueLevel`, which is also what labelled the
-            // button). The inspector's `levelName` is no longer a starting point; the way to
-            // jump to a late level while developing is PICK_ROW in hud-view.
+            // THE BUTTON IS THE ONLY WAY IN, and it opens whatever is in the middle of the
+            // rail (`focusedLevel`, which is also what labelled it). Tapping a stop only
+            // brings it to the middle. Two jobs on one control is how a stray tap starts a
+            // level nobody asked for -- and on a rail, a stray tap is what a
+            // slightly-too-still drag looks like.
             if (this.home.hitsStart(ui)) {
-                this.enterLevel(`level-${this.home.continueLevel(this.progress)}`);
+                this.enterLevel(`level-${this.home.focusedLevel()}`);
                 return;
             }
-            const pick = this.home.hitsLevel(ui);
-            if (pick > 0) this.enterLevel(`level-${pick}`);
+            const stop = this.home.hitsStop(ui);
+            if (stop >= 0) {
+                this.home.focusStop(stop);
+                this.sfx?.play('tap');
+            }
             return;
         }
         // The unlock prompt owns every tap while it is up -- see `showUnlockPrompt`. Before

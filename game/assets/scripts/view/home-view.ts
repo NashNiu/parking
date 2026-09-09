@@ -1,20 +1,36 @@
-import { Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3 } from 'cc';
-import { roundedSprite, starSprite } from './ui-shapes';
+import {
+    Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
+} from 'cc';
+import { burstSprite, dotSprite, roundedSprite, starSprite } from './ui-shapes';
 import { canvasSize, makeLabel, safeInsets } from './ui-layout';
 import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
+import {
+    RAIL_PITCH, railFlick, railNearest, railOffset, railRubber, railStopT,
+} from './rail-math';
 
 /**
- * The home screen: the game's name, one button that starts playing, and the level grid.
+ * The home screen: the game's name, a rail of levels you drag through, and one button that
+ * plays the one in the middle.
  *
  * It is a UI screen in the SAME canvas as the HUD, not a Cocos scene of its own. A second
  * scene would mean a second copy of the camera rig and the preload chain that `start()`
  * spends its first frames on, and a scene load between the menu and the board -- for a
- * screen that is nine sprites and a dozen labels. `GameController.screen` decides which of
- * the two is up, and the board simply is not built while this one is.
+ * screen that is a few dozen sprites. `GameController.screen` decides which of the two is
+ * up, and the board simply is not built while this one is.
  *
- * It draws the save, and it is the only place the gate is enforced (`hitsLevel` refuses a
- * locked chip). One place, because this screen owns the chips' state -- a second check
- * elsewhere could only disagree with what the player can see.
+ * A RAIL RATHER THAN A GRID, and the difference is not decoration: a grid has to be
+ * re-laid-out when the game grows past ten levels, while a rail just gets longer. It also
+ * puts one level in the middle at a size worth looking at, which is what lets the button say
+ * WHICH level it starts.
+ *
+ * THE BUTTON IS THE ONLY WAY IN. Dragging and tapping select; the green button plays. Two
+ * jobs on one control -- tap to select, tap again to play -- is how a stray tap starts a
+ * level nobody asked for, and on a rail a stray tap is exactly what a slightly-too-still
+ * drag looks like.
+ *
+ * It draws the save, and it is the only place the level gate is enforced: a locked level can
+ * be brought to the middle and read, but the button goes quiet and says what would unlock
+ * it. One place, because this screen owns what the player can see.
  */
 
 /**
@@ -23,89 +39,147 @@ import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../c
  */
 const GAME_TITLE = '停车场';
 
-/** Covers the whole canvas, so the empty 3D scene behind the menu is never visible. */
 const BG = new Color(24, 30, 50, 255);
 const TITLE_INK = new Color(255, 255, 255, 255);
 const SUB_INK = new Color(150, 163, 196, 255);
+
+/**
+ * The background: the board's own grid, at the strength a background can carry.
+ *
+ * The lines are `scene-stage.ts`'s GRID_LINE -- the same paint the board's floor wears --
+ * knocked back to a few percent. That is the whole idea of this decoration: the menu is not
+ * a screen in front of the game, it is a corner of the same lot, so its floor is that floor.
+ * Inventing a pattern here would have said the opposite.
+ *
+ * The ticks along the bottom are stall mouths: short marks hanging off a kerb line, which is
+ * what a car park looks like from above.
+ */
+const DECO_LINE = new Color(224, 232, 247, 14);
+const DECO_KERB = new Color(224, 232, 247, 18);
+const DECO_COLS = 6;
+const DECO_ROWS = 5;
+const DECO_LINE_W = 3;
+const DECO_BAYS = 8;
+const DECO_BAY_H = 74;
+
+/**
+ * The sunburst behind the rail: the same `burstSprite` the win card wears, at background
+ * strength, turning once every 46 seconds.
+ *
+ * It is the only thing on this screen that MOVES once the entrance is over, and that is its
+ * whole job -- a menu that is perfectly still reads as a screenshot of a menu. 46 rather
+ * than the win card's 40 because a player sits here longer, and fast enough to notice is
+ * fast enough to become an animation you watch.
+ */
+const DECO_BURST = new Color(255, 255, 255, 9);
+const DECO_BURST_D = 1500;
+const DECO_BURST_TURN = 46;
+
+/** The lane the stops ride on: a full-bleed band with a dashed centre line. */
+const LANE = new Color(33, 42, 68, 255);
+const LANE_H = 236;
+const LANE_DASH = new Color(60, 71, 102, 255);
+const LANE_DASH_W = 26;
+const LANE_DASH_GAP = 22;
+const LANE_DASH_H = 5;
 
 const START_W = 400;
 const START_H = 116;
 const START_R = 40;
 const START = new Color(86, 199, 104, 255);
 const START_BASE = new Color(56, 156, 76, 255);
+/** The button with nothing to play: the same slab, drained, and it answers no taps. */
+const START_SHUT = new Color(60, 71, 102, 255);
+const START_SHUT_BASE = new Color(45, 54, 78, 255);
 /** How far the base peeks out below the face. Same lip the HUD's buttons wear. */
 const BTN_LIFT = 8;
 
-const CHIP_D = 100;
-const CHIP_R = 28;
-const CHIP = new Color(74, 144, 226, 255);
-const CHIP_BASE = new Color(44, 96, 165, 255);
-const CHIP_INK = new Color(255, 255, 255, 240);
 /**
- * A locked chip: the same shape, drained. Dark enough to read as unavailable against the blue
- * of an open one, light enough to still read as one of the row -- the grid is ten chips and
- * should look like ten, the same argument the bay's locked stalls settled.
+ * A stop is built at its FOCUSED size and scaled down as it leaves the middle, so one node
+ * covers both states and the size is continuous while a finger is moving.
  */
-const CHIP_LOCKED = new Color(52, 62, 90, 255);
-const CHIP_LOCKED_BASE = new Color(38, 46, 70, 255);
-const CHIP_PITCH_X = 118;
-/**
- * 140 for a 100-unit chip, so there are 40 units of clear space under each row rather than
- * the 18 an even grid would give. That band holds the three small stars each cleared level
- * reports -- reserving it when the screen was first built is what kept adding them from
- * moving every chip.
- */
-const CHIP_PITCH_Y = 140;
-/** Five across fits 10 levels in two rows, and 10 is what the game ships. */
-const COLS = 5;
+const STOP_D = 104;
+const STOP_R = 26;
+const STOP_REST = 0.58;
+const STOP_ALPHA_REST = 140;
+const STOP = new Color(74, 144, 226, 255);
+const STOP_BASE = new Color(44, 96, 165, 255);
+/** Cleared: the same blue, walked back, so a finished level reads as finished. */
+const STOP_DONE = new Color(59, 108, 168, 255);
+const STOP_DONE_BASE = new Color(42, 79, 124, 255);
+const STOP_SHUT = new Color(52, 62, 90, 255);
+const STOP_SHUT_BASE = new Color(38, 46, 70, 255);
+const STOP_INK = new Color(255, 255, 255, 240);
+/** The halo on the middle stop. It fades out as that stop leaves the middle. */
+const STOP_RING = new Color(86, 199, 104, 90);
+const STOP_RING_PAD = 15;
+
+const STOP_STAR_D = 24;
+const STOP_STAR_PITCH = 27;
+const STOP_STAR_Y = -72;
+const STAR_ON = new Color(255, 201, 52, 255);
+const STAR_OFF = new Color(70, 82, 116, 255);
 
 /**
- * The rating under a chip: three small stars, `CHIP_STAR_Y` below its centre, which puts them
- * in the band CHIP_PITCH_Y reserves. Absent entirely on a level never cleared -- an empty row
- * of three would say "cleared with nothing", which is not a thing that can happen.
- */
-const CHIP_STAR_D = 22;
-const CHIP_STAR_PITCH = 26;
-const CHIP_STAR_Y = -66;
-const CHIP_STAR_ON = new Color(255, 201, 52, 255);
-/** Dim, but lighter than the background it sits on -- an unearned star still has a place. */
-const CHIP_STAR_OFF = new Color(70, 82, 116, 255);
-
-/**
- * The padlock on a locked chip, drawn from the primitives that exist.
- *
- * `ui-shapes` has no ring, so the shackle is a rounded square with a chip-coloured rounded
- * square over its middle to cut it hollow, and the body goes on top of the join. Later
- * siblings draw over earlier ones, which is the whole mechanism.
- *
- * Not an emoji lock: 🔒 is one font substitution away from a hollow box on a device whose
- * system font lacks it, the same reason the HUD's home button says 主页 rather than wearing a
- * glyph.
+ * The padlock on a locked stop, drawn from the primitives that exist: a round shackle with a
+ * stop-coloured rounded sprite over its middle to cut it hollow, and the body over the join.
+ * `ui-shapes` has no ring, and an emoji lock is one font substitution away from a hollow box
+ * -- the same reason the HUD's home button says 主页 rather than wearing a glyph.
  */
 const LOCK_INK = new Color(150, 163, 196, 255);
-const LOCK_SHACKLE_D = 34;
-const LOCK_SHACKLE_Y = 12;
-const LOCK_HOLE_W = 18;
-const LOCK_HOLE_H = 22;
-const LOCK_BODY_W = 44;
-const LOCK_BODY_H = 32;
-const LOCK_BODY_Y = -10;
 
 /**
- * The line that stands where the start button will be while the game is still loading.
+ * The barrier arm, which IS the loading screen.
  *
- * IN THE SAME PLACE as the button it is waiting for, so the eye does not have to move when
- * one becomes the other. It pulses because a still "loading" is indistinguishable from a
- * frozen one, and a frozen loading screen is the failure this screen exists to make visible
- * (see PRELOAD_DEADLINE in GameController: a preload has up to eight seconds to answer).
+ * It is the one object that says "car park" with no caption, and it is nine rounded sprites.
+ * IT DOES NOT SHOW A FRACTION, and that is deliberate: this game has no fractional progress
+ * to show -- the preload is one material load behind an eight-second deadline -- so an arm
+ * creeping toward vertical would be a progress bar reporting a number nobody measured.
+ *
+ * What it reports instead is the real milestone. It bobs a few degrees while the preload is
+ * outstanding, which says "working" rather than "nearly there", and sweeps open once, when
+ * the preload actually answers. A preload that hangs therefore leaves the arm DOWN and
+ * bobbing for the full eight seconds -- which is the right thing to be looking at, and more
+ * honest than a bar that fills to 90% and stops.
  */
+const GATE_POST_W = 22;
+const GATE_POST_H = 96;
+const GATE_ARM_W = 300;
+const GATE_ARM_H = 22;
+const GATE_ARM_SEGS = 6;
+const GATE_KERB_W = 340;
+const GATE_KERB_H = 8;
+const GATE_INK = new Color(107, 119, 150, 255);
+const GATE_RED = new Color(232, 72, 60, 255);
+const GATE_PALE = new Color(246, 247, 251, 255);
+const GATE_OPEN_ANGLE = 78;
+const GATE_OPEN_TIME = 0.42;
+const GATE_BOB = 4;
+const GATE_BOB_TIME = 0.9;
+const GATE_DROP = 74;
+
 const LOADING_SIZE = 34;
 const LOADING_INK = new Color(150, 163, 196, 255);
-const LOADING_PULSE = 0.7;
-const LOADING_DIM = 110;
 
 /** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 const TAP_PAD = 10;
+
+/**
+ * How far a finger may travel and still count as a tap.
+ *
+ * 14 design units. Below it, a press that wobbles is a tap -- a rail that refused to be
+ * tapped because the thumb moved two units would be maddening. Above it the gesture is a
+ * drag, and the release must NOT also be treated as a tap, or every swipe would end by
+ * selecting whatever it happened to stop over.
+ */
+const DRAG_SLOP = 14;
+
+/**
+ * How fast the rail closes on its target, per second, as a fraction of the distance left.
+ * 12 lands a one-stop move in about a fifth of a second and cannot overshoot, which a spring
+ * can -- and an overshooting level rail reads as broken rather than lively.
+ */
+const RAIL_EASE = 12;
 
 /**
  * The title's hit box, for the press-and-hold that clears the save. Much larger than the
@@ -116,48 +190,75 @@ const TITLE_HIT_W = 400;
 const TITLE_HIT_H = 140;
 
 /** Everything drawn for one level. Kept so `setProgress` can repaint without rebuilding. */
-interface Chip {
+interface Stop {
     node: Node;
+    fade: UIOpacity;
+    ringFade: UIOpacity;
     face: Node;
     base: Node;
     num: Label;
     lock: Node;
     stars: Node[];
-    /** Set by `setProgress`; read by `hitsLevel`, which is how the gate is enforced. */
     open: boolean;
 }
 
 export class HomeView {
     /** Everything this screen draws, under one node, so `show`/`hide` is one flag. */
     private root: Node;
-    private startBtn: Node;
-    private startLabel: Label;
     private titleNode: Node;
-    /** One per level, in level order, so the index IS the level number minus one. */
-    private chips: Chip[] = [];
-    /** 0 until `setLevels` has been told, which is also what "the grid exists" means. */
-    private levelCount = 0;
     private sub: Label;
-    private pickCap: Label;
-    private loading: Label;
+    private cap: Label;
+    private startBtn: Node;
+    private startFace: Node;
+    private startBase: Node;
+    private startLabel: Label;
+    /** The stops' parent, parked on the lane. Stops are positioned within it. */
+    private railRoot: Node;
+    private stops: Stop[] = [];
+
+    private loadingLayer: Node;
     private loadingFade: UIOpacity;
+    private gateArm: Node;
+
+    /** 0 until `setLevels`, which is also what "the rail exists" means. */
+    private levelCount = 0;
     /** Whether the screen is still waiting. Every hit test refuses while it is true. */
     private waiting = true;
-    /** Where the grid starts, kept because it is built later than the constructor. */
-    private gridTopY: number;
+
+    /** The rail's drawn scroll position, and where it is heading. See `rail-math`. */
+    private offset = 0;
+    private target = 0;
+    private focused = 0;
+    /** Whether the level in the middle can be played -- what the button reflects. */
+    private focusOpen = false;
+
+    private dragging = false;
+    private dragFromX = 0;
+    private dragBase = 0;
+    private lastX = 0;
+    private lastT = 0;
+    private travelled = 0;
+    /** Offset units per second, positive when later levels are coming to the middle. */
+    private vel = 0;
+
+    private w = 720;
+    private h = 1280;
 
     /**
      * Builds everything that does NOT depend on knowing the levels: the background, the
-     * title, and the line that says the game is still loading.
+     * title, the lane, the button, and the barrier that stands in for all of it while the
+     * game loads.
      *
      * Split that way so this screen can be on the canvas from the first frame the engine
      * draws. The Cocos first screen ends BEFORE the app starts -- `game.js` has it as
      * `firstScreen.end().then(() => application.start())` -- so between that logo and this
      * menu there is a stretch with nothing drawn in it but the camera's clear colour. The
-     * grid arrives with `setLevels` once the level count can be read.
+     * stops arrive with `setLevels`, once the level count can be read.
      */
     constructor(canvas: Node) {
         const { w, h } = canvasSize(canvas);
+        this.w = w;
+        this.h = h;
 
         this.root = new Node('Home');
         this.root.layer = Layers.Enum.UI_2D;
@@ -169,9 +270,11 @@ export class HomeView {
         const bg = roundedSprite('HomeBg', w * 2, h * 2, BG, 2);
         this.root.addChild(bg);
 
+        this.buildDeco();
+
         // Under the notch, not under the top edge -- the same reservation the HUD's title
         // plate makes, for the same reason.
-        const titleY = h / 2 - safeInsets().top * h - h * 0.17;
+        const titleY = h / 2 - safeInsets().top * h - h * 0.15;
         const title = makeLabel(this.root, 'HomeTitle', 80, titleY);
         title.color = TITLE_INK;
         title.isBold = true;
@@ -182,74 +285,97 @@ export class HomeView {
         this.sub.color = SUB_INK;
         this.sub.node.active = false;
 
-        const start = this.buildStart(h * 0.04);
+        this.railRoot = this.buildLane(h * 0.03);
+
+        this.cap = makeLabel(this.root, 'HomeCap', 28, h * 0.03 - LANE_H / 2 - 46);
+        this.cap.color = SUB_INK;
+        this.cap.string = '左右滑动选择关卡';
+        this.cap.node.active = false;
+
+        const start = this.buildStart(-h * 0.25);
         this.startBtn = start.node;
+        this.startFace = start.face;
+        this.startBase = start.base;
         this.startLabel = start.label;
-        this.pickCap = makeLabel(this.root, 'HomePickCap', 30, -h * 0.10);
-        this.pickCap.color = SUB_INK;
-        this.pickCap.string = '选择关卡';
 
-        this.loading = makeLabel(this.root, 'HomeLoading', LOADING_SIZE, h * 0.04);
-        this.loading.color = LOADING_INK;
-        this.loading.string = '加载中…';
-        this.loadingFade = this.loading.node.addComponent(UIOpacity);
+        this.loadingLayer = new Node('Loading');
+        this.loadingLayer.layer = Layers.Enum.UI_2D;
+        this.loadingLayer.addComponent(UITransform);
+        this.root.addChild(this.loadingLayer);
+        this.loadingFade = this.loadingLayer.addComponent(UIOpacity);
+        this.gateArm = this.buildGate(h * 0.03);
 
-        this.gridTopY = -h * 0.10 - 92;
         this.setLoading(true);
         this.root.active = false;
     }
 
-    /**
-     * Show or hide the waiting state: the loading line stands in for the start button and the
-     * grid, and every hit test refuses while it is up.
-     *
-     * One flag drives the visibility AND the hit tests, the discipline SPEED_BUTTON and
-     * PICK_ROW settled: a control that is invisible but still answering taps would start a
-     * level out of a screen that has not finished loading one.
-     */
-    setLoading(on: boolean): void {
-        this.waiting = on;
-        this.loading.node.active = on;
-        this.startBtn.active = !on;
-        this.pickCap.node.active = !on;
-        this.sub.node.active = !on;
-        for (const chip of this.chips) chip.node.active = !on;
-        Tween.stopAllByTarget(this.loadingFade);
-        this.loadingFade.opacity = 255;
-        if (on) {
-            tween(this.loadingFade)
-                .to(LOADING_PULSE, { opacity: LOADING_DIM }, { easing: 'sineInOut' })
-                .to(LOADING_PULSE, { opacity: 255 }, { easing: 'sineInOut' })
-                .union()
-                .repeatForever()
-                .start();
+    /** See DECO_LINE and DECO_BURST for what this draws and why it is those things. */
+    private buildDeco(): void {
+        const deco = new Node('Deco');
+        deco.layer = Layers.Enum.UI_2D;
+        deco.addComponent(UITransform);
+        this.root.addChild(deco);
+
+        // The burst goes in first, so the grid lies over it rather than under it -- the
+        // floor is nearer than the light.
+        const burst = burstSprite('DecoBurst', DECO_BURST_D, DECO_BURST);
+        deco.addChild(burst);
+        burst.setPosition(0, this.h * 0.03, 0);
+        tween(burst).by(DECO_BURST_TURN, { angle: 360 }).repeatForever().start();
+
+        const { w, h } = this;
+        for (let i = 1; i < DECO_COLS; i++) {
+            const line = roundedSprite(`col-${i}`, DECO_LINE_W, h, DECO_LINE, 1);
+            deco.addChild(line);
+            line.setPosition((i / DECO_COLS - 0.5) * w, 0, 0);
+        }
+        for (let i = 1; i < DECO_ROWS; i++) {
+            const line = roundedSprite(`row-${i}`, w, DECO_LINE_W, DECO_LINE, 1);
+            deco.addChild(line);
+            line.setPosition(0, (i / DECO_ROWS - 0.5) * h, 0);
+        }
+
+        // The stall mouths: a kerb across the bottom with ticks hanging off it.
+        const bayY = -h / 2 + safeInsets().bottom * h + h * 0.06;
+        const kerb = roundedSprite('kerb', w * 1.1, DECO_LINE_W, DECO_KERB, 1);
+        deco.addChild(kerb);
+        kerb.setPosition(0, bayY, 0);
+        for (let i = 0; i <= DECO_BAYS; i++) {
+            const tick = roundedSprite(`bay-${i}`, DECO_LINE_W, DECO_BAY_H, DECO_KERB, 1);
+            deco.addChild(tick);
+            tick.setPosition((i / DECO_BAYS - 0.5) * w * 1.1, bayY - DECO_BAY_H / 2, 0);
         }
     }
 
-    /**
-     * Tell the screen how many levels there are, and build the grid.
-     *
-     * `levelCount` comes from the caller rather than a constant here, because the number of
-     * levels is a fact about the `resources/levels` folder and `GameController` is what can
-     * see it. Adding a level-11.json then extends this grid with no change to this file --
-     * the same property `nextLevelName` has.
-     *
-     * Called once, after the preload: reading the bundle's index is the one thing on this
-     * screen that cannot be done before the engine has finished starting.
-     */
-    setLevels(levelCount: number): void {
-        if (this.chips.length > 0) return;
-        this.levelCount = levelCount;
-        this.sub.string = `共 ${levelCount} 关`;
-        this.buildGrid(levelCount, this.gridTopY);
-        for (const chip of this.chips) chip.node.active = !this.waiting;
+    /** The band the stops ride on, and the node they live in. */
+    private buildLane(y: number): Node {
+        const band = roundedSprite('Lane', this.w * 1.2, LANE_H, LANE, 2);
+        this.root.addChild(band);
+        band.setPosition(0, y, 0);
+
+        const span = this.w * 1.2;
+        const step = LANE_DASH_W + LANE_DASH_GAP;
+        const n = Math.ceil(span / step);
+        for (let i = 0; i < n; i++) {
+            const dash = roundedSprite(`dash-${i}`, LANE_DASH_W, LANE_DASH_H, LANE_DASH, 2);
+            band.addChild(dash);
+            dash.setPosition(-span / 2 + step / 2 + i * step, 0, 0);
+        }
+
+        const rail = new Node('RailStops');
+        rail.layer = Layers.Enum.UI_2D;
+        rail.addComponent(UITransform);
+        this.root.addChild(rail);
+        rail.setPosition(0, y, 0);
+        return rail;
     }
 
     /**
-     * The primary button. Its LABEL says which level it opens and the caller decides what
-     * that is (see `continueLevel`), so this only reports the tap.
+     * The primary button. Its LABEL says which level it opens, and `setFocus` keeps that in
+     * step with whatever is in the middle of the rail -- the two cannot disagree, because
+     * one function writes both.
      */
-    private buildStart(y: number): { node: Node; label: Label } {
+    private buildStart(y: number): { node: Node; face: Node; base: Node; label: Label } {
         const btn = new Node('HomeStart');
         btn.layer = Layers.Enum.UI_2D;
         btn.addComponent(UITransform).setContentSize(START_W, START_H);
@@ -263,134 +389,281 @@ export class HomeView {
         const label = makeLabel(face, 'HomeStartLabel', 46, 0);
         label.isBold = true;
         label.string = '开始游戏';
-        return { node: btn, label };
+        return { node: btn, face, base, label };
+    }
+
+    /** See GATE_POST_W for what this is and why its arm does not report a fraction. */
+    private buildGate(y: number): Node {
+        const kerb = roundedSprite('gateKerb', GATE_KERB_W, GATE_KERB_H, GATE_INK, 4);
+        this.loadingLayer.addChild(kerb);
+        kerb.setPosition(0, y - GATE_DROP, 0);
+
+        const postX = -GATE_KERB_W / 2 + GATE_POST_W;
+        const post = roundedSprite('gatePost', GATE_POST_W, GATE_POST_H, GATE_INK, 8);
+        this.loadingLayer.addChild(post);
+        post.setPosition(postX, y - GATE_DROP + GATE_POST_H / 2, 0);
+
+        // The arm pivots at its LEFT end, on top of the post, so its own node sits there and
+        // the stripes hang off to the right of the origin -- rotating the node then rotates
+        // the whole arm about the post, which is what a barrier does.
+        const arm = new Node('gateArm');
+        arm.layer = Layers.Enum.UI_2D;
+        arm.addComponent(UITransform);
+        this.loadingLayer.addChild(arm);
+        arm.setPosition(postX, y - GATE_DROP + GATE_POST_H, 0);
+        const seg = GATE_ARM_W / GATE_ARM_SEGS;
+        for (let i = 0; i < GATE_ARM_SEGS; i++) {
+            const bar = roundedSprite(
+                `seg-${i}`, seg, GATE_ARM_H, i % 2 === 0 ? GATE_RED : GATE_PALE, 3,
+            );
+            arm.addChild(bar);
+            bar.setPosition(seg / 2 + i * seg, 0, 0);
+        }
+
+        const label = makeLabel(this.loadingLayer, 'HomeLoading', LOADING_SIZE, y - 200);
+        label.color = LOADING_INK;
+        label.string = '正在放行…';
+        return arm;
     }
 
     /**
-     * The level grid, `COLS` across, centred on x and running down from `topY`.
+     * Show or hide the waiting state: the barrier stands in for the rail and the button, and
+     * every hit test refuses while it is up.
      *
-     * A partly filled last row is centred on its OWN width rather than left-aligned under a
-     * full row: with 10 levels and 5 columns both rows are full, but an eleventh level must
-     * not leave one chip hanging off the left edge of the block.
+     * One flag drives the visibility AND the hit tests, the discipline SPEED_BUTTON and
+     * PICK_ROW settled: a control that is invisible but still answering taps would start a
+     * level out of a screen that has not finished loading one.
      *
-     * Every chip is built with all its parts -- number, padlock, three stars -- and
-     * `setProgress` only ever changes colours and `active` flags. Rebuilding a chip to change
-     * its state would mean destroying nodes on a screen the player is looking at.
+     * Turning it OFF sweeps the arm open and brings the menu up as the sweep clears it, so
+     * the two read as one movement rather than a wipe followed by a menu. That costs
+     * GATE_OPEN_TIME, and it is the only reason the metaphor is worth having.
      */
-    private buildGrid(levelCount: number, topY: number): void {
-        const rows = Math.ceil(levelCount / COLS);
-        for (let r = 0; r < rows; r++) {
-            const inRow = Math.min(COLS, levelCount - r * COLS);
-            for (let c = 0; c < inRow; c++) {
-                const n = r * COLS + c + 1;
-                const node = new Node(`HomeLevel${n}`);
-                node.layer = Layers.Enum.UI_2D;
-                node.addComponent(UITransform).setContentSize(CHIP_D, CHIP_D);
-                this.root.addChild(node);
-                node.setPosition(
-                    (c - (inRow - 1) / 2) * CHIP_PITCH_X, topY - r * CHIP_PITCH_Y, 0,
-                );
-                const base = roundedSprite('base', CHIP_D, CHIP_D, CHIP_BASE, CHIP_R);
-                node.addChild(base);
-                base.setPosition(0, -BTN_LIFT, 0);
-                const face = roundedSprite('face', CHIP_D, CHIP_D, CHIP, CHIP_R);
-                node.addChild(face);
-                const num = makeLabel(face, 'n', 44, 0);
-                num.color = CHIP_INK;
-                num.isBold = true;
-                num.string = `${n}`;
-                this.chips.push({
-                    node,
-                    face,
-                    base,
-                    num,
-                    lock: this.buildLock(face),
-                    stars: this.buildChipStars(node),
-                    open: true,
-                });
-            }
+    setLoading(on: boolean): void {
+        this.waiting = on;
+        Tween.stopAllByTarget(this.gateArm);
+        Tween.stopAllByTarget(this.loadingFade);
+        Tween.stopAllByTarget(this.root);
+        if (on) {
+            this.loadingLayer.active = true;
+            this.loadingFade.opacity = 255;
+            this.gateArm.angle = 0;
+            this.revealMenu(false);
+            // Bobbing, not creeping: it says "working", and it cannot be mistaken for a
+            // measurement of how much is left.
+            tween(this.gateArm)
+                .to(GATE_BOB_TIME, { angle: -GATE_BOB }, { easing: 'sineInOut' })
+                .to(GATE_BOB_TIME, { angle: 0 }, { easing: 'sineInOut' })
+                .union()
+                .repeatForever()
+                .start();
+            return;
         }
+        tween(this.gateArm)
+            .to(GATE_OPEN_TIME, { angle: GATE_OPEN_ANGLE }, { easing: 'cubicOut' })
+            .start();
+        tween(this.loadingFade)
+            .delay(GATE_OPEN_TIME * 0.55)
+            .to(0.2, { opacity: 0 })
+            .call(() => { this.loadingLayer.active = false; })
+            .start();
+        tween(this.root)
+            .delay(GATE_OPEN_TIME * 0.5)
+            .call(() => this.revealMenu(true))
+            .start();
     }
 
-    /** See LOCK_INK for how a padlock is made of rounded squares and what draws over what. */
+    private revealMenu(on: boolean): void {
+        this.sub.node.active = on;
+        this.cap.node.active = on;
+        this.startBtn.active = on;
+        this.railRoot.active = on;
+    }
+
+    /**
+     * Tell the screen how many levels there are, and build the rail.
+     *
+     * `levelCount` comes from the caller rather than a constant here, because the number of
+     * levels is a fact about the `resources/levels` folder and `GameController` is what can
+     * see it. Adding a level-11.json then extends the rail with no change to this file --
+     * and with a rail, not even a change of layout.
+     *
+     * Called once, after the preload: reading the bundle's index is the one thing on this
+     * screen that cannot be done before the engine has finished starting.
+     */
+    setLevels(levelCount: number): void {
+        if (this.stops.length > 0) return;
+        this.levelCount = levelCount;
+        this.sub.string = `共 ${levelCount} 关`;
+        for (let i = 0; i < levelCount; i++) this.stops.push(this.buildStop(i));
+        this.layout();
+    }
+
+    private buildStop(i: number): Stop {
+        const node = new Node(`Stop${i + 1}`);
+        node.layer = Layers.Enum.UI_2D;
+        node.addComponent(UITransform).setContentSize(STOP_D, STOP_D);
+        this.railRoot.addChild(node);
+        const fade = node.addComponent(UIOpacity);
+
+        // The halo first, so it sits behind the chip and reads as a glow rather than a frame.
+        const ring = roundedSprite(
+            'ring', STOP_D + STOP_RING_PAD * 2, STOP_D + STOP_RING_PAD * 2,
+            STOP_RING, STOP_R + 8,
+        );
+        node.addChild(ring);
+        const ringFade = ring.addComponent(UIOpacity);
+        const base = roundedSprite('base', STOP_D, STOP_D, STOP_BASE, STOP_R);
+        node.addChild(base);
+        base.setPosition(0, -BTN_LIFT, 0);
+        const face = roundedSprite('face', STOP_D, STOP_D, STOP, STOP_R);
+        node.addChild(face);
+        const num = makeLabel(face, 'n', 46, 0);
+        num.color = STOP_INK;
+        num.isBold = true;
+        num.string = `${i + 1}`;
+
+        const lock = this.buildLock(face);
+        const stars: Node[] = [];
+        for (let s = 0; s < STAR_MAX; s++) {
+            const star = starSprite(`star${s}`, STOP_STAR_D, STAR_OFF);
+            node.addChild(star);
+            star.setPosition((s - (STAR_MAX - 1) / 2) * STOP_STAR_PITCH, STOP_STAR_Y, 0);
+            star.active = false;
+            stars.push(star);
+        }
+        return { node, fade, ringFade, face, base, num, lock, stars, open: false };
+    }
+
+    /** See LOCK_INK: a padlock out of three sprites, the middle one a hole. */
     private buildLock(face: Node): Node {
         const lock = new Node('lock');
         lock.layer = Layers.Enum.UI_2D;
         lock.addComponent(UITransform);
         face.addChild(lock);
-
-        const shackle = roundedSprite(
-            'shackle', LOCK_SHACKLE_D, LOCK_SHACKLE_D, LOCK_INK, LOCK_SHACKLE_D / 2,
-        );
+        const shackle = dotSprite('shackle', 38, LOCK_INK);
         lock.addChild(shackle);
-        shackle.setPosition(0, LOCK_SHACKLE_Y, 0);
-        // The hole, in the colour of the plate behind it. A locked chip is the only state
-        // this is ever drawn in, so CHIP_LOCKED is that colour and not a guess.
-        const hole = roundedSprite('hole', LOCK_HOLE_W, LOCK_HOLE_H, CHIP_LOCKED, LOCK_HOLE_W / 2);
+        shackle.setPosition(0, 13, 0);
+        const hole = roundedSprite('hole', 18, 24, STOP_SHUT, 9);
         lock.addChild(hole);
-        hole.setPosition(0, LOCK_SHACKLE_Y + 2, 0);
-        const body = roundedSprite('body', LOCK_BODY_W, LOCK_BODY_H, LOCK_INK, 8);
+        hole.setPosition(0, 15, 0);
+        const body = roundedSprite('body', 46, 34, LOCK_INK, 8);
         lock.addChild(body);
-        body.setPosition(0, LOCK_BODY_Y, 0);
-
+        body.setPosition(0, -10, 0);
         lock.active = false;
         return lock;
     }
 
-    private buildChipStars(chip: Node): Node[] {
-        const out: Node[] = [];
-        for (let i = 0; i < STAR_MAX; i++) {
-            const star = starSprite(`star${i}`, CHIP_STAR_D, CHIP_STAR_OFF);
-            chip.addChild(star);
-            star.setPosition((i - (STAR_MAX - 1) / 2) * CHIP_STAR_PITCH, CHIP_STAR_Y, 0);
-            star.active = false;
-            out.push(star);
-        }
-        return out;
-    }
-
     /**
-     * Draw the save: each chip locked or open, its rating, and what the start button opens.
+     * Draw the save: every stop's state and rating, and which level the rail opens on.
      *
-     * All three in one call so they cannot drift apart -- a grid that says level 4 is open
-     * over a button that offers level 3 is two answers to one question.
+     * Opening on the furthest unlocked level is what makes the rail land where the player
+     * left off, and it is the same number the button offers -- `setFocus` writes both.
      */
     setProgress(p: Progress): void {
-        // No-op before `setLevels`: there is nothing to paint, and `continueLevel` would
-        // report level 1 off a levelCount of 0. The caller draws again once the grid is up.
-        if (this.chips.length === 0) return;
-        for (let i = 0; i < this.chips.length; i++) {
+        if (this.stops.length === 0) return;
+        for (let i = 0; i < this.stops.length; i++) {
             const level = i + 1;
-            const chip = this.chips[i];
+            const stop = this.stops[i];
             const open = isUnlocked(p, level);
             const best = bestStars(p, level);
-            chip.open = open;
-            chip.face.getComponent(Sprite)!.color = open ? CHIP : CHIP_LOCKED;
-            chip.base.getComponent(Sprite)!.color = open ? CHIP_BASE : CHIP_LOCKED_BASE;
-            chip.num.node.active = open;
-            chip.lock.active = !open;
-            for (let s = 0; s < chip.stars.length; s++) {
+            const done = best > 0;
+            stop.open = open;
+            stop.face.getComponent(Sprite)!.color =
+                !open ? STOP_SHUT : (done ? STOP_DONE : STOP);
+            stop.base.getComponent(Sprite)!.color =
+                !open ? STOP_SHUT_BASE : (done ? STOP_DONE_BASE : STOP_BASE);
+            stop.num.node.active = open;
+            stop.lock.active = !open;
+            for (let s = 0; s < stop.stars.length; s++) {
                 // Absent, not empty, on a level never cleared: three grey stars would say it
                 // was cleared with none, which cannot happen (the rating floors at one).
-                chip.stars[s].active = open && best > 0;
-                chip.stars[s].getComponent(Sprite)!.color =
-                    s < best ? CHIP_STAR_ON : CHIP_STAR_OFF;
+                stop.stars[s].active = open && done;
+                stop.stars[s].getComponent(Sprite)!.color = s < best ? STAR_ON : STAR_OFF;
             }
         }
-        const level = this.continueLevel(p);
-        this.startLabel.string = level === 1 ? '开始游戏' : `继续 第 ${level} 关`;
+        this.setFocus(Math.max(1, Math.min(this.levelCount, unlockedThrough(p))) - 1);
+        // Land there rather than glide there: this runs as the screen appears, and a rail
+        // that slides in from level 1 every time would be an animation of loading a save.
+        this.offset = this.target;
+        this.layout();
+    }
+
+    /** Which level the button plays, 1-based. */
+    focusedLevel(): number {
+        return this.focused + 1;
     }
 
     /**
-     * Which level the start button opens: the furthest one unlocked, capped at the last that
-     * exists.
+     * Move the rail's aim to stop `i`, and write the button to match.
      *
-     * `unlockedThrough` reports one PAST the series on a fully cleared save, which is what the
-     * cap is for. On such a save the button reads "继续 第 10 关" -- true, since the last level
-     * is the furthest unlocked one, and slightly odd; a better wording needs another state.
+     * The button is the ONLY place the gate shows as a refusal: a locked level can be brought
+     * to the middle and looked at, and then the button says what would open it and
+     * `hitsStart` stops answering. Friendlier than a rail that refuses to travel, and one
+     * predicate rather than two.
      */
-    continueLevel(p: Progress): number {
-        return Math.max(1, Math.min(this.levelCount, unlockedThrough(p)));
+    private setFocus(i: number): void {
+        this.focused = Math.max(0, Math.min(Math.max(0, this.levelCount - 1), i));
+        this.target = railOffset(this.focused);
+        const stop = this.stops[this.focused];
+        this.focusOpen = !!stop && stop.open;
+        this.startFace.getComponent(Sprite)!.color = this.focusOpen ? START : START_SHUT;
+        this.startBase.getComponent(Sprite)!.color =
+            this.focusOpen ? START_BASE : START_SHUT_BASE;
+        this.startLabel.string = this.focusOpen
+            ? `开始 第 ${this.focused + 1} 关`
+            : `通过第 ${this.focused} 关解锁`;
+    }
+
+    /** Bring stop `i` to the middle, on a tap. */
+    focusStop(i: number): void {
+        this.setFocus(i);
+    }
+
+    /**
+     * Ease the rail toward its target and lay the stops out. Driven from
+     * `GameController.update`, which calls it BEFORE its own `core` guard -- there is no core
+     * on this screen.
+     *
+     * Exponential smoothing rather than a tween: the target changes mid-flight (a tap during
+     * a glide, a second flick) and a tween would have to be stopped and rebuilt every time,
+     * while this just keeps closing on whatever the target is now.
+     */
+    tick(dt: number): void {
+        if (!this.dragging && this.offset !== this.target) {
+            this.offset += (this.target - this.offset) * Math.min(1, dt * RAIL_EASE);
+            if (Math.abs(this.target - this.offset) < 0.5) this.offset = this.target;
+        }
+        this.layout();
+    }
+
+    /**
+     * Place every stop for the current offset: x from the rail's coordinate, scale and
+     * opacity from how far out of the middle it is.
+     *
+     * Everything here is continuous in `offset`, which is what makes a drag read as direct
+     * manipulation -- chips grow as they arrive rather than snapping between two sizes.
+     * Stops fully off screen are deactivated; ones at the edge are left to be clipped by the
+     * screen itself, because a half-visible chip is what says there is more rail.
+     */
+    private layout(): void {
+        const edge = this.w * 0.75;
+        for (let i = 0; i < this.stops.length; i++) {
+            const stop = this.stops[i];
+            const x = railOffset(i) - this.offset;
+            if (Math.abs(x) > edge) {
+                stop.node.active = false;
+                continue;
+            }
+            stop.node.active = true;
+            const t = Math.min(1, railStopT(this.offset, i));
+            const scale = 1 + (STOP_REST - 1) * t;
+            stop.node.setPosition(x, 0, 0);
+            stop.node.setScale(scale, scale, 1);
+            stop.fade.opacity = Math.round(255 + (STOP_ALPHA_REST - 255) * t);
+            // The halo belongs to the middle alone, and is gone by half a pitch out, so two
+            // chips are never wearing it at once.
+            stop.ringFade.opacity = Math.round(255 * Math.max(0, 1 - t * 2));
+        }
     }
 
     show(): void {
@@ -409,9 +682,70 @@ export class HomeView {
         return this.root.active;
     }
 
-    /** Whether `ui` (UI-space) landed on the start button. */
+    // --- the gesture -------------------------------------------------------------------
+
+    /**
+     * A press landed. `t` is a clock in seconds; only differences matter.
+     *
+     * The drag takes hold of the DRAWN offset rather than the target, so grabbing the rail
+     * mid-glide catches it where it visibly is -- taking hold of a moving thing and having
+     * it jump is the single thing that makes a drag feel broken.
+     */
+    beginDrag(uiX: number, t: number): void {
+        if (this.waiting || this.levelCount === 0) return;
+        this.dragging = true;
+        this.dragFromX = uiX;
+        this.dragBase = this.offset;
+        this.lastX = uiX;
+        this.lastT = t;
+        this.travelled = 0;
+        this.vel = 0;
+    }
+
+    /** Whether a finger is currently on the rail. Lets the caller skip work per mouse move. */
+    isDragging(): boolean {
+        return this.dragging;
+    }
+
+    moveDrag(uiX: number, t: number): void {
+        if (!this.dragging) return;
+        this.travelled += Math.abs(uiX - this.lastX);
+        // Negated once, here: a finger moving LEFT brings later levels to the middle, which
+        // is a RISING offset. Nothing downstream has to think about the sign again.
+        this.offset = railRubber(this.dragBase - (uiX - this.dragFromX), this.levelCount);
+        this.target = this.offset;
+        const dt = t - this.lastT;
+        if (dt > 0.001) this.vel = -(uiX - this.lastX) / dt;
+        this.lastX = uiX;
+        this.lastT = t;
+    }
+
+    /**
+     * The press ended. Says whether it was a tap or a drag, and the caller uses that to
+     * decide whether the release also counts as a click.
+     *
+     * A release that travelled more than DRAG_SLOP must NOT also be treated as a tap, or
+     * every swipe would end by selecting whatever it stopped over.
+     */
+    endDrag(t: number): 'tap' | 'slid' {
+        if (!this.dragging) return 'tap';
+        this.dragging = false;
+        if (this.travelled < DRAG_SLOP) {
+            // A wobble, not a drag: put the rail back on the stop it was aiming at -- the
+            // offset may have drifted a unit or two under the finger -- and let the tap out.
+            this.setFocus(railNearest(this.offset, this.levelCount));
+            return 'tap';
+        }
+        // Stale velocity is worse than none: a finger that slid, stopped, rested and then
+        // lifted must not fling the rail on the speed it had a second ago.
+        const fresh = t - this.lastT < 0.12 ? this.vel : 0;
+        this.setFocus(railFlick(this.offset, fresh, this.levelCount));
+        return 'slid';
+    }
+
+    /** Whether `ui` (UI-space) landed on the start button, and there is a level to start. */
     hitsStart(ui: Vec3): boolean {
-        if (!this.open() || this.waiting) return false;
+        if (!this.open() || this.waiting || !this.focusOpen) return false;
         const p = this.startBtn.worldPosition;
         return Math.abs(ui.x - p.x) <= START_W / 2 + TAP_PAD
             && Math.abs(ui.y - p.y) <= START_H / 2 + TAP_PAD;
@@ -426,23 +760,21 @@ export class HomeView {
     }
 
     /**
-     * Which level chip `ui` landed on, 1-based, or -1 for none OR for a locked one.
+     * Which stop `ui` landed on, 0-based, or -1 for none. A tap on a stop brings it to the
+     * middle; it does NOT start the level, which is the button's job alone.
      *
-     * THE GATE IS HERE. A locked chip is not a tap that gets refused later -- it is not a tap
-     * at all, so there is no second opinion anywhere about which levels can be played.
-     *
-     * Square hit boxes, unlike the HUD's circular chip test, because these chips ARE squares
-     * -- a circular test would refuse their corners.
+     * Measured against the stop's DRAWN size, so a resting chip has a resting chip's target
+     * -- a hit box left at the focused size would overlap its neighbours' and bring the
+     * wrong level in.
      */
-    hitsLevel(ui: Vec3): number {
+    hitsStop(ui: Vec3): number {
         if (!this.open() || this.waiting) return -1;
-        const r = CHIP_D / 2 + TAP_PAD;
-        for (let i = 0; i < this.chips.length; i++) {
-            const chip = this.chips[i];
-            const p = chip.node.worldPosition;
-            if (Math.abs(ui.x - p.x) <= r && Math.abs(ui.y - p.y) <= r) {
-                return chip.open ? i + 1 : -1;
-            }
+        for (let i = 0; i < this.stops.length; i++) {
+            const stop = this.stops[i];
+            if (!stop.node.active) continue;
+            const p = stop.node.worldPosition;
+            const half = (STOP_D * stop.node.scale.x) / 2 + TAP_PAD;
+            if (Math.abs(ui.x - p.x) <= half && Math.abs(ui.y - p.y) <= half) return i;
         }
         return -1;
     }
