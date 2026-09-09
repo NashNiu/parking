@@ -1,7 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const HUD = path.join(__dirname, '../../game/assets/scripts/view/hud-view.ts');
+const VIEW = path.join(__dirname, '../../game/assets/scripts/view');
+/**
+ * Every view file that builds a panel by appending children, which is all of them that hold
+ * one. A file added here needs no other change: the first test walks the list.
+ */
+const FILES = ['hud-view.ts', 'home-view.ts'];
 
 /** `.children[<number>]` in code, with comments stripped. See the test below for why. */
 function indexedChildLookups(src: string): string[] {
@@ -22,11 +27,11 @@ function indexedChildLookups(src: string): string[] {
 }
 
 /**
- * The HUD locates child nodes by NAME, never by sibling index.
+ * A view locates child nodes by NAME, never by sibling index.
  *
- * A source-level guard rather than a behavioural test, because the HUD imports `cc` and this
- * suite does not load the engine -- so this is the only automated check available for the one
- * defect class that has actually shipped here.
+ * A source-level guard rather than a behavioural test, because these files import `cc` and
+ * this suite does not load the engine -- so this is the only automated check available for
+ * the one defect class that has actually shipped here.
  *
  * WHAT IT CAUGHT. `showWin` read its panel as `scrim.children[0]`. That was correct when it
  * was written: the scrim had exactly one child. Two commits later a decorative rotating burst
@@ -44,12 +49,12 @@ function indexedChildLookups(src: string): string[] {
  * have gone unnoticed too.
  *
  * A name lookup cannot break that way: inserting, reordering or removing a sibling leaves it
- * pointing at the same node. The rule is worth more than the one bug -- every panel in here is
- * built by appending children, so any future decoration is another chance to make this
- * mistake, and the failure is silent by construction.
+ * pointing at the same node. The rule is worth more than the one bug -- every panel in these
+ * files is built by appending children, so any future decoration is another chance to make
+ * this mistake, and the failure is silent by construction.
  */
-test('the HUD never locates a child node by sibling index', () => {
-  expect(indexedChildLookups(fs.readFileSync(HUD, 'utf8'))).toEqual([]);
+test.each(FILES)('%s never locates a child node by sibling index', (file) => {
+  expect(indexedChildLookups(fs.readFileSync(path.join(VIEW, file), 'utf8'))).toEqual([]);
 });
 
 /**
@@ -69,4 +74,6 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
   // A variable index is walking the list, not pinning a position.
   expect(indexedChildLookups('for (const c of n.children) {}')).toEqual([]);
   expect(indexedChildLookups('const c = n.children[i];')).toEqual([]);
+  // `children.length` is not an index at all, and HomeView.show uses it.
+  expect(indexedChildLookups('n.setSiblingIndex(n.parent!.children.length - 1);')).toEqual([]);
 });

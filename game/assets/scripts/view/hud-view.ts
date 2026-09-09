@@ -1,48 +1,6 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import { roundedSprite, dotSprite, starSprite, burstSprite } from './ui-shapes';
-
-declare const wx: any;
-
-/**
- * The screen's unusable top and bottom edges, as FRACTIONS of its height: the notch or
- * Dynamic Island above, the home indicator below.
- *
- * Fractions, not pixels, because that is the only form in which the number is portable.
- * `safeArea` and `screenHeight` come back from wx in logical px, the canvas measures itself
- * in design units, and the ratio between those two is a project setting this file does not
- * read -- but their QUOTIENT is the same in either. `topReserve` hands the same fractions to
- * the camera for the same reason.
- *
- * Zero off-device (browser, editor preview), which is exactly right: there is no notch
- * there, and the layout should not pretend otherwise.
- *
- * Read once and cached. Nothing here changes while the game runs, and getSystemInfoSync is
- * one of the slower wx calls.
- */
-let insets: { top: number; bottom: number } | null = null;
-
-function safeInsets(): { top: number; bottom: number } {
-    if (insets) return insets;
-    insets = { top: 0, bottom: 0 };
-    try {
-        const info = typeof wx !== 'undefined' && wx.getSystemInfoSync
-            ? wx.getSystemInfoSync() : null;
-        const h = info && info.screenHeight;
-        const area = info && info.safeArea;
-        if (h > 0 && area) {
-            insets = {
-                top: Math.max(0, Math.min(0.3, area.top / h)),
-                bottom: Math.max(0, Math.min(0.3, (h - area.bottom) / h)),
-            };
-        }
-    } catch { /* leave it at zero -- a missing inset is a cosmetic loss, not a crash */ }
-    return insets;
-}
-
-function canvasSize(canvas: Node): { w: number; h: number } {
-    const ct = canvas.getComponent(UITransform);
-    return ct ? { w: ct.width, h: ct.height } : { w: 720, h: 1280 };
-}
+import { canvasSize, makeLabel, safeInsets } from './ui-layout';
 
 /**
  * The passenger figure as a flat glyph, centred on `parent`: a head over a narrower body.
@@ -78,19 +36,6 @@ function liftedPill(name: string, w: number, h: number): { holder: Node; face: N
     const face = roundedSprite('face', w, h, PILL_BG);
     holder.addChild(face);
     return { holder, face };
-}
-
-function makeLabel(parent: Node, name: string, fontSize: number, y: number, x = 0): Label {
-    const n = new Node(name);
-    n.layer = Layers.Enum.UI_2D;
-    n.addComponent(UITransform);
-    const label = n.addComponent(Label);
-    label.fontSize = fontSize;
-    label.lineHeight = Math.round(fontSize * 1.2);
-    label.color = Color.WHITE.clone();
-    parent.addChild(n);
-    n.setPosition(x, y, 0);
-    return label;
 }
 
 /**
@@ -353,11 +298,41 @@ const TAG_INK = new Color(90, 100, 125, 130);
  * 0.08, which is not a margin, it is a coincidence.
  */
 const PICK_LEVELS = 10;
+/**
+ * Whether the in-game picker row is shown at all. FALSE: the home screen owns level choice
+ * now (`HomeView`), and two ways to change level -- one of them sitting under the player's
+ * thumb all game -- is one too many.
+ *
+ * A switch rather than a deletion for the reason PICK_LEVELS was written down: checking a
+ * change on level 7 otherwise means playing six levels first, on a phone, once per build.
+ * Flipping this back puts the row under the lot again.
+ *
+ * Visibility and `hitsLevel` read THIS constant, the same discipline as SPEED_BUTTON: a row
+ * that is invisible but still answering taps would jump levels under a player who pressed
+ * empty screen.
+ */
+const PICK_ROW = false;
 const PICK_D = 64;
 const PICK_PITCH = 88;
 const PICK_BG = new Color(120, 132, 158, 120);
 const PICK_ON = new Color(74, 144, 226, 235);
 const PICK_INK = new Color(255, 255, 255, 220);
+
+/**
+ * The button that leaves a level for the home screen, top RIGHT.
+ *
+ * Right, against the usual convention of a back button top-left, because the left of that
+ * row is taken: the title plate is centred and the passenger counter hangs off the left
+ * margin one row below it, and a 76 disc on the title line reaches 16 units down into the
+ * counter's plate. The right of that row is empty at every screen width.
+ *
+ * Words, not a glyph. A house or a chevron is one font substitution away from a hollow box
+ * on a device whose system font lacks it, and every other string on this HUD is already
+ * Chinese text that is known to render.
+ */
+const HOME_BTN_D = 76;
+const HOME_BTN_BG = new Color(252, 253, 255, 235);
+const HOME_BTN_INK = new Color(84, 96, 124, 255);
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -468,6 +443,16 @@ export class HudView {
     private promptBtn: Node | null = null;
     private promptClose: Node | null = null;
     private pickNodes: Node[] = [];
+    /**
+     * The two readout plates, by their HOLDERS rather than their labels: `setPlayVisible`
+     * takes the whole plate down, and the label is two nodes inside it.
+     */
+    private titlePill: Node;
+    private paxPill: Node;
+    /** Leaves the level for the home screen. See HOME_BTN_D and `hitsHome`. */
+    private homeBtn: Node;
+    /** Whether a level is on screen. `syncHomeBtn` is the only reader. */
+    private play = false;
     /** Per-tunnel count readouts, keyed by tunnel id. See `setTunnelCount`. */
     private tunnelBadges = new Map<number, { holder: Node; label: Label }>();
     private speedNode: Node;
@@ -485,15 +470,20 @@ export class HudView {
         // Below the notch, not below the top edge. The centred plate is directly under a
         // Dynamic Island otherwise, which is where it went the first time.
         const line = h / 2 - safeInsets().top * h - margin - PILL_H / 2;
-        this.levelLabel = this.buildTitlePill(canvas, 0, line);
+        const title = this.buildTitlePill(canvas, 0, line);
+        this.levelLabel = title.label;
+        this.titlePill = title.holder;
         // Dropped half its own height plus a margin -- clear of the status bar it used to
         // share, and no further. A FULL row lower was tried on paper and rejected: see
         // TITLE_PILL_W for the arithmetic, but the short version is that the ring's top
         // rows start 8.3% of the screen height down and a full row puts this plate's
         // bottom edge past that.
-        this.progressLabel = this.buildPassengerPill(
+        const pax = this.buildPassengerPill(
             canvas, w, margin, line - PILL_H / 2 - margin,
         );
+        this.progressLabel = pax.label;
+        this.paxPill = pax.holder;
+        this.homeBtn = this.buildHomeButton(canvas, w / 2 - margin - HOME_BTN_D / 2, line);
         // A fallback spot only. `placeSpeed` moves it onto the carousel's corner as soon as
         // the board is framed, which happens in the same frame the board is built -- but a
         // HUD with no board behind it (a failed level load) should still put it somewhere
@@ -506,6 +496,7 @@ export class HudView {
             canvas,
             -h / 2 + safeInsets().bottom * h + margin + 22 + PICK_D / 2 + 10,
         );
+        for (const chip of this.pickNodes) chip.active = PICK_ROW;
         this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
         this.bannerLabel.color = TITLE_INK;
         this.bannerLabel.isBold = true;
@@ -513,6 +504,10 @@ export class HudView {
         this.bannerLabel.outlineColor = new Color(255, 255, 255, 235);
         this.bannerLabel.outlineWidth = 5;
         this.bannerLabel.node.active = false;
+        // Nothing here belongs to a level yet: the game opens on the home screen, and the
+        // preload before it can take up to PRELOAD_DEADLINE seconds. Built hidden rather
+        // than shown and then hidden, so there is no frame of empty readouts over nothing.
+        this.setPlayVisible(false);
     }
 
     /**
@@ -541,14 +536,35 @@ export class HudView {
      * makes the centre safe). 46px against the counter's 54 -- it is the quieter of the two,
      * because the number is the one that changes.
      */
-    private buildTitlePill(canvas: Node, x: number, line: number): Label {
+    private buildTitlePill(
+        canvas: Node, x: number, line: number,
+    ): { holder: Node; label: Label } {
         const { holder, face } = liftedPill('TitlePill', TITLE_PILL_W, TITLE_PILL_H);
         canvas.addChild(holder);
         holder.setPosition(x, line, 0);
         const label = makeLabel(face, 'LevelLabel', 46, 0);
         label.color = TITLE_INK;
         label.isBold = true;
-        return label;
+        return { holder, label };
+    }
+
+    /** See HOME_BTN_D for where this sits and why it says what it says. */
+    private buildHomeButton(canvas: Node, x: number, y: number): Node {
+        const holder = new Node('HomeBtn');
+        holder.layer = Layers.Enum.UI_2D;
+        holder.addComponent(UITransform).setContentSize(HOME_BTN_D, HOME_BTN_D);
+        canvas.addChild(holder);
+        holder.setPosition(x, y, 0);
+        const base = dotSprite('base', HOME_BTN_D, PILL_BASE);
+        holder.addChild(base);
+        base.setPosition(0, -PILL_LIFT, 0);
+        const face = dotSprite('face', HOME_BTN_D, HOME_BTN_BG);
+        holder.addChild(face);
+        const label = makeLabel(face, 'HomeBtnLabel', 30, 0);
+        label.color = HOME_BTN_INK;
+        label.isBold = true;
+        label.string = '主页';
+        return holder;
     }
 
     /**
@@ -566,7 +582,9 @@ export class HudView {
      * legible, which at 22 it was not -- it is the smallest type on the screen and it was
      * carrying the only words that say what the number means.
      */
-    private buildPassengerPill(canvas: Node, w: number, margin: number, y: number): Label {
+    private buildPassengerPill(
+        canvas: Node, w: number, margin: number, y: number,
+    ): { holder: Node; label: Label } {
         const { holder, face } = liftedPill('PaxPill', PILL_W, PILL_H);
         canvas.addChild(holder);
         holder.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
@@ -584,7 +602,66 @@ export class HudView {
         const count = makeLabel(face, 'PaxCount', 48, -19, textX);
         count.color = PILL_INK;
         count.isBold = true;
-        return count;
+        return { holder, label: count };
+    }
+
+    /**
+     * Show or hide everything that belongs to a level in play: the two readout plates, the
+     * home button, the speed disc and the picker row, plus whichever end-of-level panel was
+     * up. `GameController` calls this with false when it leaves for the home screen and true
+     * when it enters a level.
+     *
+     * The two SWITCHED parts stay switched off either way -- `on && SPEED_BUTTON`, and the
+     * picker's own `PICK_ROW` -- so turning play back on cannot resurrect a control that is
+     * deliberately hidden. That is the whole reason this reads the constants rather than a
+     * remembered "what was visible before".
+     *
+     * Per-level nodes are NOT in here. Seat chips and tunnel badges are created as a level
+     * runs and destroyed when it is torn down (`clearTunnelBadges`, and the controller's own
+     * chip destroy), so hiding them would leave two owners of the same lifetime.
+     */
+    setPlayVisible(on: boolean): void {
+        this.play = on;
+        this.titlePill.active = on;
+        this.paxPill.active = on;
+        this.speedNode.active = on && SPEED_BUTTON;
+        for (const chip of this.pickNodes) chip.active = on && PICK_ROW;
+        if (!on) {
+            this.bannerLabel.node.active = false;
+            if (this.win) this.win.active = false;
+            if (this.prompt) this.prompt.active = false;
+            if (this.toast) this.toast.active = false;
+        }
+        this.syncHomeBtn();
+    }
+
+    /**
+     * The home button is live only when a level is up AND no modal is over it.
+     *
+     * Both panels raise their scrim to the front of the canvas, so the button is UNDER them
+     * -- and a hit test does not care about draw order, so leaving it active would make the
+     * top-right corner of a modal quietly leave the level. That is the same defect as a
+     * hidden button that still answers taps, arrived at from the other direction, so the
+     * answer is the same one: one predicate drives both the visibility and the hit test
+     * (`hitsHome` reads `active`), and every place that raises or drops a panel calls this.
+     *
+     * The lose BANNER is not a panel: it is a bare label with no scrim, so the button stays
+     * live behind it. That is deliberate -- a lost level is one a player particularly wants
+     * to leave, and until now the only way out was to replay it.
+     */
+    private syncHomeBtn(): void {
+        const modal = !!(this.win?.active) || !!(this.prompt?.active);
+        this.homeBtn.active = this.play && !modal;
+    }
+
+    /** Whether `ui` landed on the home button. Dead while the home screen is up. */
+    hitsHome(ui: Vec3): boolean {
+        if (!this.homeBtn.active) return false;
+        const p = this.homeBtn.worldPosition;
+        const r = HOME_BTN_D / 2 + 10;
+        const dx = ui.x - p.x;
+        const dy = ui.y - p.y;
+        return dx * dx + dy * dy <= r * r;
     }
 
     /**
@@ -761,6 +838,7 @@ export class HudView {
         // To the front, past every seat chip: chips are appended as cars park, so they are
         // later siblings than anything built in the constructor. Same reason as the banner.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncHomeBtn();
         // By name, for the reason `showWin` now does: this happens to be children[0] today,
         // and would quietly become whatever decoration is added in front of it tomorrow.
         // Here the failure would be milder than showWin's -- the panel still shows, because
@@ -778,6 +856,7 @@ export class HudView {
     /** Take the prompt down. Safe before it has ever been built. */
     hideUnlockPrompt(): void {
         if (this.prompt) this.prompt.active = false;
+        this.syncHomeBtn();
     }
 
     /** Whether the prompt is up, i.e. whether it owns the next tap. */
@@ -891,6 +970,8 @@ export class HudView {
      * same UI-space point as `hitsSpeed`.
      */
     hitsLevel(ui: Vec3): number {
+        // Hidden means unpressable -- see PICK_ROW.
+        if (!PICK_ROW) return -1;
         const r = PICK_D / 2 + 8;
         for (let i = 0; i < this.pickNodes.length; i++) {
             const p = this.pickNodes[i].worldPosition;
@@ -1103,7 +1184,7 @@ export class HudView {
         const scrim = this.win!;
         // BY NAME, not by index. This read `scrim.children[0]`, which was the panel when it
         // was written and became the decorative burst the moment one was added in front of
-        // it -- see the guard in logic/tests/hud-view-source.test.ts for what that cost.
+        // it -- see the guard in logic/tests/view-source.test.ts for what that cost.
         const panel = scrim.getChildByName('WinPanel')!;
         const plate = panel.getChildByName('plate')!;
         plate.getChildByName('WinTitle')!.getComponent(Label)!.string =
@@ -1120,6 +1201,7 @@ export class HudView {
         // Past every seat chip: chips are appended as cars park, so they are later siblings
         // than anything built in the constructor. Same reason as the banner and the prompt.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncHomeBtn();
         const fade = scrim.getComponent(UIOpacity)!;
         Tween.stopAllByTarget(fade);
         fade.opacity = 0;
@@ -1177,5 +1259,6 @@ export class HudView {
     hideBanner(): void {
         this.bannerLabel.node.active = false;
         if (this.win) this.win.active = false;
+        this.syncHomeBtn();
     }
 }

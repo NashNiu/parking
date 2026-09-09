@@ -15,6 +15,7 @@ import { buildTunnel, tunnelCrown, TUNNEL_SHELL } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
+import { HomeView } from './home-view';
 import { setupEnvironment, setupAntiAliasing } from './environment';
 import {
     setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
@@ -432,11 +433,40 @@ export class GameController extends Component {
     @property
     levelName: string = 'level-1';
 
+    /**
+     * Which level the home screen's start button opens, read off `levelName` once at boot.
+     *
+     * A copy, because `levelName` does not stay put: `loadLevel` sets it to whatever level is
+     * in play, so the inspector's value is gone the moment the first level starts and the
+     * button would then mean "replay the last level I chose". This keeps the inspector field
+     * meaning what it says -- where the game starts -- and is the field that becomes
+     * "continue" when progress is saved.
+     */
+    private startLevel = 'level-1';
+
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
     private parkingView: ParkingView | null = null;
     private loopView: TrackView | null = null;
     private hud: HudView | null = null;
+    /**
+     * Built on first `showHome` rather than in `start`, the same way the win panel is built
+     * on the first win -- and for a sharper reason than tidiness: its grid is sized by
+     * `countLevels`, which reads the `resources` bundle index, and a count read before that
+     * bundle is usable comes back 0 and draws a home screen with no way into the game.
+     * After the preload it is known good, because the preload went through the same bundle.
+     */
+    private home: HomeView | null = null;
+    /** The UI canvas, kept because `HomeView` is built later than `start`. */
+    private canvasNode: Node | null = null;
+    /**
+     * Which screen is up. The board exists only in 'level': leaving for 'home' tears it down
+     * (`unloadLevel`) rather than hiding it, because a paused board is a second live state to
+     * keep correct -- the loop would either keep stepping behind the menu or need a pause flag
+     * threaded through `update`, and neither buys anything while there is nothing to come back
+     * to. Nothing is saved mid-level, so leaving IS abandoning.
+     */
+    private screen: 'home' | 'level' = 'home';
     private cam: Camera | null = null;
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
@@ -616,6 +646,8 @@ export class GameController extends Component {
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
+            this.canvasNode = canvas;
+            this.startLevel = this.levelName;
             this.tagText = BUILD_TAG;
             this.hud.setBuildTag(this.tagText);
             this.uiCam = canvas.getComponentInChildren(Camera);
@@ -639,7 +671,7 @@ export class GameController extends Component {
         // The step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
         // back used to strand the game on the splash screen with nothing logged.
         this.withDeadline('builtin-standard preload', (d) => this.preloadLitEffect(d), () => {
-            this.loadLevel(this.levelName);
+            this.showHome();
         });
     }
 
@@ -705,6 +737,94 @@ export class GameController extends Component {
         if (!m) return null;
         const next = `${m[1]}${parseInt(m[2], 10) + 1}`;
         return resources.getInfoWithPath(`levels/${next}`, JsonAsset) ? next : null;
+    }
+
+    /**
+     * How many levels the bundle holds, counted from level-1 upward until one is missing.
+     *
+     * Counted rather than declared for the same reason `nextLevelName` probes: dropping a
+     * level-11.json into `resources/levels` should extend the game, and a constant here would
+     * have to be remembered. `getInfoWithPath` reads the bundle's index -- no load, no console
+     * error on a miss.
+     *
+     * The cap is a guard against a level series this loop cannot see the end of, not a ceiling
+     * on the game: at 99 the home screen's grid is already twenty rows long.
+     */
+    private countLevels(): number {
+        let n = 0;
+        while (n < 99 && resources.getInfoWithPath(`levels/level-${n + 1}`, JsonAsset)) n++;
+        return n;
+    }
+
+    /**
+     * Show the home screen, tearing down whatever level was in play.
+     *
+     * Safe to call from anywhere, including before the first level has ever loaded -- which is
+     * exactly how the game starts.
+     */
+    private showHome(): void {
+        this.unloadLevel();
+        if (!this.home && this.canvasNode) {
+            const count = this.countLevels();
+            console.log(`[Game] home screen: ${count} levels`);
+            this.home = new HomeView(this.canvasNode, count);
+        }
+        this.screen = 'home';
+        this.hud?.setPlayVisible(false);
+        this.home?.show();
+    }
+
+    /** Leave the home screen for `name`. The inverse of `showHome`. */
+    private enterLevel(name: string): void {
+        this.sfx?.play('tap');
+        vibrate('light');
+        this.home?.hide();
+        this.screen = 'level';
+        this.hud?.setPlayVisible(true);
+        this.loadLevel(name);
+    }
+
+    /**
+     * Take the board down and leave no live level behind: every node destroyed, every per-id
+     * collection emptied, `core` null.
+     *
+     * `core = null` is what makes this different from the teardown `switchTo` used to do
+     * inline, and it is the load-bearing line: `update` returns early on a null core, so the
+     * loop stops stepping the instant this runs rather than running on against a board whose
+     * nodes have been destroyed.
+     *
+     * Ends with the HUD's panels down. A player who leaves from the win card and then starts a
+     * level must not find that card still over the board.
+     */
+    private unloadLevel(): void {
+        // Stop the track's phase tween before its cluster nodes are destroyed
+        // (the tween targets a plain object, so node destruction won't stop it).
+        this.loopView?.destroy();
+        this.loopView = null;
+        if (this.boardRoot) {
+            this.boardRoot.destroy();
+            this.boardRoot = null;
+        }
+        this.gridRoot = null;
+        this.gridView = null;
+        this.parkingView = null;
+        for (const [, e] of this.parked) {
+            if (e.chip) e.chip.destroy();
+        }
+        this.parked.clear();
+        this.tunnelNodes.clear();
+        // The badges hang off the persistent Canvas, not the board, so `boardRoot.destroy()`
+        // above never touches them. `buildBoard` clears them too, for the rebuild path; this is
+        // the path where no build follows.
+        this.hud?.clearTunnelBadges();
+        this.core = null;
+        this.speedAnchor = null;
+        this.ended = false;
+        this.busy = false;
+        this.arriving = 0;
+        this.tickAcc = 0;
+        this.hud?.hideBanner();
+        this.hud?.hideUnlockPrompt();
     }
 
     private loadLevel(name: string): void {
@@ -827,17 +947,7 @@ export class GameController extends Component {
 
     /** Tear the current board down and load `name` — used for both replay and advancing. */
     private switchTo(name: string): void {
-        // Stop the track's phase tween before its cluster nodes are destroyed
-        // (the tween targets a plain object, so node destruction won't stop it).
-        this.loopView?.destroy();
-        if (this.boardRoot) {
-            this.boardRoot.destroy();
-            this.boardRoot = null;
-        }
-        for (const [, e] of this.parked) {
-            if (e.chip) e.chip.destroy();
-        }
-        this.parked.clear();
+        this.unloadLevel();
         this.loadLevel(name);
     }
 
@@ -1921,6 +2031,20 @@ export class GameController extends Component {
 
     private handleTap(screenX: number, screenY: number): void {
         if (this.loading) return; // ignore taps while a level is (re)loading
+        // The home screen owns every tap while it is up, and nothing below runs: there is no
+        // board to raycast, no HUD control on screen and no level to end. A tap that hits
+        // neither the start button nor a chip is swallowed rather than falling through.
+        if (this.screen === 'home') {
+            if (!this.uiCam || !this.home) return;
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            // `startLevel`, not level 1: see the field. When progress is saved this is where
+            // "continue" resolves to the furthest level reached -- the button already means
+            // "start playing", which is why HomeView reports the tap and does not pick.
+            if (this.home.hitsStart(ui)) { this.enterLevel(this.startLevel); return; }
+            const pick = this.home.hitsLevel(ui);
+            if (pick > 0) this.enterLevel(`level-${pick}`);
+            return;
+        }
         // The unlock prompt owns every tap while it is up -- see `showUnlockPrompt`. Before
         // the level picker too: this is a question with a losing answer, and being able to
         // duck it by tapping something else would make it optional, which it is not.
@@ -1952,6 +2076,20 @@ export class GameController extends Component {
                 // wipes the board would be a worse bug than the one this is here to debug.
                 const want = `level-${pick}`;
                 if (want !== this.levelName) this.switchTo(want);
+                return;
+            }
+        }
+        // The way back to the menu, and it is checked BEFORE the level-over branch. It has to
+        // be: a lost level puts up a bare banner with no scrim, so the button is still live
+        // there (see `HudView.syncHomeBtn`) -- and `ended` swallows every tap into a replay,
+        // so a home check after it could never be reached from the one screen a player most
+        // wants to leave. Under the win card the button is deactivated instead, which is why
+        // this order costs that screen nothing.
+        if (this.uiCam && this.hud) {
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            if (this.hud.hitsHome(ui)) {
+                this.sfx?.play('tap');
+                this.showHome();
                 return;
             }
         }
