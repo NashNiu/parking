@@ -83,6 +83,21 @@ npm run preview:nobuild    # 跳过构建(已经在 Creator 界面里点过构�
 
 两个工具的路径自动探测,探不到用环境变量顶:`WX_DEVTOOLS_CLI`(cli.bat)、`COCOS_CREATOR`(CocosCreator.exe)。`--dry-run` 只打印要执行的命令,`--image` 把二维码写成 PNG 而不是画在终端里。
 
+### 启动首屏:每次构建之后跑一次
+
+```bash
+cd logic
+npm run splash             # 把游戏自己的 logo 贴到 Cocos 首屏上
+```
+
+`game/build/` 在 `.gitignore` 里,首屏那三个文件(`first-screen.js`、`logo.png`、`slogan.png`)**是每次构建重新生成的产物**,所以手改一次下次构建就没了。这个脚本改五个变量:`logoName` 指向拷进去的 `game-logo.png`、`useDefaultLogo = false`(不画 "Created with Cocos")、`bgColor` 换成主页的深蓝、进度条换成主页按钮的绿 —— 于是首屏交接到主页时不像换了个场景。**幂等**,重复跑或者对已经改过的构建跑都没事。
+
+logo 是 `tools/splash/logo.png`,当前是占位图(`tools/make-splash-logo.py` 画的一个 P 字牌)。**换成真的美术图就是替换这一个文件**,任意尺寸任意比例 —— 首屏按画布高度的 18.5% 等比缩放它。
+
+做成脚本而不是 Cocos 构建插件(`game/extensions`、`onAfterBuild`),是因为插件我没法在这里验证:编辑器要是没加载上,构建出来的包照样带着 Cocos logo,而且**什么都不会说**。脚本的失败模式是「你忘了跑」,那是看得见的。`patchFirstScreen` 是纯函数并且有测试,以后想挂插件,插件里就是三行包装。
+
+**授权不是代码问题。** `game/settings/v2/packages/information.json` 里 `customSplash` 和 `removeSplash` 都是 `enable: false`,各挂一个 creator-api.cocos.com 的申请表单。换 logo 属于前者。脚本干活,能不能这样发布是项目所有者和 Cocos 之间的事。
+
 ### 重新生成关卡
 
 关卡不是手写的,是离线算出来的:
