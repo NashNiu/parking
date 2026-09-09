@@ -72,6 +72,17 @@ export class ParkingSystem {
     return this.parked.length - 1;
   }
 
+  /**
+   * How many stalls the PLAYER has opened, which is what the star rating is spent from.
+   *
+   * `unlocked` is the level's opening count and never moves; `parked.length` IS the open
+   * count, because `unlock` appends a slot (see there). Their difference is therefore the
+   * bay's whole history in one number, with no counter to keep in step.
+   */
+  unlocksUsed(): number {
+    return this.parked.length - this.unlocked;
+  }
+
   park(car: CarSpec): number {
     const idx = this.parked.findIndex((p) => p === null);
     if (idx === -1) throw new Error('no free parking slot');

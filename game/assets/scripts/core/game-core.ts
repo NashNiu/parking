@@ -1,4 +1,4 @@
-import { DEFAULT_FEEDS, LevelData } from './types';
+import { DEFAULT_FEEDS, LevelData, STAR_MAX } from './types';
 import { LotSystem } from './lot-system';
 import { ParkingSystem } from './parking-system';
 import { LoopSystem } from './loop-system';
@@ -73,6 +73,27 @@ export class GameCore {
     const slot = this.parking.unlock();
     if (slot >= 0) this.updateState();
     return slot;
+  }
+
+  /**
+   * The level's star rating, 1 to STAR_MAX: full marks for clearing it without opening a
+   * stall, one star fewer for each one opened.
+   *
+   * The locked stalls are the only resource the game already meters -- nothing counts moves
+   * or time -- so they are what a rating can honestly be made of, and metering them is what
+   * turns "open a stall" from a free rescue into a decision. `ParkingSystem.unlocksUsed`
+   * does the counting; this only applies the scale and the floor.
+   *
+   * The floor of one is deliberate: a cleared level is a win, and a win showing no stars
+   * reads as a failure. The upper stars are what separate a cheap clear from an expensive
+   * one.
+   *
+   * Answerable at any time, not just at the end. It reports the rating the level WOULD earn
+   * from here, which is what lets the blocked-stall prompt tell the player what opening one
+   * will cost before they agree to it.
+   */
+  stars(): number {
+    return Math.max(1, STAR_MAX - this.parking.unlocksUsed());
   }
 
   stepLoop(): BoardResult {

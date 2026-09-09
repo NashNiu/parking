@@ -1,6 +1,25 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import { roundedSprite, dotSprite, starSprite, burstSprite } from './ui-shapes';
 import { canvasSize, makeLabel, safeInsets } from './ui-layout';
+import { STAR_MAX } from '../core/index';
+
+/**
+ * What the win card reports. Assembled by the caller, because every one of these is a fact
+ * about the level and the run that the HUD has no way to know -- `stars` especially, which
+ * is core's verdict (`GameCore.stars`) and not a number this file should be deriving.
+ */
+export interface WinStats {
+    /** The level just cleared, 1-based. Also how many of the bar's cells light up. */
+    level: number;
+    /** How many levels the game holds, which is how many cells the bar has. */
+    levelCount: number;
+    /** Passengers delivered. On a win this is the level's whole queue, every one boarded. */
+    passengers: number;
+    /** Stalls the player opened. What the missing stars were spent on. */
+    unlocks: number;
+    /** The rating, 1 to STAR_MAX. */
+    stars: number;
+}
 
 /**
  * The passenger figure as a flat glyph, centred on `parent`: a head over a narrower body.
@@ -181,7 +200,28 @@ const PROMPT_X_INK = new Color(122, 133, 160, 255);
  * button is a drawing, not a target -- tapping it works only because tapping anything works.
  */
 const WIN_W = 600;
-const WIN_H = 420;
+/**
+ * 600, up from 420. The card carries five things now where it carried three: the stars, the
+ * headline, the series progress bar, two lines of tally, and two answers. The stack below is
+ * laid out from the stars DOWN, and every gap in it is written next to the constant that
+ * makes it, because the last time this card was crowded the title's line box grew into the
+ * caption's and nothing on screen said which number was wrong.
+ *
+ * Arithmetic, top to bottom, with the plate spanning y -300..300 and each line's box being
+ * 1.2x its font size (Cocos' default `lineHeight`, set that way in `makeLabel`):
+ *
+ *   side stars   y 286 +/- 60   ->  226..346   (76 of the card's top edge, deliberately out)
+ *   middle star  y 314 +/- 78   ->  236..392
+ *   title        y 150 +/- 43   ->  107..193   (33 clear of the side stars' underside)
+ *   caption      y  76 +/- 17   ->   59..93    (14 clear of the title)
+ *   bar          y  28 +/- 6    ->   22..34    (25 clear of the caption)
+ *   rule         y  -8          ->    -9..-7   (31 clear of the bar)
+ *   tally line 1 y -44 +/- 16   ->  -60..-28   (19 clear of the rule)
+ *   tally line 2 y -84 +/- 16   -> -100..-68   (8 clear of line 1: one block, two lines)
+ *   button       y -166 +/- 56  -> -222..-110  (10 clear of the tally)
+ *   replay       y -256 +/- 18  -> -274..-238  (16 clear of the button, 26 off the bottom)
+ */
+const WIN_H = 600;
 const WIN_R = 56;
 const WIN_SCRIM = new Color(10, 14, 26, 110);
 /**
@@ -197,8 +237,8 @@ const WIN_SCRIM = new Color(10, 14, 26, 110);
 const WIN_STAR_D = 120;
 const WIN_STAR_MID_D = 156;
 const WIN_STAR_PITCH = 146;
-const WIN_STAR_Y = 196;
-const WIN_STAR_MID_Y = 224;
+const WIN_STAR_Y = 286;
+const WIN_STAR_MID_Y = 314;
 /** How far each star's darker twin peeks out below it. */
 const WIN_STAR_LIFT = 8;
 const WIN_STAR = new Color(255, 201, 52, 255);
@@ -217,6 +257,60 @@ const WIN_BURST_D = 980;
 const WIN_BURST = new Color(255, 255, 255, 30);
 const WIN_BURST_TURN = 40;
 const WIN_CAPTION = new Color(140, 150, 175, 255);
+/**
+ * How far the win card's close button is pulled in from its corner, against the unlock
+ * prompt's PROMPT_R + 6.
+ *
+ * Further in, because on this card the corner is not empty: the right-hand star's box
+ * reaches x 206, and a 76 button at the prompt's inset of 62 would span 200..276 -- straight
+ * through it. At 44 it spans 218..294, which clears the star by 12 and still leaves 6 units
+ * of plate outside it. The two overlap in y whatever happens (star 226..346 against button
+ * 218..294), so x is the only separation there is.
+ */
+const WIN_CLOSE_INSET = 44;
+
+/** Where each line of the stack sits. The arithmetic that spaces them is under WIN_H. */
+const WIN_TITLE_Y = 150;
+const WIN_CAPTION_Y = 76;
+const WIN_BAR_Y = 28;
+const WIN_RULE_Y = -8;
+const WIN_TALLY_Y = -44;
+const WIN_TALLY_PITCH = 40;
+const WIN_CTA_Y = -166;
+const WIN_REPLAY_Y = -256;
+
+/**
+ * The series progress bar: one cell per level, the cleared one lit.
+ *
+ * It replaces the words the caption used to spend on the same fact ("第 N 关 · 共 M 关"), and
+ * says something they could not: how much of the game is behind you. The cell count comes
+ * from the caller, so a level series of any length draws its own bar -- at which point the
+ * PITCH is what has to give, not the count, which is why the width below is derived rather
+ * than written down.
+ */
+const WIN_BAR_H = 12;
+const WIN_BAR_GAP = 8;
+/** The widest the bar may get. Inside the card's 600 with its 48 of side padding to spare. */
+const WIN_BAR_MAX_W = 504;
+const WIN_BAR_ON = new Color(86, 199, 104, 255);
+const WIN_BAR_OFF = new Color(222, 227, 238, 255);
+
+/** The tally lines: what the level cost, in the same ink as the caption but smaller. */
+const WIN_TALLY_SIZE = 27;
+
+/**
+ * The second answer, as TEXT rather than a second slab.
+ *
+ * Two buttons of equal weight is a question the player did not ask -- nearly everyone wants
+ * the next level -- so the replay is a text button under the main one: reachable, obviously
+ * tappable, and clearly the quieter of the two. It matters because the star rating gives
+ * replaying a point for the first time.
+ */
+const WIN_REPLAY_SIZE = 30;
+const WIN_REPLAY_INK = new Color(122, 133, 160, 255);
+/** The text button's hit box, which is bigger than its ink. */
+const WIN_REPLAY_W = 240;
+const WIN_REPLAY_H = 72;
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -433,6 +527,14 @@ export class HudView {
     /** The win panel's scrim and the three star nodes on it, built on first win. */
     private win: Node | null = null;
     private winStars: Node[] = [];
+    /** One cell per level. See `buildWinBar`. */
+    private winBar: Node[] = [];
+    /** The two lines of tally under the rule, in order. See `showWin`. */
+    private winTally: Label[] = [];
+    /** The card's three answers, kept for `hitsWin`. Null until the panel is built. */
+    private winCta: Node | null = null;
+    private winReplay: Node | null = null;
+    private winClose: Node | null = null;
     /** The toast pill and its parts, built on first use. See `showToast`. */
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
@@ -1091,14 +1193,19 @@ export class HudView {
     }
 
     /**
-     * The win panel, built once and kept. See WIN_W for what it is made of and why.
+     * The win panel, built once and kept. See WIN_W for the palette and WIN_H for the
+     * arithmetic that spaces the stack.
      *
      * The star ORDER on screen is left, middle, right; the order in `winStars` is the order
      * they are ANIMATED in -- left, right, middle -- so `showWin` can just stagger by index.
-     * Filling left-to-right up to `starCount` reads off the x positions, not the array, so
-     * the two are kept separate rather than one being inferred from the other.
+     * Filling left-to-right up to the rating reads off the x positions, not the array, so the
+     * two are kept separate rather than one being inferred from the other.
+     *
+     * `levelCount` sizes the progress bar, which is why this takes an argument at all and why
+     * it is built on the first win rather than in the constructor: the HUD is constructed
+     * before anything has counted the levels.
      */
-    private buildWinPanel(): void {
+    private buildWinPanel(levelCount: number): void {
         const { w, h } = canvasSize(this.canvas);
         const scrim = roundedSprite('WinScrim', w * 2, h * 2, WIN_SCRIM, 2);
         scrim.addComponent(UIOpacity);
@@ -1140,20 +1247,34 @@ export class HudView {
             this.winStars.push(holder);
         }
 
-        // 84, not 92, and the caption a row lower: at 92 the title's line box (1.2x the font)
-        // reached from 9 up to 119 against the stars' bottom edge at 136 and DOWN through the
-        // caption's box. The three of them now clear each other by 13 to 24 units.
-        const title = makeLabel(plate, 'WinTitle', 84, 72);
+        const title = makeLabel(plate, 'WinTitle', 72, WIN_TITLE_Y);
         title.color = TITLE_INK;
         title.isBold = true;
-        const caption = makeLabel(plate, 'WinCaption', 30, -14);
+        const caption = makeLabel(plate, 'WinCaption', 28, WIN_CAPTION_Y);
         caption.color = WIN_CAPTION;
+
+        this.buildWinBar(plate, levelCount);
+
+        // The same hairline the unlock prompt uses, and for the same reason: it splits the
+        // card into what happened (above) and what to do next (below), so the six things on
+        // it read as two groups rather than six stacked things.
+        const rule = roundedSprite('rule', WIN_W - 96, 2, PROMPT_X_BG, 1);
+        plate.addChild(rule);
+        rule.setPosition(0, WIN_RULE_Y, 0);
+
+        for (let i = 0; i < 2; i++) {
+            const line = makeLabel(
+                plate, `WinTally${i}`, WIN_TALLY_SIZE, WIN_TALLY_Y - i * WIN_TALLY_PITCH,
+            );
+            line.color = WIN_CAPTION;
+            this.winTally.push(line);
+        }
 
         const cta = new Node('WinCta');
         cta.layer = Layers.Enum.UI_2D;
         cta.addComponent(UITransform).setContentSize(PROMPT_BTN_W, PROMPT_BTN_H);
         plate.addChild(cta);
-        cta.setPosition(0, -112, 0);
+        cta.setPosition(0, WIN_CTA_Y, 0);
         const ctaBase = roundedSprite(
             'base', PROMPT_BTN_W, PROMPT_BTN_H, PROMPT_BTN_BASE, PROMPT_BTN_R,
         );
@@ -1163,24 +1284,70 @@ export class HudView {
         cta.addChild(face);
         const ctaLabel = makeLabel(face, 'WinCtaLabel', 44, 0);
         ctaLabel.isBold = true;
+        this.winCta = cta;
+
+        // A node with a hit box, holding a label: the ink is 30px of text but the target is
+        // WIN_REPLAY_W by WIN_REPLAY_H, because a text button sized to its own glyphs is a
+        // text button nobody can hit.
+        const replay = new Node('WinReplay');
+        replay.layer = Layers.Enum.UI_2D;
+        replay.addComponent(UITransform).setContentSize(WIN_REPLAY_W, WIN_REPLAY_H);
+        plate.addChild(replay);
+        replay.setPosition(0, WIN_REPLAY_Y, 0);
+        const replayLabel = makeLabel(replay, 'WinReplayLabel', WIN_REPLAY_SIZE, 0);
+        replayLabel.color = WIN_REPLAY_INK;
+        replayLabel.string = '重玩本关';
+        this.winReplay = replay;
+
+        // Inside the corner, and pulled further in than the prompt's (44 against 62) to clear
+        // the right-hand star, whose disc reaches x 206 against this one's left edge at 218.
+        const close = dotSprite('WinClose', PROMPT_X_D, PROMPT_X_BG);
+        plate.addChild(close);
+        close.setPosition(WIN_W / 2 - WIN_CLOSE_INSET, WIN_H / 2 - WIN_CLOSE_INSET, 0);
+        const x = makeLabel(close, 'WinCloseLabel', 46, 2);
+        x.color = PROMPT_X_INK;
+        x.isBold = true;
+        x.string = '×';
+        this.winClose = close;
 
         scrim.active = false;
         this.win = scrim;
     }
 
     /**
-     * Victory panel: three stars filled left-to-right up to `starCount`, over a card that
-     * scales in, with the stars popping and spinning into place behind it. `hasNext` switches
-     * the call to action between advancing and replaying, matching what the next tap will
-     * actually do.
+     * One cell per level, the pitch derived from how many there are rather than fixed, so the
+     * bar keeps to WIN_BAR_MAX_W however long the series gets. The gap tightens past twenty
+     * levels and the cells have a floor of 3 units: at 99 the bar is hairlines, which still
+     * reads as a progress meter, and the alternative -- wrapping onto a second row -- is a
+     * layout for a game that does not exist.
+     */
+    private buildWinBar(plate: Node, levelCount: number): void {
+        const n = Math.max(1, levelCount);
+        const gap = n <= 20 ? WIN_BAR_GAP : 2;
+        const cellW = Math.max(3, Math.floor((WIN_BAR_MAX_W - gap * (n - 1)) / n));
+        const total = n * cellW + (n - 1) * gap;
+        for (let i = 0; i < n; i++) {
+            const cell = roundedSprite(`WinBar${i}`, cellW, WIN_BAR_H, WIN_BAR_OFF, WIN_BAR_H / 2);
+            plate.addChild(cell);
+            cell.setPosition(-total / 2 + cellW / 2 + i * (cellW + gap), WIN_BAR_Y, 0);
+            this.winBar.push(cell);
+        }
+    }
+
+    /**
+     * Victory panel: the rating in stars over a card that scales in, what the level cost
+     * underneath it, and two answers.
+     *
+     * `hasNext` switches the headline and the call to action between advancing and replaying
+     * the series, matching what the next tap will actually do.
      *
      * Every tween is stopped before it is restarted and every property it will touch is set
      * explicitly first: this panel can be shown again without the scene being rebuilt (win,
      * replay, win), and a half-finished pop from last time would otherwise leave a star at
      * whatever scale it had got to.
      */
-    showWin(starCount: number, hasNext: boolean = false): void {
-        if (!this.win) this.buildWinPanel();
+    showWin(stats: WinStats, hasNext: boolean = false): void {
+        if (!this.win) this.buildWinPanel(stats.levelCount);
         const scrim = this.win!;
         // BY NAME, not by index. This read `scrim.children[0]`, which was the panel when it
         // was written and became the decorative burst the moment one was added in front of
@@ -1189,13 +1356,26 @@ export class HudView {
         const plate = panel.getChildByName('plate')!;
         plate.getChildByName('WinTitle')!.getComponent(Label)!.string =
             hasNext ? '过关!' : '全部通关!';
-        // The caption is the only place the level's own number appears once the board is
-        // cleared, and it is what stops the panel being three words on a card.
         plate.getChildByName('WinCaption')!.getComponent(Label)!.string =
-            hasNext ? `第 ${this.levelId} 关完成` : '十关全部完成';
-        plate.getChildByName('WinCta')!.getChildByName('face')!
+            hasNext ? `第 ${stats.level} 关完成` : `${stats.levelCount} 关全部完成`;
+        this.winCta!.getChildByName('face')!
             .getChildByName('WinCtaLabel')!.getComponent(Label)!.string =
-            hasNext ? '点击进入下一关' : '点击重玩';
+            hasNext ? '下一关' : '再玩一次';
+
+        // Lit up to and including the level just cleared. The bar is the series, not this
+        // level, which is the one thing on the card that says how far in the player is.
+        for (let i = 0; i < this.winBar.length; i++) {
+            this.winBar[i].getComponent(Sprite)!.color =
+                i < stats.level ? WIN_BAR_ON : WIN_BAR_OFF;
+        }
+
+        this.winTally[0].string = `送达乘客 ${stats.passengers} 人`;
+        // Named as a cost, and only when there was one. "解锁车位 0 个" is a line about
+        // something that did not happen, and the star row above has already said as much.
+        const lost = STAR_MAX - stats.stars;
+        this.winTally[1].string = stats.unlocks === 0
+            ? '没有解锁车位'
+            : `解锁车位 ${stats.unlocks} 个 · 少 ${lost} 颗星`;
 
         scrim.active = true;
         // Past every seat chip: chips are appended as cars park, so they are later siblings
@@ -1219,7 +1399,7 @@ export class HudView {
             // Slot order is left, right, middle (see `buildWinPanel`), and the fill is by
             // POSITION: the middle star is the third of three, the right one the second.
             const rank = i === 2 ? 1 : (i === 0 ? 0 : 2);
-            const on = rank < starCount;
+            const on = rank < stats.stars;
             star.getChildByName('face')!.getComponent(Sprite)!.color =
                 on ? WIN_STAR : WIN_STAR_OFF;
             star.getChildByName('base')!.getComponent(Sprite)!.color =
@@ -1234,9 +1414,10 @@ export class HudView {
                 .start();
         }
 
-        // The button breathes, and that is the only reason it reads as the thing to do next --
-        // it cannot be a hit target (a tap anywhere advances), so movement is all it has.
-        const cta = plate.getChildByName('WinCta')!;
+        // The button breathes. It IS a hit target now (see `hitsWin`), but a tap anywhere
+        // else on the card advances too, so the movement is still what marks it as the thing
+        // to do next rather than the only thing that works.
+        const cta = this.winCta!;
         Tween.stopAllByTarget(cta);
         cta.setScale(Vec3.ONE);
         tween(cta)
@@ -1246,6 +1427,26 @@ export class HudView {
             .union()
             .repeatForever()
             .start();
+    }
+
+    /**
+     * What `ui` chose on the win card: the level after this one, this one again, or the home
+     * screen.
+     *
+     * Anything that is not the close button or the replay text counts as 'next' -- the card
+     * is not a form, and tapping the board to get on with it is how this screen has always
+     * worked. That is also why the two quiet answers are the ones with hit boxes: they have
+     * to be asked for.
+     */
+    hitsWin(ui: Vec3): 'next' | 'replay' | 'home' | null {
+        if (!this.win?.active) return null;
+        const c = this.winClose!.worldPosition;
+        const r = PROMPT_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
+        const p = this.winReplay!.worldPosition;
+        if (Math.abs(ui.x - p.x) <= WIN_REPLAY_W / 2
+            && Math.abs(ui.y - p.y) <= WIN_REPLAY_H / 2) return 'replay';
+        return 'next';
     }
 
     /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */

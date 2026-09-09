@@ -460,6 +460,24 @@ export class GameController extends Component {
     /** The UI canvas, kept because `HomeView` is built later than `start`. */
     private canvasNode: Node | null = null;
     /**
+     * Two facts about the level in play that the win card reports and nothing else needs, so
+     * they are copied out of the LevelData rather than the whole object being kept.
+     *
+     * `levelPassengers` is the queue's total. On a win every one of them boarded -- that is
+     * what winning IS (`GameCore.updateState` wants the lot, the bay and the ring all empty)
+     * -- so the card can report it as delivered without counting them one by one.
+     */
+    private levelPassengers = 0;
+    /**
+     * The level's own id, from its JSON -- which is what the win card names and what the
+     * progress bar counts to. Not parsed out of `levelName`: the id is the level's own
+     * statement about where it sits in the series, and it is what the HUD's title plate
+     * already shows.
+     */
+    private levelIdNum = 0;
+    /** How many levels the bundle holds, counted once. See `countLevels`. */
+    private levelCountCache = 0;
+    /**
      * Which screen is up. The board exists only in 'level': leaving for 'home' tears it down
      * (`unloadLevel`) rather than hiding it, because a paused board is a second live state to
      * keep correct -- the loop would either keep stepping behind the menu or need a pause flag
@@ -751,8 +769,10 @@ export class GameController extends Component {
      * on the game: at 99 the home screen's grid is already twenty rows long.
      */
     private countLevels(): number {
+        if (this.levelCountCache > 0) return this.levelCountCache;
         let n = 0;
         while (n < 99 && resources.getInfoWithPath(`levels/level-${n + 1}`, JsonAsset)) n++;
+        this.levelCountCache = n;
         return n;
     }
 
@@ -855,6 +875,8 @@ export class GameController extends Component {
             // on restart without running killParticle, so reset the budget here.
             resetParticleBudget();
             this.core = new GameCore(level);
+            this.levelPassengers = level.loop.queue.reduce((sum, g) => sum + g.count, 0);
+            this.levelIdNum = level.id;
             this.buildBoard(level);
             this.hud?.setLevel(level.id);
             this.hud?.setProgress(this.core.loop.remainingCount());
@@ -1948,11 +1970,20 @@ export class GameController extends Component {
                     new Color(255, 210, 60), new Color(120, 255, 140), new Color(90, 170, 255),
                 ]);
             }
-            // Star rating is a placeholder (always 3): a real rule based on
-            // moves/time/powerups is deferred — not computed by the core.
-            // `hasNext` only picks the banner's call-to-action; the tap handler
+            // The rating is core's (`GameCore.stars`): three for a level cleared without
+            // opening a stall, one fewer per stall opened, floored at one. Everything else on
+            // the card is a fact about the level, which is why the view is handed numbers
+            // rather than asked to work any of them out.
+            //
+            // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
-            this.hud?.showWin(3, this.nextLevelName() !== null);
+            this.hud?.showWin({
+                level: this.levelIdNum,
+                levelCount: this.countLevels(),
+                passengers: this.levelPassengers,
+                unlocks: this.core!.parking.unlocksUsed(),
+                stars: this.core!.stars(),
+            }, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
             for (const [id] of this.core!.lot.cars) {
@@ -2094,8 +2125,17 @@ export class GameController extends Component {
             }
         }
         if (this.ended) {
+            // The win card answers for itself: it has a replay and a way home now, and
+            // anything else on screen still means "get on with it" (see `hitsWin`).
+            if (this.uiCam && this.hud) {
+                const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+                const pick = this.hud.hitsWin(ui);
+                if (pick === 'home') { this.showHome(); return; }
+                if (pick === 'replay') { this.switchTo(this.levelName); return; }
+            }
             // Won and another level exists → advance. Deadlocked, or the series has
-            // run out → replay the same level.
+            // run out → replay the same level. This is also the path the lose banner takes,
+            // which has no card of its own.
             const next = this.core?.getState() === 'won' ? this.nextLevelName() : null;
             this.switchTo(next ?? this.levelName);
             return;

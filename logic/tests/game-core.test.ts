@@ -38,6 +38,13 @@ function deadlockLevel(): LevelData {
   };
 }
 
+/** `soloLevel`, but with the shipped bay shape: 4 of 7 stalls open, so 3 can be unlocked. */
+function soloLevel4of7(): LevelData {
+  const level = soloLevel();
+  level.parking = { slots: 7, unlocked: 4 };
+  return level;
+}
+
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
   expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
@@ -307,4 +314,45 @@ test('GameCore builds the ring straight from the authored queue order', () => {
   // Authored order is red-then-blue, ring capacity 4 == the whole red band (4 groups of
   // GROUP_SIZE 4): a shuffle over the 8 groups would almost certainly mix a blue group in.
   expect(game.loop.ring.map((g) => g?.color)).toEqual(['red', 'red', 'red', 'red']);
+});
+/**
+ * The star rating: three stars for a level cleared without opening a stall, one fewer per
+ * stall opened, and never below one.
+ *
+ * The rating is the level's locked stalls turned into a resource. It is the only number the
+ * game already has that says something about HOW a level was cleared rather than that it
+ * was -- moves and time are not counted anywhere -- and it costs no new bookkeeping:
+ * `unlocksUsed` is the difference between the bay the level opened with and the bay it ended
+ * with.
+ *
+ * The floor of ONE is deliberate. A cleared level is a win, and a win with no stars reads as
+ * a failure; the difference between clearing a level cheaply and expensively is what the
+ * upper two stars are for.
+ */
+test('stars count down from three as stalls are opened, and stop at one', () => {
+  const game = new GameCore(soloLevel4of7());
+  expect(game.stars()).toBe(3);
+  game.unlockSlot();
+  expect(game.stars()).toBe(2);
+  game.unlockSlot();
+  expect(game.stars()).toBe(1);
+  game.unlockSlot();
+  expect(game.stars()).toBe(1);
+});
+
+test('a level whose bay opens fully still rates three stars', () => {
+  // 7 of 7 open: there is nothing to spend, so nothing to lose a star for. The rating must
+  // not read "all stalls open" as "all unlocks used".
+  const level = soloLevel4of7();
+  level.parking = { slots: 7, unlocked: 7 };
+  expect(new GameCore(level).stars()).toBe(3);
+});
+
+test('stars ignore how the level is going', () => {
+  // Parking, boarding and departing move nothing: the rating is about stalls opened.
+  const game = new GameCore(soloLevel4of7());
+  game.tapCar(1);
+  for (let i = 0; i < 8; i++) game.stepLoop();
+  expect(game.getState()).toBe('won');
+  expect(game.stars()).toBe(3);
 });

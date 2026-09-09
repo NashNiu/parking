@@ -14,6 +14,17 @@ export type FeedSide = 'far' | 'near';
 
 export type Cap = 'small' | 'medium' | 'big';
 
+/**
+ * How many stars a cleared level can show, and so how many unlocks a full-marks clear has to
+ * do without.
+ *
+ * Three because the shipped levels open 4 of 7 stalls, leaving exactly three lockable -- the
+ * rating and the resource it is spent from are the same three things. A level shaped
+ * differently still rates out of three (`GameCore.stars` clamps), so this is the SCALE, not a
+ * count of anything on the board.
+ */
+export const STAR_MAX = 3;
+
 export const CAP_SIZE: Record<Cap, number> = {
   small: 16,
   medium: 24,
