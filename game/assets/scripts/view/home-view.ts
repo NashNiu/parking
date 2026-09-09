@@ -1,4 +1,4 @@
-import { Color, Label, Layers, Node, Sprite, UITransform, Vec3 } from 'cc';
+import { Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3 } from 'cc';
 import { roundedSprite, starSprite } from './ui-shapes';
 import { canvasSize, makeLabel, safeInsets } from './ui-layout';
 import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
@@ -91,6 +91,19 @@ const LOCK_BODY_W = 44;
 const LOCK_BODY_H = 32;
 const LOCK_BODY_Y = -10;
 
+/**
+ * The line that stands where the start button will be while the game is still loading.
+ *
+ * IN THE SAME PLACE as the button it is waiting for, so the eye does not have to move when
+ * one becomes the other. It pulses because a still "loading" is indistinguishable from a
+ * frozen one, and a frozen loading screen is the failure this screen exists to make visible
+ * (see PRELOAD_DEADLINE in GameController: a preload has up to eight seconds to answer).
+ */
+const LOADING_SIZE = 34;
+const LOADING_INK = new Color(150, 163, 196, 255);
+const LOADING_PULSE = 0.7;
+const LOADING_DIM = 110;
+
 /** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 const TAP_PAD = 10;
 
@@ -122,17 +135,29 @@ export class HomeView {
     private titleNode: Node;
     /** One per level, in level order, so the index IS the level number minus one. */
     private chips: Chip[] = [];
-    private levelCount: number;
+    /** 0 until `setLevels` has been told, which is also what "the grid exists" means. */
+    private levelCount = 0;
+    private sub: Label;
+    private pickCap: Label;
+    private loading: Label;
+    private loadingFade: UIOpacity;
+    /** Whether the screen is still waiting. Every hit test refuses while it is true. */
+    private waiting = true;
+    /** Where the grid starts, kept because it is built later than the constructor. */
+    private gridTopY: number;
 
     /**
-     * `levelCount` comes from the caller rather than a constant here, because the number of
-     * levels is a fact about the `resources/levels` folder and `GameController` is what can
-     * see it. Adding a level-11.json then extends this grid with no change to this file --
-     * the same property `nextLevelName` has.
+     * Builds everything that does NOT depend on knowing the levels: the background, the
+     * title, and the line that says the game is still loading.
+     *
+     * Split that way so this screen can be on the canvas from the first frame the engine
+     * draws. The Cocos first screen ends BEFORE the app starts -- `game.js` has it as
+     * `firstScreen.end().then(() => application.start())` -- so between that logo and this
+     * menu there is a stretch with nothing drawn in it but the camera's clear colour. The
+     * grid arrives with `setLevels` once the level count can be read.
      */
-    constructor(canvas: Node, levelCount: number) {
+    constructor(canvas: Node) {
         const { w, h } = canvasSize(canvas);
-        this.levelCount = levelCount;
 
         this.root = new Node('Home');
         this.root.layer = Layers.Enum.UI_2D;
@@ -153,20 +178,71 @@ export class HomeView {
         title.string = GAME_TITLE;
         this.titleNode = title.node;
 
-        const sub = makeLabel(this.root, 'HomeSub', 30, titleY - 78);
-        sub.color = SUB_INK;
-        sub.string = `共 ${levelCount} 关`;
+        this.sub = makeLabel(this.root, 'HomeSub', 30, titleY - 78);
+        this.sub.color = SUB_INK;
+        this.sub.node.active = false;
 
         const start = this.buildStart(h * 0.04);
         this.startBtn = start.node;
         this.startLabel = start.label;
-        const pickCap = makeLabel(this.root, 'HomePickCap', 30, -h * 0.10);
-        pickCap.color = SUB_INK;
-        pickCap.string = '选择关卡';
+        this.pickCap = makeLabel(this.root, 'HomePickCap', 30, -h * 0.10);
+        this.pickCap.color = SUB_INK;
+        this.pickCap.string = '选择关卡';
 
-        this.buildGrid(levelCount, -h * 0.10 - 92);
+        this.loading = makeLabel(this.root, 'HomeLoading', LOADING_SIZE, h * 0.04);
+        this.loading.color = LOADING_INK;
+        this.loading.string = '加载中…';
+        this.loadingFade = this.loading.node.addComponent(UIOpacity);
 
+        this.gridTopY = -h * 0.10 - 92;
+        this.setLoading(true);
         this.root.active = false;
+    }
+
+    /**
+     * Show or hide the waiting state: the loading line stands in for the start button and the
+     * grid, and every hit test refuses while it is up.
+     *
+     * One flag drives the visibility AND the hit tests, the discipline SPEED_BUTTON and
+     * PICK_ROW settled: a control that is invisible but still answering taps would start a
+     * level out of a screen that has not finished loading one.
+     */
+    setLoading(on: boolean): void {
+        this.waiting = on;
+        this.loading.node.active = on;
+        this.startBtn.active = !on;
+        this.pickCap.node.active = !on;
+        this.sub.node.active = !on;
+        for (const chip of this.chips) chip.node.active = !on;
+        Tween.stopAllByTarget(this.loadingFade);
+        this.loadingFade.opacity = 255;
+        if (on) {
+            tween(this.loadingFade)
+                .to(LOADING_PULSE, { opacity: LOADING_DIM }, { easing: 'sineInOut' })
+                .to(LOADING_PULSE, { opacity: 255 }, { easing: 'sineInOut' })
+                .union()
+                .repeatForever()
+                .start();
+        }
+    }
+
+    /**
+     * Tell the screen how many levels there are, and build the grid.
+     *
+     * `levelCount` comes from the caller rather than a constant here, because the number of
+     * levels is a fact about the `resources/levels` folder and `GameController` is what can
+     * see it. Adding a level-11.json then extends this grid with no change to this file --
+     * the same property `nextLevelName` has.
+     *
+     * Called once, after the preload: reading the bundle's index is the one thing on this
+     * screen that cannot be done before the engine has finished starting.
+     */
+    setLevels(levelCount: number): void {
+        if (this.chips.length > 0) return;
+        this.levelCount = levelCount;
+        this.sub.string = `共 ${levelCount} 关`;
+        this.buildGrid(levelCount, this.gridTopY);
+        for (const chip of this.chips) chip.node.active = !this.waiting;
     }
 
     /**
@@ -280,6 +356,9 @@ export class HomeView {
      * over a button that offers level 3 is two answers to one question.
      */
     setProgress(p: Progress): void {
+        // No-op before `setLevels`: there is nothing to paint, and `continueLevel` would
+        // report level 1 off a levelCount of 0. The caller draws again once the grid is up.
+        if (this.chips.length === 0) return;
         for (let i = 0; i < this.chips.length; i++) {
             const level = i + 1;
             const chip = this.chips[i];
@@ -332,7 +411,7 @@ export class HomeView {
 
     /** Whether `ui` (UI-space) landed on the start button. */
     hitsStart(ui: Vec3): boolean {
-        if (!this.open()) return false;
+        if (!this.open() || this.waiting) return false;
         const p = this.startBtn.worldPosition;
         return Math.abs(ui.x - p.x) <= START_W / 2 + TAP_PAD
             && Math.abs(ui.y - p.y) <= START_H / 2 + TAP_PAD;
@@ -340,7 +419,7 @@ export class HomeView {
 
     /** Whether `ui` landed on the title -- the press-and-hold that clears the save. */
     hitsTitle(ui: Vec3): boolean {
-        if (!this.open()) return false;
+        if (!this.open() || this.waiting) return false;
         const p = this.titleNode.worldPosition;
         return Math.abs(ui.x - p.x) <= TITLE_HIT_W / 2
             && Math.abs(ui.y - p.y) <= TITLE_HIT_H / 2;
@@ -356,7 +435,7 @@ export class HomeView {
      * -- a circular test would refuse their corners.
      */
     hitsLevel(ui: Vec3): number {
-        if (!this.open()) return -1;
+        if (!this.open() || this.waiting) return -1;
         const r = CHIP_D / 2 + TAP_PAD;
         for (let i = 0; i < this.chips.length; i++) {
             const chip = this.chips[i];

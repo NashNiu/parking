@@ -707,6 +707,12 @@ export class GameController extends Component {
         // below us, in the engine or the asset download; if it is present, the hang is in
         // the preload chain below and the deadline warnings will say which step.
         console.log('[Game] controller start');
+        // The menu goes up FIRST, in its waiting state, and that is the whole point of
+        // HomeView's split constructor: Cocos' first screen ends before the app even starts
+        // (`game.js` runs `firstScreen.end().then(() => application.start())`), so from the
+        // engine's first frame until the preload answered there used to be nothing on screen
+        // but the camera's clear colour -- a flat pale rectangle, for as long as it took.
+        this.showHome();
         // Preload builtin-standard so lit materials get real lighting. Nothing else in the
         // project uses it, so it needs asking for by name -- see preloadLitEffect.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
@@ -716,9 +722,11 @@ export class GameController extends Component {
         // first synchronous build -- which also means one fewer way to hang on the splash.
         //
         // The step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
-        // back used to strand the game on the splash screen with nothing logged.
+        // back used to strand the game on the splash screen with nothing logged. It is also
+        // why the loading line pulses -- eight seconds of a still screen is indistinguishable
+        // from a hang.
         this.withDeadline('builtin-standard preload', (d) => this.preloadLitEffect(d), () => {
-            this.showHome();
+            this.finishLoading();
         });
     }
 
@@ -817,15 +825,26 @@ export class GameController extends Component {
      */
     private showHome(): void {
         this.unloadLevel();
-        if (!this.home && this.canvasNode) {
-            const count = this.countLevels();
-            this.home = new HomeView(this.canvasNode, count);
-            console.log(`[Game] home screen: ${count} levels`);
-        }
+        if (!this.home && this.canvasNode) this.home = new HomeView(this.canvasNode);
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
         this.home?.setProgress(this.progress);
         this.home?.show();
+    }
+
+    /**
+     * The menu is done waiting: count the levels, draw the grid, and let it answer taps.
+     *
+     * Counting reads the `resources` bundle index, which is the one thing this screen needs
+     * that cannot be had before the engine has finished starting -- so it happens here,
+     * after the preload, rather than in `showHome`, which now runs on the first frame.
+     */
+    private finishLoading(): void {
+        const count = this.countLevels();
+        this.home?.setLevels(count);
+        this.home?.setProgress(this.progress);
+        this.home?.setLoading(false);
+        console.log(`[Game] home screen ready: ${count} levels`);
     }
 
     /** Leave the home screen for `name`. The inverse of `showHome`. */
