@@ -742,7 +742,12 @@ export class HudView {
         // To the front, past every seat chip: chips are appended as cars park, so they are
         // later siblings than anything built in the constructor. Same reason as the banner.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
-        const panel = scrim.children[0];
+        // By name, for the reason `showWin` now does: this happens to be children[0] today,
+        // and would quietly become whatever decoration is added in front of it tomorrow.
+        // Here the failure would be milder than showWin's -- the panel still shows, because
+        // `active` is set above this, and only the entrance bounce would land on the wrong
+        // node -- which is exactly why it would go unnoticed.
+        const panel = scrim.getChildByName('UnlockPanel')!;
         Tween.stopAllByTarget(panel);
         panel.setScale(0.86, 0.86, 1);
         tween(panel)
@@ -1074,7 +1079,10 @@ export class HudView {
     showWin(starCount: number, hasNext: boolean = false): void {
         if (!this.win) this.buildWinPanel();
         const scrim = this.win!;
-        const panel = scrim.children[0];
+        // BY NAME, not by index. This read `scrim.children[0]`, which was the panel when it
+        // was written and became the decorative burst the moment one was added in front of
+        // it -- see the guard in logic/tests/hud-view-source.test.ts for what that cost.
+        const panel = scrim.getChildByName('WinPanel')!;
         const plate = panel.getChildByName('plate')!;
         plate.getChildByName('WinTitle')!.getComponent(Label)!.string =
             hasNext ? '过关!' : '全部通关!';
