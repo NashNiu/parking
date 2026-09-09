@@ -298,6 +298,24 @@ const WIN_CAPTION = new Color(140, 150, 175, 255);
  */
 const SPEED_D = 92;
 const SPEED_PAD = 14;
+
+/**
+ * Whether the speed button is shown at all. FALSE: it is hidden for now.
+ *
+ * It is a switch rather than a deletion because the button is wanted back later, and because
+ * the thing that must not happen is a HALF-hidden button -- invisible but still answering
+ * taps, so the carousel changes speed under a player who pressed empty screen. `hitsSpeed`
+ * and the node's own visibility both read THIS constant, so the two cannot drift apart.
+ *
+ * The node is still built, just inactive. That keeps `speedNode` non-nullable and leaves
+ * `placeSpeed` and `setSpeed` valid as written; making it optional instead would spread null
+ * checks through the HUD and through `GameController`'s reframe path to hide one disc.
+ *
+ * With no way to press it, `GameController.speed` stays 1 for the whole session, so every
+ * `/ this.speed` there divides by one and the boarding flights, the lane slides and the ring
+ * rotation all run at their authored durations.
+ */
+const SPEED_BUTTON = false;
 const SPEED_GAP = 10;
 const SPEED_BG = new Color(74, 144, 226);
 const SPEED_RIM = new Color(255, 255, 255, 235);
@@ -483,6 +501,7 @@ export class HudView {
         const speed = this.buildSpeedButton(canvas, -w / 2 + margin + SPEED_D / 2);
         this.speedNode = speed.node;
         this.speedLabel = speed.label;
+        this.speedNode.active = SPEED_BUTTON;
         this.buildLevelPicker(
             canvas,
             -h / 2 + safeInsets().bottom * h + margin + 22 + PICK_D / 2 + 10,
@@ -948,6 +967,9 @@ export class HudView {
      * hang over the lot.
      */
     hitsSpeed(ui: Vec3): boolean {
+        // Hidden means unpressable. Same constant the node's visibility reads, so a hidden
+        // button can never still be swallowing taps -- see SPEED_BUTTON.
+        if (!SPEED_BUTTON) return false;
         const p = this.speedNode.worldPosition;
         const r = SPEED_D / 2 + SPEED_PAD;
         const dx = ui.x - p.x;
