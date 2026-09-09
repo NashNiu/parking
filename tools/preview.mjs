@@ -255,6 +255,31 @@ if (creator) {
     }
 }
 
+// 2b. Put the game's own logo on the Cocos first screen.
+//
+// UNCONDITIONAL, --no-build included, and that is the point: the build folder is generated
+// output, so EVERY build resets first-screen.js and deletes the logo copied in beside it --
+// whether the build happened above or in the Creator GUI a minute ago. Doing this by hand
+// after every build was the plan, and it survived exactly one build before a rebuild ate it
+// and the Cocos logo came back on a real device.
+//
+// Two node spawns rather than `npm run splash`: no shell, no npm.cmd, no PATH -- the same
+// reason every other tool here is invoked through `process.execPath`. A failure is LOUD but
+// not fatal: a missing logo is not a reason to refuse a device test.
+if (!DRY) {
+    const tsc = join(REPO, 'logic', 'node_modules', 'typescript', 'bin', 'tsc');
+    const patcher = join(REPO, '.tmp', 'gen', 'tools', 'patch-splash.js');
+    const built = run('compiling patch-splash', process.execPath,
+                      [tsc, '-p', join(REPO, 'logic', 'tsconfig.gen.json')]);
+    if (built !== 0) {
+        console.error('[preview] patch-splash did not compile -- the first screen will show');
+        console.error('          the Cocos logo. The build itself is fine.');
+    } else if (run('patching the first screen', process.execPath, [patcher]) !== 0) {
+        console.error('[preview] the first screen could not be patched -- it will show the');
+        console.error('          Cocos logo. The build itself is fine.');
+    }
+}
+
 // 3. Hand the settled folder back. Every name in it is final, so there is no ghost to trip on.
 const qr = AS_IMAGE
     ? ['--qr-format', 'image', '--qr-output', join(REPO, '.tmp', 'preview-qr.png')]

@@ -21,6 +21,12 @@ export interface WinStats {
     stars: number;
 }
 
+/** A switch's two moving parts. The knob is a child of the track, so it travels with it. */
+interface SwitchParts {
+    track: Node;
+    knob: Node;
+}
+
 /**
  * What opening a stall costs, for the prompt that offers it. Assembled by the caller for the
  * same reason WinStats is: both numbers are core's (`ParkingSystem.locked`, `GameCore.stars`).
@@ -176,6 +182,31 @@ const PROMPT_W = 560;
  *   replay y -167 +/- 18   -> -185..-149  (21 clear of the cost, 45 off the bottom)
  */
 const PROMPT_H = 460;
+/**
+ * The settings panel. Its stack's arithmetic is in `buildSettings`, which is also where the
+ * reason it exists at all is written down.
+ */
+const SET_W = 560;
+const SET_H = 480;
+const SET_TITLE_Y = 176;
+const SET_RULE_TOP_Y = 126;
+const SET_ROW1_Y = 76;
+const SET_ROW2_Y = -4;
+const SET_RULE_BOTTOM_Y = -62;
+const SET_BTN_Y = -140;
+const SET_BTN_H = 96;
+const SET_BTN_R = 30;
+const SET_WIDE_W = 252;
+const SET_SIDE_W = 112;
+const SET_BTN_GAP = 18;
+/** The two quieter answers: the same slab, in the HUD's blue rather than its green. */
+const SET_SIDE = new Color(74, 144, 226, 255);
+const SET_SIDE_BASE = new Color(44, 96, 165, 255);
+const SET_SW_W = 120;
+const SET_SW_H = 56;
+const SET_SW_ON = new Color(86, 199, 104, 255);
+const SET_SW_OFF = new Color(214, 219, 232, 255);
+
 /** Where each line sits. The arithmetic that spaces them is under PROMPT_H. */
 const PROMPT_TITLE_Y = 154;
 const PROMPT_SUB_Y = 92;
@@ -457,20 +488,31 @@ const PICK_ON = new Color(74, 144, 226, 235);
 const PICK_INK = new Color(255, 255, 255, 220);
 
 /**
- * The button that leaves a level for the home screen, top RIGHT.
+ * The button that opens the settings panel, top LEFT, on the counter's row.
  *
- * Right, against the usual convention of a back button top-left, because the left of that
- * row is taken: the title plate is centred and the passenger counter hangs off the left
- * margin one row below it, and a 76 disc on the title line reaches 16 units down into the
- * counter's plate. The right of that row is empty at every screen width.
+ * IT WAS TOP RIGHT AND THAT WAS WRONG. WeChat draws its own capsule -- the ... and the
+ * dot -- pinned to the top right of every mini-game, and it is not ours to move or to
+ * overlap. A 76 disc in that corner sits underneath it: unreadable, and half of it
+ * unpressable. Reported from a device, and the fix is to leave that corner to WeChat.
  *
- * Words, not a glyph. A house or a chevron is one font substitution away from a hollow box
- * on a device whose system font lacks it, and every other string on this HUD is already
- * Chinese text that is known to render.
+ * On the counter's row rather than the title's, because a disc on the title line reaches 16
+ * units down into the counter's plate -- which is what sent it right in the first place.
+ * Sharing the counter's row instead is what the reference art does, and there is room: the
+ * counter simply starts to the right of it.
+ *
+ * It opens a PANEL rather than going straight home, because "leave this level" is not the
+ * only thing a player wants from that corner, and a bare exit invites a mis-tap that throws
+ * a level away.
+ *
+ * Words, not a glyph. A gear or a chevron is one font substitution away from a hollow box on
+ * a device whose system font lacks it, and every other string on this HUD is already Chinese
+ * text that is known to render.
  */
-const HOME_BTN_D = 76;
-const HOME_BTN_BG = new Color(252, 253, 255, 235);
-const HOME_BTN_INK = new Color(84, 96, 124, 255);
+const GEAR_D = 76;
+/** Between the gear and the counter beside it. */
+const PILL_GAP = 12;
+const GEAR_BG = new Color(252, 253, 255, 235);
+const GEAR_INK = new Color(84, 96, 124, 255);
 
 /** The seat-count chip that sits under a parked car's stall. */
 const CHIP_W = 88;
@@ -591,6 +633,14 @@ export class HudView {
     private promptReplay: Node | null = null;
     /** The only line on the prompt that changes. See `showUnlockPrompt`. */
     private promptCost: Label | null = null;
+    /** The settings panel's scrim and its five hit targets, built on first use. */
+    private settings: Node | null = null;
+    private setClose: Node | null = null;
+    private setResume: Node | null = null;
+    private setHome: Node | null = null;
+    private setReplay: Node | null = null;
+    private sfxSwitch: SwitchParts | null = null;
+    private hapticSwitch: SwitchParts | null = null;
     private pickNodes: Node[] = [];
     /**
      * The two readout plates, by their HOLDERS rather than their labels: `setPlayVisible`
@@ -598,9 +648,9 @@ export class HudView {
      */
     private titlePill: Node;
     private paxPill: Node;
-    /** Leaves the level for the home screen. See HOME_BTN_D and `hitsHome`. */
-    private homeBtn: Node;
-    /** Whether a level is on screen. `syncHomeBtn` is the only reader. */
+    /** Opens the settings panel. See GEAR_D and `hitsGear`. */
+    private gearBtn: Node;
+    /** Whether a level is on screen. `syncGear` is the only reader. */
     private play = false;
     /** Per-tunnel count readouts, keyed by tunnel id. See `setTunnelCount`. */
     private tunnelBadges = new Map<number, { holder: Node; label: Label }>();
@@ -627,12 +677,14 @@ export class HudView {
         // TITLE_PILL_W for the arithmetic, but the short version is that the ring's top
         // rows start 8.3% of the screen height down and a full row puts this plate's
         // bottom edge past that.
+        // The counter's row also carries the gear, so the pill starts to the right of it.
+        const secondRow = line - PILL_H / 2 - margin;
+        this.gearBtn = this.buildGear(canvas, -w / 2 + margin + GEAR_D / 2, secondRow);
         const pax = this.buildPassengerPill(
-            canvas, w, margin, line - PILL_H / 2 - margin,
+            canvas, w, margin + GEAR_D + PILL_GAP, secondRow,
         );
         this.progressLabel = pax.label;
         this.paxPill = pax.holder;
-        this.homeBtn = this.buildHomeButton(canvas, w / 2 - margin - HOME_BTN_D / 2, line);
         // A fallback spot only. `placeSpeed` moves it onto the carousel's corner as soon as
         // the board is framed, which happens in the same frame the board is built -- but a
         // HUD with no board behind it (a failed level load) should still put it somewhere
@@ -697,22 +749,22 @@ export class HudView {
         return { holder, label };
     }
 
-    /** See HOME_BTN_D for where this sits and why it says what it says. */
-    private buildHomeButton(canvas: Node, x: number, y: number): Node {
-        const holder = new Node('HomeBtn');
+    /** See GEAR_D for where this sits and why it says what it says. */
+    private buildGear(canvas: Node, x: number, y: number): Node {
+        const holder = new Node('GearBtn');
         holder.layer = Layers.Enum.UI_2D;
-        holder.addComponent(UITransform).setContentSize(HOME_BTN_D, HOME_BTN_D);
+        holder.addComponent(UITransform).setContentSize(GEAR_D, GEAR_D);
         canvas.addChild(holder);
         holder.setPosition(x, y, 0);
-        const base = dotSprite('base', HOME_BTN_D, PILL_BASE);
+        const base = dotSprite('base', GEAR_D, PILL_BASE);
         holder.addChild(base);
         base.setPosition(0, -PILL_LIFT, 0);
-        const face = dotSprite('face', HOME_BTN_D, HOME_BTN_BG);
+        const face = dotSprite('face', GEAR_D, GEAR_BG);
         holder.addChild(face);
-        const label = makeLabel(face, 'HomeBtnLabel', 30, 0);
-        label.color = HOME_BTN_INK;
+        const label = makeLabel(face, 'GearLabel', 30, 0);
+        label.color = GEAR_INK;
         label.isBold = true;
-        label.string = '主页';
+        label.string = '设置';
         return holder;
     }
 
@@ -731,12 +783,16 @@ export class HudView {
      * legible, which at 22 it was not -- it is the smallest type on the screen and it was
      * carrying the only words that say what the number means.
      */
+    /**
+     * `left` is the inset from the screen's left edge to the pill's left edge -- the margin
+     * PLUS whatever shares its row, which is now the gear.
+     */
     private buildPassengerPill(
-        canvas: Node, w: number, margin: number, y: number,
+        canvas: Node, w: number, left: number, y: number,
     ): { holder: Node; label: Label } {
         const { holder, face } = liftedPill('PaxPill', PILL_W, PILL_H);
         canvas.addChild(holder);
-        holder.setPosition(-w / 2 + margin + PILL_W / 2, y, 0);
+        holder.setPosition(-w / 2 + left + PILL_W / 2, y, 0);
 
         const badge = dotSprite('paxBadge', PILL_BADGE_D, PILL_BADGE);
         face.addChild(badge);
@@ -779,9 +835,10 @@ export class HudView {
             this.bannerLabel.node.active = false;
             if (this.win) this.win.active = false;
             if (this.prompt) this.prompt.active = false;
+            if (this.settings) this.settings.active = false;
             if (this.toast) this.toast.active = false;
         }
-        this.syncHomeBtn();
+        this.syncGear();
     }
 
     /**
@@ -792,22 +849,23 @@ export class HudView {
      * top-right corner of a modal quietly leave the level. That is the same defect as a
      * hidden button that still answers taps, arrived at from the other direction, so the
      * answer is the same one: one predicate drives both the visibility and the hit test
-     * (`hitsHome` reads `active`), and every place that raises or drops a panel calls this.
+     * (`hitsGear` reads `active`), and every place that raises or drops a panel calls this.
      *
      * The lose BANNER is not a panel: it is a bare label with no scrim, so the button stays
      * live behind it. That is deliberate -- a lost level is one a player particularly wants
      * to leave, and until now the only way out was to replay it.
      */
-    private syncHomeBtn(): void {
-        const modal = !!(this.win?.active) || !!(this.prompt?.active);
-        this.homeBtn.active = this.play && !modal;
+    private syncGear(): void {
+        const modal = !!(this.win?.active) || !!(this.prompt?.active)
+            || !!(this.settings?.active);
+        this.gearBtn.active = this.play && !modal;
     }
 
     /** Whether `ui` landed on the home button. Dead while the home screen is up. */
-    hitsHome(ui: Vec3): boolean {
-        if (!this.homeBtn.active) return false;
-        const p = this.homeBtn.worldPosition;
-        const r = HOME_BTN_D / 2 + 10;
+    hitsGear(ui: Vec3): boolean {
+        if (!this.gearBtn.active) return false;
+        const p = this.gearBtn.worldPosition;
+        const r = GEAR_D / 2 + 10;
         const dx = ui.x - p.x;
         const dy = ui.y - p.y;
         return dx * dx + dy * dy <= r * r;
@@ -992,7 +1050,7 @@ export class HudView {
         // To the front, past every seat chip: chips are appended as cars park, so they are
         // later siblings than anything built in the constructor. Same reason as the banner.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
-        this.syncHomeBtn();
+        this.syncGear();
         // Both halves of the price, because either one alone reads as a smaller decision than
         // it is: how many are left, and what this one takes off the rating. At one star the
         // rating has bottomed out and there is nothing left to lose, so saying so is more
@@ -1017,7 +1075,7 @@ export class HudView {
     /** Take the prompt down. Safe before it has ever been built. */
     hideUnlockPrompt(): void {
         if (this.prompt) this.prompt.active = false;
-        this.syncHomeBtn();
+        this.syncGear();
     }
 
     /** Whether the prompt is up, i.e. whether it owns the next tap. */
@@ -1146,6 +1204,209 @@ export class HudView {
         this.promptBtn = btn;
         this.promptClose = close;
         this.promptReplay = replay;
+    }
+
+    /**
+     * The settings panel: two switches and the three things a player wants from a level they
+     * are in the middle of.
+     *
+     * IT REPLACED A BARE HOME BUTTON, and the reason is worth keeping: that button sat under
+     * WeChat's capsule (see GEAR_D), and a single exit in a corner is also a mis-tap that
+     * throws a level away. A panel asks, and it has room for the switches the corner had
+     * nowhere to put.
+     *
+     * Laid out from the top edge down, plate spanning y -240..240, each line's box being 1.2x
+     * its font size (`makeLabel`):
+     *
+     *   title  y  176 +/- 29   ->  147..205   (35 off the top edge)
+     *   rule   y  126          ->  125..127   (20 clear of the title)
+     *   sound  y   76 +/- 28   ->   48..104   (21 clear of the rule, switch height)
+     *   buzz   y   -4 +/- 28   ->  -32..24    (16 clear of the row above: one block)
+     *   rule   y  -62          ->  -63..-61   (29 clear)
+     *   answers y -140 +/- 48  -> -188..-92   (29 clear, 52 off the bottom)
+     *
+     * NO MUSIC ROW: nothing in this project plays a track, and a switch that toggles nothing
+     * is worse than no switch.
+     */
+    private buildSettings(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('SetScrim', w * 2, h * 2, SCRIM, 2);
+        this.canvas.addChild(scrim);
+        scrim.setPosition(0, 0, 0);
+
+        const panel = new Node('SetPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
+        scrim.addChild(panel);
+
+        const shadow = roundedSprite('shadow', SET_W, SET_H, PROMPT_SHADOW, PROMPT_R);
+        panel.addChild(shadow);
+        shadow.setPosition(0, -PROMPT_SHADOW_DROP, 0);
+        const plate = roundedSprite('plate', SET_W, SET_H, PROMPT_BG, PROMPT_R);
+        panel.addChild(plate);
+
+        const title = makeLabel(plate, 'SetTitle', 48, SET_TITLE_Y);
+        title.color = PROMPT_INK;
+        title.isBold = true;
+        title.string = '设置';
+
+        const rule1 = roundedSprite('rule1', SET_W - 96, 2, PROMPT_X_BG, 1);
+        plate.addChild(rule1);
+        rule1.setPosition(0, SET_RULE_TOP_Y, 0);
+
+        this.sfxSwitch = this.buildSwitch(plate, '音效', SET_ROW1_Y);
+        this.hapticSwitch = this.buildSwitch(plate, '震动', SET_ROW2_Y);
+
+        const rule2 = roundedSprite('rule2', SET_W - 96, 2, PROMPT_X_BG, 1);
+        plate.addChild(rule2);
+        rule2.setPosition(0, SET_RULE_BOTTOM_Y, 0);
+
+        // Three answers in one row, the middle one wide and green: carrying on is what nearly
+        // every visit to this panel ends in, so it is the one that looks like a button.
+        this.setResume = this.buildSetBtn(
+            plate, 0, SET_BTN_Y, SET_WIDE_W, '继续游戏', PROMPT_BTN, PROMPT_BTN_BASE, 42,
+        );
+        const side = SET_WIDE_W / 2 + SET_BTN_GAP + SET_SIDE_W / 2;
+        this.setHome = this.buildSetBtn(
+            plate, -side, SET_BTN_Y, SET_SIDE_W, '主页', SET_SIDE, SET_SIDE_BASE, 34,
+        );
+        this.setReplay = this.buildSetBtn(
+            plate, side, SET_BTN_Y, SET_SIDE_W, '重玩', SET_SIDE, SET_SIDE_BASE, 34,
+        );
+
+        const close = dotSprite('SetClose', PROMPT_X_D, PROMPT_X_BG);
+        plate.addChild(close);
+        close.setPosition(SET_W / 2 - PROMPT_R - 6, SET_H / 2 - PROMPT_R - 6, 0);
+        const x = makeLabel(close, 'SetCloseLabel', 46, 2);
+        x.color = PROMPT_X_INK;
+        x.isBold = true;
+        x.string = '×';
+        this.setClose = close;
+
+        scrim.active = false;
+        this.settings = scrim;
+    }
+
+    /**
+     * One switch: a label on the left, a track and a knob on the right.
+     *
+     * The knob moves AND the track changes colour, on purpose. Colour alone fails for a
+     * player who cannot tell the green from the grey, and position alone is ambiguous on a
+     * control this small -- either one on its own is a switch you have to test to read.
+     */
+    private buildSwitch(plate: Node, text: string, y: number): SwitchParts {
+        const label = makeLabel(plate, `sw-${text}`, 34, y, -SET_W / 2 + 64);
+        label.color = PROMPT_INK;
+        label.horizontalAlign = Label.HorizontalAlign.LEFT;
+
+        const track = roundedSprite(`track-${text}`, SET_SW_W, SET_SW_H, SET_SW_OFF, SET_SW_H / 2);
+        plate.addChild(track);
+        track.setPosition(SET_W / 2 - 64 - SET_SW_W / 2, y, 0);
+        const knob = dotSprite(`knob-${text}`, SET_SW_H - 8, PROMPT_BG);
+        track.addChild(knob);
+        return { track, knob };
+    }
+
+    private buildSetBtn(
+        plate: Node, x: number, y: number, wid: number, text: string,
+        face: Color, base: Color, size: number,
+    ): Node {
+        const btn = new Node(`set-${text}`);
+        btn.layer = Layers.Enum.UI_2D;
+        btn.addComponent(UITransform).setContentSize(wid, SET_BTN_H);
+        plate.addChild(btn);
+        btn.setPosition(x, y, 0);
+        const under = roundedSprite('base', wid, SET_BTN_H, base, SET_BTN_R);
+        btn.addChild(under);
+        under.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const top = roundedSprite('face', wid, SET_BTN_H, face, SET_BTN_R);
+        btn.addChild(top);
+        const label = makeLabel(top, 'l', size, 0);
+        label.isBold = true;
+        label.string = text;
+        return btn;
+    }
+
+    /**
+     * Raise the settings panel. `sfx` and `haptics` are the caller's current values -- the
+     * panel draws them and reports taps; it does not remember them, because the thing that
+     * has to be right is what the game is actually doing, not what a panel thinks.
+     */
+    showSettings(sfx: boolean, haptics: boolean): void {
+        if (!this.settings) this.buildSettings();
+        const scrim = this.settings!;
+        this.paintSwitches(sfx, haptics);
+        if (scrim.active) return;
+        scrim.active = true;
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncGear();
+        const panel = scrim.getChildByName('SetPanel')!;
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.86, 0.86, 1);
+        tween(panel)
+            .to(0.14, { scale: new Vec3(1.03, 1.03, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: Vec3.ONE })
+            .start();
+    }
+
+    /** Repaint both switches. Called on every raise and on every toggle. */
+    paintSwitches(sfx: boolean, haptics: boolean): void {
+        if (!this.settings) return;
+        this.paintSwitch(this.sfxSwitch!, sfx);
+        this.paintSwitch(this.hapticSwitch!, haptics);
+    }
+
+    private paintSwitch(sw: SwitchParts, on: boolean): void {
+        sw.track.getComponent(Sprite)!.color = on ? SET_SW_ON : SET_SW_OFF;
+        const travel = (SET_SW_W - SET_SW_H) / 2;
+        sw.knob.setPosition(on ? travel : -travel, 0, 0);
+    }
+
+    hideSettings(): void {
+        if (this.settings) this.settings.active = false;
+        this.syncGear();
+    }
+
+    /** Whether the panel is up, i.e. whether it owns the next tap. */
+    settingsOpen(): boolean {
+        return !!this.settings && this.settings.active;
+    }
+
+    /**
+     * What `ui` chose on the settings panel, or null for the plate and the scrim -- a tap
+     * that hits nothing is SWALLOWED rather than closing the panel, because the board behind
+     * it is mid-level and a stray tap there would move a car.
+     */
+    hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | null {
+        if (!this.settingsOpen()) return null;
+        const c = this.setClose!.worldPosition;
+        const r = PROMPT_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
+        if (this.inBox(ui, this.setResume!, SET_WIDE_W, SET_BTN_H)) return 'close';
+        if (this.inBox(ui, this.setHome!, SET_SIDE_W, SET_BTN_H)) return 'home';
+        if (this.inBox(ui, this.setReplay!, SET_SIDE_W, SET_BTN_H)) return 'replay';
+        if (this.inRow(ui, this.sfxSwitch!)) return 'sfx';
+        if (this.inRow(ui, this.hapticSwitch!)) return 'haptics';
+        return null;
+    }
+
+    private inBox(ui: Vec3, node: Node, wid: number, hgt: number): boolean {
+        const p = node.worldPosition;
+        return Math.abs(ui.x - p.x) <= wid / 2 + 8 && Math.abs(ui.y - p.y) <= hgt / 2 + 8;
+    }
+
+    /**
+     * The whole ROW is the switch's target, label included: a 120-wide track is a small thing
+     * to ask of a thumb when the row it sits in is 430 wide and holds nothing else.
+     *
+     * Bounded by the PLATE, not by the track: measured from the track it reached 150 units
+     * past the panel's right edge, so a tap on the dim scrim beside the panel toggled the
+     * sound. `setResume` is the node centred on the plate, which is what makes it the anchor.
+     */
+    private inRow(ui: Vec3, sw: SwitchParts): boolean {
+        const mid = this.setResume!.worldPosition.x;
+        return Math.abs(ui.y - sw.track.worldPosition.y) <= SET_SW_H / 2 + 14
+            && Math.abs(ui.x - mid) <= SET_W / 2 - 32;
     }
 
     /** See PICK_LEVELS for why this exists and how to remove it. */
@@ -1474,7 +1735,7 @@ export class HudView {
         // Past every seat chip: chips are appended as cars park, so they are later siblings
         // than anything built in the constructor. Same reason as the banner and the prompt.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
-        this.syncHomeBtn();
+        this.syncGear();
         const fade = scrim.getComponent(UIOpacity)!;
         Tween.stopAllByTarget(fade);
         fade.opacity = 0;
@@ -1553,6 +1814,6 @@ export class HudView {
     hideBanner(): void {
         this.bannerLabel.node.active = false;
         if (this.win) this.win.active = false;
-        this.syncHomeBtn();
+        this.syncGear();
     }
 }

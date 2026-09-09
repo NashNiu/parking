@@ -106,10 +106,12 @@ export function patchFirstScreen(src: string, patch: SplashPatch): string {
 function main(): void {
     const argv = process.argv.slice(2);
     const at = argv.indexOf('--build');
-    // Relative to the CWD, which npm makes `logic/` -- the same convention `gen-levels` uses.
-    const root = path.resolve(process.cwd(), '..');
+    // From THIS FILE's location, not the CWD. It compiles to `.tmp/gen/tools/`, so three up
+    // is the repo root -- and unlike `gen-levels`' cwd convention, that holds whether npm ran
+    // it from `logic/` or `tools/preview.mjs` ran it from the repo root.
+    const root = path.resolve(__dirname, '..', '..', '..');
     const buildDir = at >= 0 && argv[at + 1]
-        ? path.resolve(process.cwd(), argv[at + 1])
+        ? path.resolve(argv[at + 1])
         : path.join(root, 'game', 'build', 'wechatgame');
 
     const target = path.join(buildDir, FIRST_SCREEN);

@@ -7,6 +7,12 @@ const NAMES: SfxName[] = ['tap', 'drive', 'park', 'board', 'depart', 'win', 'los
 export class SfxManager {
     private src: AudioSource;
     private clips = new Map<SfxName, AudioClip>();
+    /**
+     * The player's switch, from the settings panel. Checked at PLAY time rather than by
+     * unloading the clips, so turning the sound back on is immediate and does not re-fetch
+     * seven files.
+     */
+    private on = true;
 
     constructor(host: Node) {
         this.src = host.addComponent(AudioSource);
@@ -17,7 +23,12 @@ export class SfxManager {
         }
     }
 
+    setEnabled(on: boolean): void {
+        this.on = on;
+    }
+
     play(name: SfxName, vol = 1): void {
+        if (!this.on) return;
         const clip = this.clips.get(name);
         if (clip) this.src.playOneShot(clip, vol);
     }

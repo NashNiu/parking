@@ -7,6 +7,7 @@ import {
     GameCore, validateLevel, LevelData, firstBlocker, Flight, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
     emptyProgress, parseProgress, Progress, recordClear, serializeProgress, unlockedThrough,
+    defaultSettings, parseSettings, serializeSettings, Settings,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -17,7 +18,10 @@ import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { HomeView } from './home-view';
-import { clearProgressText, loadProgressText, saveProgressText } from './storage';
+import {
+    clearProgressText, loadProgressText, loadSettingsText, saveProgressText, saveSettingsText,
+} from './storage';
+import { setHaptics } from './haptics';
 import { setupEnvironment, setupAntiAliasing } from './environment';
 import {
     setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
@@ -462,6 +466,11 @@ export class GameController extends Component {
      */
     private progress: Progress = emptyProgress();
     /**
+     * The player's preferences, in memory. Read once beside the save; written whenever a
+     * switch is flipped, which is rare enough that the synchronous store does not care.
+     */
+    private settings: Settings = defaultSettings();
+    /**
      * Whether the press-and-hold that wipes the save is counting down.
      *
      * A flag rather than trusting `unschedule` to undo an over-arm: on web a single click
@@ -703,9 +712,11 @@ export class GameController extends Component {
         // overwrite a real save with a single level's result. `parseProgress` cannot throw,
         // so a corrupt or absent save costs the player their stars and not their game.
         this.progress = parseProgress(loadProgressText());
+        this.settings = parseSettings(loadSettingsText());
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
+        this.applySettings();
         this.setupCamera();
         const canvas = find('Canvas');
         if (canvas) {
@@ -2224,6 +2235,39 @@ export class GameController extends Component {
      * rather than a claim, and a toast that says so in words. The toast activates its own
      * node, so it works with the in-level HUD hidden.
      */
+    /**
+     * Hand the preferences to the things that obey them.
+     *
+     * Called on boot and after every toggle, and it sets BOTH every time rather than only
+     * the one that changed: two setters and one call site cannot drift, while "apply the
+     * delta" has to be right at every call.
+     *
+     * The sound is gated at play time inside `SfxManager` and the buzz in `haptics`, so
+     * neither has to be told twice and turning something back on is immediate.
+     */
+    private applySettings(): void {
+        this.sfx?.setEnabled(this.settings.sfx);
+        setHaptics(this.settings.haptics);
+    }
+
+    /**
+     * Flip one switch, obey it, draw it, and write it down.
+     *
+     * The panel is repainted from `this.settings` rather than from a value it kept, so what
+     * the player sees is what the game is actually doing -- a panel that remembers its own
+     * state is a second answer to the same question.
+     */
+    private toggleSetting(which: 'sfx' | 'haptics'): void {
+        this.settings = { ...this.settings, [which]: !this.settings[which] };
+        this.applySettings();
+        this.hud?.paintSwitches(this.settings.sfx, this.settings.haptics);
+        saveSettingsText(serializeSettings(this.settings));
+        // AFTER applying, so switching the sound ON is confirmed by a sound and switching it
+        // off is confirmed by silence -- the tap is the demonstration.
+        this.sfx?.play('tap');
+        vibrate('light');
+    }
+
     private wipeProgress(): void {
         this.holdArmed = false;
         clearProgressText();
@@ -2269,6 +2313,25 @@ export class GameController extends Component {
             }
             return;
         }
+        // The settings panel owns every tap while it is up, and it is asked FIRST because
+        // when it is up it is the topmost thing on screen. It cannot currently be raised
+        // over the blocked-stall prompt or the win card -- the gear goes dead under both
+        // (`HudView.syncGear`) -- so this branch and those never contend.
+        if (this.uiCam && this.hud?.settingsOpen()) {
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            const hit = this.hud.hitsSettings(ui);
+            if (hit === 'close') {
+                this.hud.hideSettings();
+            } else if (hit === 'home') {
+                this.showHome();
+            } else if (hit === 'replay') {
+                this.hud.hideSettings();
+                this.switchTo(this.levelName);
+            } else if (hit === 'sfx' || hit === 'haptics') {
+                this.toggleSetting(hit);
+            }
+            return;   // anything else on this screen is swallowed
+        }
         // The unlock prompt owns every tap while it is up -- see `showUnlockPrompt`. Before
         // the level picker and before the home button, because it is a modal and the board
         // behind it has no move in it: a tap that misses its three answers is swallowed
@@ -2307,17 +2370,17 @@ export class GameController extends Component {
                 return;
             }
         }
-        // The way back to the menu, and it is checked BEFORE the level-over branch. It has to
-        // be: a lost level puts up a bare banner with no scrim, so the button is still live
-        // there (see `HudView.syncHomeBtn`) -- and `ended` swallows every tap into a replay,
-        // so a home check after it could never be reached from the one screen a player most
-        // wants to leave. Under the win card the button is deactivated instead, which is why
-        // this order costs that screen nothing.
+        // The gear, and it is checked BEFORE the level-over branch. It has to be: a lost
+        // level puts up a bare banner with no scrim, so the gear is still live there (see
+        // `HudView.syncGear`) -- and `ended` swallows every tap into a replay, so a check
+        // after it could never be reached from the one screen a player most wants to leave.
+        // Under the win card the gear is deactivated instead, so this order costs that
+        // screen nothing.
         if (this.uiCam && this.hud) {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
-            if (this.hud.hitsHome(ui)) {
+            if (this.hud.hitsGear(ui)) {
                 this.sfx?.play('tap');
-                this.showHome();
+                this.hud.showSettings(this.settings.sfx, this.settings.haptics);
                 return;
             }
         }

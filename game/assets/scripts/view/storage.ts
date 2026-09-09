@@ -46,6 +46,29 @@ export function saveProgressText(text: string): void {
     }
 }
 
+/**
+ * The settings live under their OWN key, so `clearProgressText` cannot take them with it: a
+ * player who wipes their progress has not asked for the sound back on.
+ */
+const SETTINGS_KEY = 'parking.settings';
+
+export function loadSettingsText(): string | null {
+    try {
+        return sys.localStorage.getItem(SETTINGS_KEY);
+    } catch (e) {
+        console.warn('[Game] settings could not be read:', e);
+        return null;
+    }
+}
+
+export function saveSettingsText(text: string): void {
+    try {
+        sys.localStorage.setItem(SETTINGS_KEY, text);
+    } catch (e) {
+        console.warn('[Game] settings could not be saved:', e);
+    }
+}
+
 export function clearProgressText(): void {
     try {
         sys.localStorage.removeItem(KEY);
