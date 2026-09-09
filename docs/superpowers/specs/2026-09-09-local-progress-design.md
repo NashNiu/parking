@@ -94,7 +94,7 @@ a rule the view computes for itself is a rule no test can see. The same argument
 ### `view/storage.ts` -- thin
 
 `loadProgressText(): string | null`, `saveProgressText(text: string): void`,
-`clearProgress(): void`. Each is a `localStorage` call inside a try/catch that logs once. It
+`clearProgressText(): void`. Each is a `localStorage` call inside a try/catch that logs once. It
 holds the key name and nothing else -- no parsing, no defaults, no policy.
 
 ### The gate
@@ -127,10 +127,17 @@ When all levels are cleared the button reads `继续 第 10 关`. That is true -
 the furthest unlocked one -- and reads slightly oddly; a better wording needs another state,
 which is not worth it yet.
 
-### When it writes
+### When it reads and writes
 
-One place: `onEnd`, on a win, when `recordClear` reports a change. Replaying, leaving and
-opening a stall never write.
+The save is READ once in `start`, unconditionally -- not alongside the home screen it feeds,
+which is built only if a Canvas was found. `onEnd` writes whether or not there is a HUD to
+show the result on, so a run that never read a save would overwrite a real one with a single
+level's result.
+
+It is WRITTEN in one place: `onEnd`, on a win, when `recordClear` reports a change, and
+before the win card goes up -- so the card's "next level" is one the save already agrees is
+unlocked, and a player who closes the app on that screen has kept the result. Replaying,
+leaving and opening a stall never write.
 
 ### Reset: press and hold the title
 

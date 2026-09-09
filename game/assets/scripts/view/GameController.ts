@@ -6,6 +6,7 @@ import {
 import {
     GameCore, validateLevel, LevelData, firstBlocker, Flight, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
+    emptyProgress, parseProgress, Progress, recordClear, serializeProgress, unlockedThrough,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -16,6 +17,7 @@ import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { HomeView } from './home-view';
+import { clearProgressText, loadProgressText, saveProgressText } from './storage';
 import { setupEnvironment, setupAntiAliasing } from './environment';
 import {
     setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
@@ -361,6 +363,14 @@ const LIT_MATERIAL = 'materials/lit';
 const PRELOAD_DEADLINE = 8;
 
 /**
+ * How long the home screen's title must be held to clear the save.
+ *
+ * Three seconds is long enough that no ordinary tap or fumble reaches it, and short enough
+ * that someone who has been told about it does not give up. See `wipeProgress`.
+ */
+const HOLD_SECONDS = 3;
+
+/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -434,15 +444,27 @@ export class GameController extends Component {
     levelName: string = 'level-1';
 
     /**
-     * Which level the home screen's start button opens, read off `levelName` once at boot.
+     * The save, in memory: the best rating each level has been cleared with.
      *
-     * A copy, because `levelName` does not stay put: `loadLevel` sets it to whatever level is
-     * in play, so the inspector's value is gone the moment the first level starts and the
-     * button would then mean "replay the last level I chose". This keeps the inspector field
-     * meaning what it says -- where the game starts -- and is the field that becomes
-     * "continue" when progress is saved.
+     * Read once in `start` and kept -- the file on the device is only ever written after
+     * that, never read again, so this field and the device cannot disagree unless something
+     * else on the phone edits the key. It is the source for the home screen's locks and
+     * stars and for where the start button goes.
      */
-    private startLevel = 'level-1';
+    private progress: Progress = emptyProgress();
+    /**
+     * Whether the press-and-hold that wipes the save is counting down.
+     *
+     * A flag rather than trusting `unschedule` to undo an over-arm: on web a single click
+     * emits BOTH a mouse and a touch event, so the press handler runs twice for one press,
+     * and this keeps the second one from arming a timer the release cannot see.
+     */
+    private holdArmed = false;
+    /**
+     * Held as a field because `unschedule` matches on the callback's identity -- an inline
+     * arrow would arm a timer that nothing could ever cancel.
+     */
+    private readonly holdWipe = (): void => this.wipeProgress();
 
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
@@ -659,13 +681,20 @@ export class GameController extends Component {
 
     start() {
         console.log(`[Game] ${BUILD_TAG}`);
+        // BEFORE anything can finish a level, and unconditionally -- not alongside the home
+        // screen it feeds, which is only built if a Canvas was found. `onEnd` writes the save
+        // whether or not there is a HUD to show it on, so a run that never read one would
+        // overwrite a real save with a single level's result. `parseProgress` cannot throw,
+        // so a corrupt or absent save costs the player their stars and not their game.
+        this.progress = parseProgress(loadProgressText());
+        console.log(`[Game] progress: cleared through`
+            + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
         this.setupCamera();
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
             this.canvasNode = canvas;
-            this.startLevel = this.levelName;
             this.tagText = BUILD_TAG;
             this.hud.setBuildTag(this.tagText);
             this.uiCam = canvas.getComponentInChildren(Camera);
@@ -740,6 +769,10 @@ export class GameController extends Component {
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.off(Input.EventType.KEY_UP, this.onKeyUp, this);
+        input.off(Input.EventType.TOUCH_START, this.onPressStart, this);
+        input.off(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
+        input.off(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
+        this.unschedule(this.holdWipe);
     }
 
     /**
@@ -786,11 +819,12 @@ export class GameController extends Component {
         this.unloadLevel();
         if (!this.home && this.canvasNode) {
             const count = this.countLevels();
-            console.log(`[Game] home screen: ${count} levels`);
             this.home = new HomeView(this.canvasNode, count);
+            console.log(`[Game] home screen: ${count} levels`);
         }
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
+        this.home?.setProgress(this.progress);
         this.home?.show();
     }
 
@@ -1980,6 +2014,19 @@ export class GameController extends Component {
             // the card is a fact about the level, which is why the view is handed numbers
             // rather than asked to work any of them out.
             //
+            // Recorded BEFORE the card goes up, so the card's "next level" is one the save
+            // already agrees is unlocked -- and so a player who closes the app on this screen
+            // has kept the result anyway. It is the only write in the game, and only when the
+            // rating actually beat the record: storage on the device is a synchronous call.
+            //
+            // `rating`, not `stars`: `stars` in this file is the particle burst above.
+            const rating = this.core!.stars();
+            const rec = recordClear(this.progress, this.levelIdNum, rating);
+            this.progress = rec.progress;
+            if (rec.changed) {
+                saveProgressText(serializeProgress(this.progress));
+                console.log(`[Game] level ${this.levelIdNum} cleared with ${rating} stars`);
+            }
             // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
             this.hud?.showWin({
@@ -1987,7 +2034,7 @@ export class GameController extends Component {
                 levelCount: this.countLevels(),
                 passengers: this.levelPassengers,
                 unlocks: this.core!.parking.unlocksUsed(),
-                stars: this.core!.stars(),
+                stars: rating,
             }, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
@@ -2005,6 +2052,11 @@ export class GameController extends Component {
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
+        // Presses, for the one control in the game that is a HOLD rather than a tap. Nothing
+        // else reads them, so they only ever arm and disarm the wipe.
+        input.on(Input.EventType.TOUCH_START, this.onPressStart, this);
+        input.on(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
+        input.on(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
     }
 
     /**
@@ -2056,11 +2108,60 @@ export class GameController extends Component {
     }
 
     private onTouchEnd(e: EventTouch): void {
+        this.onPressEnd();
         const p = e.getLocation();
         this.handleTap(p.x, p.y);
     }
 
+    /**
+     * Arm the press-and-hold that clears the save, if this press landed on the home screen's
+     * title. Every other press in the game is a tap and is handled on release.
+     *
+     * It FIRES at HOLD_SECONDS rather than waiting for the release, so the confirmation
+     * arrives while the finger is still down -- a hidden control that only reacts after you
+     * let go leaves you unsure whether you held it long enough.
+     */
+    private onPressStart(e: EventTouch | EventMouse): void {
+        if (this.holdArmed || this.screen !== 'home' || !this.uiCam || !this.home) return;
+        const p = e.getLocation();
+        const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
+        if (!this.home.hitsTitle(ui)) return;
+        this.holdArmed = true;
+        this.scheduleOnce(this.holdWipe, HOLD_SECONDS);
+    }
+
+    /** Disarm it. Runs on release and on a cancelled touch, and is safe when nothing is armed. */
+    private onPressEnd(): void {
+        if (!this.holdArmed) return;
+        this.holdArmed = false;
+        this.unschedule(this.holdWipe);
+    }
+
+    /**
+     * Throw the save away, on a three-second hold of the home screen's title.
+     *
+     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why it is a long hold on
+     * an unlabelled target rather than a button. A "clear my progress" button on the home
+     * screen of a ten-level game is louder than the thing it does, and this is the only
+     * destructive path in the game.
+     *
+     * The confirmation is two things: the grid repaints fully locked, which is evidence
+     * rather than a claim, and a toast that says so in words. The toast activates its own
+     * node, so it works with the in-level HUD hidden.
+     */
+    private wipeProgress(): void {
+        this.holdArmed = false;
+        clearProgressText();
+        this.progress = emptyProgress();
+        this.home?.setProgress(this.progress);
+        this.hud?.showToast('进度已清除');
+        this.sfx?.play('tap');
+        vibrate('light');
+        console.log('[Game] progress cleared');
+    }
+
     private onMouseUp(e: EventMouse): void {
+        this.onPressEnd();
         const p = e.getLocation();
         this.handleTap(p.x, p.y);
     }
@@ -2073,10 +2174,14 @@ export class GameController extends Component {
         if (this.screen === 'home') {
             if (!this.uiCam || !this.home) return;
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
-            // `startLevel`, not level 1: see the field. When progress is saved this is where
-            // "continue" resolves to the furthest level reached -- the button already means
-            // "start playing", which is why HomeView reports the tap and does not pick.
-            if (this.home.hitsStart(ui)) { this.enterLevel(this.startLevel); return; }
+            // The save decides where this goes -- the furthest level unlocked, capped at the
+            // last that exists (`HomeView.continueLevel`, which is also what labelled the
+            // button). The inspector's `levelName` is no longer a starting point; the way to
+            // jump to a late level while developing is PICK_ROW in hud-view.
+            if (this.home.hitsStart(ui)) {
+                this.enterLevel(`level-${this.home.continueLevel(this.progress)}`);
+                return;
+            }
             const pick = this.home.hitsLevel(ui);
             if (pick > 0) this.enterLevel(`level-${pick}`);
             return;

@@ -8,5 +8,6 @@ export * from './lot-system';
 export * from './parking-system';
 export * from './loop-system';
 export * from './boarding-system';
+export * from './progress';
 export * from './game-core';
 export * from './solvability';
