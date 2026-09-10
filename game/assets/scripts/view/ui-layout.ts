@@ -51,9 +51,28 @@ export function safeInsets(): { top: number; bottom: number } {
     return insets;
 }
 
+/**
+ * The canvas, in DESIGN UNITS. Read it; do not assume it.
+ *
+ * IT IS 1280 WIDE, not 720, and getting that wrong is expensive. The project ships
+ * `designResolution 1280x720, policy 4` -- FIXED_WIDTH -- so the width is pinned at 1280 on
+ * every device and the HEIGHT is whatever the aspect ratio makes it: about 2770 on a 19.5:9
+ * phone, 1707 on a 4:3 tablet. The 1280x720 pair reads as a landscape resolution and the game
+ * is portrait, which is exactly the trap: the numbers are the design box, and FIXED_WIDTH
+ * keeps the first of them and throws the second away.
+ *
+ * The fallback below used to say 720x1280 -- the same two numbers the other way round, which
+ * is wrong in BOTH of them. It never fired (the Canvas always has a UITransform), but it was
+ * the only statement in this file about how big the screen is, and three rounds of dialog
+ * geometry were built on top of it before a screenshot showed the panels coming out at half
+ * the width they were designed for.
+ *
+ * So: x measurements are portable as absolute design units, because 1280 is a constant. Y
+ * measurements are NOT -- anything anchored to an edge has to be derived from `h`.
+ */
 export function canvasSize(canvas: Node): { w: number; h: number } {
     const ct = canvas.getComponent(UITransform);
-    return ct ? { w: ct.width, h: ct.height } : { w: 720, h: 1280 };
+    return ct ? { w: ct.width, h: ct.height } : { w: 1280, h: 2770 };
 }
 
 export function makeLabel(

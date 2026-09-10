@@ -160,8 +160,8 @@ const TITLE_PILL_H = PILL_H;
  * busiest thing on the screen, so the board showing through was costing it exactly the
  * legibility it exists for.
  */
-const TOAST_W = 380;
-const TOAST_H = 124;
+const TOAST_W = 660;
+const TOAST_H = 200;
 const TOAST_HOLD = 1.5;
 /**
  * The card's colours, not the dark slab this used to be -- 所有提示都做成同一种风格.
@@ -173,8 +173,8 @@ const TOAST_HOLD = 1.5;
  */
 const TOAST_BG = new Color(64, 172, 236, 245);
 const TOAST_BASE = new Color(28, 112, 176, 245);
-const TOAST_LIFT = 7;
-const TOAST_SIZE = 60;
+const TOAST_LIFT = 11;
+const TOAST_SIZE = 96;
 
 /**
  * THE CARD: the shape both of this HUD's dialogs are cut from -- a thick coloured rim, a
@@ -199,27 +199,45 @@ const TOAST_SIZE = 60;
  */
 /**
  * ONE WIDTH FOR ALL FOUR DIALOGS. They are the same object at four heights, so a width each
- * would be four numbers that have to be kept equal by hand. 640 of a 720 canvas leaves 40 a
- * side, which is what the close button overhangs into.
+ * would be four numbers that have to be kept equal by hand.
+ *
+ * 1120 OF A 1280-WIDE CANVAS. The canvas is 1280 design units across, not 720 -- see
+ * `canvasSize`, which now says so -- and three rounds of this geometry were built on 720
+ * before a screenshot showed every dialog coming out at half the width it was drawn for.
+ * That is the whole of what 「再大一点」 was asking for, three times: not a taste for bigger
+ * panels, a panel at 50% of the screen when it was meant to be at 88%.
+ *
+ * Everything else in this section is scaled with it, by about 1.75, including the type -- a
+ * card twice the size with the same 34px body text would read as a poster with a footnote on
+ * it.
  */
-const CARD_W = 640;
-const CARD_R = 60;
-const CARD_RIM = 26;
-const CARD_HEAD = 132;
+const CARD_W = 1120;
+const CARD_R = 96;
+const CARD_RIM = 42;
+const CARD_HEAD = 210;
 /** How far the rim's darker copy peeks out below it: the frame's bottom edge. */
-const CARD_LIFT = 12;
-const CARD_PAGE_R = 40;
+const CARD_LIFT = 18;
+const CARD_PAGE_R = 64;
 /** The width every card's page has, since they all share CARD_W. */
 const CARD_PAGE_W = CARD_W - CARD_RIM * 2;
 /**
- * 60, not the 64 the rest of this scale-up would suggest. The longest title is the prompt's
- * seven characters, and Chinese glyphs run about one em wide: at 64 it reaches x +/-224
- * against the close button's left edge at 232, which is a coincidence rather than a margin.
- * At 60 it reaches 210 and clears it by 22.
+ * 96. The longest title is the prompt's seven characters, and Chinese glyphs run about one em
+ * wide, so it reaches x +/-336 against the close button's left edge at 470 -- 134 clear.
+ * That margin is why the title can take the full scale-up where the 640-wide card had to hold
+ * it back to 60 against a close button only 232 out.
  */
-const CARD_TITLE_SIZE = 60;
-const CARD_RIM_FACE = new Color(64, 172, 236, 255);
-const CARD_RIM_BASE = new Color(28, 112, 176, 255);
+const CARD_TITLE_SIZE = 96;
+/**
+ * The frame, DARKER than it was (64,172,236 over 28,112,176), asked for as 卡片外层的背景颜色再
+ * 深一些.
+ *
+ * The bright cyan was competing with the cream page for the eye instead of holding it: a
+ * frame's job is to be the edge of the thing, and an edge brighter than the page it frames
+ * reads as the subject. It is still the family's blue -- the gear, the switches and the side
+ * buttons all take these two -- just seated behind the page rather than in front of it.
+ */
+const CARD_RIM_FACE = new Color(42, 138, 208, 255);
+const CARD_RIM_BASE = new Color(20, 92, 150, 255);
 const CARD_PAGE = new Color(253, 246, 232, 255);
 /**
  * Ink on the cream page, and the quieter ink under it.
@@ -241,17 +259,17 @@ const CARD_RULE = new Color(226, 208, 182, 255);
  * with the page's own contents for that corner; reported as 关闭按钮放在右上角. On the card's
  * corner it belongs to the whole dialog, which is what it closes.
  *
- * CARD_X_INSET is measured from the card's corner, and at 34 the disc's outer edge (radius
- * 46 plus the ring's 8) reaches 20 units past the card -- 340 of a 720 canvas's 360, so it
- * overhangs onto the scrim without leaving the screen.
+ * CARD_X_INSET is measured from the card's corner, and at 48 the disc's outer edge (radius
+ * 65 plus the ring's 11) reaches 28 units past the card -- 588 of a 1280 canvas's 640, so it
+ * overhangs onto the scrim with 52 to spare.
  *
  * A white ring around it, then the same face-over-base pair as every other pressable thing
  * here. The ring is what separates a blue disc from the blue rim it half sits on.
  */
-const CARD_X_D = 92;
-const CARD_X_RING = 8;
-const CARD_X_LIFT = 5;
-const CARD_X_INSET = 34;
+const CARD_X_D = 130;
+const CARD_X_RING = 11;
+const CARD_X_LIFT = 7;
+const CARD_X_INSET = 48;
 /** The rim colour for white type on a green button -- the frame's blue would fight the green. */
 const CARD_BTN_RIM = new Color(48, 132, 40, 255);
 
@@ -263,12 +281,12 @@ const CARD_BTN_RIM = new Color(48, 132, 40, 255);
  * Declared here rather than with the win card it is also used by, because the settings
  * panel derives SET_BTN_Y from this height and a const initialiser cannot reach forward.
  */
-const PROMPT_BTN_W = 440;
-const PROMPT_BTN_H = 124;
-const PROMPT_BTN_R = 42;
+const PROMPT_BTN_W = 760;
+const PROMPT_BTN_H = 200;
+const PROMPT_BTN_R = 68;
 const PROMPT_BTN = new Color(86, 199, 104, 255);
 const PROMPT_BTN_BASE = new Color(56, 156, 76, 255);
-const PROMPT_BTN_LIFT = 8;
+const PROMPT_BTN_LIFT = 13;
 
 /**
  * The "open a stall or lose" prompt: the one MODAL thing on this HUD.
@@ -282,27 +300,27 @@ const PROMPT_BTN_LIFT = 8;
  * A dark scrim rather than a light one: the board underneath is pale and the card is pale.
  */
 /**
- * 558: CARD_HEAD 132 + a 400-tall page + CARD_RIM 26. The title is not part of this stack --
+ * 902: CARD_HEAD 210 + a 650-tall page + CARD_RIM 42. The title is not part of this stack --
  * it sits on the rim -- so the page holds four things where it held five.
  *
- * Laid out in PAGE coordinates, the page spanning y -200..200, each line's box being 1.2x
+ * Laid out in PAGE coordinates, the page spanning y -325..325, each line's box being 1.2x
  * its font size (`makeLabel`):
  *
- *   sub    y  142 +/- 20  ->  122..162   (38 off the page's top edge)
- *   button y   20 +/- 62  ->  -42..82    (40 clear of the sub)
- *   cost   y  -76 +/- 18  ->  -94..-58   (16 clear of the button)
- *   replay y -148 +/- 20  -> -168..-128  (34 clear of the cost, 32 off the bottom)
+ *   sub    y  230 +/- 28  ->  202..258   (67 off the page's top edge)
+ *   button y   30 +/- 100 -> -70..130    (72 clear of the sub)
+ *   cost   y -125 +/- 24  -> -149..-101  (31 clear of the button)
+ *   replay y -240 +/- 28  -> -268..-212  (63 clear of the cost, 57 off the bottom)
  *
- * The close button now hangs off the CARD's corner, well above the page, so nothing in this
- * stack shares a band with it -- which is most of why it moved.
+ * The close button hangs off the CARD's corner, well above the page, so nothing in this stack
+ * shares a band with it -- which is most of why it moved.
  */
-const PROMPT_H = 558;
+const PROMPT_H = 902;
 /** Where each line sits, in page coordinates. The arithmetic is under PROMPT_H. */
-const PROMPT_SUB_Y = 142;
-const PROMPT_SUB_SIZE = 34;
-const PROMPT_BTN_Y = 20;
-const PROMPT_COST_Y = -76;
-const PROMPT_REPLAY_Y = -148;
+const PROMPT_SUB_Y = 230;
+const PROMPT_SUB_SIZE = 46;
+const PROMPT_BTN_Y = 30;
+const PROMPT_COST_Y = -125;
+const PROMPT_REPLAY_Y = -240;
 
 /**
  * The settings panel: the same card, with its three answers BELOW it rather than on it.
@@ -312,29 +330,29 @@ const PROMPT_REPLAY_Y = -148;
  * it is. The panel node is raised by SET_RAISE so that the card and the button row TOGETHER
  * centre on the screen; without it the composition hangs low by half a button.
  *
- *   card    y  336 .. 77     (SET_H 518: CARD_HEAD 132 + a 360-tall page + CARD_RIM 26)
- *   buttons y -212 .. -336   (SET_BTN_GAP_Y 30 below the card, so the whole thing is
+ *   card    y  536 .. 122    (SET_H 828: CARD_HEAD 210 + a 576-tall page + CARD_RIM 42)
+ *   buttons y -336 .. -536   (SET_BTN_GAP_Y 42 below the card, so the whole thing is
  *                            symmetric about the middle of the screen)
  */
-const SET_H = 518;
+const SET_H = 828;
 /**
- * The two switch rows, in page coordinates: 120 tall each, 144 apart, on a 360-tall page.
+ * The two switch rows, in page coordinates: 196 tall each, 232 apart, on a 576-tall page.
  *
- * That leaves 48 clear above the first and below the second and 24 between them. The two
+ * That leaves 74 clear above the first and below the second and 36 between them. The two
  * rows are the only things on this page, and rows crammed against a frame read as a list
  * that has been cut off.
  */
-const SET_ROW_H = 120;
-const SET_ROW1_Y = 72;
-const SET_ROW2_Y = -72;
+const SET_ROW_H = 196;
+const SET_ROW1_Y = 116;
+const SET_ROW2_Y = -116;
 /** Icon, then label, then track, measured in from the page's own edges. */
-const SET_ICON_D = 76;
-const SET_ICON_X = -CARD_PAGE_W / 2 + 62;
-const SET_LABEL_SIZE = 48;
-const SET_LABEL_X = SET_ICON_X + SET_ICON_D / 2 + 26;
-const SET_SW_W = 176;
-const SET_SW_H = 80;
-const SET_SW_X = CARD_PAGE_W / 2 - 62 - SET_SW_W / 2;
+const SET_ICON_D = 116;
+const SET_ICON_X = -CARD_PAGE_W / 2 + 104;
+const SET_LABEL_SIZE = 72;
+const SET_LABEL_X = SET_ICON_X + SET_ICON_D / 2 + 40;
+const SET_SW_W = 268;
+const SET_SW_H = 124;
+const SET_SW_X = CARD_PAGE_W / 2 - 104 - SET_SW_W / 2;
 /**
  * The knob: a rounded square, not a circle, with a white ring around it.
  *
@@ -344,9 +362,9 @@ const SET_SW_X = CARD_PAGE_W / 2 - 62 - SET_SW_W / 2;
  * the track is two independent signals, and a red knob also reads as "switched off" to
  * somebody who has never seen the control before.
  */
-const SET_SW_KNOB = 76;
-const SET_SW_KNOB_R = 26;
-const SET_SW_RING = 6;
+const SET_SW_KNOB = 116;
+const SET_SW_KNOB_R = 40;
+const SET_SW_RING = 9;
 const SET_SW_TRACK = new Color(228, 214, 190, 255);
 const SET_SW_ON = new Color(112, 200, 60, 255);
 const SET_SW_OFF = new Color(230, 82, 78, 255);
@@ -365,20 +383,22 @@ const SET_SW_OFF = new Color(230, 82, 78, 255);
  * a third button offering it would be a button that cannot work. Replay or leave is the whole
  * truth of the position.
  *
- * Laid out in PAGE coordinates, the page spanning y -140..140 (LOSE_H 438: CARD_HEAD 132 +
- * a 280-tall page + CARD_RIM 26):
+ * Laid out in PAGE coordinates, the page spanning y -225..225 (LOSE_H 702: CARD_HEAD 210 +
+ * a 450-tall page + CARD_RIM 42):
  *
- *   sub     y  82 +/- 20  ->  62..102   (38 off the page's top edge)
- *   buttons y -42 +/- 62  -> -104..20   (42 clear of the sub, 36 off the bottom)
+ *   sub     y  135 +/- 28  ->  107..163   (62 off the page's top edge)
+ *   buttons y  -70 +/- 100 -> -170..30    (78 clear of the sub, 55 off the bottom)
  *
- * The buttons come to 520 across (180 + 20 + 320), which leaves 34 of page either side.
+ * The buttons come to 900 across (280 + 28 + 592), which leaves 68 of page either side.
  */
-const LOSE_H = 438;
-const LOSE_SUB_Y = 82;
-const LOSE_BTN_Y = -42;
-const LOSE_HOME_W = 180;
-const LOSE_REPLAY_W = 320;
-const LOSE_BTN_GAP = 20;
+/** See `showLose`: light on purpose, so the red flash on the stuck cars still reads. */
+const LOSE_SCRIM = new Color(10, 14, 26, 110);
+const LOSE_H = 702;
+const LOSE_SUB_Y = 135;
+const LOSE_BTN_Y = -70;
+const LOSE_HOME_W = 280;
+const LOSE_REPLAY_W = 592;
+const LOSE_BTN_GAP = 28;
 
 /**
  * The answers under the card. The middle one is the wide green one -- see `buildSettings`.
@@ -387,20 +407,20 @@ const LOSE_BTN_GAP = 20;
  * their own: they are the same control as the prompt's 解锁车位 button, and two button heights
  * four units apart is a difference nobody can see and everybody has to maintain.
  */
-const SET_WIDE_W = 320;
-const SET_SIDE_W = 128;
-const SET_BTN_GAP = 20;
+const SET_WIDE_W = 560;
+const SET_SIDE_W = 230;
+const SET_BTN_GAP = 28;
 /**
  * The two type sizes the answer row uses, shared with the lose card's pair.
  *
- * 616 across (320 + 2x(20 + 128)) inside a 640 card: 12 either side. The wide one takes 50
- * because 继续游戏 at 50 is 200 wide inside 320; the narrow ones take 42, which sets 主页 at
- * 84 inside 128 -- both about five eighths of their button, so the row reads as one control
- * repeated at two widths rather than as three unrelated buttons.
+ * 1076 across (560 + 2x(28 + 230)) inside a 1120 card: 22 either side. The wide one takes
+ * 68 because 继续游戏 at 68 is 272 wide inside 560; the narrow ones take 56, which sets 主页 at
+ * 112 inside 230 -- both about half of their button, so the row reads as one control repeated
+ * at two widths rather than as three unrelated buttons.
  */
-const SET_WIDE_SIZE = 50;
-const SET_SIDE_SIZE = 42;
-const SET_BTN_GAP_Y = 30;
+const SET_WIDE_SIZE = 68;
+const SET_SIDE_SIZE = 56;
+const SET_BTN_GAP_Y = 42;
 const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
 const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
 /**
@@ -412,7 +432,7 @@ const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
  * twice. With the star rating metering unlocks and this line naming both what is left and
  * what it costs, it becomes a decision.
  */
-const PROMPT_COST_SIZE = 30;
+const PROMPT_COST_SIZE = 40;
 /**
  * Every card's drop shadow: a plate behind it, offset down. `buildCard` drops it by this
  * PLUS the rim's own CARD_LIFT, so the shadow sits under the frame's bottom edge rather than
@@ -451,7 +471,7 @@ const SCRIM = new Color(10, 14, 26, 178);
  */
 
 /**
- * 778: CARD_HEAD 132 + a 620-tall page + CARD_RIM 26.
+ * 1132: CARD_HEAD 210 + an 880-tall page + CARD_RIM 42.
  *
  * The card carries six things: the stars, the headline (on the rim now, like every other
  * card's), the series bar, two lines of tally, and two answers. The stack is laid out from
@@ -463,38 +483,45 @@ const SCRIM = new Color(10, 14, 26, 178);
  * rimmed title already make it an object does not need it. The rim band is also where the
  * title goes, so a straddling star would land on top of the headline.
  *
- * Arithmetic in PAGE coordinates, the page spanning y -310..310, each line's box being 1.2x
+ * Arithmetic in PAGE coordinates, the page spanning y -440..440, each line's box being 1.2x
  * the font size (Cocos' default `lineHeight`, set that way in `makeLabel`):
  *
- *   side stars   y 195 +/- 60   ->  135..255   (55 off the page's top edge)
- *   middle star  y 223 +/- 78   ->  145..301   (9 off it, being the taller one)
- *   caption      y 100 +/- 19   ->   81..119   (16 clear of the side stars' underside)
- *   bar          y  46 +/- 5    ->   41..51    (30 clear of the caption)
- *   rule         y   8          ->    7..9     (32 clear of the bar)
- *   tally line 1 y -34 +/- 18   ->  -52..-16   (23 clear of the rule, which is 2 tall)
- *   tally line 2 y -80 +/- 18   ->  -98..-62   (10 clear of line 1: one block, two lines)
- *   button       y -172 +/- 62  -> -234..-110  (12 clear of the tally)
- *   replay       y -270 +/- 20  -> -290..-250  (16 clear of the button, 20 off the bottom)
+ *   side stars   y  246 +/- 105  ->  141..351   (89 off the page's top edge)
+ *   middle star  y  295 +/- 137  ->  158..432   (8 off it, being the taller one)
+ *   caption      y   92 +/- 26   ->   66..118   (23 clear of the side stars' underside)
+ *   bar          y   24 +/- 8    ->   16..32    (34 clear of the caption)
+ *   rule         y  -22          ->  -23..-21   (37 clear of the bar)
+ *   tally line 1 y  -82 +/- 25   -> -107..-57   (34 clear of the rule, which is 2 tall)
+ *   tally line 2 y -146 +/- 25   -> -171..-121  (14 clear of line 1: one block, two lines)
+ *   answers      y -300 +/- 100  -> -400..-200  (29 clear of the tally, 40 off the bottom)
  */
-const WIN_H = 778;
-const WIN_SCRIM = new Color(10, 14, 26, 110);
+const WIN_H = 1132;
+/**
+ * 150, up from 110, asked for alongside the card's own frame going darker.
+ *
+ * The board behind this one has just been emptied and there is nothing on it left to read,
+ * so the scrim can do its job -- which is to stop the card competing with a lit 3D scene for
+ * contrast. The LOSE card keeps 110 (see LOSE_SCRIM) because the red flash on its stuck cars
+ * is the answer to "why did I lose".
+ */
+const WIN_SCRIM = new Color(10, 14, 26, 150);
 /**
  * The stars, in an arch at the top of the PAGE: the middle one bigger and higher, and it
  * lands last. Three identical stars in a row read as a progress bar; an arch with the
  * emphasis in the middle reads as a prize.
  *
- * The pitch keeps eight units of daylight between a side star and the middle one at these
+ * The pitch keeps fourteen units of daylight between a side star and the middle one at these
  * diameters -- worth checking by hand if any of the three change, because two stars whose
- * points cross look like a mistake rather than a cluster. The three of them come to 412
- * across inside a 588 page.
+ * points cross look like a mistake rather than a cluster. The three of them come to 722
+ * across inside a 1036 page.
  */
-const WIN_STAR_D = 120;
-const WIN_STAR_MID_D = 156;
-const WIN_STAR_PITCH = 146;
-const WIN_STAR_Y = 195;
-const WIN_STAR_MID_Y = 223;
+const WIN_STAR_D = 210;
+const WIN_STAR_MID_D = 273;
+const WIN_STAR_PITCH = 256;
+const WIN_STAR_Y = 246;
+const WIN_STAR_MID_Y = 295;
 /** How far each star's darker twin peeks out below it. */
-const WIN_STAR_LIFT = 8;
+const WIN_STAR_LIFT = 14;
 const WIN_STAR = new Color(255, 201, 52, 255);
 const WIN_STAR_BASE = new Color(206, 140, 18, 255);
 const WIN_STAR_OFF = new Color(219, 224, 236, 255);
@@ -507,18 +534,33 @@ const WIN_STAR_OFF_BASE = new Color(183, 191, 209, 255);
  * moving reads as a screenshot. Slow enough that it is not an animation you watch; fast enough
  * that the screen is alive.
  */
-const WIN_BURST_D = 980;
+const WIN_BURST_D = 1900;
 const WIN_BURST = new Color(255, 255, 255, 30);
 const WIN_BURST_TURN = 40;
 /** Where each line of the stack sits, in page coordinates. The arithmetic is under WIN_H. */
-const WIN_CAPTION_Y = 100;
-const WIN_CAPTION_SIZE = 32;
-const WIN_BAR_Y = 46;
-const WIN_RULE_Y = 8;
-const WIN_TALLY_Y = -34;
-const WIN_TALLY_PITCH = 46;
-const WIN_CTA_Y = -172;
-const WIN_REPLAY_Y = -270;
+const WIN_CAPTION_Y = 92;
+const WIN_CAPTION_SIZE = 44;
+const WIN_BAR_Y = 24;
+const WIN_RULE_Y = -22;
+const WIN_TALLY_Y = -82;
+const WIN_TALLY_PITCH = 64;
+/**
+ * The answers, side by side under the tally, exactly like the lose card's pair.
+ *
+ * 重玩本关 WAS A BARE LABEL, 34px with a 280x80 hit box, and it came back as 都快点不到了 --
+ * hard to hit, and the reason is worse than its size: `hitsWin` falls through to 'next' for
+ * anything it does not claim, so a near-miss on the replay text does not do nothing, it
+ * ADVANCES THE LEVEL. The one control on this card a player has to aim at was surrounded by
+ * a target that undoes it.
+ *
+ * As a chunky button it is 360x200 and it looks like the thing it is. 900 across for the
+ * pair (360 + 28 + 512) inside a 1036 page, which leaves 68 either side -- the same row the
+ * lose card uses, because they are the same two questions.
+ */
+const WIN_BTN_Y = -300;
+const WIN_REPLAY_W = 360;
+const WIN_NEXT_W = 512;
+const WIN_BTN_GAP = 28;
 
 /**
  * The series progress bar: one cell per level, the cleared one lit.
@@ -529,16 +571,16 @@ const WIN_REPLAY_Y = -270;
  * PITCH is what has to give, not the count, which is why the width below is derived rather
  * than written down.
  */
-const WIN_BAR_H = 10;
-const WIN_BAR_GAP = 8;
+const WIN_BAR_H = 16;
+const WIN_BAR_GAP = 12;
 /** The widest the bar may get. Inside the card's 600 with its 48 of side padding to spare. */
-const WIN_BAR_MAX_W = 492;
+const WIN_BAR_MAX_W = 880;
 const WIN_BAR_ON = new Color(86, 199, 104, 255);
 /** The unlit cells: a warm grey, because the cool one this had reads as dirt on cream. */
 const WIN_BAR_OFF = new Color(228, 212, 188, 255);
 
 /** The tally lines: what the level cost, in the same ink as the caption but smaller. */
-const WIN_TALLY_SIZE = 30;
+const WIN_TALLY_SIZE = 42;
 
 /**
  * A card's quiet second answer, as TEXT rather than a second slab. Both cards use it: the
@@ -551,10 +593,9 @@ const WIN_TALLY_SIZE = 30;
  * The hit box is much bigger than the ink, because a text button sized to its own glyphs is
  * a text button nobody can hit.
  */
-const TEXT_BTN_SIZE = 34;
-const TEXT_BTN_INK = new Color(122, 133, 160, 255);
-const TEXT_BTN_W = 280;
-const TEXT_BTN_H = 80;
+const TEXT_BTN_SIZE = 46;
+const TEXT_BTN_W = 440;
+const TEXT_BTN_H = 130;
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -1188,9 +1229,9 @@ export class HudView {
         // fade-out starts from the pill's 245 and the type's own alpha, not from 255. On the
         // HOLDER, so it fades the face, the base and the type as one thing.
         this.toastFade = pill.addComponent(UIOpacity);
-        // Centred, because there is nothing else on the pill to make room for. 60 sets four
-        // CJK glyphs at about 240 wide inside a 380 pill -- the same share of its pill the
-        // title plate's 46 takes of its 190, so the toast reads as the same HUD, only louder.
+        // Centred, because there is nothing else on the pill to make room for. 96 sets four
+        // CJK glyphs at about 384 wide inside a 660 pill, which leaves room for the five that
+        // 「进度已清除」 needs, and reads as the same HUD as the plates above it, only louder.
         this.toastTitle = makeLabel(face, 'ToastTitle', TOAST_SIZE, 0);
         rimLabel(this.toastTitle, TOAST_BASE, 6);
         pill.active = false;
@@ -1417,9 +1458,14 @@ export class HudView {
         this.promptCost = makeLabel(page, 'PromptCost', PROMPT_COST_SIZE, PROMPT_COST_Y);
         this.promptCost.color = CARD_SUB;
 
-        // See TEXT_BTN_SIZE. The same control the win card wears, and the same reason: this
-        // is the answer for a player who would rather start the level over than pay, and it
-        // must be reachable without being as loud as the offer.
+        // See TEXT_BTN_SIZE: the answer for a player who would rather start the level over
+        // than pay, reachable without being as loud as the offer.
+        //
+        // THE WIN CARD'S 重玩本关 IS A BUTTON NOW and this one is still text, which is not
+        // drift. There, a tap the card did not claim advances the level, so the quiet control
+        // had a target around it that undid it (see WIN_BTN_Y). Here a tap this panel does
+        // not claim is swallowed -- there is no move left on the board to give it to -- so
+        // the quiet form costs nothing and the loud green offer keeps the hierarchy it wants.
         const replay = new Node('PromptReplay');
         replay.layer = Layers.Enum.UI_2D;
         replay.addComponent(UITransform).setContentSize(TEXT_BTN_W, TEXT_BTN_H);
@@ -1537,9 +1583,9 @@ export class HudView {
         track.setPosition(SET_SW_X, 0, 0);
 
         // The knob is a holder with the white ring behind its coloured face, so `paintSwitch`
-        // moves one node and tints one sprite. With the ring the knob is 88 across against an
-        // 80 track, so it overhangs by 4 top and bottom, on purpose: a knob that stands proud
-        // of its track reads as a thing ON the track rather than a hole cut in it.
+        // moves one node and tints one sprite. With the ring the knob is 134 across against a
+        // 124 track, so it overhangs by 5 top and bottom, on purpose: a knob that stands
+        // proud of its track reads as a thing ON the track rather than a hole cut in it.
         const knob = new Node('knob');
         knob.layer = Layers.Enum.UI_2D;
         knob.addComponent(UITransform);
@@ -1821,25 +1867,23 @@ export class HudView {
             this.winTally.push(line);
         }
 
-        // `showWin` overwrites the label -- what it says depends on whether another level
-        // exists -- so this is the common case rather than a placeholder. Built with real
-        // text on purpose: a button whose label is set somewhere else should still read
-        // correctly if that somewhere else is ever missed.
+        // Two answers in a row, the wide green one on the right. See WIN_BTN_Y for why the
+        // replay is a button now and not a line of text.
+        //
+        // `showWin` overwrites the green one's label -- what it says depends on whether
+        // another level exists -- so 下一关 here is the common case rather than a placeholder.
+        // Built with real text on purpose: a button whose label is set somewhere else should
+        // still read correctly if that somewhere else is ever missed.
+        const total = WIN_REPLAY_W + WIN_BTN_GAP + WIN_NEXT_W;
+        this.winReplay = this.buildCardBtn(page, {
+            x: -total / 2 + WIN_REPLAY_W / 2, y: WIN_BTN_Y, w: WIN_REPLAY_W,
+            text: '重玩本关',
+            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+        });
         this.winCta = this.buildCardBtn(page, {
-            x: 0, y: WIN_CTA_Y, w: PROMPT_BTN_W, text: '下一关',
+            x: total / 2 - WIN_NEXT_W / 2, y: WIN_BTN_Y, w: WIN_NEXT_W, text: '下一关',
             face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: SET_WIDE_SIZE,
         });
-
-        // See TEXT_BTN_SIZE: a node with a hit box, holding a label.
-        const replay = new Node('WinReplay');
-        replay.layer = Layers.Enum.UI_2D;
-        replay.addComponent(UITransform).setContentSize(TEXT_BTN_W, TEXT_BTN_H);
-        page.addChild(replay);
-        replay.setPosition(0, WIN_REPLAY_Y, 0);
-        const replayLabel = makeLabel(replay, 'WinReplayLabel', TEXT_BTN_SIZE, 0);
-        replayLabel.color = CARD_SUB;
-        replayLabel.string = '重玩本关';
-        this.winReplay = replay;
 
         scrim.active = false;
         this.win = scrim;
@@ -1975,18 +2019,20 @@ export class HudView {
         const c = this.winClose!.worldPosition;
         const r = CARD_X_D / 2 + 12;
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
-        const p = this.winReplay!.worldPosition;
-        if (Math.abs(ui.x - p.x) <= TEXT_BTN_W / 2
-            && Math.abs(ui.y - p.y) <= TEXT_BTN_H / 2) return 'replay';
+        if (this.inBox(ui, this.winReplay!, WIN_REPLAY_W, PROMPT_BTN_H)) return 'replay';
+        // Not `inBox` on the green one: it does not need a box, because everything this
+        // function has not already claimed is 'next' anyway. Checked in this order so the
+        // replay button owns its own area -- see WIN_BTN_Y for what happened when it did not.
         return 'next';
     }
 
     /**
      * The deadlock card. See LOSE_H for what it replaced and why it has two answers.
      *
-     * A LIGHT scrim, the win card's rather than the prompt's: `GameController.onEnd` flashes
-     * every stuck car red behind this, and that flash is the answer to "why did I lose" --
-     * dimming it to the prompt's 178 would hide the one useful thing on the screen.
+     * A LIGHT scrim, and its own rather than the win card's now: `GameController.onEnd`
+     * flashes every stuck car red behind this, and that flash is the answer to "why did I
+     * lose" -- dimming it would hide the one useful thing on the screen. The win card went
+     * darker (see WIN_SCRIM) because there is nothing behind IT worth reading.
      */
     showLose(): void {
         if (!this.lose) this.buildLosePanel();
@@ -2006,7 +2052,7 @@ export class HudView {
 
     private buildLosePanel(): void {
         const { w, h } = canvasSize(this.canvas);
-        const scrim = roundedSprite('LoseScrim', w * 2, h * 2, WIN_SCRIM, 2);
+        const scrim = roundedSprite('LoseScrim', w * 2, h * 2, LOSE_SCRIM, 2);
         this.canvas.addChild(scrim);
         scrim.setPosition(0, 0, 0);
 

@@ -56,6 +56,7 @@ const BURST_FADE = 0.30;
  */
 const roundFrames = new Map<number, SpriteFrame>();
 let dotFrame: SpriteFrame | null = null;
+let rampFrame: SpriteFrame | null = null;
 let starFrame: SpriteFrame | null = null;
 let burstFrame: SpriteFrame | null = null;
 
@@ -230,6 +231,33 @@ export function roundedSprite(
         roundFrames.set(r, frame);
     }
     return spriteNode(name, w, h, color, frame, Sprite.Type.SLICED);
+}
+
+/**
+ * A vertical fade: opaque at the TOP, gone at the bottom, tinted `color`.
+ *
+ * The one thing this file could not draw before, and the reason a flat background reads as
+ * flat -- a tinted sprite is one colour everywhere, so a screen painted from them has no
+ * light in it anywhere. Layered over a flat ground at low alpha this is a glow at the top of
+ * the sky; rotated 180 it is a vignette at the bottom.
+ *
+ * SMOOTHSTEP rather than a straight line, because the visible artefact of a linear ramp is
+ * not the ramp -- it is the hard stop where the sprite's bottom edge meets the ground it was
+ * laid over. Easing both ends puts the whole of the fade inside the sprite.
+ *
+ * Painted at RAMP_SIZE square and stretched, SIMPLE: a ramp has no detail across, so one
+ * frame serves every size and any aspect.
+ */
+const RAMP_SIZE = 64;
+
+export function rampSprite(name: string, w: number, h: number, color: Color): Node {
+    if (!rampFrame) {
+        rampFrame = frameFrom(paint(RAMP_SIZE, (_x, y) => {
+            const t = 1 - y / RAMP_SIZE;
+            return t * t * (3 - 2 * t);
+        }), RAMP_SIZE);
+    }
+    return spriteNode(name, w, h, color, rampFrame, Sprite.Type.SIMPLE);
 }
 
 /** A filled circle of diameter `d`, tinted `color`. */

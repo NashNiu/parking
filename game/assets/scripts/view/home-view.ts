@@ -1,7 +1,7 @@
 import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
-import { burstSprite, dotSprite, roundedSprite, starSprite } from './ui-shapes';
+import { burstSprite, dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
 import { canvasSize, makeLabel, safeInsets } from './ui-layout';
 import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
 import {
@@ -42,6 +42,17 @@ const GAME_TITLE = '停车场';
 const BG = new Color(24, 30, 50, 255);
 const TITLE_INK = new Color(255, 255, 255, 255);
 const SUB_INK = new Color(150, 163, 196, 255);
+/**
+ * The three type sizes on this screen, on a canvas 1280 design units wide (see `canvasSize`
+ * -- NOT 720, which is what the first pass at every panel in this game was built on).
+ *
+ * 「左右滑动选择关卡」 was 28, asked for as 这几个字大一点: that is 2.2% of the screen's width for
+ * the one line telling a new player that the rail moves, which is the only instruction on the
+ * screen. At 52 it is 4%, and it sits on the same step as the subtitle rather than below it.
+ */
+const TITLE_SIZE = 124;
+const SUB_SIZE = 46;
+const CAP_SIZE = 52;
 
 /**
  * The background: the board's own grid, at the strength a background can carry.
@@ -55,12 +66,72 @@ const SUB_INK = new Color(150, 163, 196, 255);
  * what a car park looks like from above.
  */
 const DECO_LINE = new Color(224, 232, 247, 14);
-const DECO_KERB = new Color(224, 232, 247, 18);
+const DECO_KERB = new Color(224, 232, 247, 22);
 const DECO_COLS = 6;
 const DECO_ROWS = 5;
-const DECO_LINE_W = 3;
-const DECO_BAYS = 8;
-const DECO_BAY_H = 74;
+const DECO_LINE_W = 4;
+const DECO_BAYS = 7;
+const DECO_BAY_H = 220;
+
+/**
+ * The sky and the floor: a light wash down from the top and a darker one up from the bottom.
+ *
+ * This is what 有点单调 was about, and it is the one thing a screen painted from flat tinted
+ * sprites cannot have -- every sprite here is a single colour, so before `rampSprite` there
+ * was no way to put LIGHT anywhere. The wash costs two draw calls and does more for the
+ * screen than everything else in this function.
+ *
+ * Both are sized as fractions of the canvas HEIGHT, which varies by device (see `canvasSize`:
+ * the width is pinned at 1280 and the height is whatever the aspect ratio gives). A wash
+ * measured in absolute units would be a third of a tall phone and all of a short one.
+ */
+const SKY = new Color(86, 128, 208, 30);
+const SKY_SPAN = 0.5;
+const FLOOR = new Color(6, 8, 16, 130);
+const FLOOR_SPAN = 0.34;
+
+/**
+ * Cars parked in the bays along the bottom, at background strength.
+ *
+ * Four of the seven bays, not all of them: a car park with a space in it reads as a car park,
+ * and a full row reads as a wall. They carry the four car colours, which is the only place
+ * on this screen -- other than the rail's stops -- that any colour appears at all.
+ *
+ * Drawn as one rounded body with a lighter roof band, and nothing else. At this alpha the
+ * detail would not survive anyway, and the shape's job is to be recognisable as a car from
+ * the arrangement rather than from its windows.
+ */
+const CAR_COLORS = [
+    new Color(232, 78, 74, 78),
+    new Color(74, 150, 232, 78),
+    new Color(112, 200, 92, 78),
+    new Color(240, 196, 64, 78),
+];
+const CAR_ROOF = new Color(255, 255, 255, 30);
+const CAR_BAYS = [0, 1, 3, 5];
+const CAR_W = 96;
+const CAR_H = 176;
+const CAR_R = 26;
+
+/**
+ * Passengers standing at the bays that have no car in them: three to a bay, at the kerb.
+ *
+ * 78 on the cars and 96 here, not the 34 the first pass used. A mock of this composition put
+ * the cars at 34 over the floor wash and they did not register at all -- background strength
+ * is measured against what is BEHIND it, and the bottom of this screen is the darkest part of
+ * it. Faint enough to stay background, strong enough to be a thing.
+ *
+ * They are also the only reason the empty bays read as empty rather than as unfinished: three
+ * dots waiting in a gap says a car is coming to it.
+ */
+const PAX_D = 34;
+const PAX_GAP = 44;
+const PAX_PER_BAY = 3;
+const PAX_COLORS = [
+    new Color(240, 196, 64, 96),
+    new Color(112, 200, 92, 96),
+    new Color(74, 150, 232, 96),
+];
 
 /**
  * The sunburst behind the rail: the same `burstSprite` the win card wears, at background
@@ -275,19 +346,19 @@ export class HomeView {
         // Under the notch, not under the top edge -- the same reservation the HUD's title
         // plate makes, for the same reason.
         const titleY = h / 2 - safeInsets().top * h - h * 0.15;
-        const title = makeLabel(this.root, 'HomeTitle', 80, titleY);
+        const title = makeLabel(this.root, 'HomeTitle', TITLE_SIZE, titleY);
         title.color = TITLE_INK;
         title.isBold = true;
         title.string = GAME_TITLE;
         this.titleNode = title.node;
 
-        this.sub = makeLabel(this.root, 'HomeSub', 30, titleY - 78);
+        this.sub = makeLabel(this.root, 'HomeSub', SUB_SIZE, titleY - TITLE_SIZE - 22);
         this.sub.color = SUB_INK;
         this.sub.node.active = false;
 
         this.railRoot = this.buildLane(h * 0.03);
 
-        this.cap = makeLabel(this.root, 'HomeCap', 28, h * 0.03 - LANE_H / 2 - 46);
+        this.cap = makeLabel(this.root, 'HomeCap', CAP_SIZE, h * 0.03 - LANE_H / 2 - 62);
         this.cap.color = SUB_INK;
         this.cap.string = '左右滑动选择关卡';
         this.cap.node.active = false;
@@ -316,14 +387,27 @@ export class HomeView {
         deco.addComponent(UITransform);
         this.root.addChild(deco);
 
-        // The burst goes in first, so the grid lies over it rather than under it -- the
-        // floor is nearer than the light.
+        const { w, h } = this;
+
+        // The wash first of all, under everything including the light: it IS the ground.
+        // Twice the canvas across, like the flat colour under it, so a wide viewport cannot
+        // show a strip of unpainted scene down either side.
+        const sky = rampSprite('Sky', w * 2, h * SKY_SPAN, SKY);
+        deco.addChild(sky);
+        sky.setPosition(0, h / 2 - h * SKY_SPAN / 2, 0);
+        const floor = rampSprite('Floor', w * 2, h * FLOOR_SPAN, FLOOR);
+        deco.addChild(floor);
+        floor.setPosition(0, -h / 2 + h * FLOOR_SPAN / 2, 0);
+        // Rotated, so the opaque end is at the BOTTOM. `rampSprite` paints one direction and
+        // the caller turns it; the alternative was two frames of the same gradient.
+        floor.angle = 180;
+
+        // Then the light, so the grid lies over it rather than under it -- the floor is
+        // nearer than the light.
         const burst = burstSprite('DecoBurst', DECO_BURST_D, DECO_BURST);
         deco.addChild(burst);
         burst.setPosition(0, this.h * 0.03, 0);
         tween(burst).by(DECO_BURST_TURN, { angle: 360 }).repeatForever().start();
-
-        const { w, h } = this;
         for (let i = 1; i < DECO_COLS; i++) {
             const line = roundedSprite(`col-${i}`, DECO_LINE_W, h, DECO_LINE, 1);
             deco.addChild(line);
@@ -335,15 +419,45 @@ export class HomeView {
             line.setPosition(0, (i / DECO_ROWS - 0.5) * h, 0);
         }
 
-        // The stall mouths: a kerb across the bottom with ticks hanging off it.
-        const bayY = -h / 2 + safeInsets().bottom * h + h * 0.06;
-        const kerb = roundedSprite('kerb', w * 1.1, DECO_LINE_W, DECO_KERB, 1);
+        // The stall mouths: a kerb across the bottom with ticks hanging off it, and cars in
+        // some of them. The bays are deep enough to park in now -- at 74 they were marks on
+        // the floor, and a mark is not a bay.
+        const span = w * 1.1;
+        const bayY = -h / 2 + safeInsets().bottom * h + h * 0.115;
+        const kerb = roundedSprite('kerb', span, DECO_LINE_W, DECO_KERB, 1);
         deco.addChild(kerb);
         kerb.setPosition(0, bayY, 0);
         for (let i = 0; i <= DECO_BAYS; i++) {
             const tick = roundedSprite(`bay-${i}`, DECO_LINE_W, DECO_BAY_H, DECO_KERB, 1);
             deco.addChild(tick);
-            tick.setPosition((i / DECO_BAYS - 0.5) * w * 1.1, bayY - DECO_BAY_H / 2, 0);
+            tick.setPosition((i / DECO_BAYS - 0.5) * span, bayY - DECO_BAY_H / 2, 0);
+        }
+        // Centred in the bay, which is the gap BETWEEN two ticks -- half a pitch over from
+        // the tick's own x. See CAR_COLORS for why only four of the seven are taken.
+        const bayX = (bay: number): number => ((bay + 0.5) / DECO_BAYS - 0.5) * span;
+        for (let i = 0; i < CAR_BAYS.length; i++) {
+            const bay = CAR_BAYS[i];
+            const car = roundedSprite(`car-${bay}`, CAR_W, CAR_H, CAR_COLORS[i], CAR_R);
+            deco.addChild(car);
+            car.setPosition(bayX(bay), bayY - DECO_BAY_H / 2 - 6, 0);
+            const roof = roundedSprite('roof', CAR_W - 30, CAR_H * 0.34, CAR_ROOF, 14);
+            car.addChild(roof);
+            roof.setPosition(0, CAR_H * 0.1, 0);
+        }
+        // And people in the bays that have none. See PAX_D.
+        let waiting = 0;
+        for (let bay = 0; bay < DECO_BAYS; bay++) {
+            if (CAR_BAYS.indexOf(bay) >= 0) continue;
+            for (let k = 0; k < PAX_PER_BAY; k++) {
+                const dot = dotSprite(
+                    `pax-${bay}-${k}`, PAX_D, PAX_COLORS[(waiting + k) % PAX_COLORS.length],
+                );
+                deco.addChild(dot);
+                dot.setPosition(
+                    bayX(bay) + (k - (PAX_PER_BAY - 1) / 2) * PAX_GAP, bayY + PAX_D, 0,
+                );
+            }
+            waiting++;
         }
     }
 
