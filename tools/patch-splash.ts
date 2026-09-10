@@ -103,6 +103,33 @@ export interface SplashLayout {
      * 4:3. So the strip is placed first and the bar is lifted off it.
      */
     barGap: number;
+    /**
+     * The scrim: a wash over the artwork's foot, opaque at the screen's bottom edge and fading
+     * out going up, so the bar and the notice read whatever the artwork happens to do behind
+     * them -- and so the join between the artwork and the band below it is covered rather
+     * than colour-matched, which for this artwork is not possible (see GAME_SPLASH.bgColor).
+     *
+     * `scrimSolid` is the FLOOR on how much of the screen's height is fully covered. The
+     * actual figure is the highest of that, the join, and the bar's own top edge, so BOTH the
+     * things the scrim is for are inside the opaque part by construction rather than by luck
+     * of the aspect ratio. All three matter: the band is 449px on a 19.5:9 phone and nothing
+     * at all on a 16:9 one, so the floor carries the second; and on a 4:3 screen the notice
+     * strip is drawn wide enough to be 225px tall, which lifts the bar above both -- measured,
+     * a bar whose top 31px sat in the fade.
+     *
+     * `scrimOver` is how far past the join the opaque part reaches. Without it the two land
+     * on exactly the same pixel on a 20:9 screen -- measured, 637px against 637px -- and the
+     * join sits on the boundary where the fade begins, which is the one place it can still
+     * show. A percent of the height is 25px on a 19.5:9 phone and costs nothing.
+     *
+     * `scrimFade` is how far the fade reaches above that, again as a fraction of the height.
+     * It has to stop short of anything worth seeing -- at these values it tops out at 702px
+     * on a 19.5:9 phone, and the bus's wheels are at about 955px.
+     */
+    scrim: Rgba;
+    scrimSolid: number;
+    scrimOver: number;
+    scrimFade: number;
     /** The notice strip's width, as a fraction of the screen's width. */
     noticeWidth: number;
     /**
@@ -168,10 +195,15 @@ function rgba(r: number, g: number, b: number, a = 1): Rgba {
 /**
  * The game's own loading screen.
  *
- * `bgColor` is the band below the artwork, and it is the one colour here that has to be
- * chosen against the art rather than against the HUD: the artwork is fitted to the screen's
- * width, so on a tall phone it stops short of the bottom and this colour continues it. A
- * road grey, because the bottom of the artwork is asphalt -- the seam should be invisible.
+ * `bgColor` is what shows below the artwork, which is HomeView's own navy -- so the hand-off
+ * from the first screen to the menu is not a change of scene. It is almost entirely covered
+ * by the scrim (see SplashLayout.scrim), and matching the two means a rounding error at their
+ * boundary cannot show as a line.
+ *
+ * IT USED TO BE A ROAD GREY, meant to continue the artwork's foot. That only works if the
+ * artwork's bottom edge is one colour, and this one is not: the left 55% is asphalt and the
+ * right 45% is warm cream paving. No flat colour continues that -- whatever it is, half the
+ * seam shows. Hence the scrim, which covers the join instead of trying to match it.
  */
 export const GAME_SPLASH: SplashPatch = {
     useCustomBg: true,
@@ -186,7 +218,7 @@ export const GAME_SPLASH: SplashPatch = {
     useLogo: true,
     logoName: 'splash-notice.png',
     useDefaultLogo: false,
-    bgColor: rgba(112, 116, 122),
+    bgColor: rgba(24, 30, 50),
     progressBarColor: rgba(250, 196, 62),
     progressBackground: rgba(58, 66, 82),
 };
@@ -208,6 +240,12 @@ export const GAME_LAYOUT: SplashLayout = {
     barAspect: 14,
     barUp: 0.12,
     barGap: 0.02,
+    // HomeView's own navy, which is also bgColor -- a cool shadow under a warm sunlit scene,
+    // and the same colour the menu behind it opens on.
+    scrim: [24 / 255, 30 / 255, 50 / 255, 0.78],
+    scrimSolid: 0.18,
+    scrimOver: 0.01,
+    scrimFade: 0.1,
     noticeWidth: 0.86,
     noticeUp: 0.028,
     ease: 8,
@@ -261,6 +299,13 @@ export const FIRST_SCREEN = 'first-screen.js';
  * It has to go in front of `module.exports`, not after it: that line captures the current
  * VALUES of `start`, `end` and `setProgress`, so an override placed after it would rewrite
  * bindings nothing exported reads, and `game.js` would keep calling the originals.
+ *
+ * The mark is also what makes an EXISTING block findable, so a stale one can be cut out and
+ * replaced. Skipping the insertion when the mark was present was the first version of that,
+ * and it was wrong in a way that only shows up while the block is being worked on: a build
+ * already patched by an older version of this script never received the newer block, and the
+ * script cheerfully reported "already patched". Idempotence should fall out of writing an
+ * identical block over the old one, not out of declining to look.
  */
 export const OVERRIDE_MARK = '/* --- parking loading screen (tools/patch-splash.ts) --- */';
 const EXPORT_ANCHOR = 'module.exports = { start, end, setProgress };';
@@ -321,6 +366,78 @@ updateBgVertexBuffer = function () {
         -1.0, 1.0,    0.0, 1.0,
         -1.0, bottom, 0.0, 0.0,
     ]), gl.STATIC_DRAW);
+    // This is the only place that knows where the artwork's foot landed. Record it and let
+    // the scrim size itself, so the two ways it can be too short stay in one place.
+    parkingJoin = 1.0 - half;
+    parkingWriteScrim();
+};
+
+// The scrim. A full-width wash from opaque at the screen's bottom edge to nothing partway
+// up, drawn between the artwork and everything else -- see SplashLayout.scrim for why this
+// exists rather than a colour-matched band.
+//
+// Its own program, because the artwork's shader samples a texture and the bar's draws a pill;
+// neither can produce a vertical gradient of a flat colour. It is a dozen lines and one more
+// draw call, and it is what makes the bar legible over an artwork nobody has seen yet.
+let parkingScrimSolid = ${num(L.scrimSolid)};
+// Where the artwork's foot fell, and where the bar's top edge is, both as fractions of the
+// screen's height. Written by the two functions that know, read by parkingWriteScrim.
+let parkingJoin = 0.0;
+let parkingBarTop = 0.0;
+let parkingScrimBuffer = null;
+let parkingScrimProgram = null;
+const PARKING_SCRIM_VS = \`
+attribute vec4 a_Position;
+varying float v_T;
+void main() {
+    gl_Position = vec4(a_Position.xy, 0.0, 1.0);
+    v_T = a_Position.z;
+}\`;
+const PARKING_SCRIM_FS = \`
+precision mediump float;
+uniform vec4 u_Scrim;
+uniform float u_Solid;
+varying float v_T;
+void main() {
+    // v_T runs 0 at the screen's bottom edge to 1 at the top of the fade. Below u_Solid the
+    // wash is flat; above it, it eases out -- smoothstep and not a straight ramp, so there is
+    // no visible edge where the fade begins.
+    float a = u_Scrim.a * (1.0 - smoothstep(u_Solid, 1.0, v_T));
+    gl_FragColor = vec4(u_Scrim.rgb, a);
+}\`;
+
+const parkingWriteScrim = function () {
+    parkingScrimSolid = Math.max(${num(L.scrimSolid)},
+                                 parkingJoin + ${num(L.scrimOver)},
+                                 parkingBarTop + ${num(L.scrimOver)});
+    const top = parkingScrimSolid + ${num(L.scrimFade)};
+    const topNdc = -1.0 + 2.0 * top;
+    if (!parkingScrimBuffer) parkingScrimBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, parkingScrimBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+         1.0, -1.0,   0.0,
+         1.0, topNdc, 1.0,
+        -1.0, -1.0,   0.0,
+        -1.0, topNdc, 1.0,
+    ]), gl.STATIC_DRAW);
+};
+
+const parkingDrawScrim = function () {
+    if (!parkingScrimBuffer) return;
+    if (!parkingScrimProgram) {
+        parkingScrimProgram = initShaders(PARKING_SCRIM_VS, PARKING_SCRIM_FS);
+    }
+    gl.useProgram(parkingScrimProgram);
+    gl.uniform4fv(gl.getUniformLocation(parkingScrimProgram, 'u_Scrim'),
+                  ${fmt(L.scrim)});
+    // As a fraction of the scrim's own height, which is what v_T is measured in.
+    gl.uniform1f(gl.getUniformLocation(parkingScrimProgram, 'u_Solid'),
+                 parkingScrimSolid / (parkingScrimSolid + ${num(L.scrimFade)}));
+    gl.bindBuffer(gl.ARRAY_BUFFER, parkingScrimBuffer);
+    const aPosition = gl.getAttribLocation(parkingScrimProgram, 'a_Position');
+    gl.enableVertexAttribArray(aPosition);
+    gl.vertexAttribPointer(aPosition, 3, gl.FLOAT, false, 12, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 };
 
 // The logo slot, carrying the health notice instead of a logo: fitted to a fraction of the
@@ -345,6 +462,8 @@ updateVertexBuffer = function () {
                             ${num(L.noticeUp)} + halfH + ${num(L.barGap)}
                             + parkingBarPx / (2.0 * canvas.height));
     parkingWriteBar();
+    // The bar has moved, so the scrim has to grow to keep covering it.
+    parkingWriteScrim();
 };
 
 // The bar's quad: xy in NDC, zw the uv across and down it, four floats a vertex. The vertex
@@ -366,6 +485,10 @@ const parkingWriteBar = function () {
     parkingBarPx = halfW * canvas.width / ${num(L.barAspect)};
     const halfH = parkingBarPx / canvas.height;
     const cy = -1.0 + 2.0 * parkingBarUp;
+    // halfH is an NDC half-extent, which is the bar's FULL height as a fraction of the screen
+    // -- the same cancellation the comment above describes -- so its top edge is barUp plus
+    // half of that.
+    parkingBarTop = parkingBarUp + halfH / 2.0;
     // Reused, not recreated: this runs a second time once the notice is measured, and a
     // fresh buffer each time would leak the first and leave end()'s deleteBuffer with the
     // wrong one.
@@ -380,6 +503,7 @@ const parkingWriteBar = function () {
 };
 initProgressVertexBuffer = function () {
     parkingWriteBar();
+    parkingWriteScrim();
 };
 
 // A pill, drawn as a signed distance to the segment running between the two cap centres. The
@@ -428,6 +552,25 @@ drawProgressBar = function (_glCtx, _program, buffer, _stride, value, fill, trou
     gl.enableVertexAttribArray(aPosition);
     gl.vertexAttribPointer(aPosition, 4, gl.FLOAT, false, 16, 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+};
+
+// draw(), reproduced so the scrim can go in the one place it belongs: OVER the artwork and
+// UNDER the notice. There is no other hook -- the notice is drawn before the bar, so a scrim
+// painted from inside drawProgressBar would cover the notice it exists to make readable.
+//
+// The generated version also draws the slogan when useDefaultLogo is set. That is patched to
+// false above, and the slogan is the "Created with Cocos" line drawn straight through the
+// middle of the logo, so it is dropped here rather than carried along.
+draw = function () {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.clearColor(bgColor[0], bgColor[1], bgColor[2], bgColor[3]);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    if (useCustomBg) drawTexture(gl, programBg, bgTexture, bgVertexBuffer, 4);
+    parkingDrawScrim();
+    if (useLogo) drawTexture(gl, program, logoTexture, vertexBuffer, 4);
+    drawProgressBar(gl, programProgress, vertexBufferProgress, 3, progress,
+                    progressBarColor, progressBackground);
 };
 
 // The fill's own clock. \`setProgress\` records a TARGET and still resolves on the next tick,
@@ -501,6 +644,14 @@ end = function () {
             gl.deleteProgram(parkingBarProgram);
             parkingBarProgram = null;
         }
+        if (parkingScrimProgram) {
+            gl.deleteProgram(parkingScrimProgram);
+            parkingScrimProgram = null;
+        }
+        if (parkingScrimBuffer) {
+            gl.deleteBuffer(parkingScrimBuffer);
+            parkingScrimBuffer = null;
+        }
     });
 };
 
@@ -528,15 +679,20 @@ export function patchFirstScreen(
     out = assign(out, 'progressBarColor', fmt(patch.progressBarColor));
     out = assign(out, 'progressBackground', fmt(patch.progressBackground));
 
-    if (out.includes(OVERRIDE_MARK)) return out;
-    if (!out.includes(EXPORT_ANCHOR)) {
+    const anchor = out.indexOf(EXPORT_ANCHOR);
+    if (anchor < 0) {
         throw new Error(
             `patch-splash: no \`${EXPORT_ANCHOR}\` in ${FIRST_SCREEN}.`
             + ' The overrides have nowhere safe to go -- read the generated file and update'
             + ' EXPORT_ANCHOR.',
         );
     }
-    return out.replace(EXPORT_ANCHOR, `${overrideBlock(layout)}${EXPORT_ANCHOR}`);
+    // Cut out any block already there before writing the current one. The block always sits
+    // immediately in front of the anchor, so mark..anchor is exactly it -- and replacing it
+    // rather than skipping is what keeps a re-run without a rebuild honest. See OVERRIDE_MARK.
+    const stale = out.indexOf(OVERRIDE_MARK);
+    const head = stale >= 0 ? out.slice(0, stale) : out.slice(0, anchor);
+    return `${head}${overrideBlock(layout)}${out.slice(anchor)}`;
 }
 
 function main(): void {

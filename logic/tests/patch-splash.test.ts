@@ -62,7 +62,9 @@ test('the notice slot can be turned off without touching anything else', () => {
 
 test('the patch recolours the band and the progress bar', () => {
   const out = patchFirstScreen(SAMPLE, GAME_SPLASH);
-  expect(out).toContain('let bgColor = [0.439216, 0.454902, 0.478431, 1];');
+  // HomeView's navy: 24/255, so the first screen's foot and the menu behind it are the same
+  // colour and the hand-off is not a change of scene.
+  expect(out).toContain('let bgColor = [0.094118, 0.117647, 0.196078, 1];');
   expect(out).toContain('let progressBarColor = [0.980392, 0.768627, 0.243137, 1];');
   expect(out).toContain('let progressBackground = [0.227451, 0.258824, 0.321569, 1];');
 });
@@ -270,4 +272,82 @@ test('the size warning leaves room for the rest of the package', () => {
  */
 test('the notice slot is PNG only', () => {
   expect(GAME_SPLASH.logoName.endsWith('.png')).toBe(true);
+});
+
+/**
+ * THE SCRIM'S ORDER IS THE WHOLE POINT OF IT. It has to land OVER the artwork and UNDER the
+ * notice: painted before the artwork it is invisible, and painted after the notice it covers
+ * the text it exists to make readable. There is no hook between the two -- the generated
+ * draw() runs artwork, notice, bar -- which is why draw() is reproduced rather than left
+ * alone, and why this test reads the order out of it rather than trusting the comment.
+ */
+test('the scrim is drawn over the artwork and under the notice', () => {
+  const block = overrideBlock(GAME_LAYOUT);
+  const art = block.indexOf('drawTexture(gl, programBg, bgTexture');
+  const scrim = block.indexOf('parkingDrawScrim();');
+  const notice = block.indexOf('drawTexture(gl, program, logoTexture');
+  const bar = block.indexOf('drawProgressBar(gl, programProgress');
+  for (const at of [art, scrim, notice, bar]) expect(at).toBeGreaterThan(0);
+  expect(art).toBeLessThan(scrim);
+  expect(scrim).toBeLessThan(notice);
+  expect(notice).toBeLessThan(bar);
+});
+
+/**
+ * The scrim's opaque part has to reach past BOTH things it covers, and both are runtime facts:
+ * the join is 449px up on a 19.5:9 phone and nothing at all on a 16:9 one, and the bar's own
+ * position depends on how tall the notice strip came out. Taking the highest of the three --
+ * floor, join, bar -- is what makes "the bar is never in the fade" true by construction; the
+ * 4:3 case measured a bar whose top 31px sat in the fade before the third term existed.
+ *
+ * `scrimOver` is the third of those: without it the opaque part and the join land on exactly
+ * the same pixel on a 20:9 screen, which puts the join on the boundary where the fade begins.
+ */
+test('the scrim is sized from the artwork and the bar, with the constant as a floor', () => {
+  const block = overrideBlock(GAME_LAYOUT);
+  expect(block).toContain(`parkingScrimSolid = Math.max(${GAME_LAYOUT.scrimSolid},`);
+  expect(block).toContain(`parkingJoin + ${GAME_LAYOUT.scrimOver}`);
+  expect(block).toContain(`parkingBarTop + ${GAME_LAYOUT.scrimOver}`);
+  expect(GAME_LAYOUT.scrimOver).toBeGreaterThan(0);
+  // Re-sized after the bar moves, or the third term above is read before it is written.
+  expect(block.split('parkingWriteScrim();').length - 1).toBe(3);
+  // The fade has to stop short of the artwork's subject. At these values it tops out at 28%
+  // of the height, and the bus's wheels sit at about 38%.
+  expect(GAME_LAYOUT.scrimSolid + GAME_LAYOUT.scrimFade).toBeLessThan(0.32);
+  expect(GAME_LAYOUT.scrimFade).toBeGreaterThan(0);
+  // Translucent, or it is a bar across the artwork rather than a shadow under it.
+  expect(GAME_LAYOUT.scrim[3]).toBeGreaterThan(0.5);
+  expect(GAME_LAYOUT.scrim[3]).toBeLessThan(1);
+});
+
+/**
+ * Everything the block creates on the GL side has to be released, because `end()`'s generated
+ * teardown only knows about Cocos's own handles. A leak here outlives the splash for the whole
+ * session, on a device where the whole point of the first screen is that it gets out of the way.
+ */
+test('the scrim and the bar release what they created', () => {
+  const block = overrideBlock(GAME_LAYOUT);
+  for (const handle of ['parkingBarProgram', 'parkingScrimProgram']) {
+    expect(block).toContain(`gl.deleteProgram(${handle});`);
+  }
+  expect(block).toContain('gl.deleteBuffer(parkingScrimBuffer);');
+});
+
+/**
+ * A build already carrying an OLDER block has to receive the new one. This was the first
+ * version's actual behaviour and it was wrong: it returned early on seeing the mark, so a
+ * re-run after editing the block wrote nothing and reported "already patched". The symptom is
+ * silent -- the phone shows the previous version of the loading screen and the script says it
+ * succeeded -- which is exactly the failure mode this whole script is built to avoid.
+ */
+test('a stale override block is replaced, not left in place', () => {
+  const older = patchFirstScreen(SAMPLE, GAME_SPLASH).replace(
+    'let parkingTarget = 0.0;', 'let parkingTarget = 0.0; /* FROM AN OLDER SCRIPT */',
+  );
+  expect(older).toContain('FROM AN OLDER SCRIPT');
+  const fresh = patchFirstScreen(older, GAME_SPLASH);
+  expect(fresh).not.toContain('FROM AN OLDER SCRIPT');
+  expect(fresh).toBe(patchFirstScreen(SAMPLE, GAME_SPLASH));
+  // Still exactly one block: replaced, not appended.
+  expect(fresh.split(OVERRIDE_MARK).length - 1).toBe(1);
 });
