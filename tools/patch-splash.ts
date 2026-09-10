@@ -110,12 +110,20 @@ export interface SplashLayout {
      * than colour-matched, which for this artwork is not possible (see GAME_SPLASH.bgColor).
      *
      * `scrimSolid` is the FLOOR on how much of the screen's height is fully covered. The
-     * actual figure is the highest of that, the join, and the bar's own top edge, so BOTH the
-     * things the scrim is for are inside the opaque part by construction rather than by luck
-     * of the aspect ratio. All three matter: the band is 449px on a 19.5:9 phone and nothing
-     * at all on a 16:9 one, so the floor carries the second; and on a 4:3 screen the notice
-     * strip is drawn wide enough to be 225px tall, which lifts the bar above both -- measured,
-     * a bar whose top 31px sat in the fade.
+     * actual figure is the highest of that, the join, and the bar's own top edge, so whatever
+     * the scrim is for is inside the opaque part by construction rather than by luck of the
+     * aspect ratio. On a 4:3 screen, for instance, the notice strip is drawn wide enough to be
+     * 225px tall, which lifts the bar above both other terms -- measured, before that third
+     * term existed, a bar whose top 31px sat in the fade.
+     *
+     * THE JOIN TERM NO LONGER BINDS, and the sizing here is what changed when it stopped. A
+     * 9:21 artwork overflows every phone from 16:9 to 21:9, so there is no band and no join --
+     * `parkingJoin` is negative everywhere. The scrim's remaining job is legibility, so it is
+     * sized to the bar and nothing more. It used to be 0.18 solid over 0.10 of fade, which was
+     * chosen to swallow a 449px band; against an artwork that fills the screen that same wash
+     * put 0.68 to 0.78 of navy straight onto the bus's wheels on every common phone -- the bus
+     * sinking into fog. The join term is kept for the case where somebody supplies a short
+     * artwork again, where it is the only thing that covers the band.
      *
      * `scrimOver` is how far past the join the opaque part reaches. Without it the two land
      * on exactly the same pixel on a 20:9 screen -- measured, 637px against 637px -- and the
@@ -123,8 +131,14 @@ export interface SplashLayout {
      * show. A percent of the height is 25px on a 19.5:9 phone and costs nothing.
      *
      * `scrimFade` is how far the fade reaches above that, again as a fraction of the height.
-     * It has to stop short of anything worth seeing -- at these values it tops out at 702px
-     * on a 19.5:9 phone, and the bus's wheels are at about 955px.
+     * It has to stop short of anything worth seeing. The artwork's wheels sit at 76% of its
+     * own height, which on a 19.5:9 phone is 457px above the bottom edge -- the tightest of
+     * any screen -- and at these values the wash is down to 0.08 there. Invisible, and it
+     * reads as the shadow under the bus rather than as a band across it.
+     *
+     * On a SHORT screen the bus is below the scrim entirely and nothing here can help: 16:9
+     * shows only the top 76% of a 9:21 artwork, which puts the wheels 4px off the bottom edge.
+     * That is a composition matter, not a constant.
      */
     scrim: Rgba;
     scrimSolid: number;
@@ -243,9 +257,9 @@ export const GAME_LAYOUT: SplashLayout = {
     // HomeView's own navy, which is also bgColor -- a cool shadow under a warm sunlit scene,
     // and the same colour the menu behind it opens on.
     scrim: [24 / 255, 30 / 255, 50 / 255, 0.78],
-    scrimSolid: 0.18,
+    scrimSolid: 0.14,
     scrimOver: 0.01,
-    scrimFade: 0.1,
+    scrimFade: 0.04,
     noticeWidth: 0.86,
     noticeUp: 0.028,
     ease: 8,
