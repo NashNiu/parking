@@ -87,14 +87,31 @@ npm run preview:nobuild    # 跳过构建(已经在 Creator 界面里点过构�
 
 ```bash
 cd logic
-npm run splash             # 把游戏自己的 logo 贴到 Cocos 首屏上
+npm run splash             # 把加载画面贴到 Cocos 首屏上
 ```
 
-`game/build/` 在 `.gitignore` 里,首屏那三个文件(`first-screen.js`、`logo.png`、`slogan.png`)**是每次构建重新生成的产物**,所以手改一次下次构建就没了。这个脚本改五个变量:`logoName` 指向拷进去的 `game-logo.png`、`useDefaultLogo = false`(不画 "Created with Cocos")、`bgColor` 换成主页的深蓝、进度条换成主页按钮的绿 —— 于是首屏交接到主页时不像换了个场景。**幂等**,重复跑或者对已经改过的构建跑都没事。
+`game/build/` 在 `.gitignore` 里,首屏那几个文件**是每次构建重新生成的产物**,所以手改一次下次构建就没了。**幂等**,重复跑或者对已经改过的构建跑都没事。
 
-logo 是 `tools/splash/logo.png`,由 `tools/make-splash-logo.py` 画出来:一圈等着上车的乘客(四色成簇,就是转盘上的那些人),中间一辆正面看的巴士。**没有文字**,因为游戏还没定名 —— 定了之后名字加在图形下面,首屏按同样的方式等比缩放更高的那张图。改图形改脚本里的常量,或者直接**替换这一个文件**,任意尺寸任意比例 —— 首屏按画布高度的 18.5% 等比缩放它,所以 512 见方在 2532 高的屏上落到约 468px。
+**要你放两张图**,都在 `tools/splash/` 下:
+
+| 文件 | 内容 | 缺了会怎样 |
+| --- | --- | --- |
+| `splash-bg.png` | 加载画面的**画面本身**,竖图。不要带色带、不要带文字 | 脚本**响亮地失败**,构建保持原样 |
+| `splash-notice.png` | 健康游戏忠告那条,透明底的横条 | 这个槽位关掉,只有画面和进度条 |
+
+画面按**屏幕宽度**等比铺满并**顶部对齐**,底下剩多少就是一条 `bgColor` 的色带 —— 忠告和进度条都落在那条带里。1170×2532 的手机上,0.62 的竖图留出 631px 的带;16:9 的手机只留 165px,这时进度条会压在画面下沿的路面上。**这是故意的**:进度条在每台手机上位置一样,比它跟着屏幕比例上下乱跑要好。
+
+首屏也不可能做成 Cocos 场景 —— 它在 `game.js` 里跑,那时候 `application.init` 还没把引擎交出来,没有 `cc`、没有节点树、没有 `Label`。所以这里全是对着生成文件自己的 shader 和模块变量写的裸 WebGL。
+
+**进度条本来就在画,但本来不动。** `game.js` 只喂四个值(0.2 / 0.4 / 0.6,然后 `end()` 的 1),而 `setProgress` 是直接赋值 —— 快手机上你只看得到两三帧。补丁把它分成三段:落地的里程碑用 `ease` 快速追上;追上之后按 `creep` **渐近**爬向下一个里程碑,永远到不了所以永远不停(实测最慢的半秒也走 0.031);`end()` 之后是 `tailMs` 的**定长线性**跑完,正好落在 1,零跳变。爬升绝不越过下一个里程碑,所以它不会声称一个还没开始的加载步骤。
+
+`tools/splash/logo.png` 和 `tools/make-splash-logo.py` 是**上一版**的首屏图形(一圈乘客加一辆正面巴士),现在首屏用整张画面,它就不再被引用了 —— 留着当小程序图标或分享图的底子。
 
 做成脚本而不是 Cocos 构建插件(`game/extensions`、`onAfterBuild`),是因为插件我没法在这里验证:编辑器要是没加载上,构建出来的包照样带着 Cocos logo,而且**什么都不会说**。脚本的失败模式是「你忘了跑」,那是看得见的。`patchFirstScreen` 是纯函数并且有测试,以后想挂插件,插件里就是三行包装。
+
+改动分两半。变量那半按行锚点重写,改不到就抛错。**另一半是函数体和 shader**,那半是在 `module.exports` **之前**插一个覆盖块,重新赋值 `updateBgVertexBuffer`、`updateVertexBuffer`、`initProgressVertexBuffer`、`drawProgressBar`、`setProgress`、`tick`、`end` —— `function` 声明是可变绑定,所有已有调用点自动拿到新的。必须插在 `module.exports` 之前:那一行捕获的是当时的**值**,插在后面等于改了没人读的绑定,`game.js` 会继续调原来的,而且**哪里都不会报错**。
+
+块里每个顶层声明都带 `parking` / `PARKING_` 前缀,因为它落在生成文件的模块作用域里 —— 撞名就是重复声明,整个文件 SyntaxError,症状是白屏。这条有测试守着,守的是前缀而不是 Cocos 自己那份名单(下个版本就变了)。
 
 **授权不是代码问题。** `game/settings/v2/packages/information.json` 里 `customSplash` 和 `removeSplash` 都是 `enable: false`,各挂一个 creator-api.cocos.com 的申请表单。换 logo 属于前者。脚本干活,能不能这样发布是项目所有者和 Cocos 之间的事。
 
