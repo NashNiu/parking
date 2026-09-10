@@ -92,7 +92,7 @@ npm run splash             # 把游戏自己的 logo 贴到 Cocos 首屏上
 
 `game/build/` 在 `.gitignore` 里,首屏那三个文件(`first-screen.js`、`logo.png`、`slogan.png`)**是每次构建重新生成的产物**,所以手改一次下次构建就没了。这个脚本改五个变量:`logoName` 指向拷进去的 `game-logo.png`、`useDefaultLogo = false`(不画 "Created with Cocos")、`bgColor` 换成主页的深蓝、进度条换成主页按钮的绿 —— 于是首屏交接到主页时不像换了个场景。**幂等**,重复跑或者对已经改过的构建跑都没事。
 
-logo 是 `tools/splash/logo.png`,当前是占位图(`tools/make-splash-logo.py` 画的一个 P 字牌)。**换成真的美术图就是替换这一个文件**,任意尺寸任意比例 —— 首屏按画布高度的 18.5% 等比缩放它。
+logo 是 `tools/splash/logo.png`,由 `tools/make-splash-logo.py` 画出来:一圈等着上车的乘客(四色成簇,就是转盘上的那些人),中间一辆正面看的巴士。**没有文字**,因为游戏还没定名 —— 定了之后名字加在图形下面,首屏按同样的方式等比缩放更高的那张图。改图形改脚本里的常量,或者直接**替换这一个文件**,任意尺寸任意比例 —— 首屏按画布高度的 18.5% 等比缩放它,所以 512 见方在 2532 高的屏上落到约 468px。
 
 做成脚本而不是 Cocos 构建插件(`game/extensions`、`onAfterBuild`),是因为插件我没法在这里验证:编辑器要是没加载上,构建出来的包照样带着 Cocos logo,而且**什么都不会说**。脚本的失败模式是「你忘了跑」,那是看得见的。`patchFirstScreen` 是纯函数并且有测试,以后想挂插件,插件里就是三行包装。
 

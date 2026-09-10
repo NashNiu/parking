@@ -925,7 +925,7 @@ export class GameController extends Component {
         this.busy = false;
         this.arriving = 0;
         this.tickAcc = 0;
-        this.hud?.hideBanner();
+        this.hud?.hideEndPanels();
         this.hud?.hideUnlockPrompt();
     }
 
@@ -962,7 +962,7 @@ export class GameController extends Component {
             this.buildBoard(level);
             this.hud?.setLevel(level.id);
             this.hud?.setProgress(this.core.loop.remainingCount());
-            this.hud?.hideBanner();
+            this.hud?.hideEndPanels();
             this.hud?.hideUnlockPrompt();
             this.ended = false;
             this.busy = false;
@@ -2370,12 +2370,12 @@ export class GameController extends Component {
                 return;
             }
         }
-        // The gear, and it is checked BEFORE the level-over branch. It has to be: a lost
-        // level puts up a bare banner with no scrim, so the gear is still live there (see
-        // `HudView.syncGear`) -- and `ended` swallows every tap into a replay, so a check
-        // after it could never be reached from the one screen a player most wants to leave.
-        // Under the win card the gear is deactivated instead, so this order costs that
-        // screen nothing.
+        // The gear, checked BEFORE the level-over branch. It is deactivated under all three
+        // end-of-level cards (see `HudView.syncGear`), so on those screens this falls through
+        // and costs nothing -- the order is kept because `ended` turns every unclaimed tap
+        // into a replay, and a gear check after it could never be reached at all. Which is
+        // exactly what the lose screen needed back when it was a bare label with no controls
+        // on it, and is why this was written this way in the first place.
         if (this.uiCam && this.hud) {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             if (this.hud.hitsGear(ui)) {
@@ -2389,7 +2389,10 @@ export class GameController extends Component {
             // anything else on screen still means "get on with it" (see `hitsWin`).
             if (this.uiCam && this.hud) {
                 const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
-                const pick = this.hud.hitsWin(ui);
+                // Both cards, and only one of them can be up. Each returns null when it is
+                // not, so the fall-through below is still what an unclaimed tap gets: advance
+                // on a win, replay on a deadlock.
+                const pick = this.hud.hitsWin(ui) ?? this.hud.hitsLose(ui);
                 if (pick === 'home') { this.showHome(); return; }
                 if (pick === 'replay') { this.switchTo(this.levelName); return; }
             }

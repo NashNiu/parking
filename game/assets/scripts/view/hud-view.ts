@@ -320,6 +320,37 @@ const SET_SW_RING = 5;
 const SET_SW_TRACK = new Color(228, 214, 190, 255);
 const SET_SW_ON = new Color(112, 200, 60, 255);
 const SET_SW_OFF = new Color(230, 82, 78, 255);
+
+/**
+ * The lose card: the same card, the smallest of the three, with its two answers on the page.
+ *
+ * IT REPLACED A BARE LABEL -- 「游戏失败 点击重试」 in 72px outlined type over the live board,
+ * no panel, no scrim, and no controls at all: the only way out of a lost level was to replay
+ * it, which is why the gear had to stay live underneath it. That is now the one screen in the
+ * game with real answers on it, so the gear goes dead under it like under every other modal.
+ *
+ * TWO answers, not three, and that is the deadlock's own arithmetic rather than a shortcut.
+ * `GameCore.isDeadlocked` is reached only when nothing can board AND there is no room to
+ * bring a car out -- no free stall and none left to open. So there is nothing to unlock, and
+ * a third button offering it would be a button that cannot work. Replay or leave is the whole
+ * truth of the position.
+ *
+ * Laid out in PAGE coordinates, the page spanning y -125..125 (LOSE_H 390: CARD_HEAD 116 +
+ * a 250-tall page + CARD_RIM 24):
+ *
+ *   sub     y  78 +/- 18  ->  60..96   (29 off the page's top edge)
+ *   buttons y -36 +/- 56  -> -92..20   (40 clear of the sub, 33 off the bottom)
+ *
+ * The buttons come to 488 across (168 + 20 + 300), which leaves 42 of page either side.
+ */
+const LOSE_W = 620;
+const LOSE_H = 390;
+const LOSE_SUB_Y = 78;
+const LOSE_BTN_Y = -36;
+const LOSE_HOME_W = 168;
+const LOSE_REPLAY_W = 300;
+const LOSE_BTN_GAP = 20;
+
 /**
  * The answers under the card. The middle one is the wide green one -- see `buildSettings`.
  *
@@ -710,9 +741,12 @@ const PILL_FIG_BODY_H = 24;
 const PILL_FIG_TUCK = 4;
 
 /**
- * Ink for the level title and the win/lose banner. The board is a light scene, so white
- * type — which is what this used — disappears into it; the banner keeps a white rim
- * because it lands over cars and passengers of every colour.
+ * Ink for the level title and the win card's headline. The board is a light scene, so white
+ * type -- which is what these used -- disappears into it.
+ *
+ * The white rim this once described belonged to the win/lose BANNER: 72px type laid straight
+ * over the board, which needed a rim because it landed over cars and passengers of every
+ * colour. Both banners are cards now, and type on a card's own page needs nothing.
  */
 const TITLE_INK = new Color(43, 52, 80);
 
@@ -725,7 +759,6 @@ export class HudView {
     private canvas: Node;
     private levelLabel: Label;
     private progressLabel: Label;
-    private bannerLabel: Label;
     /** The win panel's scrim and the three star nodes on it, built on first win. */
     private win: Node | null = null;
     private winStars: Node[] = [];
@@ -737,6 +770,11 @@ export class HudView {
     private winCta: Node | null = null;
     private winReplay: Node | null = null;
     private winClose: Node | null = null;
+    /** The lose card's scrim and its three hit targets, built on first use. */
+    private lose: Node | null = null;
+    private loseReplay: Node | null = null;
+    private loseHome: Node | null = null;
+    private loseClose: Node | null = null;
     /** The toast pill and its parts, built on first use. See `showToast`. */
     private toast: Node | null = null;
     private toastFade: UIOpacity | null = null;
@@ -814,13 +852,6 @@ export class HudView {
             -h / 2 + safeInsets().bottom * h + margin + 22 + PICK_D / 2 + 10,
         );
         for (const chip of this.pickNodes) chip.active = PICK_ROW;
-        this.bannerLabel = makeLabel(canvas, 'Banner', 72, 0);
-        this.bannerLabel.color = TITLE_INK;
-        this.bannerLabel.isBold = true;
-        this.bannerLabel.enableOutline = true;
-        this.bannerLabel.outlineColor = new Color(255, 255, 255, 235);
-        this.bannerLabel.outlineWidth = 5;
-        this.bannerLabel.node.active = false;
         // Nothing here belongs to a level yet: the game opens on the home screen, and the
         // preload before it can take up to PRELOAD_DEADLINE seconds. Built hidden rather
         // than shown and then hidden, so there is no frame of empty readouts over nothing.
@@ -945,8 +976,8 @@ export class HudView {
         this.speedNode.active = on && SPEED_BUTTON;
         for (const chip of this.pickNodes) chip.active = on && PICK_ROW;
         if (!on) {
-            this.bannerLabel.node.active = false;
             if (this.win) this.win.active = false;
+            if (this.lose) this.lose.active = false;
             if (this.prompt) this.prompt.active = false;
             if (this.settings) this.settings.active = false;
             if (this.toast) this.toast.active = false;
@@ -964,13 +995,14 @@ export class HudView {
      * answer is the same one: one predicate drives both the visibility and the hit test
      * (`hitsGear` reads `active`), and every place that raises or drops a panel calls this.
      *
-     * The lose BANNER is not a panel: it is a bare label with no scrim, so the button stays
-     * live behind it. That is deliberate -- a lost level is one a player particularly wants
-     * to leave, and until now the only way out was to replay it.
+     * THE LOSE CARD COUNTS. It did not have to before, because it was a bare label with no
+     * scrim and no controls -- the gear was the only way off that screen and had to stay live
+     * underneath it. It is a card with a 主页 button on it now, so the exception it needed is
+     * gone, and leaving the gear live under its scrim would put the old defect back.
      */
     private syncGear(): void {
         const modal = !!(this.win?.active) || !!(this.prompt?.active)
-            || !!(this.settings?.active);
+            || !!(this.settings?.active) || !!(this.lose?.active);
         this.gearBtn.active = this.play && !modal;
     }
 
@@ -1682,23 +1714,6 @@ export class HudView {
     }
 
     /**
-     * Moves the banner to the end of the canvas's child list, so it renders on top of every
-     * seat chip. `newSeatChip` appends chips at runtime as cars park, which makes each one a
-     * later — and therefore higher-rendering — sibling of the banner, which is constructed
-     * early. Raising it at show time (once the game is over, no further chip can appear)
-     * undoes that ordering. `showWin` does the same for the win panel's scrim.
-     */
-    private raiseBannerToFront(): void {
-        this.bannerLabel.node.setSiblingIndex(this.canvas.children.length - 1);
-    }
-
-    showBanner(text: string): void {
-        this.bannerLabel.string = text;
-        this.bannerLabel.node.active = true;
-        this.raiseBannerToFront();
-    }
-
-    /**
      * The win panel, built once and kept. See WIN_W for the palette and WIN_H for the
      * arithmetic that spaces the stack.
      *
@@ -1953,17 +1968,86 @@ export class HudView {
         return 'next';
     }
 
-    /** Failure panel: deadlock message; the stuck-car highlight itself is driven by the caller. */
+    /**
+     * The deadlock card. See LOSE_W for what it replaced and why it has two answers.
+     *
+     * A LIGHT scrim, the win card's rather than the prompt's: `GameController.onEnd` flashes
+     * every stuck car red behind this, and that flash is the answer to "why did I lose" --
+     * dimming it to the prompt's 178 would hide the one useful thing on the screen.
+     */
     showLose(): void {
-        this.bannerLabel.string = '游戏失败\n点击重试';
-        this.bannerLabel.node.active = true;
-        this.raiseBannerToFront();
+        if (!this.lose) this.buildLosePanel();
+        const scrim = this.lose!;
+        scrim.active = true;
+        // Past every seat chip. `newSeatChip` appends chips as cars park, so each one is a
+        // later -- and higher-rendering -- sibling than anything built in the constructor.
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncGear();
+        const card = scrim.getChildByName('LosePanel')!;
+        Tween.stopAllByTarget(card);
+        // DOWN onto the screen, where the win card pops UP off it. Same vocabulary, opposite
+        // direction: this card arrives with weight rather than with a bounce.
+        card.setScale(1.1, 1.1, 1);
+        tween(card).to(0.16, { scale: Vec3.ONE }, { easing: 'quadOut' }).start();
     }
 
-    /** Takes down whichever end-of-level panel was shown. Safe before either has been built. */
-    hideBanner(): void {
-        this.bannerLabel.node.active = false;
+    private buildLosePanel(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('LoseScrim', w * 2, h * 2, WIN_SCRIM, 2);
+        this.canvas.addChild(scrim);
+        scrim.setPosition(0, 0, 0);
+
+        // 卡住了, not 游戏失败. The level is not lost through a mistake the player can name --
+        // the position simply has no legal move left in it -- and the sub line is that
+        // predicate in words (`GameCore.isDeadlocked`) rather than a verdict on the player.
+        const { page, close } = this.buildCard(scrim, 'LosePanel', LOSE_W, LOSE_H, '卡住了');
+        this.loseClose = close;
+
+        const sub = makeLabel(page, 'LoseSub', 30, LOSE_SUB_Y);
+        sub.color = CARD_INK;
+        sub.string = '这一关没有可走的一步了';
+
+        const total = LOSE_HOME_W + LOSE_BTN_GAP + LOSE_REPLAY_W;
+        this.loseHome = this.buildCardBtn(page, {
+            x: -total / 2 + LOSE_HOME_W / 2, y: LOSE_BTN_Y, w: LOSE_HOME_W, text: '主页',
+            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: 38,
+        });
+        this.loseReplay = this.buildCardBtn(page, {
+            x: total / 2 - LOSE_REPLAY_W / 2, y: LOSE_BTN_Y, w: LOSE_REPLAY_W,
+            text: '重玩本关',
+            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: 44,
+        });
+
+        scrim.active = false;
+        this.lose = scrim;
+    }
+
+    /**
+     * What `ui` chose on the lose card, or null for the card and the scrim.
+     *
+     * Null does NOT mean "swallow" here, and that is the one place this card differs from the
+     * unlock prompt: the caller's fall-through replays the level, which is what a tap anywhere
+     * on this screen has always done (the label it replaces said 点击重试) and is also this
+     * card's primary answer. So a stray tap does the obvious thing instead of nothing.
+     *
+     * The close button means 'home', the same as on the prompt and the win card. It doubles
+     * the 主页 button on purpose: one is the corner reflex, the other is the labelled control,
+     * and an X that did something DIFFERENT from the button beside it would be the trap.
+     */
+    hitsLose(ui: Vec3): 'home' | 'replay' | null {
+        if (!this.lose || !this.lose.active) return null;
+        const c = this.loseClose!.worldPosition;
+        const r = CARD_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
+        if (this.inBox(ui, this.loseHome!, LOSE_HOME_W, PROMPT_BTN_H)) return 'home';
+        if (this.inBox(ui, this.loseReplay!, LOSE_REPLAY_W, PROMPT_BTN_H)) return 'replay';
+        return null;
+    }
+
+    /** Takes down whichever end-of-level card was shown. Safe before either has been built. */
+    hideEndPanels(): void {
         if (this.win) this.win.active = false;
+        if (this.lose) this.lose.active = false;
         this.syncGear();
     }
 }
