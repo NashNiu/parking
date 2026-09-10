@@ -1,5 +1,6 @@
 import {
-  GAME_LAYOUT, GAME_SPLASH, overrideBlock, OVERRIDE_MARK, patchFirstScreen, SplashPatch,
+  ART_SOURCES, ART_WARN_KB, GAME_LAYOUT, GAME_SPLASH, overrideBlock, OVERRIDE_MARK,
+  PACKAGE_LIMIT_KB, patchFirstScreen, SplashPatch,
 } from '../../tools/patch-splash';
 
 /**
@@ -238,4 +239,35 @@ test('the bar has one writer and two callers', () => {
   // measured -16px of clearance on 16:9 and -85px on 4:3 before this existed.
   expect(block).toContain('parkingBarUp = Math.max(');
   expect(GAME_LAYOUT.barGap).toBeGreaterThan(0);
+});
+
+/**
+ * The artwork's format is a package-size decision, not a preference. The first screen sits at
+ * the build's root, so all of it counts against the 4MB main package -- and the build is
+ * already near 2.9MB, so a multi-megabyte PNG render fails at UPLOAD, with a message about
+ * the package and nothing about the splash.
+ *
+ * Hence JPEG first in the lookup, and hence `bgName` carrying whichever extension was found:
+ * the first screen loads the file BY NAME through `new Image()`, so a .jpg on disk copied in
+ * under a .png name is a texture that never arrives, on a screen with nothing to say why.
+ */
+test('the artwork is looked for as a JPEG before a PNG', () => {
+  expect(ART_SOURCES).toHaveLength(2);
+  expect(ART_SOURCES[0].endsWith('.jpg')).toBe(true);
+  expect(ART_SOURCES[1].endsWith('.png')).toBe(true);
+  // The shipped default names one of them, so a build with neither still reads honestly.
+  expect(ART_SOURCES.some((p) => p.endsWith(GAME_SPLASH.bgName))).toBe(true);
+});
+
+test('the size warning leaves room for the rest of the package', () => {
+  expect(ART_WARN_KB).toBeGreaterThan(0);
+  expect(ART_WARN_KB).toBeLessThan(PACKAGE_LIMIT_KB / 4);
+});
+
+/**
+ * The notice has to stay PNG. It is drawn over the artwork and the band, so it needs a
+ * transparent background, and JPEG cannot carry one -- a JPEG notice would be a white slab.
+ */
+test('the notice slot is PNG only', () => {
+  expect(GAME_SPLASH.logoName.endsWith('.png')).toBe(true);
 });

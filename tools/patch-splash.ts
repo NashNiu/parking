@@ -175,7 +175,8 @@ function rgba(r: number, g: number, b: number, a = 1): Rgba {
  */
 export const GAME_SPLASH: SplashPatch = {
     useCustomBg: true,
-    bgName: 'splash-bg.png',
+    // Overridden by main() to match whatever it actually finds -- see ART_SOURCES.
+    bgName: 'splash-bg.jpg',
     // Fit to width: the artwork spans the screen and its height follows its own aspect. The
     // override below implements exactly this case and then pins it to the TOP; these two
     // variables are set to agree with it rather than to be read.
@@ -216,8 +217,34 @@ export const GAME_LAYOUT: SplashLayout = {
     tailMs: 280,
 };
 
-/** Where our artwork lives in the repo, and what each file is called once copied in. */
-export const ART_SOURCE = path.join('tools', 'splash', 'splash-bg.png');
+/**
+ * Where the artwork may live, in the order it is looked for. JPEG FIRST, AND ON PURPOSE.
+ *
+ * The first screen lives at the build's ROOT, so every byte of it counts against the WeChat
+ * mini-game's 4MB main package -- and this build is already at 2.9MB, which leaves about
+ * 1.1MB for the whole loading screen. A 1600x2848 render is several megabytes as a PNG and a
+ * few hundred kilobytes as a JPEG at the same apparent quality: it is a photograph-like image,
+ * gradients everywhere, no flat colour for PNG's predictor to exploit. Nothing on it needs
+ * lossless, and nothing needs alpha -- it is the bottom layer.
+ *
+ * The NOTICE is PNG only, and that is not an oversight. It is drawn OVER the artwork and the
+ * band, so it needs a transparent background, which JPEG cannot carry.
+ */
+export const ART_SOURCES = [
+    path.join('tools', 'splash', 'splash-bg.jpg'),
+    path.join('tools', 'splash', 'splash-bg.png'),
+];
+
+/**
+ * The size at which the artwork gets a warning, in KB, and the budget it is measured against.
+ *
+ * A warning and not an error: what the package may hold is a judgement about the whole build,
+ * not about this one file, and a script that refused to run would be wrong as often as it was
+ * right. But an artwork that quietly takes the package over the limit fails at UPLOAD, hours
+ * later, with a message about the package and nothing about the splash -- so it says so here.
+ */
+export const ART_WARN_KB = 900;
+export const PACKAGE_LIMIT_KB = 4096;
 export const NOTICE_SOURCE = path.join('tools', 'splash', 'splash-notice.png');
 export const FIRST_SCREEN = 'first-screen.js';
 
@@ -528,9 +555,10 @@ function main(): void {
         throw new Error(`patch-splash: ${target} not found. Build the mini-game first,`
             + ' or pass --build <dir>.');
     }
-    const art = path.join(root, ART_SOURCE);
-    if (!fs.existsSync(art)) {
-        throw new Error(`patch-splash: ${art} not found.`
+    const art = ART_SOURCES.map((rel) => path.join(root, rel))
+        .find((p) => fs.existsSync(p));
+    if (!art) {
+        throw new Error(`patch-splash: none of ${ART_SOURCES.join(' or ')} found.`
             + ' Put the loading screen artwork there -- portrait, the artwork ALONE, with no'
             + ' band and no text: it is fitted to the screen\'s width and pinned to the top,'
             + ' and the band below it is drawn in bgColor.');
@@ -540,7 +568,13 @@ function main(): void {
     // missing texture: `useLogo` false is what stops `start()` even asking for the file.
     const notice = path.join(root, NOTICE_SOURCE);
     const hasNotice = fs.existsSync(notice);
-    const patch: SplashPatch = { ...GAME_SPLASH, useLogo: hasNotice };
+    // The name in the build carries the extension of whatever was found: the first screen
+    // loads it by name through `new Image()`, so the two have to agree.
+    const patch: SplashPatch = {
+        ...GAME_SPLASH,
+        useLogo: hasNotice,
+        bgName: `splash-bg${path.extname(art)}`,
+    };
 
     fs.copyFileSync(art, path.join(buildDir, patch.bgName));
     if (hasNotice) fs.copyFileSync(notice, path.join(buildDir, patch.logoName));
@@ -553,7 +587,18 @@ function main(): void {
     // `useDefaultLogo` is false, they are 26KB between them, and deleting files a rebuild
     // recreates buys nothing but a diff.
     console.log(`patched  ${path.relative(root, target)}`);
-    console.log(`copied   ${ART_SOURCE} -> ${patch.bgName}`);
+    const artKb = Math.round(fs.statSync(art).size / 1024);
+    console.log(`copied   ${path.relative(root, art)} -> ${patch.bgName}  (${artKb} KB)`);
+    if (artKb > ART_WARN_KB) {
+        console.warn('');
+        console.warn(`patch-splash: WARNING -- the artwork is ${artKb} KB.`);
+        console.warn("  It sits at the build's root, so all of it counts against the"
+            + ` ${PACKAGE_LIMIT_KB} KB main`);
+        console.warn('  package, and THAT failure shows up at upload time with a message about');
+        console.warn('  the package and nothing about the splash. Export it as a JPEG, and no');
+        console.warn('  wider than 1440 -- the widest phone canvas there is.');
+        console.warn('');
+    }
     console.log(hasNotice
         ? `copied   ${NOTICE_SOURCE} -> ${patch.logoName}`
         : `skipped  ${NOTICE_SOURCE} (absent, so the notice slot is off)`);
