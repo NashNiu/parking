@@ -8,7 +8,7 @@
 **过关**:乘客池空 + 轨道上没人 + 车位全空 + 网格无车。
 **死局**:车位全满、没有一辆车还能坐满、网格里也没有一辆车能开出去 —— 此时判负。
 
-引擎 Cocos Creator **3.8.7**。当前有 10 个离线生成的关卡,每关 36 辆车。
+引擎 Cocos Creator **3.8.7**。当前有 10 关:**第 1 关是手写的教学关**(8 辆车摆在停车场中间,全部正交朝向),第 2~10 关离线生成(每关 63 辆车)。
 
 ---
 
@@ -100,7 +100,7 @@ logo 是 `tools/splash/logo.png`,由 `tools/make-splash-logo.py` 画出来:一�
 
 ### 重新生成关卡
 
-关卡不是手写的,是离线算出来的:
+第 2~10 关不是手写的,是离线算出来的:
 
 ```bash
 cd logic
@@ -108,6 +108,8 @@ npm run gen
 ```
 
 它把 `tools/gen-levels.ts` 和 core 一起编译到 `.tmp/gen`,用普通 node 跑一遍,写出 `game/assets/resources/levels/level-N.json`,并打印一张表(每关的车数、颜色数、初始被挡车数、难度分、乘客总数)。
+
+**第 1 关是手写的,但也走同一条路**:它写在 `level-gen.ts` 的 `TEACH_CARS` 里,由 `authoredLevel` 返回,所以 `npm run gen` 照样把它落盘、照样过 `validateLevel` 和 `validateTrack`,表里那一行的 packing 列会写 `AUTHORED`。**不要直接手改 level-1.json** —— 这个命令写 1~10,手改活不到下一次生成(和首屏 logo 一样的坑,见 `tools/patch-splash.ts`)。
 
 **改了 core 里任何影响关卡数据的东西(环长、容量、难度曲线),都要重跑一次 `npm run gen` 并把 JSON 一起提交**,否则运行时的关卡和代码里的规则会对不上。
 
@@ -135,6 +137,7 @@ npm start          # 起一个本地静态服务
 ---
 
 ## 几个容易踩的不变量
+
 
 这些都在代码注释里写着原因,这里只列出来提醒:
 

@@ -1495,7 +1495,65 @@ export function blockedTarget(id: number): number {
  * and not a filter -- see `WELDED_PENALTY` -- so an attempt with a welded mouth is still kept
  * as a nearest miss, it just loses to anything without one.
  */
+/**
+ * LEVEL 1 IS AUTHORED. Eight cars in two rows in the middle of an otherwise empty lot, every
+ * one of them axis-aligned and free to leave on the first tap.
+ *
+ * Asked for as 简单放几辆车在中间就行了，不用铺满，都是直行的，不要有偏移角度 -- and it is the
+ * one level where that is the right shape, because `levelParams` already proves level 1
+ * cannot be made hard: at four colours against four open stalls a player who keeps the bay
+ * all-different wins whatever the lot looks like (the note under `colors` has the
+ * measurement -- 0 of 66 paintings beat that one-line rule). So the packer was spending 63
+ * cars and eight compass headings on a level that teaches ONE thing, the colour match, and
+ * every one of those cars was noise in front of it.
+ *
+ * AUTHORED IN THE GENERATOR, not by hand in level-1.json. `npm run gen` writes ids 1..10, so
+ * a hand-edited file lasts exactly until the next run -- the same trap the splash logo fell
+ * into (see tools/patch-splash.ts). Here the level is the generator's output, so it survives
+ * regeneration, `validateLevel` and `isSolvable` still run over it in the CLI and the tests,
+ * and `assemble` gives it the same parking, track and queue shape every other level has.
+ *
+ * THE GEOMETRY, in board units on the 8x10 lot (origin at its centre, +Y up, +Y being the
+ * direction of the parking bay on screen):
+ *
+ *   row A  y  1.45, heading 90   -- four cars facing the bay
+ *   row B  y -1.45, heading 270  -- four facing away from it
+ *   x      -2.4, -0.8, 0.8, 2.4  -- a pitch of 1.6
+ *
+ * Both rows drive OUTWARD, away from each other, so no car blocks another and any of the
+ * eight can be the first tap. That is deliberate for a teaching level: being blocked is
+ * level 2's lesson, and it needs a full lot to make sense.
+ *
+ * The clearances, which `validateLevel` re-checks: the tallest body is a big at 1.793 long,
+ * so the rows' nearest edges are 1.45 - 0.897 = 0.553 apart from the middle and 1.106 apart
+ * from each other; across, the widest body is 0.570 and the pitch is 1.6, leaving 1.03. The
+ * block reaches x +/-2.685 and y +/-2.347 inside a lot that runs to 4 and 5.
+ *
+ * The mix carries all three body sizes on purpose -- a level that only shows smalls does not
+ * teach that a car's size is its capacity -- and pairs each colour across the two rows, so
+ * every colour is 32 or 56 passengers and `bandedQueue` balances the ring by construction.
+ */
+const TEACH_CARS: readonly CarSpec[] = [
+    { id: 1, x: -2.4, y: 1.45, angle: 90, color: 'red', cap: 'small' },
+    { id: 2, x: -0.8, y: 1.45, angle: 90, color: 'blue', cap: 'medium' },
+    { id: 3, x: 0.8, y: 1.45, angle: 90, color: 'green', cap: 'small' },
+    { id: 4, x: 2.4, y: 1.45, angle: 90, color: 'yellow', cap: 'big' },
+    { id: 5, x: -2.4, y: -1.45, angle: 270, color: 'yellow', cap: 'medium' },
+    { id: 6, x: -0.8, y: -1.45, angle: 270, color: 'green', cap: 'small' },
+    { id: 7, x: 0.8, y: -1.45, angle: 270, color: 'blue', cap: 'big' },
+    { id: 8, x: 2.4, y: -1.45, angle: 270, color: 'red', cap: 'small' },
+];
+
+/** The authored level 1, or null for every id the packer owns. See TEACH_CARS. */
+export function authoredLevel(id: number): LevelData | null {
+    // A COPY of every car, so a caller that mutates what it gets back cannot edit the
+    // constant out from under the next call -- `generateLevel` is otherwise pure in its id.
+    return id === 1 ? assemble(1, TEACH_CARS.map((c) => ({ ...c })), []) : null;
+}
+
 export function generateLevel(id: number): LevelData {
+    const authored = authoredLevel(id);
+    if (authored) return authored;
     const p = levelParams(id);
     const tp = tunnelParams(id);
     // The tunnels' cars come OUT of the level's budget, so the lot gets the remainder.

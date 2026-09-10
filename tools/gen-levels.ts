@@ -15,7 +15,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
@@ -108,6 +108,11 @@ for (const id of ids) {
     // search aimed at would print NEAREST MISS on every tunnel level.
     const target = blockedTarget(id);
     const onTarget = Math.abs(got.blocked - target) <= BLOCKED_TOLERANCE && got.rounds >= want.minRounds;
+    // An AUTHORED level (see TEACH_CARS) never went through the search, so scoring it against
+    // the curve's blocked target would print NEAREST MISS on a level that was not aiming at
+    // it. The holes and inward columns are meaningless for one too -- a deliberately sparse
+    // lot is all holes -- and this word is what says so.
+    const authored = authoredLevel(id) !== null;
     // Played, not inferred. `hard` means the one-line rule ("keep the stalls all different")
     // loses; `fair` means a policy a player could actually arrive at wins. A level below the
     // colour floor cannot be hard whatever the generator does, and prints `teach` instead of
@@ -135,7 +140,7 @@ for (const id of ids) {
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
         + ` ${holes.padStart(7)} ${inward.padStart(6)}`
-        + `  ${(onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
+        + `  ${(authored ? 'AUTHORED' : onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
