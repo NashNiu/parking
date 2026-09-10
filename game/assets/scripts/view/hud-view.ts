@@ -270,6 +270,7 @@ const CARD_X_D = 130;
 const CARD_X_RING = 11;
 const CARD_X_LIFT = 7;
 const CARD_X_INSET = 48;
+const CARD_X_SIZE = 76;
 /** The rim colour for white type on a green button -- the frame's blue would fight the green. */
 const CARD_BTN_RIM = new Color(48, 132, 40, 255);
 
@@ -306,10 +307,13 @@ const PROMPT_BTN_LIFT = 13;
  * Laid out in PAGE coordinates, the page spanning y -325..325, each line's box being 1.2x
  * its font size (`makeLabel`):
  *
- *   sub    y  230 +/- 28  ->  202..258   (67 off the page's top edge)
- *   button y   30 +/- 100 -> -70..130    (72 clear of the sub)
- *   cost   y -125 +/- 24  -> -149..-101  (31 clear of the button)
- *   replay y -240 +/- 28  -> -268..-212  (63 clear of the cost, 57 off the bottom)
+ *   sub    y  230 +/- 35  ->  195..265   (60 off the page's top edge)
+ *   button y   30 +/- 100 -> -70..130    (65 clear of the sub)
+ *   cost   y -125 +/- 30  -> -155..-95   (25 clear of the button)
+ *   replay y -240 +/- 35  -> -275..-205  (60 clear of the cost, 50 off the bottom)
+ *
+ * The replay's HIT BOX is TEXT_BTN_H 130 rather than its 70-tall line box, so it reaches
+ * -305..-175 -- 20 clear of the cost's box above it and 20 off the page's bottom edge.
  *
  * The close button hangs off the CARD's corner, well above the page, so nothing in this stack
  * shares a band with it -- which is most of why it moved.
@@ -317,7 +321,7 @@ const PROMPT_BTN_LIFT = 13;
 const PROMPT_H = 902;
 /** Where each line sits, in page coordinates. The arithmetic is under PROMPT_H. */
 const PROMPT_SUB_Y = 230;
-const PROMPT_SUB_SIZE = 46;
+const PROMPT_SUB_SIZE = 58;
 const PROMPT_BTN_Y = 30;
 const PROMPT_COST_Y = -125;
 const PROMPT_REPLAY_Y = -240;
@@ -348,7 +352,7 @@ const SET_ROW2_Y = -116;
 /** Icon, then label, then track, measured in from the page's own edges. */
 const SET_ICON_D = 116;
 const SET_ICON_X = -CARD_PAGE_W / 2 + 104;
-const SET_LABEL_SIZE = 72;
+const SET_LABEL_SIZE = 84;
 const SET_LABEL_X = SET_ICON_X + SET_ICON_D / 2 + 40;
 const SET_SW_W = 268;
 const SET_SW_H = 124;
@@ -386,8 +390,8 @@ const SET_SW_OFF = new Color(230, 82, 78, 255);
  * Laid out in PAGE coordinates, the page spanning y -225..225 (LOSE_H 702: CARD_HEAD 210 +
  * a 450-tall page + CARD_RIM 42):
  *
- *   sub     y  135 +/- 28  ->  107..163   (62 off the page's top edge)
- *   buttons y  -70 +/- 100 -> -170..30    (78 clear of the sub, 55 off the bottom)
+ *   sub     y  135 +/- 35  ->  100..170   (55 off the page's top edge)
+ *   buttons y  -70 +/- 100 -> -170..30    (70 clear of the sub, 55 off the bottom)
  *
  * The buttons come to 900 across (280 + 28 + 592), which leaves 68 of page either side.
  */
@@ -411,15 +415,20 @@ const SET_WIDE_W = 560;
 const SET_SIDE_W = 230;
 const SET_BTN_GAP = 28;
 /**
- * The two type sizes the answer row uses, shared with the lose card's pair.
+ * The two type sizes every primary/secondary button pair on this HUD uses -- the settings
+ * answers, the lose card's pair, the win card's pair, and the prompt's 解锁车位.
  *
  * 1076 across (560 + 2x(28 + 230)) inside a 1120 card: 22 either side. The wide one takes
- * 68 because 继续游戏 at 68 is 272 wide inside 560; the narrow ones take 56, which sets 主页 at
- * 112 inside 230 -- both about half of their button, so the row reads as one control repeated
- * at two widths rather than as three unrelated buttons.
+ * 80 because 继续游戏 at 80 is 320 wide inside 560; the narrow ones take 68, which sets 主页 at
+ * 136 inside 230 -- so the row reads as one control repeated at two widths rather than as
+ * three unrelated buttons.
+ *
+ * The prompt's button used to carry a hardcoded 48 and got missed when the cards were scaled
+ * to the real canvas width, which is most of what 字体也同步变大一点 was looking at: a 200-tall
+ * green slab with 48px type on it. It takes SET_WIDE_SIZE now, like every other primary.
  */
-const SET_WIDE_SIZE = 68;
-const SET_SIDE_SIZE = 56;
+const SET_WIDE_SIZE = 80;
+const SET_SIDE_SIZE = 68;
 const SET_BTN_GAP_Y = 42;
 const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
 const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
@@ -432,7 +441,7 @@ const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
  * twice. With the star rating metering unlocks and this line naming both what is left and
  * what it costs, it becomes a decision.
  */
-const PROMPT_COST_SIZE = 40;
+const PROMPT_COST_SIZE = 50;
 /**
  * Every card's drop shadow: a plate behind it, offset down. `buildCard` drops it by this
  * PLUS the rim's own CARD_LIFT, so the shadow sits under the frame's bottom edge rather than
@@ -488,12 +497,12 @@ const SCRIM = new Color(10, 14, 26, 178);
  *
  *   side stars   y  246 +/- 105  ->  141..351   (89 off the page's top edge)
  *   middle star  y  295 +/- 137  ->  158..432   (8 off it, being the taller one)
- *   caption      y   92 +/- 26   ->   66..118   (23 clear of the side stars' underside)
- *   bar          y   24 +/- 8    ->   16..32    (34 clear of the caption)
+ *   caption      y   92 +/- 34   ->   58..126   (15 clear of the side stars' underside)
+ *   bar          y   24 +/- 8    ->   16..32    (26 clear of the caption)
  *   rule         y  -22          ->  -23..-21   (37 clear of the bar)
- *   tally line 1 y  -82 +/- 25   -> -107..-57   (34 clear of the rule, which is 2 tall)
- *   tally line 2 y -146 +/- 25   -> -171..-121  (14 clear of line 1: one block, two lines)
- *   answers      y -300 +/- 100  -> -400..-200  (29 clear of the tally, 40 off the bottom)
+ *   tally line 1 y  -82 +/- 32   -> -114..-50   (27 clear of the rule, which is 2 tall)
+ *   tally line 2 y -154 +/- 32   -> -186..-122  (8 clear of line 1: one block, two lines)
+ *   answers      y -300 +/- 100  -> -400..-200  (14 clear of the tally, 40 off the bottom)
  */
 const WIN_H = 1132;
 /**
@@ -539,11 +548,16 @@ const WIN_BURST = new Color(255, 255, 255, 30);
 const WIN_BURST_TURN = 40;
 /** Where each line of the stack sits, in page coordinates. The arithmetic is under WIN_H. */
 const WIN_CAPTION_Y = 92;
-const WIN_CAPTION_SIZE = 44;
+const WIN_CAPTION_SIZE = 56;
 const WIN_BAR_Y = 24;
 const WIN_RULE_Y = -22;
 const WIN_TALLY_Y = -82;
-const WIN_TALLY_PITCH = 64;
+/**
+ * 72, not 64. At WIN_TALLY_SIZE 54 a line's box is 65 tall, so a 64 pitch would have the two
+ * lines' boxes OVERLAPPING by one unit -- the arithmetic below still read "one block, two
+ * lines" from when the type was 42 and the boxes were 50.
+ */
+const WIN_TALLY_PITCH = 72;
 /**
  * The answers, side by side under the tally, exactly like the lose card's pair.
  *
@@ -553,13 +567,17 @@ const WIN_TALLY_PITCH = 64;
  * ADVANCES THE LEVEL. The one control on this card a player has to aim at was surrounded by
  * a target that undoes it.
  *
- * As a chunky button it is 360x200 and it looks like the thing it is. 900 across for the
- * pair (360 + 28 + 512) inside a 1036 page, which leaves 68 either side -- the same row the
+ * As a chunky button it is 400x200 and it looks like the thing it is. 900 across for the
+ * pair (400 + 28 + 472) inside a 1036 page, which leaves 68 either side -- the same row the
  * lose card uses, because they are the same two questions.
+ *
+ * The narrow one is the WIDER of the two relative to its text: 重玩本关 is four glyphs against
+ * 下一关's three, so at 400 and 472 they carry 64 and 116 of padding. Sizing them by their
+ * labels instead would have made the secondary answer the bigger button.
  */
 const WIN_BTN_Y = -300;
-const WIN_REPLAY_W = 360;
-const WIN_NEXT_W = 512;
+const WIN_REPLAY_W = 400;
+const WIN_NEXT_W = 472;
 const WIN_BTN_GAP = 28;
 
 /**
@@ -580,7 +598,7 @@ const WIN_BAR_ON = new Color(86, 199, 104, 255);
 const WIN_BAR_OFF = new Color(228, 212, 188, 255);
 
 /** The tally lines: what the level cost, in the same ink as the caption but smaller. */
-const WIN_TALLY_SIZE = 42;
+const WIN_TALLY_SIZE = 54;
 
 /**
  * A card's quiet second answer, as TEXT rather than a second slab. Both cards use it: the
@@ -593,7 +611,7 @@ const WIN_TALLY_SIZE = 42;
  * The hit box is much bigger than the ink, because a text button sized to its own glyphs is
  * a text button nobody can hit.
  */
-const TEXT_BTN_SIZE = 46;
+const TEXT_BTN_SIZE = 58;
 const TEXT_BTN_W = 440;
 const TEXT_BTN_H = 130;
 
@@ -1388,7 +1406,7 @@ export class HudView {
         xBase.setPosition(0, -CARD_X_LIFT, 0);
         const xFace = dotSprite('face', CARD_X_D, CARD_RIM_FACE);
         close.addChild(xFace);
-        const x = makeLabel(xFace, 'x', 58, 2);
+        const x = makeLabel(xFace, 'x', CARD_X_SIZE, 2);
         x.isBold = true;
         x.string = '×';
 
@@ -1450,7 +1468,7 @@ export class HudView {
 
         const btn = this.buildCardBtn(page, {
             x: 0, y: PROMPT_BTN_Y, w: PROMPT_BTN_W, text: '解锁车位',
-            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: 48,
+            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: SET_WIDE_SIZE,
         });
 
         // Under the button, not on it: it is the price of pressing that button, and a price
@@ -1570,7 +1588,7 @@ export class HudView {
         glyph.setPosition(SET_ICON_X, 0, 0);
 
         const label = makeLabel(row, 'label', SET_LABEL_SIZE, 0, SET_LABEL_X);
-        rimLabel(label, CARD_RIM_BASE, 5);
+        rimLabel(label, CARD_RIM_BASE, 6);
         label.string = text;
         // Anchored at its LEFT edge, so SET_LABEL_X is where the text starts rather than
         // where its middle happens to land. Both rows say two characters today and centring
