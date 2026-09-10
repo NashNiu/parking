@@ -1,6 +1,6 @@
 import {
-  ART_SOURCES, ART_WARN_KB, GAME_LAYOUT, GAME_SPLASH, overrideBlock, OVERRIDE_MARK,
-  PACKAGE_LIMIT_KB, patchFirstScreen, SplashPatch,
+  ART_SOURCES, ART_WARN_KB, GAME_LAYOUT, GAME_SPLASH, holdFrom, overrideBlock, OVERRIDE_MARK,
+  PACKAGE_LIMIT_KB, patchFirstScreen, SplashLayout, SplashPatch,
 } from '../../tools/patch-splash';
 
 /**
@@ -350,4 +350,53 @@ test('a stale override block is replaced, not left in place', () => {
   expect(fresh).toBe(patchFirstScreen(SAMPLE, GAME_SPLASH));
   // Still exactly one block: replaced, not appended.
   expect(fresh.split(OVERRIDE_MARK).length - 1).toBe(1);
+});
+
+/**
+ * THE ONE THAT KEEPS A DEBUG BUILD FROM SHIPPING. `--hold` makes the first screen sit there
+ * after loading finishes, which is the only way to look at it -- and a hold left in the
+ * committed default is a game that appears to hang on startup, on every device, for as long
+ * as somebody typed. The flag lives on the command line and the default stays zero.
+ */
+test('the shipped default holds for no time at all', () => {
+  expect(GAME_LAYOUT.holdMs).toBe(0);
+  const block = overrideBlock(GAME_LAYOUT);
+  // Emitted, but unreachable: the guard is a literal comparison against zero.
+  expect(block).toContain('if (0 <= 0) return parkingFinish();');
+});
+
+test('a hold reaches the generated code when it is asked for', () => {
+  const held: SplashLayout = { ...GAME_LAYOUT, holdMs: 8000 };
+  const block = overrideBlock(held);
+  expect(block).toContain('if (8000 <= 0) return parkingFinish();');
+  expect(block).toContain('parkingHoldUntil = Date.now() + 8000;');
+});
+
+/**
+ * The hold has to be checked BEFORE the run-out, and the run-out before the milestones. The
+ * run-out ends by tearing the first screen down, so a hold behind it would have nothing left
+ * to hold open.
+ */
+test('the hold is the first thing the tick loop considers', () => {
+  const block = overrideBlock(GAME_LAYOUT);
+  const hold = block.indexOf('if (parkingHoldUntil) {');
+  const tail = block.indexOf('} else if (parkingTail) {');
+  const milestone = block.indexOf('} else if (parkingTarget - progress >');
+  expect(hold).toBeGreaterThan(0);
+  expect(hold).toBeLessThan(tail);
+  expect(tail).toBeLessThan(milestone);
+  // And end() holds first, then finishes.
+  expect(block).toContain('.then(() => parkingFinish());');
+});
+
+test('--hold is parsed, and a bad one is refused rather than guessed at', () => {
+  expect(holdFrom([])).toBe(0);
+  expect(holdFrom(['--build', 'x'])).toBe(0);
+  expect(holdFrom(['--hold', '8000'])).toBe(8000);
+  expect(holdFrom(['--build', 'x', '--hold', '500'])).toBe(500);
+  // A typo'd value is the failure worth catching: `Number('800O')` is NaN, and a NaN reaching
+  // the generated code would be a comparison that is false forever -- a hold that never ends.
+  expect(() => holdFrom(['--hold', '800O'])).toThrow(/wants a number/);
+  expect(() => holdFrom(['--hold'])).toThrow(/got nothing/);
+  expect(() => holdFrom(['--hold', '-1'])).toThrow(/wants a number/);
 });

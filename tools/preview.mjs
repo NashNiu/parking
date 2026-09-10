@@ -38,10 +38,15 @@ const GAME = join(REPO, 'game');
 const BUILD = join(GAME, 'build', 'wechatgame');
 const BUILD_LOGS = join(GAME, 'temp', 'builder', 'log');
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const NO_BUILD = args.has('--no-build');
 const AS_IMAGE = args.has('--image');
 const DRY = args.has('--dry-run');
+// `--hold <ms>`, forwarded verbatim to patch-splash. It has to come through here rather than
+// be run afterwards: the QR is generated from the folder as it stands at that moment, so a
+// hold applied after this script has finished is a hold the phone never sees.
+const HOLD = args.has('--hold') ? argv.slice(argv.indexOf('--hold'), argv.indexOf('--hold') + 2) : [];
 
 const WX_CANDIDATES = [
     process.env.WX_DEVTOOLS_CLI,
@@ -274,7 +279,7 @@ if (!DRY) {
     if (built !== 0) {
         console.error('[preview] patch-splash did not compile -- the first screen will show');
         console.error('          the Cocos logo. The build itself is fine.');
-    } else if (run('patching the first screen', process.execPath, [patcher]) !== 0) {
+    } else if (run('patching the first screen', process.execPath, [patcher, ...HOLD]) !== 0) {
         console.error('[preview] the first screen could not be patched -- it will show the');
         console.error('          Cocos logo. The build itself is fine.');
     }

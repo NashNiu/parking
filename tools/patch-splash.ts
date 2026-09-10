@@ -199,6 +199,23 @@ export interface SplashLayout {
      * a third of a second it stops reading as a flourish and starts reading as a stall.
      */
     tailMs: number;
+    /**
+     * DEBUG. How long to hold the first screen open after loading has finished, in ms. Zero
+     * ships; anything else is a build you cannot publish.
+     *
+     * It exists because the first screen is not inspectable otherwise. On a fast phone the
+     * whole thing is over in well under a second, which is the point of it -- and which makes
+     * it impossible to judge whether the artwork lands where the arithmetic says, whether the
+     * scrim sits where it should, or whether the bar reads at all. `--hold 8000` freezes it
+     * for eight seconds.
+     *
+     * During the hold the fill SWEEPS 0..1 on a loop rather than sitting at 1. A bar held at
+     * full shows the pill and nothing else -- not the trough, not the fill against it, not the
+     * rounded cap on the leading edge, which is most of what there is to look at.
+     */
+    holdMs: number;
+    /** DEBUG. How long one sweep of the fill takes during a hold, in ms. */
+    holdCycleMs: number;
 }
 
 /** 0..255 to the 0..1 the shaders want, so the constants below can be read off the HUD. */
@@ -267,6 +284,10 @@ export const GAME_LAYOUT: SplashLayout = {
     step: 0.2,
     arrived: 0.002,
     tailMs: 280,
+    // Zero, and there is a test that it stays zero: a hold committed by accident is a build
+    // that sits on its splash for eight seconds and looks like a hang.
+    holdMs: 0,
+    holdCycleMs: 1800,
 };
 
 /**
@@ -608,7 +629,10 @@ tick = function () {
         // otherwise hand the easing a dt of seconds and snap the bar to its ceiling.
         const dt = parkingLast ? Math.min(0.05, (now - parkingLast) / 1000) : 0;
         parkingLast = now;
-        if (parkingTail) {
+        if (parkingHoldUntil) {
+            // DEBUG hold: sweep the fill on a loop so the bar can actually be looked at.
+            progress = (now % ${num(L.holdCycleMs)}) / ${num(L.holdCycleMs)};
+        } else if (parkingTail) {
             // The run-out. Takes priority over both branches below: once end() has been
             // called there is nothing left to guess about, so the fill stops chasing
             // milestones and simply arrives. See SplashLayout.tailMs.
@@ -642,7 +666,8 @@ tick = function () {
 // The deadline is belt and braces -- the ramp above reaches 1 in exactly tailMs, so the only
 // way to need it is a tick loop that has stopped being called at all.
 const parkingEnd = end;
-end = function () {
+let parkingHoldUntil = 0;
+const parkingFinish = function () {
     parkingTarget = 1.0;
     const started = Date.now();
     parkingTail = { from: progress, at: started };
@@ -667,6 +692,31 @@ end = function () {
             parkingScrimBuffer = null;
         }
     });
+};
+
+// The hold goes in FRONT of the run-out, not after it: the run-out ends by tearing the whole
+// first screen down, and there is nothing to hold open after that. See SplashLayout.holdMs.
+end = function () {
+    if (${num(L.holdMs)} <= 0) return parkingFinish();
+    parkingHoldUntil = Date.now() + ${num(L.holdMs)};
+    return new Promise((resolve) => {
+        const wait = () => {
+            if (Date.now() >= parkingHoldUntil) {
+                parkingHoldUntil = 0;
+                // Arm the run-out in the same breath rather than leaving it to parkingFinish.
+                // Between clearing the hold and that promise callback there is at least one
+                // microtask, and in that window the creep branch owns the fill and pulls it
+                // back DOWN towards the next milestone -- measured, a bar that ran backwards
+                // from 0.8. One frame in practice, but there is no reason to leave it.
+                parkingTarget = 1.0;
+                parkingTail = { from: progress, at: Date.now() };
+                resolve();
+            } else {
+                setTimeout(wait, 32);
+            }
+        };
+        wait();
+    }).then(() => parkingFinish());
 };
 
 `;
@@ -709,6 +759,25 @@ export function patchFirstScreen(
     return `${head}${overrideBlock(layout)}${out.slice(anchor)}`;
 }
 
+/**
+ * `--hold <ms>` off the command line, or 0.
+ *
+ * Exported and pure so the parsing is testable: it is the one input that can turn a shippable
+ * build into an unshippable one, and "it only held because I typed --hold 800O" is not a thing
+ * anybody should have to debug on a phone.
+ */
+export function holdFrom(argv: readonly string[]): number {
+    const at = argv.indexOf('--hold');
+    if (at < 0) return 0;
+    const raw = argv[at + 1];
+    const ms = Number(raw);
+    if (!raw || !Number.isFinite(ms) || ms < 0) {
+        throw new Error(`patch-splash: --hold wants a number of milliseconds, got ${
+            raw === undefined ? 'nothing' : JSON.stringify(raw)}.`);
+    }
+    return Math.round(ms);
+}
+
 function main(): void {
     const argv = process.argv.slice(2);
     const at = argv.indexOf('--build');
@@ -749,8 +818,11 @@ function main(): void {
     fs.copyFileSync(art, path.join(buildDir, patch.bgName));
     if (hasNotice) fs.copyFileSync(notice, path.join(buildDir, patch.logoName));
 
+    const hold = holdFrom(argv);
+    const layout: SplashLayout = { ...GAME_LAYOUT, holdMs: hold };
+
     const before = fs.readFileSync(target, 'utf8');
-    const after = patchFirstScreen(before, patch, GAME_LAYOUT);
+    const after = patchFirstScreen(before, patch, layout);
     fs.writeFileSync(target, after);
 
     // The Cocos images are left in place. Nothing references them once the names move and
@@ -775,6 +847,14 @@ function main(): void {
     console.log(before === after
         ? 'already patched (idempotent, nothing changed)'
         : 'first screen now wears the artwork, with an easing bar in the band below it');
+    if (hold > 0) {
+        console.warn('');
+        console.warn(`patch-splash: HELD -- this build sits on its first screen for ${hold} ms`);
+        console.warn('  after loading finishes, sweeping the bar on a loop so it can be looked');
+        console.warn('  at. DO NOT PUBLISH IT. The hold lives only in the build output, so the');
+        console.warn('  next build clears it; re-running this script without --hold also does.');
+        console.warn('');
+    }
 }
 
 if (require.main === module) main();
