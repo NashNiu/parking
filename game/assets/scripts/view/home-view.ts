@@ -1,12 +1,11 @@
 import {
-    Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
+    Color, Label, Layers, Node, resources, Sprite, SpriteFrame, tween, Tween, UIOpacity,
+    UITransform, Vec3,
 } from 'cc';
-import { burstSprite, dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
-import { canvasSize, makeLabel, safeInsets } from './ui-layout';
+import { dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
+import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
 import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
-import {
-    RAIL_PITCH, railFlick, railNearest, railOffset, railRubber, railStopT,
-} from './rail-math';
+import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rail-math';
 
 /**
  * The home screen: the game's name, a rail of levels you drag through, and one button that
@@ -41,7 +40,24 @@ const GAME_TITLE = '停车场';
 
 const BG = new Color(24, 30, 50, 255);
 const TITLE_INK = new Color(255, 255, 255, 255);
-const SUB_INK = new Color(150, 163, 196, 255);
+/**
+ * The secondary type went from a slate grey to near-white when the backdrop became a
+ * photograph, and it had to: 150,163,196 was chosen against a flat navy, and against a
+ * sunlit street it is a grey word on a grey wall. Same reason every line on this screen now
+ * carries a rim -- see HOME_RIM.
+ */
+const SUB_INK = new Color(236, 242, 255, 255);
+/**
+ * The outline every line of type on this screen wears, and the width of it at each size.
+ *
+ * A photograph puts arbitrary colour behind arbitrary text: the title lands on bright sky on
+ * one phone and on a white cloud on the next, and no ink colour survives both. An outline
+ * does, which is why the artwork's own title wears one. Widths are about a tenth of the font
+ * size, the figure `rimLabel` documents.
+ */
+const HOME_RIM = new Color(16, 22, 40, 255);
+const TITLE_RIM_W = 12;
+const SUB_RIM_W = 5;
 /**
  * The three type sizes on this screen, on a canvas 1280 design units wide (see `canvasSize`
  * -- NOT 720, which is what the first pass at every panel in this game was built on).
@@ -55,96 +71,41 @@ const SUB_SIZE = 46;
 const CAP_SIZE = 52;
 
 /**
- * The background: the board's own grid, at the strength a background can carry.
+ * The backdrop: one photograph, `home-bg`, filling the screen.
  *
- * The lines are `scene-stage.ts`'s GRID_LINE -- the same paint the board's floor wears --
- * knocked back to a few percent. That is the whole idea of this decoration: the menu is not
- * a screen in front of the game, it is a corner of the same lot, so its floor is that floor.
- * Inventing a pattern here would have said the opposite.
+ * IT REPLACED A WHOLE PROCEDURAL SCENE. What used to be here was the board's own grid knocked
+ * back to a few percent, a sky-and-floor wash, a kerb with stall ticks, four parked cars and
+ * a dozen waiting passengers -- every one of them a flat tinted rectangle, because until
+ * `rampSprite` there was no way to put light anywhere. All of it is gone. A grid and a row of
+ * abstract cars laid over a real street is not decoration on top of decoration, it is two
+ * backgrounds arguing, and the photograph wins that argument on its own.
  *
- * The ticks along the bottom are stall mouths: short marks hanging off a kerb line, which is
- * what a car park looks like from above.
+ * It is deliberately DEFOCUSED, which is what makes it usable: a background plate for UI
+ * rather than a picture you look at. That is also why it needs so little help -- one scrim
+ * and an outline on the type.
+ *
+ * This is the FIRST image asset in the bundle. Everything else this game draws is painted at
+ * runtime by `ui-shapes.ts`, so `resources.load` here is the only reason the folder contains
+ * a picture at all, and the flat BG behind it is not redundant: the load is asynchronous, and
+ * if the asset ever fails to import the menu still has a background.
  */
-const DECO_LINE = new Color(224, 232, 247, 14);
-const DECO_KERB = new Color(224, 232, 247, 22);
-const DECO_COLS = 6;
-const DECO_ROWS = 5;
-const DECO_LINE_W = 4;
-const DECO_BAYS = 7;
-const DECO_BAY_H = 220;
+const HOME_BG = 'home-bg/spriteFrame';
 
 /**
- * The sky and the floor: a light wash down from the top and a darker one up from the bottom.
+ * The scrim over the photograph's top, so the title has something to sit on.
  *
- * This is what 有点单调 was about, and it is the one thing a screen painted from flat tinted
- * sprites cannot have -- every sprite here is a single colour, so before `rampSprite` there
- * was no way to put LIGHT anywhere. The wash costs two draw calls and does more for the
- * screen than everything else in this function.
+ * Opaque at the very top edge and eased out going down -- `rampSprite`'s own direction, no
+ * rotation. It is the sky that needs knocking back: the title sits about a fifth of the way
+ * down the screen, on bright blue on one phone and on a white cloud on the next.
  *
- * Both are sized as fractions of the canvas HEIGHT, which varies by device (see `canvasSize`:
- * the width is pinned at 1280 and the height is whatever the aspect ratio gives). A wash
- * measured in absolute units would be a third of a tall phone and all of a short one.
+ * THE SPAN IS THE NUMBER TO EYEBALL ON A DEVICE. The ramp is strongest where there is nothing
+ * to read and weakest where the type is, which is backwards, and the only lever is to make it
+ * reach further: at 0.42 of the height the wash is still at about half strength behind the
+ * title. Stronger than this and the top of the screen reads as a black bar; weaker and the
+ * outline on the type is doing all the work by itself.
  */
-const SKY = new Color(86, 128, 208, 30);
-const SKY_SPAN = 0.5;
-const FLOOR = new Color(6, 8, 16, 130);
-const FLOOR_SPAN = 0.34;
-
-/**
- * Cars parked in the bays along the bottom, at background strength.
- *
- * Four of the seven bays, not all of them: a car park with a space in it reads as a car park,
- * and a full row reads as a wall. They carry the four car colours, which is the only place
- * on this screen -- other than the rail's stops -- that any colour appears at all.
- *
- * Drawn as one rounded body with a lighter roof band, and nothing else. At this alpha the
- * detail would not survive anyway, and the shape's job is to be recognisable as a car from
- * the arrangement rather than from its windows.
- */
-const CAR_COLORS = [
-    new Color(232, 78, 74, 78),
-    new Color(74, 150, 232, 78),
-    new Color(112, 200, 92, 78),
-    new Color(240, 196, 64, 78),
-];
-const CAR_ROOF = new Color(255, 255, 255, 30);
-const CAR_BAYS = [0, 1, 3, 5];
-const CAR_W = 96;
-const CAR_H = 176;
-const CAR_R = 26;
-
-/**
- * Passengers standing at the bays that have no car in them: three to a bay, at the kerb.
- *
- * 78 on the cars and 96 here, not the 34 the first pass used. A mock of this composition put
- * the cars at 34 over the floor wash and they did not register at all -- background strength
- * is measured against what is BEHIND it, and the bottom of this screen is the darkest part of
- * it. Faint enough to stay background, strong enough to be a thing.
- *
- * They are also the only reason the empty bays read as empty rather than as unfinished: three
- * dots waiting in a gap says a car is coming to it.
- */
-const PAX_D = 34;
-const PAX_GAP = 44;
-const PAX_PER_BAY = 3;
-const PAX_COLORS = [
-    new Color(240, 196, 64, 96),
-    new Color(112, 200, 92, 96),
-    new Color(74, 150, 232, 96),
-];
-
-/**
- * The sunburst behind the rail: the same `burstSprite` the win card wears, at background
- * strength, turning once every 46 seconds.
- *
- * It is the only thing on this screen that MOVES once the entrance is over, and that is its
- * whole job -- a menu that is perfectly still reads as a screenshot of a menu. 46 rather
- * than the win card's 40 because a player sits here longer, and fast enough to notice is
- * fast enough to become an animation you watch.
- */
-const DECO_BURST = new Color(255, 255, 255, 9);
-const DECO_BURST_D = 1500;
-const DECO_BURST_TURN = 46;
+const SCRIM = new Color(16, 22, 40, 110);
+const SCRIM_SPAN = 0.42;
 
 /** The lane the stops ride on: a full-bleed band with a dashed centre line. */
 const LANE = new Color(33, 42, 68, 255);
@@ -336,30 +297,27 @@ export class HomeView {
         this.root.addComponent(UITransform);
         canvas.addChild(this.root);
 
-        // Twice the canvas, like the modal scrims: a viewport wider than the design
-        // resolution would otherwise show a strip of empty 3D scene down either side.
-        const bg = roundedSprite('HomeBg', w * 2, h * 2, BG, 2);
-        this.root.addChild(bg);
-
-        this.buildDeco();
+        this.buildBackdrop();
 
         // Under the notch, not under the top edge -- the same reservation the HUD's title
         // plate makes, for the same reason.
         const titleY = h / 2 - safeInsets().top * h - h * 0.15;
         const title = makeLabel(this.root, 'HomeTitle', TITLE_SIZE, titleY);
         title.color = TITLE_INK;
-        title.isBold = true;
+        rimLabel(title, HOME_RIM, TITLE_RIM_W);
         title.string = GAME_TITLE;
         this.titleNode = title.node;
 
         this.sub = makeLabel(this.root, 'HomeSub', SUB_SIZE, titleY - TITLE_SIZE - 22);
         this.sub.color = SUB_INK;
+        rimLabel(this.sub, HOME_RIM, SUB_RIM_W);
         this.sub.node.active = false;
 
         this.railRoot = this.buildLane(h * 0.03);
 
         this.cap = makeLabel(this.root, 'HomeCap', CAP_SIZE, h * 0.03 - LANE_H / 2 - 62);
         this.cap.color = SUB_INK;
+        rimLabel(this.cap, HOME_RIM, SUB_RIM_W);
         this.cap.string = '左右滑动选择关卡';
         this.cap.node.active = false;
 
@@ -380,85 +338,53 @@ export class HomeView {
         this.root.active = false;
     }
 
-    /** See DECO_LINE and DECO_BURST for what this draws and why it is those things. */
-    private buildDeco(): void {
-        const deco = new Node('Deco');
-        deco.layer = Layers.Enum.UI_2D;
-        deco.addComponent(UITransform);
-        this.root.addChild(deco);
-
+    /** See HOME_BG and SCRIM for what this draws and why there is so little of it. */
+    private buildBackdrop(): void {
         const { w, h } = this;
 
-        // The wash first of all, under everything including the light: it IS the ground.
-        // Twice the canvas across, like the flat colour under it, so a wide viewport cannot
-        // show a strip of unpainted scene down either side.
-        const sky = rampSprite('Sky', w * 2, h * SKY_SPAN, SKY);
-        deco.addChild(sky);
-        sky.setPosition(0, h / 2 - h * SKY_SPAN / 2, 0);
-        const floor = rampSprite('Floor', w * 2, h * FLOOR_SPAN, FLOOR);
-        deco.addChild(floor);
-        floor.setPosition(0, -h / 2 + h * FLOOR_SPAN / 2, 0);
-        // Rotated, so the opaque end is at the BOTTOM. `rampSprite` paints one direction and
-        // the caller turns it; the alternative was two frames of the same gradient.
-        floor.angle = 180;
+        // Twice the canvas, like the modal scrims: a viewport wider than the design
+        // resolution would otherwise show a strip of empty 3D scene down either side. It is
+        // also the background for the first frames, and for a build where the asset is
+        // missing -- see HOME_BG.
+        const bg = roundedSprite('HomeBg', w * 2, h * 2, BG, 2);
+        this.root.addChild(bg);
 
-        // Then the light, so the grid lies over it rather than under it -- the floor is
-        // nearer than the light.
-        const burst = burstSprite('DecoBurst', DECO_BURST_D, DECO_BURST);
-        deco.addChild(burst);
-        burst.setPosition(0, this.h * 0.03, 0);
-        tween(burst).by(DECO_BURST_TURN, { angle: 360 }).repeatForever().start();
-        for (let i = 1; i < DECO_COLS; i++) {
-            const line = roundedSprite(`col-${i}`, DECO_LINE_W, h, DECO_LINE, 1);
-            deco.addChild(line);
-            line.setPosition((i / DECO_COLS - 0.5) * w, 0, 0);
-        }
-        for (let i = 1; i < DECO_ROWS; i++) {
-            const line = roundedSprite(`row-${i}`, w, DECO_LINE_W, DECO_LINE, 1);
-            deco.addChild(line);
-            line.setPosition(0, (i / DECO_ROWS - 0.5) * h, 0);
-        }
+        const photo = new Node('HomePhoto');
+        photo.layer = Layers.Enum.UI_2D;
+        const box = photo.addComponent(UITransform);
+        const sprite = photo.addComponent(Sprite);
+        sprite.type = Sprite.Type.SIMPLE;
+        // CUSTOM, so the node's own content size decides how big the picture is drawn rather
+        // than the frame's pixel dimensions. With TRIMMED the sprite would come out at 1440
+        // wide on a 1280 canvas and there would be nothing to size it with.
+        sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+        this.root.addChild(photo);
 
-        // The stall mouths: a kerb across the bottom with ticks hanging off it, and cars in
-        // some of them. The bays are deep enough to park in now -- at 74 they were marks on
-        // the floor, and a mark is not a bay.
-        const span = w * 1.1;
-        const bayY = -h / 2 + safeInsets().bottom * h + h * 0.115;
-        const kerb = roundedSprite('kerb', span, DECO_LINE_W, DECO_KERB, 1);
-        deco.addChild(kerb);
-        kerb.setPosition(0, bayY, 0);
-        for (let i = 0; i <= DECO_BAYS; i++) {
-            const tick = roundedSprite(`bay-${i}`, DECO_LINE_W, DECO_BAY_H, DECO_KERB, 1);
-            deco.addChild(tick);
-            tick.setPosition((i / DECO_BAYS - 0.5) * span, bayY - DECO_BAY_H / 2, 0);
-        }
-        // Centred in the bay, which is the gap BETWEEN two ticks -- half a pitch over from
-        // the tick's own x. See CAR_COLORS for why only four of the seven are taken.
-        const bayX = (bay: number): number => ((bay + 0.5) / DECO_BAYS - 0.5) * span;
-        for (let i = 0; i < CAR_BAYS.length; i++) {
-            const bay = CAR_BAYS[i];
-            const car = roundedSprite(`car-${bay}`, CAR_W, CAR_H, CAR_COLORS[i], CAR_R);
-            deco.addChild(car);
-            car.setPosition(bayX(bay), bayY - DECO_BAY_H / 2 - 6, 0);
-            const roof = roundedSprite('roof', CAR_W - 30, CAR_H * 0.34, CAR_ROOF, 14);
-            car.addChild(roof);
-            roof.setPosition(0, CAR_H * 0.1, 0);
-        }
-        // And people in the bays that have none. See PAX_D.
-        let waiting = 0;
-        for (let bay = 0; bay < DECO_BAYS; bay++) {
-            if (CAR_BAYS.indexOf(bay) >= 0) continue;
-            for (let k = 0; k < PAX_PER_BAY; k++) {
-                const dot = dotSprite(
-                    `pax-${bay}-${k}`, PAX_D, PAX_COLORS[(waiting + k) % PAX_COLORS.length],
-                );
-                deco.addChild(dot);
-                dot.setPosition(
-                    bayX(bay) + (k - (PAX_PER_BAY - 1) / 2) * PAX_GAP, bayY + PAX_D, 0,
-                );
+        resources.load(HOME_BG, SpriteFrame, (err, frame) => {
+            if (err || !frame) {
+                // Not fatal, and it says so: the flat BG above is a background. The likely
+                // cause is a build that has not re-imported `resources/home-bg.jpg`.
+                console.warn('[Home] home-bg did not load, keeping the flat fill:', err);
+                return;
             }
-            waiting++;
-        }
+            sprite.spriteFrame = frame;
+            const raw = frame.originalSize;
+            // COVER, not contain: scale by whichever axis needs the MORE of it, so the
+            // photograph always fills and never letterboxes. `Math.min` here would be the
+            // classic version of this bug -- a picture that fits inside the screen with the
+            // flat colour showing along two edges.
+            const scale = Math.max(w / raw.width, h / raw.height);
+            box.setContentSize(raw.width * scale, raw.height * scale);
+            // Pinned to the TOP, so whatever the aspect ratio leaves over comes off the
+            // BOTTOM. The same choice, for the same reason, as the first screen: the sky and
+            // the title are at the top of the plate and the road at the foot of it is the
+            // part nothing is lost by cutting.
+            photo.setPosition(0, h / 2 - raw.height * scale / 2, 0);
+        });
+
+        const scrim = rampSprite('HomeScrim', w * 2, h * SCRIM_SPAN, SCRIM);
+        this.root.addChild(scrim);
+        scrim.setPosition(0, h / 2 - h * SCRIM_SPAN / 2, 0);
     }
 
     /** The band the stops ride on, and the node they live in. */

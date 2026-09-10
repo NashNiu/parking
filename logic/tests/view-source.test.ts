@@ -97,3 +97,37 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
   // `children.length` is not an index at all, and HomeView.show uses it.
   expect(indexedChildLookups('n.setSiblingIndex(n.parent!.children.length - 1);')).toEqual([]);
 });
+
+/**
+ * The backdrop photograph must COVER the screen, and the difference is one word.
+ *
+ * `Math.max(w / raw.width, h / raw.height)` fills the screen and crops whatever the aspect
+ * ratio does not want; `Math.min` fits the picture INSIDE the screen and leaves the flat
+ * background showing along two edges. Both compile, both draw a picture, and only one of them
+ * is a background -- and the wrong one looks deliberate enough that it can survive a glance
+ * at a device. Which is the entire reason this is asserted in text: the value is decided
+ * inside a `resources.load` callback against a frame that only exists at runtime, so no test
+ * in this suite can reach it.
+ *
+ * The limits are the usual ones for a source guard: it proves the expression is written, not
+ * that it is reached, and a rewrite that keeps the behaviour under a different shape has to
+ * come and change this line.
+ */
+test('the home backdrop covers the screen rather than fitting inside it', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  expect(src).toMatch(/Math\.max\(w \/ raw\.width, h \/ raw\.height\)/);
+  expect(src).not.toMatch(/Math\.min\(w \/ raw\.width, h \/ raw\.height\)/);
+  // And it is pinned to the top, so the crop comes off the bottom -- the road, not the sky.
+  expect(src).toContain('photo.setPosition(0, h / 2 - raw.height * scale / 2, 0);');
+});
+
+/**
+ * Every line of type on the home screen needs an outline now that a photograph is behind it:
+ * the title lands on bright sky on one phone and on a white cloud on the next, and no ink
+ * colour survives both. See HOME_RIM in home-view.ts.
+ */
+test('the home screen type carries an outline', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const rims = src.match(/rimLabel\(/g) ?? [];
+  expect(rims.length).toBeGreaterThanOrEqual(3);
+});
