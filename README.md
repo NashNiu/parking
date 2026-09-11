@@ -153,7 +153,11 @@ scrim 不透明区的高度取**三者最大**:常量下限、接缝位置、**�
 
 ### 主页背景:包里第一张图片资源
 
-`game/assets/resources/home-bg.jpg`(1440×3360,60KB),由 `home-view.ts` 的 `buildBackdrop` 用 `resources.load('home-bg/spriteFrame', ...)` 加载。
+`game/assets/resources/home-bg.jpg`(1440×3360,60KB),由 `home-view.ts` 的 `buildBackdrop` 用 `resources.load('home-bg/texture', Texture2D, ...)` 加载,再在运行时包成 SpriteFrame。
+
+**加载的是 texture,不是 spriteFrame,这一条踩过。** 这个工程的图片导入类型是 `type: "texture"`,所以资源只有**一个**子资源 —— 构建出来的 bundle 里注册的路径恰好只有 `home-bg` 和 `home-bg/texture` 两条,**根本不存在 `home-bg/spriteFrame`**。写那个路径会在运行时失败,而 `.meta` 和构建产物里都没有任何东西提示为什么。加载 texture 再包一层,在**两种导入类型下都成立**(sprite-frame 类型也会注册 `/texture`),所以工程默认哪天变了也不会再坏。也不能退而加载父级 `home-bg`:`type: "texture"` 的 meta 带着一个 `redirect` 指向子资源,那个名字取回来的不一定是 ImageAsset。
+
+**纹理必须 clamp,这是尺寸决定的,不是偏好。** 引擎在 `setWrapMode` 的注释里写着「若贴图尺寸不是 2 的整数幂,缠绕模式仅允许 CLAMP_TO_EDGE」,而 1440×3360 不是。导入器的默认值是 `repeat`,在 WebGL1 设备上(小游戏里这是多数)纹理会被判为不完整、**整张采样成黑色** —— 症状看起来就像"图没加载出来",但并不是。`.meta` 里改成了 `clamp-to-edge`,代码里也强制了一次:这是图片尺寸的不变量,不是一个可以调的设置。
 
 **这是整个包里第一张图片资源。** 这个游戏画的其他所有东西都是 `ui-shapes.ts` 运行时画出来的,所以以前 `resources/` 下连一张图都没有。放进来之后**必须构建一次**(`npm run preview`,或者在 Creator 里点一下),让编辑器把它导入并生成 `.meta` —— 没导入的话 `resources.load` 会失败,主页退回那块纯色深蓝,控制台里有 `[Home] home-bg did not load` 一行。
 

@@ -1,6 +1,6 @@
 import {
-    Color, Label, Layers, Node, resources, Sprite, SpriteFrame, tween, Tween, UIOpacity,
-    UITransform, Vec3,
+    Color, Label, Layers, Node, resources, Sprite, SpriteFrame, Texture2D, tween, Tween,
+    UIOpacity, UITransform, Vec3,
 } from 'cc';
 import { dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
@@ -88,8 +88,19 @@ const CAP_SIZE = 52;
  * runtime by `ui-shapes.ts`, so `resources.load` here is the only reason the folder contains
  * a picture at all, and the flat BG behind it is not redundant: the load is asynchronous, and
  * if the asset ever fails to import the menu still has a background.
+ *
+ * THE TEXTURE, NOT THE SPRITE FRAME, and that is the whole of why the first attempt failed.
+ * This project imports images as `type: "texture"`, so the asset has ONE sub-asset -- the
+ * built bundle registers exactly `home-bg` and `home-bg/texture` and nothing else. There is
+ * no `home-bg/spriteFrame` to load, and asking for one fails at runtime with nothing in the
+ * .meta or the build to suggest why. Loading the texture and wrapping it works under EITHER
+ * import type, because a sprite-frame import registers `/texture` as well -- so this cannot
+ * break again if the project's default ever changes.
+ *
+ * Not the parent `home-bg` either: with `type: "texture"` the .meta carries a `redirect` to
+ * the sub-asset, so what comes back under that name is not reliably the ImageAsset.
  */
-const HOME_BG = 'home-bg/spriteFrame';
+const HOME_BG = 'home-bg/texture';
 
 /**
  * The scrim over the photograph's top, so the title has something to sit on.
@@ -360,26 +371,37 @@ export class HomeView {
         sprite.sizeMode = Sprite.SizeMode.CUSTOM;
         this.root.addChild(photo);
 
-        resources.load(HOME_BG, SpriteFrame, (err, frame) => {
-            if (err || !frame) {
+        resources.load(HOME_BG, Texture2D, (err, tex) => {
+            if (err || !tex) {
                 // Not fatal, and it says so: the flat BG above is a background. The likely
                 // cause is a build that has not re-imported `resources/home-bg.jpg`.
                 console.warn('[Home] home-bg did not load, keeping the flat fill:', err);
                 return;
             }
+            // NOT A PREFERENCE. The engine's own note on `setWrapMode` reads "if the size of
+            // the texture is not power of two, only WrapMode.CLAMP_TO_EDGE is allowed", and
+            // 1440x3360 is not. The importer's default here is REPEAT, under which a WebGL1
+            // device -- which in a mini-game is most of them -- treats the texture as
+            // incomplete and samples it as BLACK. Enforced here rather than left to the
+            // .meta because it is an invariant of the image's size, not a setting.
+            tex.setWrapMode(Texture2D.WrapMode.CLAMP_TO_EDGE, Texture2D.WrapMode.CLAMP_TO_EDGE);
+            const frame = new SpriteFrame();
+            // A fresh frame has a zero rect, which is what makes the setter take the whole
+            // texture and compute the UVs from it. This is the engine's own documented way
+            // of building a frame from a texture.
+            frame.texture = tex;
             sprite.spriteFrame = frame;
-            const raw = frame.originalSize;
             // COVER, not contain: scale by whichever axis needs the MORE of it, so the
             // photograph always fills and never letterboxes. `Math.min` here would be the
             // classic version of this bug -- a picture that fits inside the screen with the
             // flat colour showing along two edges.
-            const scale = Math.max(w / raw.width, h / raw.height);
-            box.setContentSize(raw.width * scale, raw.height * scale);
+            const scale = Math.max(w / tex.width, h / tex.height);
+            box.setContentSize(tex.width * scale, tex.height * scale);
             // Pinned to the TOP, so whatever the aspect ratio leaves over comes off the
             // BOTTOM. The same choice, for the same reason, as the first screen: the sky and
             // the title are at the top of the plate and the road at the foot of it is the
             // part nothing is lost by cutting.
-            photo.setPosition(0, h / 2 - raw.height * scale / 2, 0);
+            photo.setPosition(0, h / 2 - tex.height * scale / 2, 0);
         });
 
         const scrim = rampSprite('HomeScrim', w * 2, h * SCRIM_SPAN, SCRIM);

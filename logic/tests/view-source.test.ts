@@ -115,10 +115,37 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
  */
 test('the home backdrop covers the screen rather than fitting inside it', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  expect(src).toMatch(/Math\.max\(w \/ raw\.width, h \/ raw\.height\)/);
-  expect(src).not.toMatch(/Math\.min\(w \/ raw\.width, h \/ raw\.height\)/);
+  expect(src).toMatch(/Math\.max\(w \/ tex\.width, h \/ tex\.height\)/);
+  expect(src).not.toMatch(/Math\.min\(w \/ tex\.width, h \/ tex\.height\)/);
   // And it is pinned to the top, so the crop comes off the bottom -- the road, not the sky.
-  expect(src).toContain('photo.setPosition(0, h / 2 - raw.height * scale / 2, 0);');
+  expect(src).toContain('photo.setPosition(0, h / 2 - tex.height * scale / 2, 0);');
+});
+
+/**
+ * THE ONE THAT ACTUALLY SHIPPED BROKEN. `resources.load('home-bg/spriteFrame', ...)` is the
+ * obvious line to write and it fails at runtime with nothing to explain it: this project
+ * imports images as `type: "texture"`, so the built bundle registers exactly `home-bg` and
+ * `home-bg/texture` and no sprite frame exists to load. Loading the texture and wrapping it
+ * works under either import type, because a sprite-frame import registers `/texture` too.
+ *
+ * A source guard because the path is a string resolved inside the engine's asset manager
+ * against a bundle this suite does not build -- there is no way to fail it from here.
+ */
+test('the home backdrop loads the texture, not a sprite frame', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  expect(src).toContain("const HOME_BG = 'home-bg/texture';");
+  expect(src).not.toContain("'home-bg/spriteFrame'");
+});
+
+/**
+ * 1440x3360 is not a power of two, and the engine's note on `setWrapMode` says only
+ * CLAMP_TO_EDGE is allowed for such a texture. The importer's default is REPEAT, under which
+ * a WebGL1 device samples the whole thing as black -- a symptom that looks like "the image
+ * did not load" and is not.
+ */
+test('the backdrop texture is clamped, which a non-power-of-two texture requires', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  expect(src).toContain('Texture2D.WrapMode.CLAMP_TO_EDGE');
 });
 
 /**
