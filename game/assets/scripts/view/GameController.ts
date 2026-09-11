@@ -2179,8 +2179,9 @@ export class GameController extends Component {
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
         this.slidHome = false;
-        this.home.beginDrag(ui.x, nowMs() / 1000);
-        if (this.holdArmed || !this.home.hitsTitle(ui)) return;
+        // ui.y, because the home rail runs up the screen now.
+        this.home.beginDrag(ui.y, nowMs() / 1000);
+        if (this.holdArmed || !this.home.hitsReset(ui)) return;
         this.holdArmed = true;
         this.holdFromX = ui.x;
         this.scheduleOnce(this.holdWipe, HOLD_SECONDS);
@@ -2198,7 +2199,7 @@ export class GameController extends Component {
         if (!this.home.isDragging()) return;
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
-        this.home.moveDrag(ui.x, nowMs() / 1000);
+        this.home.moveDrag(ui.y, nowMs() / 1000);
         if (this.holdArmed && Math.abs(ui.x - this.holdFromX) > HOLD_SLOP) this.cancelHold();
     }
 

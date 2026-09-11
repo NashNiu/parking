@@ -32,14 +32,7 @@ import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rai
  * it. One place, because this screen owns what the player can see.
  */
 
-/**
- * A placeholder, and named so it is easy to find: the game has no title yet. One constant,
- * one string.
- */
-const GAME_TITLE = '停车场';
-
 const BG = new Color(24, 30, 50, 255);
-const TITLE_INK = new Color(255, 255, 255, 255);
 /**
  * The secondary type went from a slate grey to near-white when the backdrop became a
  * photograph, and it had to: 150,163,196 was chosen against a flat navy, and against a
@@ -56,19 +49,29 @@ const SUB_INK = new Color(236, 242, 255, 255);
  * size, the figure `rimLabel` documents.
  */
 const HOME_RIM = new Color(16, 22, 40, 255);
-const TITLE_RIM_W = 12;
 const SUB_RIM_W = 5;
 /**
- * The three type sizes on this screen, on a canvas 1280 design units wide (see `canvasSize`
- * -- NOT 720, which is what the first pass at every panel in this game was built on).
+ * The two type sizes left on this screen, on a canvas 1280 design units wide (see
+ * `canvasSize` -- NOT 720, which is what the first pass at every panel here was built on).
+ * There were three: the 124 title went with the rail's turn, see where `resetNode` is set.
  *
  * 「左右滑动选择关卡」 was 28, asked for as 这几个字大一点: that is 2.2% of the screen's width for
  * the one line telling a new player that the rail moves, which is the only instruction on the
  * screen. At 52 it is 4%, and it sits on the same step as the subtitle rather than below it.
  */
-const TITLE_SIZE = 124;
 const SUB_SIZE = 46;
-const CAP_SIZE = 52;
+
+/**
+ * The plate at the top: what level count you are looking at, and the press-and-hold target
+ * that clears the save.
+ *
+ * OPAQUE, and that is the whole reason it is a plate and not a line of type. See where it is
+ * built: on a route that fills the screen, every fixed label is eventually crossed by a
+ * scrolling stop.
+ */
+const PLATE = new Color(36, 46, 74, 236);
+const PLATE_W = 320;
+const PLATE_H = 88;
 
 /**
  * The backdrop: one photograph, `home-bg`, filling the screen.
@@ -118,13 +121,39 @@ const HOME_BG = 'home-bg/texture';
 const SCRIM = new Color(16, 22, 40, 110);
 const SCRIM_SPAN = 0.42;
 
-/** The lane the stops ride on: a full-bleed band with a dashed centre line. */
-const LANE = new Color(33, 42, 68, 255);
-const LANE_H = 236;
-const LANE_DASH = new Color(60, 71, 102, 255);
-const LANE_DASH_W = 26;
-const LANE_DASH_GAP = 22;
-const LANE_DASH_H = 5;
+/**
+ * The road the stops ride on: a full-height strip up the middle with a dashed centre line.
+ *
+ * IT USED TO RUN ACROSS. The rail was horizontal -- a band at mid-screen with five chips on
+ * it and a caption saying 左右滑动 -- and the whole of that change is this block, `buildRoad`,
+ * and which axis `layout` and the drag read. `rail-math.ts` did not change at all: it is
+ * one-dimensional offset arithmetic and never knew which direction it was pointing.
+ *
+ * LIGHTER THAN THE REFERENCE, which is what was asked for. The mock's road is about
+ * 138,143,150 and reads as wet asphalt under a bright menu; at 176,182,190 it is a pale
+ * kerbed street, the stops still sit clearly on top of it, and it does not fight the photo
+ * behind it for being the darkest thing on the screen.
+ *
+ * Opaque, not tinted: the backdrop photograph has a road of its own going to a vanishing
+ * point, and two roads arguing is exactly what a translucent strip would produce. This one
+ * covers it.
+ */
+const ROAD = new Color(176, 182, 190, 255);
+const ROAD_W = 620;
+const ROAD_DASH = new Color(248, 250, 252, 235);
+const ROAD_DASH_W = 12;
+const ROAD_DASH_H = 64;
+const ROAD_DASH_GAP = 56;
+
+/**
+ * How far off the road's centre line the stops sit, alternating side by side.
+ *
+ * The zig-zag is not decoration: it is what turns a column of buttons into a route. At 158
+ * against a 236-wide stop the two columns clear each other by 80 units down the middle --
+ * the dashes stay visible between them -- and each stop keeps 34 units inside the road's
+ * edge, so none of them hangs off it.
+ */
+const ZIG_X = 158;
 
 const START_W = 400;
 const START_H = 116;
@@ -141,10 +170,21 @@ const BTN_LIFT = 8;
  * A stop is built at its FOCUSED size and scaled down as it leaves the middle, so one node
  * covers both states and the size is continuous while a finger is moving.
  */
-const STOP_D = 104;
-const STOP_R = 26;
-const STOP_REST = 0.58;
-const STOP_ALPHA_REST = 140;
+/**
+ * The stops, now pills rather than chips: 236 x 148, which is the mock's proportion read off
+ * its own screen width.
+ *
+ * STOP_REST went from 0.58 to 0.86, and that is a consequence of the axis rather than a
+ * preference. A horizontal rail showed five stops and used size to say which one the button
+ * would play; a vertical one shows eight to eleven, and eight things at 58% read as a list
+ * that has been shrunk rather than as a route with one stop chosen. The halo does most of
+ * the pointing now, and the size difference only has to be noticeable.
+ */
+const STOP_W = 236;
+const STOP_H = 148;
+const STOP_R = 40;
+const STOP_REST = 0.86;
+const STOP_ALPHA_REST = 190;
 const STOP = new Color(74, 144, 226, 255);
 const STOP_BASE = new Color(44, 96, 165, 255);
 /** Cleared: the same blue, walked back, so a finished level reads as finished. */
@@ -157,9 +197,12 @@ const STOP_INK = new Color(255, 255, 255, 240);
 const STOP_RING = new Color(86, 199, 104, 90);
 const STOP_RING_PAD = 15;
 
-const STOP_STAR_D = 24;
-const STOP_STAR_PITCH = 27;
-const STOP_STAR_Y = -72;
+// Inside the pill, under the number: below it they would land in the 124 units of gap the
+// next stop needs, and two rows of stars between two stops reads as neither one's.
+const STOP_STAR_D = 26;
+const STOP_STAR_PITCH = 30;
+const STOP_STAR_Y = -40;
+const STOP_NUM_Y = 22;
 const STAR_ON = new Color(255, 201, 52, 255);
 const STAR_OFF = new Color(70, 82, 116, 255);
 
@@ -248,9 +291,9 @@ interface Stop {
 export class HomeView {
     /** Everything this screen draws, under one node, so `show`/`hide` is one flag. */
     private root: Node;
-    private titleNode: Node;
+    private resetNode: Node;
     private sub: Label;
-    private cap: Label;
+    private topPlate: Node;
     private startBtn: Node;
     private startFace: Node;
     private startBase: Node;
@@ -276,9 +319,9 @@ export class HomeView {
     private focusOpen = false;
 
     private dragging = false;
-    private dragFromX = 0;
+    private dragFromY = 0;
     private dragBase = 0;
-    private lastX = 0;
+    private lastY = 0;
     private lastT = 0;
     private travelled = 0;
     /** Offset units per second, positive when later levels are coming to the middle. */
@@ -310,29 +353,35 @@ export class HomeView {
 
         this.buildBackdrop();
 
-        // Under the notch, not under the top edge -- the same reservation the HUD's title
-        // plate makes, for the same reason.
-        const titleY = h / 2 - safeInsets().top * h - h * 0.15;
-        const title = makeLabel(this.root, 'HomeTitle', TITLE_SIZE, titleY);
-        title.color = TITLE_INK;
-        rimLabel(title, HOME_RIM, TITLE_RIM_W);
-        title.string = GAME_TITLE;
-        this.titleNode = title.node;
+        // NO TITLE. The route fills the screen top to bottom now, and the game's name is
+        // already the largest thing on the first screen this hands over from -- a second
+        // copy of it over the road is a caption on a picture that has one.
+        //
+        // The count takes the place it used to sit under: under the notch, not under the top
+        // edge, the same reservation the HUD's title plate makes.
+        this.railRoot = this.buildRoad();
 
-        this.sub = makeLabel(this.root, 'HomeSub', SUB_SIZE, titleY - TITLE_SIZE - 22);
+        // The plate goes in AFTER the road, so the stops pass BEHIND it. On a route that
+        // fills the screen there is nowhere to put a line of type that a scrolling stop does
+        // not eventually cross, and bare text with a stop sliding through it looks like a
+        // fault. An opaque plate is what the reference does with its chapter banner, and it
+        // is the only thing that actually solves it.
+        const plateY = h / 2 - safeInsets().top * h - h * 0.06;
+        this.topPlate = roundedSprite('HomePlate', PLATE_W, PLATE_H, PLATE, PLATE_H / 2);
+        this.root.addChild(this.topPlate);
+        this.topPlate.setPosition(0, plateY, 0);
+        this.sub = makeLabel(this.topPlate, 'HomeSub', SUB_SIZE, 0);
         this.sub.color = SUB_INK;
-        rimLabel(this.sub, HOME_RIM, SUB_RIM_W);
-        this.sub.node.active = false;
+        this.sub.isBold = true;
+        // THE CLEAR-SAVE GESTURE LIVES HERE NOW, and it is why removing the title was not a
+        // pure deletion: the press-and-hold that wipes progress had the title for a target
+        // and would have gone with it. The plate is what took the title's place on the
+        // screen, so it takes its second job too.
+        this.resetNode = this.topPlate;
+        this.topPlate.active = false;
 
-        this.railRoot = this.buildLane(h * 0.03);
-
-        this.cap = makeLabel(this.root, 'HomeCap', CAP_SIZE, h * 0.03 - LANE_H / 2 - 62);
-        this.cap.color = SUB_INK;
-        rimLabel(this.cap, HOME_RIM, SUB_RIM_W);
-        this.cap.string = '左右滑动选择关卡';
-        this.cap.node.active = false;
-
-        const start = this.buildStart(-h * 0.25);
+        const startY = -h * 0.25;
+        const start = this.buildStart(startY);
         this.startBtn = start.node;
         this.startFace = start.face;
         this.startBase = start.base;
@@ -410,25 +459,28 @@ export class HomeView {
     }
 
     /** The band the stops ride on, and the node they live in. */
-    private buildLane(y: number): Node {
-        const band = roundedSprite('Lane', this.w * 1.2, LANE_H, LANE, 2);
-        this.root.addChild(band);
-        band.setPosition(0, y, 0);
+    private buildRoad(): Node {
+        // Taller than the screen, so a road that is meant to run off both edges does. The
+        // dashes are laid over the whole of that span for the same reason -- a dash pattern
+        // that stops short of the edge says the road ends there.
+        const span = this.h * 1.2;
+        const strip = roundedSprite('Road', ROAD_W, span, ROAD, 2);
+        this.root.addChild(strip);
+        strip.setPosition(0, 0, 0);
 
-        const span = this.w * 1.2;
-        const step = LANE_DASH_W + LANE_DASH_GAP;
+        const step = ROAD_DASH_H + ROAD_DASH_GAP;
         const n = Math.ceil(span / step);
         for (let i = 0; i < n; i++) {
-            const dash = roundedSprite(`dash-${i}`, LANE_DASH_W, LANE_DASH_H, LANE_DASH, 2);
-            band.addChild(dash);
-            dash.setPosition(-span / 2 + step / 2 + i * step, 0, 0);
+            const dash = roundedSprite(`dash-${i}`, ROAD_DASH_W, ROAD_DASH_H, ROAD_DASH, 6);
+            strip.addChild(dash);
+            dash.setPosition(0, -span / 2 + step / 2 + i * step, 0);
         }
 
         const rail = new Node('RailStops');
         rail.layer = Layers.Enum.UI_2D;
         rail.addComponent(UITransform);
         this.root.addChild(rail);
-        rail.setPosition(0, y, 0);
+        rail.setPosition(0, 0, 0);
         return rail;
     }
 
@@ -535,8 +587,7 @@ export class HomeView {
     }
 
     private revealMenu(on: boolean): void {
-        this.sub.node.active = on;
-        this.cap.node.active = on;
+        this.topPlate.active = on;
         this.startBtn.active = on;
         this.railRoot.active = on;
     }
@@ -563,23 +614,23 @@ export class HomeView {
     private buildStop(i: number): Stop {
         const node = new Node(`Stop${i + 1}`);
         node.layer = Layers.Enum.UI_2D;
-        node.addComponent(UITransform).setContentSize(STOP_D, STOP_D);
+        node.addComponent(UITransform).setContentSize(STOP_W, STOP_H);
         this.railRoot.addChild(node);
         const fade = node.addComponent(UIOpacity);
 
         // The halo first, so it sits behind the chip and reads as a glow rather than a frame.
         const ring = roundedSprite(
-            'ring', STOP_D + STOP_RING_PAD * 2, STOP_D + STOP_RING_PAD * 2,
+            'ring', STOP_W + STOP_RING_PAD * 2, STOP_H + STOP_RING_PAD * 2,
             STOP_RING, STOP_R + 8,
         );
         node.addChild(ring);
         const ringFade = ring.addComponent(UIOpacity);
-        const base = roundedSprite('base', STOP_D, STOP_D, STOP_BASE, STOP_R);
+        const base = roundedSprite('base', STOP_W, STOP_H, STOP_BASE, STOP_R);
         node.addChild(base);
         base.setPosition(0, -BTN_LIFT, 0);
-        const face = roundedSprite('face', STOP_D, STOP_D, STOP, STOP_R);
+        const face = roundedSprite('face', STOP_W, STOP_H, STOP, STOP_R);
         node.addChild(face);
-        const num = makeLabel(face, 'n', 46, 0);
+        const num = makeLabel(face, 'n', 62, STOP_NUM_Y);
         num.color = STOP_INK;
         num.isBold = true;
         num.string = `${i + 1}`;
@@ -588,7 +639,7 @@ export class HomeView {
         const stars: Node[] = [];
         for (let s = 0; s < STAR_MAX; s++) {
             const star = starSprite(`star${s}`, STOP_STAR_D, STAR_OFF);
-            node.addChild(star);
+            face.addChild(star);
             star.setPosition((s - (STAR_MAX - 1) / 2) * STOP_STAR_PITCH, STOP_STAR_Y, 0);
             star.active = false;
             stars.push(star);
@@ -708,18 +759,20 @@ export class HomeView {
      * screen itself, because a half-visible chip is what says there is more rail.
      */
     private layout(): void {
-        const edge = this.w * 0.75;
+        const edge = this.h * 0.75;
         for (let i = 0; i < this.stops.length; i++) {
             const stop = this.stops[i];
-            const x = railOffset(i) - this.offset;
-            if (Math.abs(x) > edge) {
+            // Level 1 at the bottom and the numbers climbing, which is what makes the column
+            // read as a route rather than as a list: `railOffset` grows with i, and +y is up.
+            const y = railOffset(i) - this.offset;
+            if (Math.abs(y) > edge) {
                 stop.node.active = false;
                 continue;
             }
             stop.node.active = true;
             const t = Math.min(1, railStopT(this.offset, i));
             const scale = 1 + (STOP_REST - 1) * t;
-            stop.node.setPosition(x, 0, 0);
+            stop.node.setPosition(i % 2 === 0 ? -ZIG_X : ZIG_X, y, 0);
             stop.node.setScale(scale, scale, 1);
             stop.fade.opacity = Math.round(255 + (STOP_ALPHA_REST - 255) * t);
             // The halo belongs to the middle alone, and is gone by half a pitch out, so two
@@ -753,12 +806,12 @@ export class HomeView {
      * mid-glide catches it where it visibly is -- taking hold of a moving thing and having
      * it jump is the single thing that makes a drag feel broken.
      */
-    beginDrag(uiX: number, t: number): void {
+    beginDrag(uiY: number, t: number): void {
         if (this.waiting || this.levelCount === 0) return;
         this.dragging = true;
-        this.dragFromX = uiX;
+        this.dragFromY = uiY;
         this.dragBase = this.offset;
-        this.lastX = uiX;
+        this.lastY = uiY;
         this.lastT = t;
         this.travelled = 0;
         this.vel = 0;
@@ -769,16 +822,19 @@ export class HomeView {
         return this.dragging;
     }
 
-    moveDrag(uiX: number, t: number): void {
+    moveDrag(uiY: number, t: number): void {
         if (!this.dragging) return;
-        this.travelled += Math.abs(uiX - this.lastX);
-        // Negated once, here: a finger moving LEFT brings later levels to the middle, which
-        // is a RISING offset. Nothing downstream has to think about the sign again.
-        this.offset = railRubber(this.dragBase - (uiX - this.dragFromX), this.levelCount);
+        this.travelled += Math.abs(uiY - this.lastY);
+        // Negated once, here, and the sign survived the turn from a horizontal rail
+        // unchanged. A finger moving DOWN has to bring LATER levels to the middle, because
+        // later levels are drawn ABOVE and pulling the road down is what walks up it -- and
+        // a downward drag is a falling uiY, so the same subtraction that used to mean "left"
+        // now means "down". Nothing downstream thinks about the sign again.
+        this.offset = railRubber(this.dragBase - (uiY - this.dragFromY), this.levelCount);
         this.target = this.offset;
         const dt = t - this.lastT;
-        if (dt > 0.001) this.vel = -(uiX - this.lastX) / dt;
-        this.lastX = uiX;
+        if (dt > 0.001) this.vel = -(uiY - this.lastY) / dt;
+        this.lastY = uiY;
         this.lastT = t;
     }
 
@@ -813,10 +869,15 @@ export class HomeView {
             && Math.abs(ui.y - p.y) <= START_H / 2 + TAP_PAD;
     }
 
-    /** Whether `ui` landed on the title -- the press-and-hold that clears the save. */
-    hitsTitle(ui: Vec3): boolean {
+    /**
+     * Whether `ui` landed on the hold target that clears the save.
+     *
+     * It was the title until the rail turned vertical and the title went. See where
+     * `resetNode` is assigned: the caption carries it now.
+     */
+    hitsReset(ui: Vec3): boolean {
         if (!this.open() || this.waiting) return false;
-        const p = this.titleNode.worldPosition;
+        const p = this.resetNode.worldPosition;
         return Math.abs(ui.x - p.x) <= TITLE_HIT_W / 2
             && Math.abs(ui.y - p.y) <= TITLE_HIT_H / 2;
     }
@@ -835,8 +896,12 @@ export class HomeView {
             const stop = this.stops[i];
             if (!stop.node.active) continue;
             const p = stop.node.worldPosition;
-            const half = (STOP_D * stop.node.scale.x) / 2 + TAP_PAD;
-            if (Math.abs(ui.x - p.x) <= half && Math.abs(ui.y - p.y) <= half) return i;
+            // Per axis, because the stop is a pill now and not a square: one `half` would
+            // make the hit box 236 tall as well as wide, and the 124 units of gap between
+            // two stops would be claimed by both of them.
+            const halfW = (STOP_W * stop.node.scale.x) / 2 + TAP_PAD;
+            const halfH = (STOP_H * stop.node.scale.y) / 2 + TAP_PAD;
+            if (Math.abs(ui.x - p.x) <= halfW && Math.abs(ui.y - p.y) <= halfH) return i;
         }
         return -1;
     }

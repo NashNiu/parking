@@ -19,14 +19,19 @@
  */
 
 /**
- * Centre-to-centre spacing of the stops.
+ * Centre-to-centre spacing of the stops, along whatever axis the rail runs.
  *
- * 132 against a focused chip of 104 and a resting chip of 60: the focused one keeps 28 units
- * of daylight on each side, and two resting neighbours never touch. Tighter and the big chip
- * eats its neighbours; wider and the fifth stop falls off a 390-wide screen, which is the
- * narrowest phone this has to hold five on.
+ * NOTHING IN THIS FILE KNOWS WHICH AXIS THAT IS. It is one-dimensional offset arithmetic --
+ * pitch, nearest, flick, rubber -- and it carried over from a horizontal rail to a vertical
+ * one without a line changing. Only this number did, because a number is the one thing here
+ * that has to be measured against a screen.
+ *
+ * 272 against a 148-tall stop leaves 124 units of gap, and puts about eight stops on the
+ * shortest phone this has to hold (h = 2276 at 16:9) and eleven on the tallest. It was 132
+ * when the rail was horizontal, measured against a 104 chip and the five a 390-wide phone
+ * had to show.
  */
-export const RAIL_PITCH = 132;
+export const RAIL_PITCH = 272;
 
 /**
  * How much velocity is worth one extra stop, in offset units per second.

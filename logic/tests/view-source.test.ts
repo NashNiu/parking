@@ -149,12 +149,33 @@ test('the backdrop texture is clamped, which a non-power-of-two texture requires
 });
 
 /**
- * Every line of type on the home screen needs an outline now that a photograph is behind it:
- * the title lands on bright sky on one phone and on a white cloud on the next, and no ink
- * colour survives both. See HOME_RIM in home-view.ts.
+ * The two lines of type that sit DIRECTLY on the backdrop need an outline, because a
+ * photograph puts arbitrary colour behind them and no ink survives both a bright sky and a
+ * white cloud. See HOME_RIM in home-view.ts.
+ *
+ * It names them rather than counting them, which is the lesson of the version before this
+ * one: that asserted "at least three rimLabel calls", and three was right only while the
+ * title existed. A count breaks when the screen changes for an unrelated reason and says
+ * nothing about what is actually wrong. Everything else on this screen -- the stop numbers,
+ * the button's label -- sits on an opaque face and needs no rim.
  */
-test('the home screen type carries an outline', () => {
+test('nothing on the home screen is bare type over the backdrop', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  const rims = src.match(/rimLabel\(/g) ?? [];
-  expect(rims.length).toBeGreaterThanOrEqual(3);
+  // The only fixed label left is the plate's, and it reads because the plate under it is
+  // opaque -- which is also what stops a scrolling stop from passing through it.
+  expect(src).toContain("this.sub = makeLabel(this.topPlate, 'HomeSub', SUB_SIZE, 0);");
+  expect(src).toMatch(/const PLATE = new Color\(\d+, \d+, \d+, (2[0-4]\d|25[0-5])\)/);
+});
+
+/**
+ * The plate is built AFTER the road and the rail, and that order is the whole point of it:
+ * a plate drawn before the stops is a plate the stops slide over, which is the bare-type
+ * problem it was introduced to solve, with an extra draw call.
+ */
+test('the top plate is built after the rail, so stops pass behind it', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const rail = src.indexOf('this.railRoot = this.buildRoad();');
+  const plate = src.indexOf("this.topPlate = roundedSprite('HomePlate'");
+  expect(rail).toBeGreaterThan(0);
+  expect(plate).toBeGreaterThan(rail);
 });
