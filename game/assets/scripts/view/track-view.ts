@@ -1,10 +1,11 @@
 import { Node, Color, Vec3, MeshRenderer, primitives, tween, Tween } from 'cc';
+import { BOARD_TILT } from './board-layout';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
 import { buildPaxDot, buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
-    BLOCK, blockOffset, blockRanks, blockSpan, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
+    BLOCK, blockOffset, blockRanks, blockSpan, boardArc, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
     PaxGroup, TrackPath,
 } from '../core/index';
 
@@ -17,14 +18,41 @@ const LANE_STEP = LANE.step;
 const LANE_START = LANE.start;
 
 /**
- * How far a waiting figure turns, in degrees, from facing straight along the lane
- * toward facing the track. Measured against the running game (see `buildLanes`):
- * the geometrically "full" turn is 90, but at 90 the figure is in pure profile, its
- * face isn't visible, and the two channels' profiles are nearly indistinguishable at
- * this zoom. 45 keeps the face visible while the body still reads as angled toward
- * the track.
+ * How far a waiting figure turns, in degrees, out of a FULL turn of 90 -- from facing the
+ * camera toward facing the track it is queueing for.
+ *
+ * A FRACTION of the full turn, and that is what makes it a knob rather than a hand-picked
+ * pair of signs: `faceYaw` interpolates between camera-facing and the real direction, so 90
+ * would be the honest orientation and 45 is the compromise. At the honest 90 a lane figure is
+ * in pure profile -- the camera looks down world -Z and a lane runs along board X, so its face
+ * points straight across the screen and is not visible at all. At 45 the face still reads
+ * while the body is plainly angled toward the track.
+ *
+ * The ring does NOT turn its figures at all, and that is a decision rather than an omission:
+ * a figure has no front to see (pax-figure.ts -- a face was built, shown and rejected), so
+ * turning one costs a rotation per figure per frame and buys nothing. A version of this did
+ * face every ring row along its direction of travel; it went when the face did.
  */
 const FACE_TURN = 45;
+
+/**
+ * The yaw, in degrees, that turns a figure's face onto (fx, fy) in the board plane.
+ *
+ * A figure stands along the board's normal and faces board -Y at rest (`buildPaxFigure`), so
+ * a yaw of `y` about the board normal puts its face on (sin y, -cos y) -- hence the atan2
+ * below, with the arguments in that order and that sign.
+ *
+ * DERIVED, and that matters: the lane figures' turn used to be a hand-chosen `out.x > 0 ?
+ * -FACE_TURN : FACE_TURN`, carrying a note saying the sign had been checked on screen rather
+ * than worked out, that an earlier paper derivation had been wrong, and that the frame under
+ * it had since moved three times. Computing it from the direction the figure should face
+ * removes the choice: get the direction right and the sign follows. (For the record the old
+ * pair was correct -- `faceYaw(-out.x, -out.y) * 0.5` reproduces both of its values exactly
+ * on a lane running along X.)
+ */
+function faceYaw(fx: number, fy: number): number {
+    return Math.atan2(fx, -fy) * 180 / Math.PI;
+}
 
 /**
  * The track surface, how far behind the board plane it sits, and the soft shadow that
@@ -126,7 +154,20 @@ const PAX_HEIGHT = 0.55;
  * measures. It was rejected on gameplay: a row of four balls does not read as FOUR, and how
  * many a group holds is a number the player has to judge to know which car it can fill.
  */
-const PAX_DEPTH = 2.1;
+/**
+ * Fake depth for the crowd: how much board z a row gets per board unit it sits UP the board, so
+ * that a near row draws in front of a far one.
+ *
+ * ZERO ONCE THE BOARD IS TILTED, and not as a compromise -- the tilt does this job properly. A
+ * row further up a board tipped away from the camera IS further from the camera, so the depth
+ * buffer orders the crowd on its own. Keeping the fake as well would be actively wrong: at 2.1
+ * per board unit over a ring about two units deep, it is more than four world units of z, which
+ * a tilt turns into over two units of SHEAR up the screen. That is the one value in the scene
+ * big enough to have wrecked the tilt, and it was only ever free because the board was flat.
+ *
+ * The 2.1 is kept for the flat case so BOARD_TILT 0 still reproduces the old board exactly.
+ */
+const PAX_DEPTH = BOARD_TILT === 0 ? 2.1 : 0;
 
 /**
  * There is no arm swing any more, and the arms are baked into the figure's one mesh (see
@@ -254,6 +295,9 @@ export function leftLaneFloor(path: TrackPath, capacity: number, channels: Chann
  *
  * Called every frame for ring cells, because their across direction is the path normal and
  * turns as they travel; once at build time for the lanes, whose direction is fixed.
+ *
+ * POSITIONS ONLY. It does not set a facing: a ring figure is left at identity, facing down
+ * the screen, because there is nothing on its front to tell it from its back. See FACE_TURN.
  */
 function layoutRow(figures: Node[], dx: number, dy: number, rankStep: number): void {
     // A row drawn as one thing sits on its own centre -- there is no block to spread out.
@@ -285,10 +329,17 @@ function paintPassenger(node: Node, color: Color, shade: (c: Color) => Color): v
 }
 
 /**
- * A row node holding GROUP_SIZE passenger figures as children. The row's own transform
- * is the group's position on the track; the children carry the across-the-track offsets,
- * which `layoutRow` sets. The row is never rotated — the figures stand along the board's
- * +Y and face +Z, and spinning the row about the board normal would tip them over.
+ * A row node holding GROUP_SIZE passenger figures as children. The row's own transform is
+ * the group's position on the track; the children carry the across-the-track offsets, which
+ * `layoutRow` sets.
+ *
+ * The row is never rotated, but the reason it used to give for that is no longer true and
+ * should not be trusted if this is revisited: it said the figures "stand along the board's +Y
+ * and face +Z, and spinning the row about the board normal would tip them over". They stand
+ * along the board's normal now (`buildPaxFigure`), so rotating the row about it would spin
+ * them on the spot -- and would let the children's offsets be computed ONCE instead of every
+ * frame. Left alone because the per-frame layout is not what costs anything here, and moving
+ * it would touch the boarding flights, which read a figure's world position.
  */
 function makeRow(name: string): Node {
     const row = new Node(name);
@@ -383,7 +434,6 @@ export class TrackView {
     private readonly flierOwns: Record<FeedSide, number | null> = { far: null, near: null };
 
     private readonly capacity: number;
-    private readonly boardIndex: number;
     /**
      * The level's feeder channels, already normalised by `LoopSystem` -- side, drain
      * order, entry cell and lookahead all resolved there. This is the only copy of that
@@ -408,8 +458,12 @@ export class TrackView {
      * already is. NOT readonly: the speed button changes it (see `setTick`).
      */
     private tick: number;
-    /** Path parameters where the band opens up: the boarding gap and each entry. */
-    private gapTs: number[] = [];
+    /**
+     * Where the band opens up: one entry per `{ t, halfLap }`, plus the boarding doorway --
+     * which is WIDER than an entry (it spans BOARD_CELLS cells), so a single shared width
+     * no longer describes them all.
+     */
+    private gaps: { t: number; halfLap: number }[] = [];
     /** One row node per ring slot, positioned on the path centreline. */
     private clusters: Node[] = [];
     /** The GROUP_SIZE figures inside each ring row; `count` of them are shown. */
@@ -443,15 +497,23 @@ export class TrackView {
     ) {
         this.path = path;
         this.capacity = capacity;
-        this.boardIndex = boardIndex;
         this.channels = channels;
         this.root = parent;
         this.cy = y;
         this.feetTop = y + trackReach(path).top - PAX_HEIGHT;
         this.tick = tick;
-        this.gapTs = [
-            boardIndex / capacity,
-            ...channels.map((c) => c.entry / capacity),
+        // As a FRACTION of the lap, since that is what the band's sampling works in. The
+        // doorway's own arc comes from core (`boardArc`), so the band opens over exactly the
+        // cells `LoopSystem` boards from.
+        this.gaps = [
+            {
+                t: boardIndex / capacity,
+                halfLap: boardArc(path.perimeter, capacity) / 2 / path.perimeter,
+            },
+            ...channels.map((c) => ({
+                t: c.entry / capacity,
+                halfLap: GAP_ARC / 2 / path.perimeter,
+            })),
         ];
         this.buildBand(parent);
         this.buildClusters(parent);
@@ -515,16 +577,13 @@ export class TrackView {
      */
     private buildBand(parent: Node): void {
         const SAMPLES = 96;
-        // The gap is an absolute arc length, not half a slot: as a fraction of the lap it
-        // shrank with the ring, and at 20 slots the doorway was 0.37 long and stopped
-        // reading as a doorway at all.
-        const halfLap = GAP_ARC / 2 / this.path.perimeter;
         const parts: MeshPart[] = [];
         const p = new Vec3(), q = new Vec3();
         for (let i = 0; i < SAMPLES; i++) {
             const t = i / SAMPLES;
-            // Skip the samples that fall inside a gap.
-            if (this.gapTs.some((g) => Math.abs(((t - g + 1.5) % 1) - 0.5) < halfLap)) continue;
+            // Skip the samples that fall inside a gap. Each gap carries its own width: an
+            // entry is one row wide, the boarding doorway is BOARD_CELLS cells wide.
+            if (this.gaps.some((g) => Math.abs(((t - g.t + 1.5) % 1) - 0.5) < g.halfLap)) continue;
             this.point(t, p);
             this.point(t + 1 / SAMPLES, q);
             const dx = q.x - p.x, dy = q.y - p.y;
@@ -685,33 +744,21 @@ export class TrackView {
                 // Fixed, unlike the ring's rows: a lane never turns, so its rows are laid
                 // out once, across the lane's own direction.
                 layoutRow(figures, across.x, across.y, LANE_RANK_STEP);
-                // Face the track, not the camera: yaw is per figure (not on the row node,
-                // whose children carry the across-the-lane offsets `layoutRow` just set,
-                // and rotating the parent would swing those out of the board plane) and
-                // about Y only (about Z would tip them over, per makeRow's docstring).
+                // Face the track: INWARD along the lane, which is -out, held back toward the
+                // camera by (1 - FACE_TURN/90). Once at build time -- a lane never turns.
                 //
-                // Base orientation is camera-facing: a figure with no yaw of its own —
-                // like every ring figure — faces +Z, out of the board toward the
-                // camera (pax-figure.ts derives this from the geometry it places, not
-                // from an authored convention). This yaw turns a figure away from that
-                // base, toward the track, following the standard convention
-                // +Z = (sin(yaw), 0, cos(yaw)); facing inward means the yaw's sign is
-                // opposite to `out.x`'s, which is what the expression below does. The
-                // magnitude is FACE_TURN (45), not a full 90, because 90 puts the
-                // figure in pure profile — with no face on the new figure either, that
-                // still means the shoulders/arms, and the two channels' silhouettes
-                // are nearly indistinguishable at this zoom.
+                // Per figure rather than on the row node, whose children carry the
+                // across-the-lane offsets: rotating the parent would swing those round too.
+                // About Z, the board's NORMAL -- a figure stands along it, so this spins it on
+                // the spot; about Y it would tip over.
                 //
-                // This sign was previously justified by comparing a lane figure against
-                // a ring figure "known" to face the camera — but under the old GLB
-                // model that ring figure did NOT face the camera; every ring passenger
-                // was in profile for the whole project (see git history on this file
-                // predating pax-figure.ts). That the sign below still came out right
-                // was luck, not a validated derivation. If this ever needs to change,
-                // measure it again on screen — do not re-derive it on paper; multiple
-                // paper derivations before this one were wrong.
-                const yaw = out.x > 0 ? -FACE_TURN : FACE_TURN;
-                for (const figure of figures) figure.setRotationFromEuler(0, yaw, 0);
+                // The sign is no longer chosen, which retires a long-standing worry attached
+                // to this line: it was `out.x > 0 ? -FACE_TURN : FACE_TURN`, justified by
+                // having been eyeballed on screen, under a frame that then moved three times.
+                // `faceYaw` computes it from the direction, so there is nothing left to get
+                // backwards. See its note.
+                const yaw = faceYaw(-out.x, -out.y) * (FACE_TURN / 90);
+                for (const figure of figures) figure.setRotationFromEuler(0, 0, yaw);
                 this.laneFigures[channel.side].push(figures);
                 const ly = first.y + out.y * LANE_STEP * i;
                 n.setPosition(first.x + out.x * LANE_STEP * i, ly, this.depthAt(ly));
@@ -908,13 +955,19 @@ export class TrackView {
     }
 
     /**
-     * Where figure `i` of the block at the boarding gap stands, in world space. A boarding
+     * Where figure `seat` of the row in RING CELL `cell` stands, in world space. A boarding
      * flight has to start from a spot a figure actually occupied, not from the cell's
      * centre — with four abreast in two ranks, a flight from the middle reads as the wrong
      * passenger lifting off.
+     *
+     * `cell` is a ring index, not a cluster index, and it is turned straight into a path
+     * parameter: at rest the phase is 0 by definition, so ring cell c is drawn at
+     * `c / capacity` (see `repositionAll`). That is why a doorway BOARD_CELLS wide needs no
+     * extra bookkeeping here — each of its cells has its own fixed spot on the track, and
+     * `Flight.cell` says which one the passenger left from.
      */
-    boardingFigureWorldPos(i: number): Vec3 {
-        const t = this.boardIndex / this.capacity;
+    boardingFigureWorldPos(cell: number, seat: number): Vec3 {
+        const t = ((cell % this.capacity) + this.capacity) % this.capacity / this.capacity;
         const local = this.point(t, new Vec3());
         const n = this.normal(t);
         // Same block layout the drawn figures use, so a flight leaves the spot one of them
@@ -922,7 +975,7 @@ export class TrackView {
         // as one dot (ROW_AS_DOT), in which case the centreline IS where it stood.
         const o = ROW_AS_DOT
             ? OFFSET_SCRATCH_ZERO
-            : blockOffset(i % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
+            : blockOffset(seat % GROUP_SIZE, RANKS, BLOCK.rankStep, OFFSET_SCRATCH);
         const fy = local.y + o.across * n.y - o.along * n.x;
         // Its depth too, or the flight starts at z = 0 while the figure it replaces was
         // several units nearer -- which reads as the passenger jumping backwards on takeoff.

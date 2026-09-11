@@ -1,4 +1,4 @@
-import { DEFAULT_FEEDS, LevelData } from './types';
+import { DEFAULT_FEEDS, LevelData, STAR_MAX } from './types';
 import { LotSystem } from './lot-system';
 import { ParkingSystem } from './parking-system';
 import { LoopSystem } from './loop-system';
@@ -33,17 +33,15 @@ export class GameCore {
   private state: GameState = 'playing';
 
   constructor(level: LevelData) {
-    this.lot = new LotSystem({ w: level.lot.w, h: level.lot.h }, level.lot.cars);
+    this.lot = new LotSystem(
+      { w: level.lot.w, h: level.lot.h }, level.lot.cars, level.lot.tunnels ?? [],
+    );
     this.parking = new ParkingSystem(level.parking.slots, level.parking.unlocked);
     this.loop = new LoopSystem(
       level.loop.capacity,
       level.loop.boardIndex,
       level.loop.queue,
       level.loop.feeds ?? DEFAULT_FEEDS,
-      // Seeded by level id: mixed colours, but the same mix on every replay. `?? 0`
-      // guards against a level JSON missing `id` (validateLevel doesn't check it) --
-      // a level must never silently fall back to the unshuffled authored order.
-      level.id ?? 0,
     );
     this.boarding = new BoardingSystem(this.loop, this.parking);
     this.updateState();
@@ -77,8 +75,29 @@ export class GameCore {
     return slot;
   }
 
+  /**
+   * The level's star rating, 1 to STAR_MAX: full marks for clearing it without opening a
+   * stall, one star fewer for each one opened.
+   *
+   * The locked stalls are the only resource the game already meters -- nothing counts moves
+   * or time -- so they are what a rating can honestly be made of, and metering them is what
+   * turns "open a stall" from a free rescue into a decision. `ParkingSystem.unlocksUsed`
+   * does the counting; this only applies the scale and the floor.
+   *
+   * The floor of one is deliberate: a cleared level is a win, and a win showing no stars
+   * reads as a failure. The upper stars are what separate a cheap clear from an expensive
+   * one.
+   *
+   * Answerable at any time, not just at the end. It reports the rating the level WOULD earn
+   * from here, which is what lets the blocked-stall prompt tell the player what opening one
+   * will cost before they agree to it.
+   */
+  stars(): number {
+    return Math.max(1, STAR_MAX - this.parking.unlocksUsed());
+  }
+
   stepLoop(): BoardResult {
-    if (this.state !== 'playing') return { boardedColor: null, boardedCount: 0, departedCarIds: [], boardedSlots: [] };
+    if (this.state !== 'playing') return { flights: [], boardedCount: 0, departedCarIds: [] };
     const res = this.boarding.tick();
     this.updateState();
     return res;
@@ -151,9 +170,17 @@ export class GameCore {
    * in it.
    *
    * Deliberately gated on `needsUnlock` rather than trusting the caller: a level must not
-   * be endable from a position the player could still have played out, and the view asking
-   * twice (a double tap on the prompt's close button, say) must be idempotent rather than
-   * able to kill a level that has since started moving again.
+   * be endable from a position the player could still have played out, and a caller asking
+   * twice must be idempotent rather than able to kill a level that has since started moving
+   * again.
+   *
+   * NOTHING CALLS THIS TODAY, and that is deliberate rather than rot. The prompt's close
+   * button used to: an X that lost the level on a position with a free legal move still in
+   * it, on a state the player reaches in 59 of 80 runs. Its three answers now all resolve
+   * the position instead -- open a stall, replay, or leave for the menu -- so a level ends
+   * in a loss only on a real deadlock. This stays because giving up is a real transition a
+   * settings menu may well offer later, and it is the only safe way to make it: it re-checks
+   * the position rather than believing the caller.
    */
   declineUnlock(): boolean {
     if (!this.needsUnlock()) return false;

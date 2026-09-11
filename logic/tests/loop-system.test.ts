@@ -1,5 +1,7 @@
 import { LoopSystem } from '../../game/assets/scripts/core/loop-system';
-import { DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup } from '../../game/assets/scripts/core/types';
+import {
+  BOARD_CELLS, DEFAULT_FEEDS, Feed, GROUP_SIZE, PaxGroup,
+} from '../../game/assets/scripts/core/types';
 
 /**
  * A full group, as a number. Every passenger count below is written as a multiple of it
@@ -12,15 +14,6 @@ const G = GROUP_SIZE;
 /** Terse group literal, so the expectations below stay readable. */
 function g(color: string, count: number): PaxGroup {
   return { color, count };
-}
-
-/** People per colour across the whole system, for the shuffle invariants. */
-function counts(loop: LoopSystem): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
-    if (grp) out[grp.color] = (out[grp.color] || 0) + grp.count;
-  }
-  return out;
 }
 
 test('the queue splits into same-colour groups of GROUP_SIZE', () => {
@@ -149,38 +142,26 @@ test('reachable colors span the far-to-near channel boundary', () => {
   expect(loop.reachableColors()).toEqual(new Set(['a', 'b', 'c']));
 });
 
-test('without a seed the queue keeps its authored order', () => {
+test('the queue is consumed in the order it was authored', () => {
+  // The queue's ORDER is level data now. There is no shuffle and no seed: ring cell i holds
+  // authored row i, so a band the generator put at the front of the queue is a band the
+  // player sees at the front of the track.
   const loop = new LoopSystem(4, 0, [{ color: 'a', count: 4 * G }, { color: 'b', count: 4 * G }]);
   expect(loop.ring).toEqual([g('a', G), g('a', G), g('a', G), g('a', G)]);
+  expect(loop.channels.flatMap((c) => c.queue)).toEqual([
+    g('b', G), g('b', G), g('b', G), g('b', G),
+  ]);
 });
 
-test('a seed mixes the colors without changing how many of each there are', () => {
-  const loop = new LoopSystem(12, 6, [{ color: 'a', count: 12 * G }, { color: 'b', count: 12 * G }], DEFAULT_FEEDS, 7);
-  expect(counts(loop)).toEqual({ a: 12 * G, b: 12 * G });
-  const onTrack = new Set(loop.ring.filter((x) => x !== null).map((x) => x!.color));
-  expect(onTrack.size).toBe(2); // both colors on the track
-});
-
-test('shuffling keeps every group single-coloured', () => {
-  // The shuffle reorders whole groups, never individual passengers -- a row that mixed
-  // colours would break the whole point of drawing a group as one row.
-  // Counts that are NOT multiples of G on purpose, so every colour ends in a remainder
-  // group and the shuffle has ragged blocks to move around.
-  const odd = 3 * G + 3;
+test('a band of one colour lands on neighbouring ring cells', () => {
+  // What the whole design is for: an authored band of six rows occupies six adjacent cells,
+  // so the BOARD_CELLS doorway can take three of them in one burst.
   const loop = new LoopSystem(12, 6, [
-    { color: 'a', count: odd }, { color: 'b', count: odd }, { color: 'c', count: odd },
-  ], DEFAULT_FEEDS, 3);
-  for (const grp of [...loop.ring, ...loop.channels.flatMap((c) => c.queue)]) {
-    if (!grp) continue;
-    expect(grp.count).toBeGreaterThan(0);
-    expect(grp.count).toBeLessThanOrEqual(G);
-  }
-  expect(counts(loop)).toEqual({ a: odd, b: odd, c: odd });
-});
-
-test('the same seed always shuffles the same way', () => {
-  const build = () => new LoopSystem(12, 6, [{ color: 'a', count: 12 * G }, { color: 'b', count: 12 * G }], DEFAULT_FEEDS, 7);
-  expect(build().ring).toEqual(build().ring);
+    { color: 'a', count: 6 * G }, { color: 'b', count: 6 * G },
+  ]);
+  expect(loop.ring.map((x) => x!.color)).toEqual([
+    'a', 'a', 'a', 'a', 'a', 'a', 'b', 'b', 'b', 'b', 'b', 'b',
+  ]);
 });
 
 test('the default feeds reproduce two channels split down the middle', () => {
@@ -284,5 +265,26 @@ test('feeds with no recognised side fall back to the default channels, not zero'
     const loop = new LoopSystem(8, 0, [g('a', 16 * G)], feeds);
     expect(loop.channels.map((c) => c.side)).toEqual(['far', 'near']);
     expect(loop.remainingCount()).toBe(16 * G);
+  }
+});
+
+test('the doorway window is symmetric about boardIndex and wraps the ring', () => {
+  const loop = new LoopSystem(28, 14, [{ color: 'a', count: 28 * G }]);
+  expect(loop.boardHalf).toBe((BOARD_CELLS - 1) >> 1);
+  expect(loop.boardIndices()).toEqual([15, 14, 13]);
+
+  // boardIndex 0 puts the window across the seam, which must not produce a negative index.
+  const wrapped = new LoopSystem(28, 0, [{ color: 'a', count: 28 * G }]);
+  expect(wrapped.boardIndices()).toEqual([1, 0, 27]);
+});
+
+test('the doorway never reaches an entry cell', () => {
+  // A row boarded on the tick it entered would have the entry animation flying a figure
+  // that is already gone.
+  for (const capacity of [4, 8, 12, 28, 32, 36]) {
+    const boardIndex = capacity / 2;
+    const loop = new LoopSystem(capacity, boardIndex, [{ color: 'a', count: capacity * G }]);
+    const entries = new Set(loop.channels.map((c) => c.entry));
+    for (const cell of loop.boardIndices()) expect(entries.has(cell)).toBe(false);
   }
 });

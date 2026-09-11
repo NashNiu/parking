@@ -1,9 +1,10 @@
-import { Node, Color, MeshRenderer } from 'cc';
+import { Node, Color, Mesh, MeshRenderer } from 'cc';
 import { Cap } from '../core/index';
 import { vertexColorMaterial } from './materials';
 import { carMesh } from './car-mesh';
 import { blobShadow } from './blob-shadow';
 import { KEY_LIGHT_PITCH_DEG } from './environment';
+import { BOARD_TILT } from './board-layout';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -12,43 +13,70 @@ import { KEY_LIGHT_PITCH_DEG } from './environment';
 export type { Cap };
 
 /**
- * How high off the board the car is meant to READ as being, in world units.
+ * How high off the board the car is meant to READ as being, in world units. The drop shadow is
+ * thrown from it, so it is the only place the car's apparent height is stated.
  *
- * Not how tall it is -- under this camera the car has no visible height at all, and the mesh is
- * barely a tenth of a unit thick. This is the number the drop shadow is computed from, so it is
- * the only place the car's apparent height is stated.
- *
- * Deliberately small. The shadow offset it produces is about 0.05 world units, or 0.066 board
- * units, and CLEARANCE between parked cars is 0.04 -- so a bigger lift starts laying this car's
- * shadow across its neighbour's paint, and the shadow draws in the transparent pass, i.e. ON TOP
- * of that neighbour. Turn it up and check a dense lot, not a sparse one.
+ * It can afford to be generous, which corrects an earlier note here saying the opposite. The
+ * shadow uses `builtin-unlit` technique 1, whose depth state is `depthTest: true,
+ * depthWrite: false` -- so a shadow at z = -0.06 is depth-REJECTED wherever a car in front of it
+ * has already written depth, and cannot paint across a neighbour's paint at any offset.
  */
-const SHADOW_LIFT = 0.035;
+const SHADOW_LIFT = 0.06;
+
+/**
+ * A board-space offset, expressed in `body`'s own frame.
+ *
+ * Every fake-height cue on this car -- the side wall, the body's matching half-step up, and the
+ * drop shadow -- is a board direction: down the screen, where the light throws things. But they
+ * all hang off `body`, which carries the car's heading, so writing the offset straight into a
+ * local position would SPIN it with the car and put the wall and the shadow on the wrong side of
+ * every car not pointing +X. Rotating by -angle here lands them in the same board direction
+ * whatever the heading. (They stay on `body` rather than moving to `root` so they still squash
+ * with the car on a tap.)
+ */
+function boardToLocal(angle: number, dx: number, dy: number): [number, number] {
+    const a = angle * Math.PI / 180;
+    const c = Math.cos(a), s = Math.sin(a);
+    return [dx * c + dy * s, -dx * s + dy * c];
+}
 
 /**
  * Contact shadow, sized to the car's ACTUAL body (`len` along body X, `wid` along body Y) so the
  * heading rotates it with the car — a car pointing up gets a tall narrow shadow, not a wide flat
- * one. z = -0.06 puts it between the lot surface (-0.10) and the car's lowest plate (0).
+ * one. z = -0.06 puts it under the side wall (-0.02) and over the lot surface (-0.10).
  *
- * OFFSET IN BOARD SPACE, NOT BODY SPACE, and that distinction is the whole point. The offset is
- * where the light throws the shadow, so it must be the same direction on screen for every car;
- * the shadow node hangs off `body`, which carries the heading, so a plain local offset would
- * SPIN with the car and put the shadow on the wrong side of every car not pointing +X. It is
- * therefore rotated back by -angle here, which lands it in the same board direction whatever the
- * heading. (It stays on `body` rather than moving to `root` so it still squashes with the car on
- * a tap.)
+ * The direction and distance come from the key light rather than from taste: a point `h` above
+ * the board lands at -h * L.xy / L.z, taken in BOARD space, which is h * tan(pitch - tilt).
  *
- * The direction itself comes from the key light rather than from taste: a point `h` above the
- * board lands at -h * L.xy / L.z, and with the light at KEY_LIGHT_PITCH_DEG that is
- * h * tan(55°) straight DOWN the screen, in -Y. Change the light's pitch and the shadows follow.
+ * IN BOARD SPACE, not world -- the light is a scene node and the board is what turns under it,
+ * so the two frames differ by exactly the tilt. Written as tan(pitch) it happened to be right
+ * only while the pitch stayed larger than the tilt; once the light moved to the near side of the
+ * board (see KEY_LIGHT_PITCH_DEG) that form threw the shadow to the wrong side. Change either
+ * the pitch or the tilt and this follows both.
  */
 function addShadow(body: Node, len: number, wid: number, angle: number): void {
-    const shadow = blobShadow('shadow', len * 0.94, wid * 1.08);
-    const drop = SHADOW_LIFT * Math.tan(-KEY_LIGHT_PITCH_DEG * Math.PI / 180);
-    const a = angle * Math.PI / 180;
-    // R(-angle) applied to the board-space offset (0, -drop).
-    shadow.setPosition(-drop * Math.sin(a), -drop * Math.cos(a), -0.06);
+    const shadow = blobShadow('shadow', len * 0.94, wid * 1.02);
+    const throwDown = SHADOW_LIFT
+        * Math.tan((-KEY_LIGHT_PITCH_DEG - BOARD_TILT) * Math.PI / 180);
+    const [dx, dy] = boardToLocal(angle, 0, -throwDown);
+    shadow.setPosition(dx, dy, -0.06);
     body.addChild(shadow);
+}
+
+/** One of the car's two plan meshes, scaled to the car and offset up or down the screen. */
+function mesh(
+    name: string, geometry: Mesh, color: Color,
+    len: number, wid: number, angle: number, dy: number, z: number,
+): Node {
+    const node = new Node(name);
+    const mr = node.addComponent(MeshRenderer);
+    mr.mesh = geometry;
+    mr.material = vertexColorMaterial(color);
+    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
+    node.setScale(len, wid, 1);
+    const [dx, dyLocal] = boardToLocal(angle, 0, dy);
+    node.setPosition(dx, dyLocal, z);
+    return node;
 }
 
 /** What `buildCar` hands back: the nodes to move and animate, and the size it settled on. */
@@ -81,12 +109,14 @@ export interface BuiltCar {
  * scale IS the size. They are handed straight back, exactly matching core's footprint -- there
  * is no fitted size left to differ from the requested one.
  *
- * It is also about seventy times cheaper to draw. One mesh and one material per colour, six
- * colours in the palette, one MeshRenderer per car: a full lot is six instanced draw calls,
- * against roughly 414 for 46 nine-primitive models.
+ * It is also about seventy times cheaper to draw. One MeshRenderer per car, sharing a mesh
+ * and a material with every other car of its colour AND capacity: a full lot is at most
+ * eighteen instanced draw calls, against roughly 414 for 46 nine-primitive models. `cap` is
+ * here for that mesh key alone -- the SIZE still arrives as `len`/`wid` from core's CAP_BOX,
+ * because nothing about the mesh's geometry may depend on a size the caller also passes.
  */
 export function buildCar(
-    name: string, len: number, wid: number, color: Color, angle: number,
+    name: string, len: number, wid: number, color: Color, angle: number, cap: Cap,
 ): BuiltCar {
     const root = new Node(name);
 
@@ -98,16 +128,14 @@ export function buildCar(
     root.addChild(body);
 
     // The size lives on a child, so the squash tween and the car's dimensions never share a
-    // scale. The mesh is built in a unit box with length along X and width along Y, already in
-    // board space, so there is no lay-down rotation and no lift: the plates stack a few
-    // hundredths of a unit up in +Z, just far enough apart not to z-fight.
-    const plan = new Node('plan');
-    const mr = plan.addComponent(MeshRenderer);
-    mr.mesh = carMesh(color);
-    mr.material = vertexColorMaterial(color);
-    mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
-    plan.setScale(len, wid, 1);
-    body.addChild(plan);
+    // scale. Both meshes are built in a unit box with length along X and width along Y, already
+    // in board space, so there is no lay-down rotation: the plates stack a few hundredths of a
+    // unit up in +Z, just far enough apart not to z-fight.
+    //
+    // ONE renderer, sitting EXACTLY on core's footprint. A second one carrying a screen-space
+    // "side wall" under it was tried across four rounds and removed; see the README for the
+    // structural reason it cannot be tuned into working.
+    body.addChild(mesh('plan', carMesh(color, cap), color, len, wid, angle, 0, 0));
 
     addShadow(body, len, wid, angle);
 

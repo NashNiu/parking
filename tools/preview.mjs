@@ -38,10 +38,15 @@ const GAME = join(REPO, 'game');
 const BUILD = join(GAME, 'build', 'wechatgame');
 const BUILD_LOGS = join(GAME, 'temp', 'builder', 'log');
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const NO_BUILD = args.has('--no-build');
 const AS_IMAGE = args.has('--image');
 const DRY = args.has('--dry-run');
+// `--hold <ms>`, forwarded verbatim to patch-splash. It has to come through here rather than
+// be run afterwards: the QR is generated from the folder as it stands at that moment, so a
+// hold applied after this script has finished is a hold the phone never sees.
+const HOLD = args.has('--hold') ? argv.slice(argv.indexOf('--hold'), argv.indexOf('--hold') + 2) : [];
 
 const WX_CANDIDATES = [
     process.env.WX_DEVTOOLS_CLI,
@@ -252,6 +257,31 @@ if (creator) {
             console.error('          to compile.');
         }
         process.exit(1);
+    }
+}
+
+// 2b. Put the game's own logo on the Cocos first screen.
+//
+// UNCONDITIONAL, --no-build included, and that is the point: the build folder is generated
+// output, so EVERY build resets first-screen.js and deletes the logo copied in beside it --
+// whether the build happened above or in the Creator GUI a minute ago. Doing this by hand
+// after every build was the plan, and it survived exactly one build before a rebuild ate it
+// and the Cocos logo came back on a real device.
+//
+// Two node spawns rather than `npm run splash`: no shell, no npm.cmd, no PATH -- the same
+// reason every other tool here is invoked through `process.execPath`. A failure is LOUD but
+// not fatal: a missing logo is not a reason to refuse a device test.
+if (!DRY) {
+    const tsc = join(REPO, 'logic', 'node_modules', 'typescript', 'bin', 'tsc');
+    const patcher = join(REPO, '.tmp', 'gen', 'tools', 'patch-splash.js');
+    const built = run('compiling patch-splash', process.execPath,
+                      [tsc, '-p', join(REPO, 'logic', 'tsconfig.gen.json')]);
+    if (built !== 0) {
+        console.error('[preview] patch-splash did not compile -- the first screen will show');
+        console.error('          the Cocos logo. The build itself is fine.');
+    } else if (run('patching the first screen', process.execPath, [patcher, ...HOLD]) !== 0) {
+        console.error('[preview] the first screen could not be patched -- it will show the');
+        console.error('          Cocos logo. The build itself is fine.');
     }
 }
 

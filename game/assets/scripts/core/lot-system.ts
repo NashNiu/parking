@@ -1,5 +1,7 @@
-import { CarSpec, Lot } from './types';
+import { CarSpec, Lot, TunnelSpec } from './types';
+import { OBB } from './geometry';
 import { pathClear } from './move-solver';
+import { mouthCar, tunnelBox } from './tunnel';
 
 /**
  * The cars in the parking lot, and whether any given one can drive out.
@@ -13,9 +15,43 @@ export class LotSystem {
   bounds: Lot;
   cars: Map<number, CarSpec>;
 
-  constructor(lot: Lot, cars: CarSpec[]) {
+  /**
+   * This lot's OWN copy of the level's tunnels, consumed as cars leave. Copied rather than
+   * referenced because a level object is replayed: a `LotSystem` that drained the array it
+   * was handed would leave the second play of that level with empty tunnels.
+   */
+  readonly tunnels: TunnelSpec[];
+
+  /** Tunnel bodies, computed once. Nothing ever moves them. */
+  private readonly blockers: OBB[];
+
+  /** Which tunnel a live mouth car belongs to, by car id. */
+  private mouthOf = new Map<number, TunnelSpec>();
+
+  /**
+   * Next id for a car coming out of a tunnel. Starts past every id the level wrote, so a
+   * tunnel car can never collide with a grid car's id -- which matters because the parking
+   * bay, the view's node map and the debug log all key on that number and none of them knows
+   * where a car came from.
+   */
+  private nextId: number;
+
+  constructor(lot: Lot, cars: CarSpec[], tunnels: TunnelSpec[] = []) {
     this.bounds = { w: lot.w, h: lot.h };
     this.cars = new Map(cars.map((c) => [c.id, { ...c }]));
+    this.tunnels = tunnels.map((t) => ({ ...t, cars: t.cars.slice() }));
+    this.blockers = this.tunnels.map(tunnelBox);
+    this.nextId = cars.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+    for (const t of this.tunnels) this.spawnMouth(t);
+  }
+
+  /** Put a tunnel's current head car on the board. No-op for a drained tunnel. */
+  private spawnMouth(t: TunnelSpec): void {
+    const car = mouthCar(t, this.nextId);
+    if (!car) return;
+    this.nextId++;
+    this.cars.set(car.id, car);
+    this.mouthOf.set(car.id, t);
   }
 
   canExit(carId: number): boolean {
@@ -24,11 +60,39 @@ export class LotSystem {
     // pathClear skips the mover by id, so the whole list goes in as it stands.
     //
     // Array.from, NOT [...map.values()] -- see `movableCarIds`.
-    return pathClear(car, Array.from(this.cars.values()), this.bounds);
+    return pathClear(car, Array.from(this.cars.values()), this.bounds, this.blockers);
   }
 
+  /**
+   * Take a car off the board, and -- if it was a tunnel's mouth car -- move the next one up
+   * in the SAME call. There is no in-between state where a tunnel that still holds cars has
+   * nothing at its mouth, and that is what makes `isEmpty` still mean "the level's lot is
+   * clear" without a word being added to it: a tunnel with cars left always has one on the
+   * board.
+   *
+   * The view's slide-out animation runs afterwards and changes nothing here; core has
+   * already moved on. That is the same split `ParkedCar.ready` makes, minus the flag --
+   * nothing about the new car's verdict differs during the slide, so core needs no notion
+   * of it. The view swallows taps on a car still emerging on its own.
+   */
   removeCar(carId: number): void {
     this.cars.delete(carId);
+    const t = this.mouthOf.get(carId);
+    if (!t) return;
+    this.mouthOf.delete(carId);
+    t.cars.shift();
+    this.spawnMouth(t);
+  }
+
+  /** The id of the car at `tunnelId`'s mouth, or null once it is drained. */
+  mouthCarId(tunnelId: number): number | null {
+    for (const [id, t] of this.mouthOf) if (t.id === tunnelId) return id;
+    return null;
+  }
+
+  /** How many cars `tunnelId` still holds, the one at the mouth included. */
+  remainingIn(tunnelId: number): number {
+    return this.tunnels.find((t) => t.id === tunnelId)?.cars.length ?? 0;
   }
 
   isEmpty(): boolean {

@@ -1,22 +1,33 @@
 import {
     _decorator, Component, JsonAsset, resources, Node, Camera, find, Vec3, Color, Label,
     input, Input, EventTouch, EventMouse, EventKeyboard, KeyCode, geometry, tween, Mat4,
-    assetManager, EffectAsset, screen,
+    EffectAsset, Material, screen,
 } from 'cc';
 import {
-    GameCore, validateLevel, LevelData, firstBlocker, LANE, carBox, CAP_BOX, CAR_SCALE,
-    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack,
+    GameCore, validateLevel, LevelData, firstBlocker, Flight, LANE, carBox, CAP_BOX, CAR_SCALE,
+    DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
+    emptyProgress, parseProgress, Progress, recordClear, serializeProgress, unlockedThrough,
+    defaultSettings, parseSettings, serializeSettings, Settings,
 } from '../core/index';
-import { BoardLayout } from './board-layout';
+import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
 import { colorOf } from './colors';
 import { GridView } from './grid-view';
+import { buildTunnel, tunnelCrown, TUNNEL_SHELL } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
-import { setupEnvironment } from './environment';
-import { setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad } from './scene-stage';
+import { HomeView } from './home-view';
+import {
+    clearProgressText, loadProgressText, loadSettingsText, saveProgressText, saveSettingsText,
+} from './storage';
+import { setHaptics } from './haptics';
+import { setupEnvironment, setupAntiAliasing } from './environment';
+import {
+    setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
+} from './scene-stage';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
+import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
 import { vibrate } from './haptics';
 
@@ -45,7 +56,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0901-17';
+const BUILD_TAG = 'build 0903-01';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -69,27 +80,30 @@ function levelStamp(level: LevelData, uuid: string): string {
 }
 
 /**
- * Delay between the boarding flights of one block. Small enough that the block is clearly
- * one event, large enough that eight people read as eight rather than one blob.
+ * Delay between one boarding flight and the next. Small enough that a tick's boarding is
+ * clearly one event, large enough that twelve people read as twelve rather than one blob.
  *
- * What actually pins it is a RATIO, not a duration. The whole flight takes
- * boardingDuration(), and the departure of the car that just filled waits for it (see the
- * tick loop) -- so what matters is how many ticks that wait spans. A row of four spans about
- * 1.5 of them; push it near three and the core has time to hand the same stall to another
- * car while the view still holds the old one, and two view entries share a slot.
+ * It used to be pinned by a RATIO rather than by how it looked: the departure of the car
+ * that just filled waited for the whole flight, so a long flight let the core hand the same
+ * stall to another car while the view still held the old one, and two view entries shared a
+ * slot. The departure no longer works that way -- `releaseDeparted` hands the stall back on
+ * the tick core reports it and only the car's exit animation waits (`driveDeparted`) -- so
+ * the ratio is not load-bearing any more and these two are free to be chosen for the eye.
  *
- * So when TICK halved, these halved with it: 0.04 -> 0.02 and 0.40 -> 0.20 keeps
- * boardingDuration(4)/TICK at 1.53, exactly what it was before the carousel sped up. The
- * speed button divides all three by the same number again, for the same reason.
+ * 0.05 and 0.32, up from 0.02 and 0.20. With a doorway BOARD_CELLS wide a tick can board
+ * twelve people instead of four, and at the old timing twelve figures crossed the screen in
+ * 0.42s -- too fast to see as people rather than as a smear. Now a row of four takes 0.47s
+ * and a full three-row burst 0.87s, which is about five ticks of overlap with the carousel.
+ * The speed button still divides both, so x2 is a proportionally brisker boarding too.
  */
-const BOARD_STAGGER = 0.02;
+const BOARD_STAGGER = 0.05;
 
 /** How long one boarding figure's flight arc takes — shared with `playBoarding`'s tween. */
-const BOARD_FLIGHT_TIME = 0.2;
+const BOARD_FLIGHT_TIME = 0.32;
 
 /**
- * How long a row of `count` boarding flights takes from the first figure leaving to the
- * last one landing: the last flight starts after `count - 1` staggers and then takes
+ * How long `count` boarding flights take from the first figure leaving to the last one
+ * landing: the last flight starts after `count - 1` staggers and then takes
  * `BOARD_FLIGHT_TIME` itself. Shared by `playBoarding` (which starts the flights) and the
  * tick loop (which must not tear a car down before its own boarding flights land), so the
  * two can't drift apart.
@@ -185,6 +199,70 @@ const DRIVE_SPEED_MAX_MULT = 1.6;
 const ARRIVE_TURN_TIME = 0.1;
 
 /**
+ * How long the tunnel's next car takes to arrive at the mouth, once its predecessor is tapped
+ * away. Short on purpose: `busy` is already holding taps off for the departing car's own drive
+ * (see `playDriveToSlot`), and this has to be well inside that window or a second tap would
+ * land on a still-emerging car and read as ignored. It also has to be SHORT on its own terms --
+ * unlike a drive to a stall there is no route to watch, and a mouth that stays visibly empty
+ * for as long as a departure reads as the tunnel having jammed rather than as the next car
+ * being drawn.
+ */
+const EMERGE_TIME = 0.28;
+
+/**
+ * The scale the emerging car grows from.
+ *
+ * IT USED TO SLIDE, out from the tunnel's centre to where core had put it, and that stopped
+ * working the moment the garage exit became a solid arch (see tunnel-mesh.ts): with no slot cut
+ * through its front, a car sliding out has to pass THROUGH the front wall, and it was reported
+ * as exactly that -- 穿模. The two are not reconcilable by tuning. A solid shell cannot be slid
+ * through, and the closest a slide could legally start is with the car's rear flush against the
+ * face, which leaves one CLEARANCE of travel: 0.06 world units, well under a pixel of motion.
+ *
+ * So the arrival is carried by growth instead, at the one position that is guaranteed clear of
+ * the mesh -- the one core already chose, a full clearance off the front face. Scaling shrinks a
+ * car toward its own centre, which moves it AWAY from the arch, so no value here can reintroduce
+ * the overlap.
+ *
+ * 0.55 with `backOut`: big enough to be a distinct event at 0.28s, small enough that the
+ * overshoot stays inside the clearance and the car never appears to touch the arch.
+ */
+const EMERGE_SCALE = 0.55;
+
+/**
+ * Where up the vault the count chip is anchored, as a share of the crown height.
+ *
+ * HALF, and that is a derivation rather than a taste call. Height projects up the screen: at
+ * this tilt a world unit of it eats 0.62 of a board unit, and the chip and the roof are both
+ * subject to it. The roof sits at the crown, so the dome's projected silhouette runs from the
+ * footprint's near edge up to its far edge shifted by crown * k -- putting the CENTRE of what
+ * you see at crown * k / 2. A chip anchored at crown / 2 lands at (crown / 2) * k, the same
+ * point. The k cancels, so this centres the chip on the dome at any tilt, and would still do
+ * it if BOARD_TILT changed.
+ *
+ * It replaces a float of 0.22 ABOVE the crown, which was 1.22 * crown of lift and 0.336 board
+ * units of drift up the screen -- against a footprint only 0.37 wide, so the chip was hanging
+ * off the dome's upper edge rather than sitting on it, and was reported as not centred.
+ *
+ * What the old float was FOR does not need it. It was there so the number would not read as
+ * printed on the roof, back when it was painted onto the roof geometry and washed out by the
+ * lighting; the chip is a Canvas node now and is drawn over the scene whatever its depth, so
+ * legibility no longer depends on where it is anchored. What is left is only where it looks
+ * right, and that is the middle.
+ */
+const TUNNEL_CHIP_HEIGHT = 0.5;
+
+/**
+ * Bare board between a car driving down the side of the lot and the outermost parked cars, in
+ * board units. See `driveSideX`, which is where the trade this pays for is set out.
+ *
+ * ZERO means "just touching", which is what answers the report that the mover covered the cars
+ * parked along the edge; every unit of it is paid for out of the driving car's own visible
+ * width, so it is deliberately not padded further.
+ */
+const PASS_CLEARANCE = 0;
+
+/**
  * How far toward the camera a car rides while it is out on the ring road, in board units.
  *
  * The side lanes run at `driveSideX` = 4.28 while the outermost parked cars reach 4.19, so a
@@ -200,7 +278,16 @@ const ARRIVE_TURN_TIME = 0.1;
  * construction (core only allows a tap whose corridor is empty), so nothing is being driven
  * over on the way out.
  */
-const DRIVE_LIFT = 1.2;
+/**
+ * How far a driving car rises off the board, in world units.
+ *
+ * It only has to beat the parked cars' own height so the mover draws in front of them, and it
+ * used to be 1.2 because nothing bounded it: with the board flat, lifting a car moved it not one
+ * pixel. The tilt makes it visible -- DRIVE_LIFT * sin(BOARD_TILT) of travel up the screen and
+ * back -- so it is now sized to read as a slight lift rather than a hop, while still clearing
+ * CAR_HEIGHT with room over.
+ */
+const DRIVE_LIFT = 0.45;
 
 /**
  * How much of its stall a parked car may fill, across and along -- the ceiling `stallScale`
@@ -237,12 +324,30 @@ const PREVIEW_ASPECT = 0.79;
 const VIEW_HALF_H = CAMERA_DIST * Math.tan((45 / 2) * Math.PI / 180);
 
 /**
+ * How far up the screen the car's roof sits relative to its footprint, in BOARD units.
+ *
+ * A roof point at height h appears exactly where the board point (x, y + h * tan(tilt)) would,
+ * which is what makes the tap compensation a subtraction rather than an approximation. See
+ * BOARD_TILT in board-layout.ts.
+ */
+const ROOF_RISE = CAR_HEIGHT * TILT_TAN;
+
+/**
  * Draw core's footprints and lane bars from the moment a level loads, and log what core
  * decided on every tap. DIAGNOSTIC ONLY -- set back to false once the lot's verdicts have
  * been confirmed against it. `D` toggles it either way at runtime; this is only the state
  * it starts in, so that reading it never depends on the preview having keyboard focus.
  */
 const DEBUG_FOOTPRINTS = false;
+
+/**
+ * The material whose only job is to keep the `builtin-standard` effect in the package.
+ *
+ * See `preloadLitEffect` for why an asset has to exist for the effect to ship at all. It is
+ * never applied to anything: every lit material in the game is built in code (materials.ts),
+ * from the effect this one registers.
+ */
+const LIT_MATERIAL = 'materials/lit';
 
 /**
  * Seconds a startup preload gets before the game goes on without it.
@@ -262,16 +367,34 @@ const DEBUG_FOOTPRINTS = false;
 const PRELOAD_DEADLINE = 8;
 
 /**
+ * How long the home screen's title must be held to clear the save.
+ *
+ * Three seconds is long enough that no ordinary tap or fumble reaches it, and short enough
+ * that someone who has been told about it does not give up. See `wipeProgress`.
+ */
+const HOLD_SECONDS = 3;
+
+/**
+ * How far the finger may stray and still be holding rather than swiping, in design units.
+ *
+ * 24, against the rail's own DRAG_SLOP of 14: a gesture can be a drag before it stops being
+ * a hold. The gap is deliberate -- the two questions are different, and a thumb resting for
+ * three seconds drifts further than one deciding whether to swipe.
+ */
+const HOLD_SLOP = 24;
+
+/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
  *
  * BUMP is how far past the reported stopping point it presses, and it has to stay under the
- * bare board between two cars nose to tail. That distance is core's CLEARANCE, 0.04 board
- * units or 0.030 world -- and `firstBlocker` measures its gap from a mover already inflated
+ * bare board between two cars nose to tail. That distance is core's CLEARANCE, 0.08 board
+ * units or 0.060 world -- and `firstBlocker` measures its gap from a mover already inflated
  * by CLEARANCE, so the car stops a clearance short of touching and BUMP eats into that.
- * At 0.020 it still leaves 0.010 of daylight; anything over 0.030 would drive one car into
- * the other. It was 0.06 back when cars were drawn at 90% of a grid cell and the slack was
+ * At 0.020 it leaves 0.040 of daylight; anything over 0.060 would drive one car into
+ * the other. CLEARANCE was half this when BUMP was chosen, where the same 0.020 left only
+ * 0.010 -- so this constant has more room than it was tuned with, not less. It was 0.06 back when cars were drawn at 90% of a grid cell and the slack was
  * 0.22. The jolt is what sells the impact anyway -- see JOLT.
  *
  * The forward leg is capped: with a three-cell run-up, honest speed would make a refused tap
@@ -313,10 +436,11 @@ interface ParkedCar {
     /** Seats this car has. Captured on park, so reusing its slot can't confuse the display. */
     capacity: number;
     /**
-     * Seat count the chip currently SHOWS, which lags the core on purpose. A
-     * whole row boards in one tick, and jumping the number down by four while four
-     * passengers are still in the air reads as the car emptying before anyone arrives.
-     * `seatBoarded` walks this down one seat per landing flight instead.
+     * Seat count the chip currently SHOWS, which lags the core on purpose. Up to
+     * BOARD_CELLS whole rows board in one tick, and jumping the number down by twelve while
+     * twelve passengers are still in the air reads as the car emptying before anyone
+     * arrives. `seatBoarded` walks this down one seat per landing flight instead, so the
+     * number falls at exactly the rate the figures land.
      */
     shown: number;
 }
@@ -332,15 +456,94 @@ export class GameController extends Component {
     @property
     levelName: string = 'level-1';
 
+    /**
+     * The save, in memory: the best rating each level has been cleared with.
+     *
+     * Read once in `start` and kept -- the file on the device is only ever written after
+     * that, never read again, so this field and the device cannot disagree unless something
+     * else on the phone edits the key. It is the source for the home screen's locks and
+     * stars and for where the start button goes.
+     */
+    private progress: Progress = emptyProgress();
+    /**
+     * The player's preferences, in memory. Read once beside the save; written whenever a
+     * switch is flipped, which is rare enough that the synchronous store does not care.
+     */
+    private settings: Settings = defaultSettings();
+    /**
+     * Whether the press-and-hold that wipes the save is counting down.
+     *
+     * A flag rather than trusting `unschedule` to undo an over-arm: on web a single click
+     * emits BOTH a mouse and a touch event, so the press handler runs twice for one press,
+     * and this keeps the second one from arming a timer the release cannot see.
+     */
+    private holdArmed = false;
+    /** Where the press that armed the hold landed, so a swipe off it can cancel the hold. */
+    private holdFromX = 0;
+    /**
+     * Whether the release about to arrive was a rail DRAG rather than a tap. Set by
+     * `onPressEnd`, read once by `handleTap`; see there for why the order matters.
+     */
+    private slidHome = false;
+    /**
+     * Held as a field because `unschedule` matches on the callback's identity -- an inline
+     * arrow would arm a timer that nothing could ever cancel.
+     */
+    private readonly holdWipe = (): void => this.wipeProgress();
+
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
     private parkingView: ParkingView | null = null;
     private loopView: TrackView | null = null;
     private hud: HudView | null = null;
+    /**
+     * Built on first `showHome` rather than in `start`, the same way the win panel is built
+     * on the first win -- and for a sharper reason than tidiness: its grid is sized by
+     * `countLevels`, which reads the `resources` bundle index, and a count read before that
+     * bundle is usable comes back 0 and draws a home screen with no way into the game.
+     * After the preload it is known good, because the preload went through the same bundle.
+     */
+    private home: HomeView | null = null;
+    /** The UI canvas, kept because `HomeView` is built later than `start`. */
+    private canvasNode: Node | null = null;
+    /**
+     * Two facts about the level in play that the win card reports and nothing else needs, so
+     * they are copied out of the LevelData rather than the whole object being kept.
+     *
+     * `levelPassengers` is the queue's total. On a win every one of them boarded -- that is
+     * what winning IS (`GameCore.updateState` wants the lot, the bay and the ring all empty)
+     * -- so the card can report it as delivered without counting them one by one.
+     */
+    private levelPassengers = 0;
+    /**
+     * The level's own id, from its JSON -- which is what the win card names and what the
+     * progress bar counts to. Not parsed out of `levelName`: the id is the level's own
+     * statement about where it sits in the series, and it is what the HUD's title plate
+     * already shows.
+     */
+    private levelIdNum = 0;
+    /** How many levels the bundle holds, counted once. See `countLevels`. */
+    private levelCountCache = 0;
+    /**
+     * Which screen is up. The board exists only in 'level': leaving for 'home' tears it down
+     * (`unloadLevel`) rather than hiding it, because a paused board is a second live state to
+     * keep correct -- the loop would either keep stepping behind the menu or need a pause flag
+     * threaded through `update`, and neither buys anything while there is nothing to come back
+     * to. Nothing is saved mid-level, so leaving IS abandoning.
+     */
+    private screen: 'home' | 'level' = 'home';
     private cam: Camera | null = null;
     private uiCam: Camera | null = null;
     private boardRoot: Node | null = null;
     private gridRoot: Node | null = null;
+    /**
+     * One mesh per tunnel, keyed by tunnel id -- built in `buildBoard` and read back by
+     * `syncTunnels` for the point an emerging car slides FROM. A GameController field, not a
+     * local: unlike `gridView`'s own car table (fresh on every `new GridView`, see
+     * grid-view.ts), this survives across `update` ticks between levels, so `buildBoard`
+     * clears it explicitly on every rebuild rather than trusting a stale entry to be replaced.
+     */
+    private tunnelNodes = new Map<number, Node>();
     /**
      * Half the world box that MUST be on screen, for the board AS BUILT -- not for the
      * level, and not from a constant. `buildBoard` measures it off what it actually laid
@@ -384,15 +587,23 @@ export class GameController extends Component {
      * The x a car DRIVES at down the side of the lot, which is no longer the side lane's own
      * centreline.
      *
-     * The ring road is drawn around the slab, and the slab now reaches 93% of the screen --
-     * so the side lane's centreline sits at 4.98 against a frame half-width of 4.67, and a
-     * car on it showed 0.016 of its 0.652-wide body. It was not "mostly hidden", it was gone.
+     * The ring road is drawn around the slab, and the slab reaches 93% of the screen -- so the
+     * side lane's centreline sits at 4.98 against a frame half-width of 4.67, and a car on it
+     * showed 0.016 of its 0.652-wide body. It was not "mostly hidden", it was gone.
      *
-     * There is no corridor that satisfies everything: the parked cars reach 4.208 and the
-     * frame ends at 4.67, which is 0.462 of room for a body 0.652 across. So the choice is
-     * between a car that is partly off screen and one that passes over the outermost parked
-     * cars, and a car driving OUT of a car park passing close to the parked ones is the
-     * normal-looking half of that pair. Fully visible wins.
+     * THERE IS NO CORRIDOR THAT SATISFIES EVERYTHING, and the arithmetic is worth keeping
+     * because it is the whole decision. The outermost parked cars reach 4.21 and the frame ends
+     * at 4.67, so a body 0.652 across has 0.46 of room and needs 0.65. Three positions:
+     *
+     *   4.28  fully on screen, overlapping the parked cars by 0.23 -- a third of the car
+     *   4.54  clear of the parked cars, with 0.19 of the car past the frame edge
+     *   4.98  the drawn lane, 0.016 of the car on screen
+     *
+     * It shipped at 4.28 with "fully visible wins", and that came back as the mover covering
+     * the cars parked along the edge. So it is at 4.54 now: PASS_CLEARANCE is the knob, and
+     * `Math.max` is what expresses "as far out as it takes, but no further" -- on a viewport
+     * where the frame is roomier than the lot, the fully-visible bound wins on its own and
+     * nothing is clipped.
      *
      * Measured from the biggest body rather than each car's own, so every car takes the same
      * line -- cars of three sizes each on their own lane would read as three roads.
@@ -438,7 +649,7 @@ export class GameController extends Component {
      * for a 2.5D three-quarter look; the trade is that at zero the cars only ever show
      * their roofs, since the models stand along the board's +Z toward the camera.
      */
-    private readonly BOARD_TILT = 0;
+    private readonly BOARD_TILT = BOARD_TILT;
 
     private busy = false;
     private ended = false;
@@ -456,9 +667,12 @@ export class GameController extends Component {
      * (passengers appearing to vanish) was flying the same figure the track itself draws, one
      * per seat taken, staggered by BOARD_STAGGER. With that in, the slow tick was only slow.
      *
-     * BOARD_STAGGER and BOARD_FLIGHT_TIME halved along with it -- see their note; the ratio
-     * between a boarding flight and a tick is load-bearing and a bare speed-up would have
-     * broken it.
+     * BOARD_STAGGER and BOARD_FLIGHT_TIME halved along with it at the time, because the
+     * ratio between a boarding flight and a tick was then load-bearing. It is not any more
+     * (see `releaseDeparted`), and those two have since been LENGTHENED past what the old
+     * ratio allowed -- so a boarding burst now deliberately overlaps several ticks of
+     * rotation. What still has to hold is only that a flight lands before the board it flies
+     * over is torn down, which `driveDeparted` and the `isValid` guards handle.
      */
     private readonly TICK = 0.17;
     /**
@@ -467,12 +681,11 @@ export class GameController extends Component {
      * follows -- the ring's rotation, the lane slides, a new row's entry, and the boarding
      * flights.
      *
-     * The boarding flights have to come along, and that is not decoration. A row of four
-     * takes 0.52s to fly (see boardingDuration), already longer than one 0.34 tick, and the
-     * departure of the car it fills is DEFERRED by that long so the flights are not torn
-     * down mid-air. At half a tick and unscaled flights that deferral spans three ticks --
-     * long enough for the core to hand the same stall to another car, which is exactly the
-     * failure BOARD_STAGGER's docblock was written about.
+     * The boarding flights have to come along, and that is not decoration: a three-row burst
+     * takes 0.87s to fly (see boardingDuration), five times one tick, and the exit animation
+     * of the car it fills is DEFERRED by that long so the flights are not torn down mid-air.
+     * Leaving the flights unscaled at x2 would double that overlap again, and the burst would
+     * still be in the air when the rows behind it had come round.
      *
      * Kept across levels: it is a preference, not a property of a level, and a player who
      * chose x2 does not want to choose it again ten times.
@@ -493,11 +706,22 @@ export class GameController extends Component {
 
     start() {
         console.log(`[Game] ${BUILD_TAG}`);
+        // BEFORE anything can finish a level, and unconditionally -- not alongside the home
+        // screen it feeds, which is only built if a Canvas was found. `onEnd` writes the save
+        // whether or not there is a HUD to show it on, so a run that never read one would
+        // overwrite a real save with a single level's result. `parseProgress` cannot throw,
+        // so a corrupt or absent save costs the player their stars and not their game.
+        this.progress = parseProgress(loadProgressText());
+        this.settings = parseSettings(loadSettingsText());
+        console.log(`[Game] progress: cleared through`
+            + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
+        this.applySettings();
         this.setupCamera();
         const canvas = find('Canvas');
         if (canvas) {
             this.hud = new HudView(canvas);
+            this.canvasNode = canvas;
             this.tagText = BUILD_TAG;
             this.hud.setBuildTag(this.tagText);
             this.uiCam = canvas.getComponentInChildren(Camera);
@@ -510,8 +734,14 @@ export class GameController extends Component {
         // below us, in the engine or the asset download; if it is present, the hang is in
         // the preload chain below and the deadline warnings will say which step.
         console.log('[Game] controller start');
-        // Preload builtin-standard so lit materials get real lighting; it lives in
-        // the `internal` bundle but isn't preloaded unless something already uses it.
+        // The menu goes up FIRST, in its waiting state, and that is the whole point of
+        // HomeView's split constructor: Cocos' first screen ends before the app even starts
+        // (`game.js` runs `firstScreen.end().then(() => application.start())`), so from the
+        // engine's first frame until the preload answered there used to be nothing on screen
+        // but the camera's clear colour -- a flat pale rectangle, for as long as it took.
+        this.showHome();
+        // Preload builtin-standard so lit materials get real lighting. Nothing else in the
+        // project uses it, so it needs asking for by name -- see preloadLitEffect.
         // litMaterial falls back to unlit if this doesn't register, so proceed regardless.
         //
         // This is the ONLY preload left. Cars and passengers are both drawn from code now
@@ -519,9 +749,11 @@ export class GameController extends Component {
         // first synchronous build -- which also means one fewer way to hang on the splash.
         //
         // The step is on a deadline: see PRELOAD_DEADLINE for why a step that never calls
-        // back used to strand the game on the splash screen with nothing logged.
+        // back used to strand the game on the splash screen with nothing logged. It is also
+        // why the loading line pulses -- eight seconds of a still screen is indistinguishable
+        // from a hang.
         this.withDeadline('builtin-standard preload', (d) => this.preloadLitEffect(d), () => {
-            this.loadLevel(this.levelName);
+            this.finishLoading();
         });
     }
 
@@ -545,12 +777,24 @@ export class GameController extends Component {
         step(() => finish(false));
     }
 
-    /** Load the builtin-standard EffectAsset (internal bundle addresses it by uuid), then continue. */
+    /**
+     * Register the builtin-standard effect by loading a material that references it.
+     *
+     * The load is indirect on purpose. `builtin-standard` is NOT one of the engine's default
+     * materials, so it is only in the package if a PROJECT asset asks for it -- and for a long
+     * time it arrived by accident, as a dependency of three .glb models that nothing loaded.
+     * This method used to fetch it by its engine uuid, which worked only because those models
+     * were dragging it in; deleting them would have deleted the effect too and dropped every
+     * lit material to flat shading, with one warning line to say so.
+     *
+     * LIT_MATERIAL makes the dependency deliberate: everything under `resources` is packed
+     * whether or not code references it, and loading a material loads its effect, which
+     * registers itself under its own name for `EffectAsset.get` to find. The uuid now lives in
+     * the .mtl -- the one place the editor also writes it -- rather than in a comment here.
+     */
     private preloadLitEffect(done: () => void): void {
         if (EffectAsset.get('builtin-standard')) { done(); return; }
-        // Fixed engine uuid for effects/builtin-standard.effect.
-        const uuid = 'c8f66d17-351a-48da-a12c-0212d28575c4';
-        assetManager.loadAny({ uuid }, (err) => {
+        resources.load(LIT_MATERIAL, Material, (err) => {
             if (err) console.warn('[Game] builtin-standard preload failed, using flat shading:', err);
             done();
         });
@@ -560,6 +804,12 @@ export class GameController extends Component {
         input.off(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.off(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.off(Input.EventType.KEY_UP, this.onKeyUp, this);
+        input.off(Input.EventType.TOUCH_START, this.onPressStart, this);
+        input.off(Input.EventType.TOUCH_MOVE, this.onPressMove, this);
+        input.off(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
+        input.off(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
+        input.off(Input.EventType.MOUSE_MOVE, this.onPressMove, this);
+        this.unschedule(this.holdWipe);
     }
 
     /**
@@ -575,6 +825,108 @@ export class GameController extends Component {
         if (!m) return null;
         const next = `${m[1]}${parseInt(m[2], 10) + 1}`;
         return resources.getInfoWithPath(`levels/${next}`, JsonAsset) ? next : null;
+    }
+
+    /**
+     * How many levels the bundle holds, counted from level-1 upward until one is missing.
+     *
+     * Counted rather than declared for the same reason `nextLevelName` probes: dropping a
+     * level-11.json into `resources/levels` should extend the game, and a constant here would
+     * have to be remembered. `getInfoWithPath` reads the bundle's index -- no load, no console
+     * error on a miss.
+     *
+     * The cap is a guard against a level series this loop cannot see the end of, not a ceiling
+     * on the game: at 99 the home screen's grid is already twenty rows long.
+     */
+    private countLevels(): number {
+        if (this.levelCountCache > 0) return this.levelCountCache;
+        let n = 0;
+        while (n < 99 && resources.getInfoWithPath(`levels/level-${n + 1}`, JsonAsset)) n++;
+        this.levelCountCache = n;
+        return n;
+    }
+
+    /**
+     * Show the home screen, tearing down whatever level was in play.
+     *
+     * Safe to call from anywhere, including before the first level has ever loaded -- which is
+     * exactly how the game starts.
+     */
+    private showHome(): void {
+        this.unloadLevel();
+        if (!this.home && this.canvasNode) this.home = new HomeView(this.canvasNode);
+        this.screen = 'home';
+        this.hud?.setPlayVisible(false);
+        this.home?.setProgress(this.progress);
+        this.home?.show();
+    }
+
+    /**
+     * The menu is done waiting: count the levels, draw the grid, and let it answer taps.
+     *
+     * Counting reads the `resources` bundle index, which is the one thing this screen needs
+     * that cannot be had before the engine has finished starting -- so it happens here,
+     * after the preload, rather than in `showHome`, which now runs on the first frame.
+     */
+    private finishLoading(): void {
+        const count = this.countLevels();
+        this.home?.setLevels(count);
+        this.home?.setProgress(this.progress);
+        this.home?.setLoading(false);
+        console.log(`[Game] home screen ready: ${count} levels`);
+    }
+
+    /** Leave the home screen for `name`. The inverse of `showHome`. */
+    private enterLevel(name: string): void {
+        this.sfx?.play('tap');
+        vibrate('light');
+        this.home?.hide();
+        this.screen = 'level';
+        this.hud?.setPlayVisible(true);
+        this.loadLevel(name);
+    }
+
+    /**
+     * Take the board down and leave no live level behind: every node destroyed, every per-id
+     * collection emptied, `core` null.
+     *
+     * `core = null` is what makes this different from the teardown `switchTo` used to do
+     * inline, and it is the load-bearing line: `update` returns early on a null core, so the
+     * loop stops stepping the instant this runs rather than running on against a board whose
+     * nodes have been destroyed.
+     *
+     * Ends with the HUD's panels down. A player who leaves from the win card and then starts a
+     * level must not find that card still over the board.
+     */
+    private unloadLevel(): void {
+        // Stop the track's phase tween before its cluster nodes are destroyed
+        // (the tween targets a plain object, so node destruction won't stop it).
+        this.loopView?.destroy();
+        this.loopView = null;
+        if (this.boardRoot) {
+            this.boardRoot.destroy();
+            this.boardRoot = null;
+        }
+        this.gridRoot = null;
+        this.gridView = null;
+        this.parkingView = null;
+        for (const [, e] of this.parked) {
+            if (e.chip) e.chip.destroy();
+        }
+        this.parked.clear();
+        this.tunnelNodes.clear();
+        // The badges hang off the persistent Canvas, not the board, so `boardRoot.destroy()`
+        // above never touches them. `buildBoard` clears them too, for the rebuild path; this is
+        // the path where no build follows.
+        this.hud?.clearTunnelBadges();
+        this.core = null;
+        this.speedAnchor = null;
+        this.ended = false;
+        this.busy = false;
+        this.arriving = 0;
+        this.tickAcc = 0;
+        this.hud?.hideEndPanels();
+        this.hud?.hideUnlockPrompt();
     }
 
     private loadLevel(name: string): void {
@@ -605,10 +957,12 @@ export class GameController extends Component {
             // on restart without running killParticle, so reset the budget here.
             resetParticleBudget();
             this.core = new GameCore(level);
+            this.levelPassengers = level.loop.queue.reduce((sum, g) => sum + g.count, 0);
+            this.levelIdNum = level.id;
             this.buildBoard(level);
             this.hud?.setLevel(level.id);
             this.hud?.setProgress(this.core.loop.remainingCount());
-            this.hud?.hideBanner();
+            this.hud?.hideEndPanels();
             this.hud?.hideUnlockPrompt();
             this.ended = false;
             this.busy = false;
@@ -653,6 +1007,15 @@ export class GameController extends Component {
     private logStartupDiagnosis(level: LevelData): void {
         const core = this.core!;
         const cars = level.lot.cars;
+        // The world `movable` (below) is measured in: every car core actually holds, mouth
+        // cars included, plus the tunnel bodies as blockers. `cars` (the level JSON) has
+        // neither -- a mouth car is spawned by the LotSystem, not written to the file -- so
+        // asking `firstBlocker` about `cars` with no blockers was answering a question about
+        // a different, smaller lot than the one `movable` describes. This was the bug: on
+        // level 9 it printed `jsonCars: 48, coreCars: 50` and a `blocked` count that could
+        // never agree with `movable` because the two were never the same world.
+        const coreCars = Array.from(core.lot.cars.values());
+        const blockers = core.lot.tunnels.map(tunnelBox);
         const first = cars[0];
         const box = first ? carBox(first) : null;
         // The discriminator. A gap of exactly 0 means the swept test found the pair already
@@ -661,8 +1024,8 @@ export class GameController extends Component {
         // blocked, every gap 0" is arithmetic gone bad, while a spread of real positive gaps
         // means the geometry is fine and the lot genuinely is jammed.
         let blocked = 0, zeroGap = 0;
-        for (const c of cars) {
-            const b = firstBlocker(c, cars, core.lot.bounds);
+        for (const c of coreCars) {
+            const b = firstBlocker(c, coreCars, core.lot.bounds, blockers);
             if (!b) continue;
             blocked++;
             if (b.gap === 0 || !Number.isFinite(b.gap)) zeroGap++;
@@ -670,6 +1033,9 @@ export class GameController extends Component {
         console.warn('[Game] not playing at load: ' + JSON.stringify({
             jsonCars: cars.length,
             coreCars: core.lot.cars.size,
+            // The gap between the two above: one mouth car per tunnel, spawned by core and
+            // absent from the level file. Equal to `core.lot.tunnels.length` by construction.
+            mouthCars: core.lot.tunnels.length,
             movable: core.lot.movableCarIds().length,
             blocked,
             zeroOrNaNGap: zeroGap,
@@ -679,27 +1045,29 @@ export class GameController extends Component {
             capBox: CAP_BOX,
             firstCar: first ? { id: first.id, cap: first.cap, angle: first.angle } : null,
             firstBox: box ? { len: box.len, wid: box.wid } : null,
-            firstBlocker: first ? firstBlocker(first, cars, core.lot.bounds) : null,
+            firstBlocker: first ? firstBlocker(first, coreCars, core.lot.bounds, blockers) : null,
         }));
     }
 
     /** Tear the current board down and load `name` — used for both replay and advancing. */
     private switchTo(name: string): void {
-        // Stop the track's phase tween before its cluster nodes are destroyed
-        // (the tween targets a plain object, so node destruction won't stop it).
-        this.loopView?.destroy();
-        if (this.boardRoot) {
-            this.boardRoot.destroy();
-            this.boardRoot = null;
-        }
-        for (const [, e] of this.parked) {
-            if (e.chip) e.chip.destroy();
-        }
-        this.parked.clear();
+        this.unloadLevel();
         this.loadLevel(name);
     }
 
     private buildBoard(level: LevelData): void {
+        // `boardRoot.destroy()` in `switchTo` takes every tunnel mesh down with it, but this
+        // map is a GameController field, not a child of the board it points into -- it
+        // outlives the destroy and would otherwise hand `syncTunnels` a Node whose native
+        // handle is gone the moment the next level's own tunnels are built.
+        this.tunnelNodes.clear();
+        // Same reasoning, on the HUD side: the badges hang off the persistent Canvas, not the
+        // board, so nothing else ever takes down a tunnel id the NEW level doesn't have. Here,
+        // not in `switchTo`, for the same reason `tunnelNodes.clear()` is here rather than
+        // next to `parked.clear()` -- `buildBoard` is the one function every rebuild path runs
+        // through (the very first load included, where there is nothing to clear yet), and it
+        // has to happen before the loop below re-adds the badges the new level actually owns.
+        this.hud?.clearTunnelBadges();
 
         // The box the lot and its ring road have to live in. These were CONSTANTS
         // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
@@ -746,12 +1114,21 @@ export class GameController extends Component {
         this.boardScale = scale;
         const lotH = lotHeight(level.lot.h, scale);
         const lotW = Math.max(lotWidth(level.lot.w, scale), 2 * lotHalfW);
-        // Pulled in off the side lane by half the widest body plus a hair, so the whole car
-        // is inside the frame while it drives. See `driveSideX`.
+        // How far out the driving line goes, between the two bounds `driveSideX` describes:
+        // far enough out to clear the outermost parked cars, and never past the lane the road
+        // is actually drawn on. `parkedReach` is where a car in the outermost column ends --
+        // core keeps every footprint inside the lot, so the lot's own half-width IS that
+        // reach, and it is the GRID's width, not the slab's (the slab is widened past it for
+        // looks; see `lotW`).
         const EDGE_PAD = 0.06;
+        const bodyWid = CAP_BOX.big.wid * CAR_SCALE * scale;
+        const parkedReach = (level.lot.w * scale) / 2;
         this.driveSideX = Math.min(
             lotW / 2 + RING_OFF,
-            frame.halfW - (CAP_BOX.big.wid * CAR_SCALE * scale) / 2 - EDGE_PAD,
+            Math.max(
+                frame.halfW - bodyWid / 2 - EDGE_PAD,
+                parkedReach + bodyWid / 2 + PASS_CLEARANCE,
+            ),
         );
         const GRID_Y = ROAD_Y - RING_OFF - lotH / 2;
         this.ring = {
@@ -765,17 +1142,19 @@ export class GameController extends Component {
         this.boardRoot.setRotationFromEuler(-this.BOARD_TILT, 0, 0);
         this.node.addChild(this.boardRoot);
         setupEnvironment(this.boardRoot);
-        // NO `setupAntiAliasing(this.cam)`. It hangs a PostProcess component off the board
-        // camera, and post-process is a FULL-SCREEN PASS -- on a phone at 1170x2532 that is
-        // 3.0M pixels read and written again, every frame, on top of the scene. It went in to
-        // answer a jagged-edges report and was flagged then as needing a device check it
-        // never got; the device now measures 8fps against the simulator's 49, and this is the
-        // most expensive thing in the frame that buys the least.
+        // FXAA, BACK ON, and the frame rate is the whole argument in both directions. It is a
+        // FULL-SCREEN PASS: on a phone at 1170x2532 that is 3.0M pixels read and written
+        // again every frame, on top of the scene. It was taken out when the device measured
+        // 8fps against the simulator's 49, as the most expensive thing in the frame that
+        // bought the least. The device now reports 60fps with 60 cars on the board, so the
+        // budget it was competing for exists again -- and what it buys came back as a report
+        // in almost the same words the note predicted: the passengers look "over-sharpened,
+        // grainy". A crowd of small spheres with no AA is a field of staircased edges.
         //
-        // One line to put back if the jaggies matter more than the frame rate. The engine
-        // module (`custom-pipeline-post-process` in settings/v2/packages/engine.json) is
-        // still compiled in, so restoring it needs nothing but this call.
-        setupBackground(this.boardRoot);
+        // WATCH THE ON-SCREEN FPS after changing this. It is one line either way, and the
+        // engine module (`custom-pipeline-post-process` in settings/v2/packages/engine.json)
+        // stays compiled in whichever way it goes.
+        setupAntiAliasing(this.cam);
         setupStage(this.boardRoot, lotW, lotH, GRID_Y);
         setupRoads(this.boardRoot, this.ring, ROAD_H);
 
@@ -877,6 +1256,13 @@ export class GameController extends Component {
         // board it has to hold -- and the y it has to look at -- have both just changed. Fit
         // straight away too, so a level's first frame is already framed rather than being
         // one frame late.
+        // The ground panel is built HERE, after the content bounds above, because it is sized
+        // and centred from them -- see `setupBackground`. Its depth is what orders it, not the
+        // order it was added in, so coming last costs nothing.
+        setupBackground(
+            this.boardRoot, frame.halfW, Math.max(frame.halfH, this.needHalfH),
+            (this.contentTop + this.contentBottom) / 2,
+        );
         this.fitAspect = 0;
         this.fitCamera();
 
@@ -918,6 +1304,28 @@ export class GameController extends Component {
         this.layout = layout;
         this.gridView = new GridView(gridRoot, this.core!.lot, layout);
         this.gridView.render();
+
+        // After `render()`, deliberately: the mouth car every tunnel starts with is an
+        // ordinary lot car and already drawn by it, so the tunnel body has to land on top of
+        // that, not under it, for the mouth to read as the car standing just outside a hole
+        // rather than the hole floating in front of the car.
+        for (const t of this.core!.lot.tunnels) {
+            const len = TUNNEL_BOX.len * layout.scale;
+            const wid = TUNNEL_BOX.wid * layout.scale;
+            const node = buildTunnel(`tunnel-${t.id}`, len, wid, TUNNEL_SHELL);
+            node.setPosition(layout.toWorld(t.x, t.y));
+            node.setRotationFromEuler(0, 0, t.angle);
+            this.gridRoot!.addChild(node);
+            this.tunnelNodes.set(t.id, node);
+            this.hud?.setTunnelCount(t.id, this.core!.lot.remainingIn(t.id));
+        }
+        // Placed once here, not left for the next `update` tick: a badge holder starts with
+        // no position of its own (see `setTunnelCount`), so without this every level from 4
+        // on could flash a badge at the Canvas origin -- screen centre -- for one frame. Same
+        // reason `HudView`'s constructor gives the speed button an explicit fallback spot
+        // (see the comment there); this is the tunnel badges' equivalent for the same gap.
+        this.placeTunnelBadges();
+
         if (DEBUG_FOOTPRINTS) this.toggleDebugOverlay();
     }
 
@@ -944,8 +1352,9 @@ export class GameController extends Component {
             // centred at y = -2.73 while the axis is at y = 0, so the whole lot is off-axis
             // and the bottom of it is ~5 units out. Measured over the ten shipped levels the
             // roof landed a MEDIAN of 0.109 board units from the footprint core was reasoning
-            // about, peaking at 0.187. CLEARANCE is 0.04, so the picture was lying by two to
-            // five times the entire gap budget, and it broke three things at once:
+            // about, peaking at 0.187. CLEARANCE was 0.04 then and is 0.08 now, so the
+            // picture was lying by more than the whole gap budget either way -- two to five
+            // times it as measured -- and it broke three things at once:
             //
             //  - blocked/clear. Re-running core's own sweep on the projected boxes disagreed
             //    with core on 13 of 360 cars, 10 of them "core says you may go, the eye says
@@ -969,9 +1378,12 @@ export class GameController extends Component {
             this.cam.projection = Camera.ProjectionType.ORTHO;
             this.cam.orthoHeight = VIEW_HALF_H;
             this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
-            // Matches the ground panel, so any sliver outside it doesn't flash a
-            // different colour.
-            this.cam.clearColor = new Color(205, 215, 236, 255);
+            // The ground panel's OWN colour, read from it rather than copied: anywhere the
+            // panel does not reach has to be indistinguishable from where it does, and a
+            // second literal is a second thing to forget. (`setupBackground` sizes the panel
+            // to the frame, so in practice nothing outside it is visible -- this is the belt
+            // to that braces.)
+            this.cam.clearColor = GROUND;
         }
     }
 
@@ -995,8 +1407,11 @@ export class GameController extends Component {
         // Zero or NaN only happens before the window has a size. Assume the preview's own
         // shape rather than dividing by it; `update` refits the moment a real one arrives.
         const aspect = Number.isFinite(raw) && raw > 0 ? raw : PREVIEW_ASPECT;
-        const halfH = Math.max(VIEW_HALF_H, LANE.edgeLimit / aspect);
-        return { halfW: halfH * aspect, halfH };
+        // The vertical half-view the camera needs is in WORLD units and the board's own extent
+        // is in BOARD units, and the tilt is the factor between them. Across the screen they
+        // are still the same thing, so the width requirement converts the other way.
+        const halfH = Math.max(VIEW_HALF_H, LANE.edgeLimit / (aspect * TILT_COS));
+        return { halfW: halfH * TILT_COS * aspect, halfH };
     }
 
     /**
@@ -1014,17 +1429,19 @@ export class GameController extends Component {
         if (!Number.isFinite(aspect) || aspect <= 0) return;
         if (Math.abs(aspect - this.fitAspect) < 1e-4) return;
         this.fitAspect = aspect;
-        const oh = Math.max(this.needHalfH, this.needHalfW / aspect);
+        // orthoHeight is world; needHalfH/needHalfW are board. Up the screen those differ by
+        // the tilt, across it they do not.
+        const oh = Math.max(this.needHalfH * TILT_COS, this.needHalfW / aspect);
         this.cam.orthoHeight = oh;
         // Reserve the HUD's bands off the top and bottom, then centre the board in what is
         // left. `surplus` is the room a viewport wider than the board needs hands back, and
         // it splits evenly -- reserving a share of the screen is a floor on those bands,
         // not a claim on everything going spare.
         const view = 2 * oh;
-        const surplus = view - (this.contentTop - this.contentBottom)
+        const surplus = view - (this.contentTop - this.contentBottom) * TILT_COS
             - (this.padTop + this.padBottom) * view;
         const top = this.padTop * view + Math.max(0, surplus) / 2;
-        this.camY = this.contentTop + top - oh;
+        this.camY = this.contentTop * TILT_COS + top - oh;
         this.placeCamera(this.cam.node);
     }
 
@@ -1055,7 +1472,34 @@ export class GameController extends Component {
         this.hud.placeSpeed(this.uiCam.screenToWorld(screen, new Vec3()));
     }
 
-    /** Point the camera straight down the board's normal at `camY`. */
+    /** Tunnel counts hang off board points, so they move with the framing like the speed button. */
+    /**
+     * Hang each tunnel's count chip over its crown.
+     *
+     * The lift puts the chip at the middle of the dome's projected silhouette rather than over
+     * its crown -- see TUNNEL_CHIP_HEIGHT for why half the crown height is what does that. It
+     * is taken through the tunnel node's own world matrix rather than added to its world
+     * position: local +Z there is the board's up, which is not world up -- `boardRoot` carries
+     * the 38-degree tilt. Adding to `worldPosition` would push the chip straight up the screen
+     * instead of up into the vault, and the two part company by exactly the tilt.
+     *
+     * The node's z-rotation does not affect a (0, 0, h) offset, so heading plays no part: the
+     * chip sits over the crown at every angle, which is the point of putting the number on a
+     * chip in the first place (see `setTunnelCount`).
+     */
+    private placeTunnelBadges(): void {
+        if (!this.cam || !this.uiCam || !this.gridRoot || !this.hud || !this.core || !this.layout) return;
+        const lift = tunnelCrown(TUNNEL_BOX.wid * this.layout.scale) * TUNNEL_CHIP_HEIGHT;
+        for (const t of this.core.lot.tunnels) {
+            const node = this.tunnelNodes.get(t.id);
+            if (!node) continue;
+            const world = Vec3.transformMat4(new Vec3(), new Vec3(0, 0, lift), node.worldMatrix);
+            const screen = this.cam.worldToScreen(world, new Vec3());
+            this.hud.placeTunnelBadge(t.id, this.uiCam.screenToWorld(screen, new Vec3()));
+        }
+    }
+
+    /** Point the camera down world -Z at `camY`. The BOARD is what carries the tilt. */
     private placeCamera(camNode: Node): void {
         camNode.setPosition(new Vec3(0, this.camY, CAMERA_DIST));
         camNode.lookAt(new Vec3(0, this.camY, 0));
@@ -1067,7 +1511,11 @@ export class GameController extends Component {
         // which hangs off a board point and so moves with the framing.
         this.fitCamera();
         this.placeSpeedButton();
+        this.placeTunnelBadges();
         this.tickFps(dt);
+        // BEFORE the core guard: the level rail glides on the home screen, where there is no
+        // core at all.
+        if (this.screen === 'home') this.home?.tick(dt);
         if (!this.core || this.ended) return;
         // A tap can end the game too: parking into the last free slot can seal the
         // level (nothing left to fill the parked cars, nothing left that can move).
@@ -1091,23 +1539,22 @@ export class GameController extends Component {
             this.tickMsView += afterView - afterCore;
             this.hud?.setProgress(this.core.loop.remainingCount());
             this.syncSeatCounts();
-            if (res.boardedColor) this.playBoarding(res.boardedColor, res.boardedSlots);
+            if (res.flights.length > 0) this.playBoarding(res.flights);
             if (res.departedCarIds.length > 0) {
-                if (res.boardedColor) {
-                    // This tick both boarded and departed: the departing car is exactly
-                    // the one that just filled, so its passengers are still mid-flight
-                    // (see playBoarding). Tearing it down now would destroy the seat
-                    // chip they are about to land on and drive the car out from under
-                    // them. Wait for the flights this tick actually started to land.
-                    const ids = res.departedCarIds;
+                // The stall is released NOW, whether or not anything is mid-flight: core has
+                // already freed it, and a view entry that lingered could collide with the
+                // next car parked there. Only the car's exit animation waits for the flights
+                // this tick started, because they land on the car and its seat chip.
+                const leaving = this.releaseDeparted(res.departedCarIds);
+                if (res.flights.length > 0) {
                     this.scheduleOnce(
-                        () => this.onDeparted(ids),
-                        boardingDuration(res.boardedSlots.length) / this.speed,
+                        () => this.driveDeparted(leaving),
+                        boardingDuration(res.flights.length) / this.speed,
                     );
                 } else {
                     // No boarding this tick (e.g. a zero-capacity car parked already
                     // full), so there is no flight to wait for — depart at once.
-                    this.onDeparted(res.departedCarIds);
+                    this.driveDeparted(leaving);
                 }
             }
             // Before the early exits below, so a tick that ends the level is still counted.
@@ -1184,23 +1631,53 @@ export class GameController extends Component {
      */
     private syncUnlockUrge(): void {
         if (!this.core?.needsUnlock() || this.busy || this.arriving > 0) return;
-        this.hud?.showUnlockPrompt();
+        this.hud?.showUnlockPrompt({
+            left: this.core.parking.locked(),
+            // At one star there is nothing left to lose, and a prompt that keeps threatening
+            // a star it cannot take is a prompt the player learns to stop reading.
+            losesStar: this.core.stars() > 1,
+        });
     }
 
-    private onDeparted(ids: number[]): void {
+    /**
+     * Hand the departing cars' stalls back on the tick core reports them, and return the
+     * entries whose cars still have to drive away.
+     *
+     * The split from `driveDeparted` is what frees the boarding animation to be as long as
+     * it looks best. Core removes a full car and frees its stall in one tick; if the view
+     * held its entry until the flights landed, the player could park another car in that
+     * stall in the meantime and `playBoarding`'s slot -> entry map would have two entries
+     * claiming it -- the failure the old BOARD_STAGGER docblock was written about, and the
+     * reason the flight time used to be bounded by a ratio against TICK.
+     *
+     * The seat chip goes with the stall, for the same reason: the next car's chip hangs off
+     * the same anchor, and two would sit on top of each other. In-flight boardings are
+     * unaffected -- they close over the entry itself, and `bumpSeat` already tolerates a
+     * chip that has been destroyed under it.
+     */
+    private releaseDeparted(ids: number[]): ParkedCar[] {
         if (ids.length > 0) {
             this.sfx?.play('depart');
             vibrate('medium');
         }
+        const leaving: ParkedCar[] = [];
         for (const id of ids) {
             const e = this.parked.get(id);
             if (!e) continue;
             this.parked.delete(id);
             if (e.chip) e.chip.destroy();
-            // The departure this fires for can be deferred past a boarding flight (see
-            // the tick loop), and by the time it runs the human may have tapped through
-            // the win banner and switchTo rebuilt the board — which destroys this car's
-            // node out from under the deferred call. Bail rather than touch it.
+            leaving.push(e);
+        }
+        return leaving;
+    }
+
+    /** Flash, burst and drive away the cars `releaseDeparted` already un-parked. */
+    private driveDeparted(leaving: ParkedCar[]): void {
+        for (const e of leaving) {
+            // This can be deferred past a boarding flight (see the tick loop), and by the
+            // time it runs the human may have tapped through the win banner and switchTo
+            // rebuilt the board — which destroys this car's node out from under the
+            // deferred call. Bail rather than touch it.
             if (!e.node.isValid) continue;
             // A departing car is exactly one that just filled up (the core boards +
             // removes a full car in the same tick), so the "full" highlight belongs
@@ -1422,17 +1899,21 @@ export class GameController extends Component {
     }
 
     /**
-     * Fly the passengers that just boarded from the gap to their matching parked car,
-     * one arc each, staggered so a row of four reads as four people getting on rather
-     * than one thing moving. `slots` comes from the core (`BoardResult.boardedSlots`):
-     * one parking slot per boarded passenger, in boarding order. A row can be partly
-     * boarded when a car runs out of seats mid-row, and can legitimately split across
-     * two cars of the same colour, so each figure flies to the car it actually boarded
-     * rather than all of them flying to one shared match — and a car that fills (and
-     * departs) on this very tick is still resolvable, because we read it from the
-     * view's own `this.parked`, which core's departure this tick has not touched yet.
+     * Fly the passengers that just boarded from the doorway to their matching parked car,
+     * one arc each, staggered so a burst of twelve reads as twelve people getting on rather
+     * than one thing moving. `flights` comes from the core (`BoardResult.flights`): one
+     * entry per boarded passenger, in boarding order, each naming its colour, its stall, and
+     * the ring cell and seat it stood in.
+     *
+     * Every one of those four is needed. A tick can board up to BOARD_CELLS rows at once, so
+     * the CELL is no longer implied and neither is the COLOUR -- three cells inside the
+     * doorway can be three different colours. A row can be partly boarded when a car runs
+     * out of seats mid-row, and can legitimately split across two cars of the same colour,
+     * so each figure flies to the car it actually boarded rather than to one shared match --
+     * and a car that fills (and departs) on this very tick is still resolvable, because we
+     * read it from the view's own `this.parked` before `releaseDeparted` touches it.
      */
-    private playBoarding(color: string, slots: number[]): void {
+    private playBoarding(flights: Flight[]): void {
         // Slot -> the view's own parked entry. Built once per call: `this.parked` is
         // keyed by car id, not slot, and several figures can resolve to the same car.
         const bySlot = new Map<number, ParkedCar>();
@@ -1440,27 +1921,28 @@ export class GameController extends Component {
 
         this.sfx?.play('board');
         // Without a track to fly from, nothing will land to walk the count down, so
-        // apply the whole row at once rather than leaving the number stale.
+        // apply the whole tick's boarding at once rather than leaving the numbers stale.
         if (!this.loopView || !this.boardRoot) {
-            for (const slot of slots) {
-                const e = bySlot.get(slot);
+            for (const f of flights) {
+                const e = bySlot.get(f.slot);
                 if (e) this.seatBoarded(e);
             }
             return;
         }
 
-        const count = slots.length;
-        for (let i = 0; i < count; i++) {
+        for (let i = 0; i < flights.length; i++) {
+            const f = flights[i];
             // A slot with no view entry means the view already lost track of that car
             // (shouldn't happen) — skip that one figure rather than abandon the row, but
             // warn, since a silently dropped figure is otherwise the only symptom of a
             // view/core desync.
-            const e = bySlot.get(slots[i]);
-            if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${slots[i]}`); continue; }
+            const e = bySlot.get(f.slot);
+            if (!e) { console.warn(`[GameController] playBoarding: no view entry for slot ${f.slot}`); continue; }
             const end = e.node.worldPosition.clone();
-            // Leave from where this figure actually stood in the row, not the row centre.
-            const start = this.loopView.boardingFigureWorldPos(i);
-            const p = this.loopView.spawnPassenger(color);
+            // Leave from where this figure actually stood, not the row centre: its own seat
+            // in its own cell of the doorway.
+            const start = this.loopView.boardingFigureWorldPos(f.cell, f.seat);
+            const p = this.loopView.spawnPassenger(f.color);
             p.setWorldPosition(start);
             const ctrl = new Vec3(
                 (start.x + end.x) / 2, Math.max(start.y, end.y) + 1.2, (start.z + end.z) / 2,
@@ -1578,11 +2060,33 @@ export class GameController extends Component {
                     new Color(255, 210, 60), new Color(120, 255, 140), new Color(90, 170, 255),
                 ]);
             }
-            // Star rating is a placeholder (always 3): a real rule based on
-            // moves/time/powerups is deferred — not computed by the core.
-            // `hasNext` only picks the banner's call-to-action; the tap handler
+            // The rating is core's (`GameCore.stars`): three for a level cleared without
+            // opening a stall, one fewer per stall opened, floored at one. Everything else on
+            // the card is a fact about the level, which is why the view is handed numbers
+            // rather than asked to work any of them out.
+            //
+            // Recorded BEFORE the card goes up, so the card's "next level" is one the save
+            // already agrees is unlocked -- and so a player who closes the app on this screen
+            // has kept the result anyway. It is the only write in the game, and only when the
+            // rating actually beat the record: storage on the device is a synchronous call.
+            //
+            // `rating`, not `stars`: `stars` in this file is the particle burst above.
+            const rating = this.core!.stars();
+            const rec = recordClear(this.progress, this.levelIdNum, rating);
+            this.progress = rec.progress;
+            if (rec.changed) {
+                saveProgressText(serializeProgress(this.progress));
+                console.log(`[Game] level ${this.levelIdNum} cleared with ${rating} stars`);
+            }
+            // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
-            this.hud?.showWin(3, this.nextLevelName() !== null);
+            this.hud?.showWin({
+                level: this.levelIdNum,
+                levelCount: this.countLevels(),
+                passengers: this.levelPassengers,
+                unlocks: this.core!.parking.unlocksUsed(),
+                stars: rating,
+            }, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
             for (const [id] of this.core!.lot.cars) {
@@ -1599,6 +2103,13 @@ export class GameController extends Component {
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
+        // Presses, for the one control in the game that is a HOLD rather than a tap. Nothing
+        // else reads them, so they only ever arm and disarm the wipe.
+        input.on(Input.EventType.TOUCH_START, this.onPressStart, this);
+        input.on(Input.EventType.TOUCH_MOVE, this.onPressMove, this);
+        input.on(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
+        input.on(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
+        input.on(Input.EventType.MOUSE_MOVE, this.onPressMove, this);
     }
 
     /**
@@ -1610,7 +2121,10 @@ export class GameController extends Component {
         const car = this.core?.lot.cars.get(id);
         if (!car) return;
         const lot = this.core!.lot;
-        const b = firstBlocker(car, Array.from(lot.cars.values()), lot.bounds);
+        // Same blockers `LotSystem.canExit` hands `firstBlocker` -- otherwise a tunnel-blocked
+        // car logs a false CLEAR here while core just refused the tap as blocked.
+        const blockers = lot.tunnels.map(tunnelBox);
+        const b = firstBlocker(car, Array.from(lot.cars.values()), lot.bounds, blockers);
         const who = `car ${id} (${car.cap}) at (${car.x.toFixed(2)}, ${car.y.toFixed(2)}) heading ${angle.toFixed(1)}`;
         if (b) {
             const by = lot.cars.get(b.carId);
@@ -1641,38 +2155,203 @@ export class GameController extends Component {
         if (!this.core || !this.gridRoot || !this.layout) return;
         const lot = this.core.lot;
         this.debugOverlay = buildFootprintOverlay(
-            Array.from(lot.cars.values()), lot.bounds, this.layout,
+            Array.from(lot.cars.values()), lot.bounds, this.layout, lot.tunnels,
         );
         this.gridRoot.addChild(this.debugOverlay);
     }
 
     private onTouchEnd(e: EventTouch): void {
+        this.onPressEnd();
         const p = e.getLocation();
         this.handleTap(p.x, p.y);
     }
 
+    /**
+     * Arm the press-and-hold that clears the save, if this press landed on the home screen's
+     * title. Every other press in the game is a tap and is handled on release.
+     *
+     * It FIRES at HOLD_SECONDS rather than waiting for the release, so the confirmation
+     * arrives while the finger is still down -- a hidden control that only reacts after you
+     * let go leaves you unsure whether you held it long enough.
+     */
+    private onPressStart(e: EventTouch | EventMouse): void {
+        if (this.screen !== 'home' || !this.uiCam || !this.home) return;
+        const p = e.getLocation();
+        const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
+        this.slidHome = false;
+        // ui.y, because the home rail runs up the screen now.
+        this.home.beginDrag(ui.y, nowMs() / 1000);
+        if (this.holdArmed || !this.home.hitsReset(ui)) return;
+        this.holdArmed = true;
+        this.holdFromX = ui.x;
+        this.scheduleOnce(this.holdWipe, HOLD_SECONDS);
+    }
+
+    /**
+     * Carry the drag, and cancel the press-and-hold once the finger has really moved: a hold
+     * is a hold, and a swipe that happens to start on the title is not one.
+     */
+    private onPressMove(e: EventTouch | EventMouse): void {
+        if (this.screen !== 'home' || !this.uiCam || !this.home) return;
+        // MOUSE_MOVE fires on every desktop mouse move, button or no button, so the cheap
+        // check comes before the projection rather than after it. A press always begins a
+        // drag on this screen, so "not dragging" also means "no hold can be armed".
+        if (!this.home.isDragging()) return;
+        const p = e.getLocation();
+        const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
+        this.home.moveDrag(ui.y, nowMs() / 1000);
+        if (this.holdArmed && Math.abs(ui.x - this.holdFromX) > HOLD_SLOP) this.cancelHold();
+    }
+
+    /**
+     * End the gesture. Runs on release and on a cancelled touch, and is safe when there was
+     * no gesture at all.
+     *
+     * `slidHome` has to be settled HERE rather than in `handleTap`, because the touch-end
+     * handler runs this first and `handleTap` second -- that ordering is the only thing that
+     * lets a tap be told from the end of a swipe.
+     */
+    private onPressEnd(): void {
+        this.cancelHold();
+        if (this.screen === 'home' && this.home) {
+            this.slidHome = this.home.endDrag(nowMs() / 1000) === 'slid';
+        }
+    }
+
+    private cancelHold(): void {
+        if (!this.holdArmed) return;
+        this.holdArmed = false;
+        this.unschedule(this.holdWipe);
+    }
+
+    /**
+     * Throw the save away, on a three-second hold of the home screen's title.
+     *
+     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why it is a long hold on
+     * an unlabelled target rather than a button. A "clear my progress" button on the home
+     * screen of a ten-level game is louder than the thing it does, and this is the only
+     * destructive path in the game.
+     *
+     * The confirmation is two things: the grid repaints fully locked, which is evidence
+     * rather than a claim, and a toast that says so in words. The toast activates its own
+     * node, so it works with the in-level HUD hidden.
+     */
+    /**
+     * Hand the preferences to the things that obey them.
+     *
+     * Called on boot and after every toggle, and it sets BOTH every time rather than only
+     * the one that changed: two setters and one call site cannot drift, while "apply the
+     * delta" has to be right at every call.
+     *
+     * The sound is gated at play time inside `SfxManager` and the buzz in `haptics`, so
+     * neither has to be told twice and turning something back on is immediate.
+     */
+    private applySettings(): void {
+        this.sfx?.setEnabled(this.settings.sfx);
+        setHaptics(this.settings.haptics);
+    }
+
+    /**
+     * Flip one switch, obey it, draw it, and write it down.
+     *
+     * The panel is repainted from `this.settings` rather than from a value it kept, so what
+     * the player sees is what the game is actually doing -- a panel that remembers its own
+     * state is a second answer to the same question.
+     */
+    private toggleSetting(which: 'sfx' | 'haptics'): void {
+        this.settings = { ...this.settings, [which]: !this.settings[which] };
+        this.applySettings();
+        this.hud?.paintSwitches(this.settings.sfx, this.settings.haptics);
+        saveSettingsText(serializeSettings(this.settings));
+        // AFTER applying, so switching the sound ON is confirmed by a sound and switching it
+        // off is confirmed by silence -- the tap is the demonstration.
+        this.sfx?.play('tap');
+        vibrate('light');
+    }
+
+    private wipeProgress(): void {
+        this.holdArmed = false;
+        clearProgressText();
+        this.progress = emptyProgress();
+        this.home?.setProgress(this.progress);
+        this.hud?.showToast('进度已清除');
+        this.sfx?.play('tap');
+        vibrate('light');
+        console.log('[Game] progress cleared');
+    }
+
     private onMouseUp(e: EventMouse): void {
+        this.onPressEnd();
         const p = e.getLocation();
         this.handleTap(p.x, p.y);
     }
 
     private handleTap(screenX: number, screenY: number): void {
         if (this.loading) return; // ignore taps while a level is (re)loading
+        // The home screen owns every tap while it is up, and nothing below runs: there is no
+        // board to raycast, no HUD control on screen and no level to end. A tap that hits
+        // neither the start button nor a chip is swallowed rather than falling through.
+        if (this.screen === 'home') {
+            if (!this.uiCam || !this.home) return;
+            // A release that DRAGGED the rail is not also a tap -- otherwise every swipe
+            // would end by selecting whatever it happened to stop over. `endDrag` already
+            // ran, from `onPressEnd`, and said which it was.
+            if (this.slidHome) return;
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            // THE BUTTON IS THE ONLY WAY IN, and it opens whatever is in the middle of the
+            // rail (`focusedLevel`, which is also what labelled it). Tapping a stop only
+            // brings it to the middle. Two jobs on one control is how a stray tap starts a
+            // level nobody asked for -- and on a rail, a stray tap is what a
+            // slightly-too-still drag looks like.
+            if (this.home.hitsStart(ui)) {
+                this.enterLevel(`level-${this.home.focusedLevel()}`);
+                return;
+            }
+            const stop = this.home.hitsStop(ui);
+            if (stop >= 0) {
+                this.home.focusStop(stop);
+                this.sfx?.play('tap');
+            }
+            return;
+        }
+        // The settings panel owns every tap while it is up, and it is asked FIRST because
+        // when it is up it is the topmost thing on screen. It cannot currently be raised
+        // over the blocked-stall prompt or the win card -- the gear goes dead under both
+        // (`HudView.syncGear`) -- so this branch and those never contend.
+        if (this.uiCam && this.hud?.settingsOpen()) {
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            const hit = this.hud.hitsSettings(ui);
+            if (hit === 'close') {
+                this.hud.hideSettings();
+            } else if (hit === 'home') {
+                this.showHome();
+            } else if (hit === 'replay') {
+                this.hud.hideSettings();
+                this.switchTo(this.levelName);
+            } else if (hit === 'sfx' || hit === 'haptics') {
+                this.toggleSetting(hit);
+            }
+            return;   // anything else on this screen is swallowed
+        }
         // The unlock prompt owns every tap while it is up -- see `showUnlockPrompt`. Before
-        // the level picker too: this is a question with a losing answer, and being able to
-        // duck it by tapping something else would make it optional, which it is not.
+        // the level picker and before the home button, because it is a modal and the board
+        // behind it has no move in it: a tap that misses its three answers is swallowed
+        // rather than doing something else somewhere else.
+        //
+        // All three answers RESOLVE the state, which is why none of them needs the prompt to
+        // come back afterwards: open a stall and the board moves again, replay and the level
+        // restarts, leave and there is no level. That is what replaced the old X -- it ended
+        // the level in a loss on a position that still had a legal move in it.
         if (this.uiCam && this.hud?.promptOpen()) {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             const hit = this.hud.hitsUnlockPrompt(ui);
             if (hit === 'unlock') {
                 this.hud.hideUnlockPrompt();
                 this.unlockNextSlot();
-            } else if (hit === 'close') {
-                this.hud.hideUnlockPrompt();
-                // Core decides, not the view: `declineUnlock` re-checks the position and
-                // refuses if it has started moving again. `update` picks up the state
-                // change and raises the banner.
-                this.core?.declineUnlock();
+            } else if (hit === 'replay') {
+                this.switchTo(this.levelName);
+            } else if (hit === 'home') {
+                this.showHome();
             }
             return;   // anything else on this screen is swallowed
         }
@@ -1692,9 +2371,35 @@ export class GameController extends Component {
                 return;
             }
         }
+        // The gear, checked BEFORE the level-over branch. It is deactivated under all three
+        // end-of-level cards (see `HudView.syncGear`), so on those screens this falls through
+        // and costs nothing -- the order is kept because `ended` turns every unclaimed tap
+        // into a replay, and a gear check after it could never be reached at all. Which is
+        // exactly what the lose screen needed back when it was a bare label with no controls
+        // on it, and is why this was written this way in the first place.
+        if (this.uiCam && this.hud) {
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            if (this.hud.hitsGear(ui)) {
+                this.sfx?.play('tap');
+                this.hud.showSettings(this.settings.sfx, this.settings.haptics);
+                return;
+            }
+        }
         if (this.ended) {
+            // The win card answers for itself: it has a replay and a way home now, and
+            // anything else on screen still means "get on with it" (see `hitsWin`).
+            if (this.uiCam && this.hud) {
+                const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+                // Both cards, and only one of them can be up. Each returns null when it is
+                // not, so the fall-through below is still what an unclaimed tap gets: advance
+                // on a win, replay on a deadlock.
+                const pick = this.hud.hitsWin(ui) ?? this.hud.hitsLose(ui);
+                if (pick === 'home') { this.showHome(); return; }
+                if (pick === 'replay') { this.switchTo(this.levelName); return; }
+            }
             // Won and another level exists → advance. Deadlocked, or the series has
-            // run out → replay the same level.
+            // run out → replay the same level. This is also the path the lose banner takes,
+            // which has no card of its own.
             const next = this.core?.getState() === 'won' ? this.nextLevelName() : null;
             this.switchTo(next ?? this.levelName);
             return;
@@ -1758,6 +2463,11 @@ export class GameController extends Component {
             }
         }
 
+        // The car is drawn ROOF_RISE up-screen of its footprint, because the tilt makes its
+        // height visible (see BOARD_TILT). The player aims at the roof, so the tap has to come
+        // back down to the plane core is reasoning on. Exact, not approximate: under ortho every
+        // car shifts by the same vector.
+        localHit.y -= ROOF_RISE;
         const id = this.gridView.pickCar(localHit);
         if (id == null) return;
 
@@ -1774,6 +2484,7 @@ export class GameController extends Component {
         if (this.debugOverlay) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
             this.playDriveToSlot(id, angle, res.slotIndex);
+            this.syncTunnels();
         } else if (res.reason === 'full') {
             this.playLotFull(id);
         } else {
@@ -1840,6 +2551,45 @@ export class GameController extends Component {
                 this.syncSeatCounts();
             },
         });
+    }
+
+    /**
+     * Bring every tunnel's view back in line with core: redraw the count, and bring in any
+     * mouth car core has already put on the board but the lot has not drawn yet.
+     *
+     * Idempotent, and deliberately so -- it is called after every successful tap and does
+     * nothing for the tunnels that tap did not touch. The alternative was working out which
+     * tunnel the departing car came from, which means the view keeping its own copy of a
+     * mapping core already has.
+     *
+     * The arrival starts at the same moment the departing car pulls away, not after it. `busy`
+     * is already holding taps off for the drive, and a mouth that stays visibly empty for a
+     * second and a half reads as the tunnel having jammed.
+     */
+    private syncTunnels(): void {
+        if (!this.core || !this.gridView) return;
+        for (const t of this.core.lot.tunnels) {
+            this.hud?.setTunnelCount(t.id, this.core.lot.remainingIn(t.id));
+            const mouth = this.core.lot.mouthCarId(t.id);
+            // Guards against `addCar` being called twice for one live id: it has no such
+            // guard itself (see grid-view.ts), so a second call here would silently build a
+            // second node, overwrite the tracked one, and orphan the first as a ghost car.
+            // `syncTunnels` runs after EVERY tap, so without this check it would re-trigger
+            // for the same mouth car on every subsequent, unrelated tap until it parks.
+            if (mouth === null || this.gridView.getCarNode(mouth)) continue;
+            const node = this.gridView.addCar(mouth);
+            if (!node) continue;
+            // Grown in place, not slid out of the tunnel: the arch is solid now and a slide
+            // would pass through its front wall. See EMERGE_SCALE for why there is no position
+            // left to animate.
+            node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE);
+            tween(node)
+                // A fresh Vec3, not `Vec3.ONE`: handing a shared engine constant to a tween
+                // as its target value is one in-place lerp away from corrupting it globally.
+                .to(EMERGE_TIME / this.speed, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
+                .call(() => this.gridView?.activateCar(mouth))
+                .start();
+        }
     }
 
     /**
@@ -1946,8 +2696,14 @@ export class GameController extends Component {
 
         const car = this.core!.lot.cars.get(id);
         const lot = this.core!.lot;
+        // Same blockers `LotSystem.canExit` hands `firstBlocker`. Without them, a car whose
+        // real blocker is a tunnel body either misses it entirely (falls into the no-blocker
+        // shrug below) or, if another car sits further down the SAME lane past the tunnel,
+        // finds that car instead -- and then tweens the mover THROUGH the solid tunnel to
+        // bump it, a visible clipping artifact on every level with a tunnel.
+        const blockers = lot.tunnels.map(tunnelBox);
         const block = car
-            ? firstBlocker(car, Array.from(lot.cars.values()), lot.bounds)
+            ? firstBlocker(car, Array.from(lot.cars.values()), lot.bounds, blockers)
             : null;
 
         this.busy = true;

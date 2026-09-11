@@ -38,6 +38,13 @@ function deadlockLevel(): LevelData {
   };
 }
 
+/** `soloLevel`, but with the shipped bay shape: 4 of 7 stalls open, so 3 can be unlocked. */
+function soloLevel4of7(): LevelData {
+  const level = soloLevel();
+  level.parking = { slots: 7, unlocked: 4 };
+  return level;
+}
+
 test('tapCar parks an exitable car and removes it from the grid', () => {
   const game = new GameCore(soloLevel());
   expect(game.tapCar(1)).toEqual({ ok: true, slotIndex: 0, reason: null });
@@ -135,8 +142,9 @@ test('deadlock is detected when the ring is jammed with an unboardable color', (
     powerups: { refresh: 0, hardClear: 0, magnet: 0 },
   };
   const game = new GameCore(level);
-  // Seal the ring by hand instead of relying on the authored queue order (the loop
-  // shuffles now): green fills the track, the reds behind it can never get in.
+  // Seal the ring by hand rather than relying on the authored queue's natural fill: the
+  // level above only authors 2 green passengers, not enough to fill both ring cells, so
+  // this overwrites the ring directly to get the fully-jammed shape the test needs.
   // Each cell is a row of passengers, so build distinct objects — a shared literal
   // would have every row decrement together once one of them boards.
   game.loop.ring = [{ color: 'green', count: 4 }, { color: 'green', count: 4 }];
@@ -278,4 +286,73 @@ test('declineUnlock refuses on a position that is still moving', () => {
   expect(core.needsUnlock()).toBe(false);
   expect(core.declineUnlock()).toBe(false);
   expect(core.getState()).toBe('playing');
+});
+
+test('GameCore builds the ring straight from the authored queue order', () => {
+  // THE ONLY TEST IN THE SUITE THAT WOULD FAIL if `GameCore` put the seeded shuffle back
+  // (LoopSystem's old fifth constructor argument, fed `level.id ?? 0`). Every other
+  // GameCore-based test here is blind to that: a single-colour queue makes a row shuffle
+  // unobservable, a hand-built `game.loop.ring` (see the deadlock tests above) never reads
+  // what the queue produced in the first place, and an assertion on counts or win-state is
+  // exactly what a shuffle preserves. That gap matters because the ring drains SELECTIVELY
+  // -- a colour the bay covers boards and frees its cells, a colour no parked car wants
+  // cannot leave -- so a shuffled band lands whatever colour next to whatever colour, and
+  // the whole point of authoring the queue in the leaving order is lost silently.
+  const level: LevelData = {
+    id: 7,
+    lot: { w: 4, h: 2, cars: [
+      { id: 1, x: -1, y: 0, angle: 90, color: 'red', cap: 'small' },
+      { id: 2, x: 1, y: 0, angle: 90, color: 'blue', cap: 'small' },
+    ] },
+    parking: { slots: 4, unlocked: 4 },
+    loop: { capacity: 4, boardIndex: 2, queue: [
+      { color: 'red', count: 16 }, { color: 'blue', count: 16 },
+    ] },
+    powerups: { refresh: 0, hardClear: 0, magnet: 0 },
+  };
+  const game = new GameCore(level);
+  // Authored order is red-then-blue, ring capacity 4 == the whole red band (4 groups of
+  // GROUP_SIZE 4): a shuffle over the 8 groups would almost certainly mix a blue group in.
+  expect(game.loop.ring.map((g) => g?.color)).toEqual(['red', 'red', 'red', 'red']);
+});
+/**
+ * The star rating: three stars for a level cleared without opening a stall, one fewer per
+ * stall opened, and never below one.
+ *
+ * The rating is the level's locked stalls turned into a resource. It is the only number the
+ * game already has that says something about HOW a level was cleared rather than that it
+ * was -- moves and time are not counted anywhere -- and it costs no new bookkeeping:
+ * `unlocksUsed` is the difference between the bay the level opened with and the bay it ended
+ * with.
+ *
+ * The floor of ONE is deliberate. A cleared level is a win, and a win with no stars reads as
+ * a failure; the difference between clearing a level cheaply and expensively is what the
+ * upper two stars are for.
+ */
+test('stars count down from three as stalls are opened, and stop at one', () => {
+  const game = new GameCore(soloLevel4of7());
+  expect(game.stars()).toBe(3);
+  game.unlockSlot();
+  expect(game.stars()).toBe(2);
+  game.unlockSlot();
+  expect(game.stars()).toBe(1);
+  game.unlockSlot();
+  expect(game.stars()).toBe(1);
+});
+
+test('a level whose bay opens fully still rates three stars', () => {
+  // 7 of 7 open: there is nothing to spend, so nothing to lose a star for. The rating must
+  // not read "all stalls open" as "all unlocks used".
+  const level = soloLevel4of7();
+  level.parking = { slots: 7, unlocked: 7 };
+  expect(new GameCore(level).stars()).toBe(3);
+});
+
+test('stars ignore how the level is going', () => {
+  // Parking, boarding and departing move nothing: the rating is about stalls opened.
+  const game = new GameCore(soloLevel4of7());
+  game.tapCar(1);
+  for (let i = 0; i < 8; i++) game.stepLoop();
+  expect(game.getState()).toBe('won');
+  expect(game.stars()).toBe(3);
 });

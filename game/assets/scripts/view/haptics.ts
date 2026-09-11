@@ -19,6 +19,20 @@ declare const wx: any;
  */
 let enabled: boolean | null = null;
 
+/**
+ * The player's switch, from the settings panel -- a SECOND gate, in front of `haptable`'s
+ * device check.
+ *
+ * Two separate questions: "can this device buzz" and "does this player want it to". Folding
+ * the preference into the cached device answer would make turning it back on require
+ * re-reading the device info, and would let a preference invalidate a fact.
+ */
+let wanted = true;
+
+export function setHaptics(on: boolean): void {
+    wanted = on;
+}
+
 function haptable(): boolean {
     if (enabled !== null) return enabled;
     if (typeof wx === 'undefined' || !wx.vibrateShort) {
@@ -42,7 +56,7 @@ function haptable(): boolean {
 
 /** Short vibration on a real device; silently no-op elsewhere (simulator/browser/editor). */
 export function vibrate(kind: 'light' | 'medium' | 'heavy' = 'light'): void {
-    if (!haptable()) return;
+    if (!wanted || !haptable()) return;
     try {
         wx.vibrateShort({ type: kind });
     } catch { /* ignore */ }

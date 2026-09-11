@@ -1,29 +1,7 @@
-import { DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup } from './types';
+import {
+  BOARD_CELLS, DEFAULT_FEEDS, Feed, FeedSide, GROUP_SIZE, PaxGroup, QueueGroup,
+} from './types';
 import { entryIndex } from './track-path';
-
-/**
- * Deterministic PRNG (mulberry32). The shuffle must be reproducible: a level has to
- * look the same every time it is replayed, and the tests need a fixed answer.
- */
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** In-place Fisher-Yates driven by `next`. */
-function shuffleInPlace<T>(arr: T[], next: () => number): void {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(next() * (i + 1));
-    const tmp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = tmp;
-  }
-}
 
 /**
  * Chop the authored queue into rows of at most GROUP_SIZE. A colour change always
@@ -64,29 +42,38 @@ export class LoopSystem {
   ring: (PaxGroup | null)[];
   /** Feeder channels in drain order; 1 or 2 of them. */
   channels: Channel[];
+  /**
+   * Cells either side of `boardIndex` that are also inside the doorway, so the window is
+   * `2 * boardHalf + 1` cells wide. See BOARD_CELLS for why it is clamped.
+   */
+  readonly boardHalf: number;
 
   constructor(
     capacity: number,
     boardIndex: number,
     queue: QueueGroup[],
     feeds: Feed[] = DEFAULT_FEEDS,
-    shuffleSeed?: number,
   ) {
     this.capacity = capacity;
     this.boardIndex = boardIndex;
+    // Never so wide that the window swallows an entry cell (boardIndex +- capacity/4);
+    // see BOARD_CELLS. The floor of 0 is what leaves the toy rings in the tests with the
+    // single-cell doorway they were written against.
+    this.boardHalf = Math.max(0, Math.min(
+      (BOARD_CELLS - 1) >> 1, Math.floor(capacity / 4) - 1,
+    ));
+    // The queue's ORDER is level data: the generator authored it along the order the cars can
+    // leave in (see `bandedQueue`), so it is consumed verbatim. There used to be a seeded
+    // shuffle here, and it is gone rather than made optional -- a shuffle would destroy
+    // exactly the correspondence the order exists to carry.
     const all = toGroups(queue);
-    // Shuffle before the ring is filled so the track shows a mix instead of one
-    // solid colour block per queue group. Optional and seeded: callers that pass
-    // no seed (the unit tests) keep the authored order. Whole ROWS move, never
-    // individual passengers, so every row stays one colour.
-    if (shuffleSeed !== undefined) shuffleInPlace(all, rng(shuffleSeed));
     this.ring = new Array(capacity).fill(null);
     for (let i = 0; i < capacity && all.length > 0; i++) this.ring[i] = all.shift()!;
 
     // Channels in drain order, then the remaining rows dealt out in that same order.
     // With two channels this is the even split M6 shipped; with one, everything goes
-    // to it. The split never reorders anything — a seed, when given, is what changes
-    // the order (via the shuffle above).
+    // to it. The split never reorders anything: what a channel gets is a contiguous
+    // slice of the authored queue, in the order it arrived in.
     let ordered = DRAIN_ORDER.filter((side) => feeds.some((f) => f.side === side))
       .map((side) => feeds.find((f) => f.side === side) as Feed);
     // A `feeds` with no recognised side (empty, or a hand-edited level JSON with a
@@ -107,21 +94,59 @@ export class LoopSystem {
     }));
   }
 
-  /** Colour of the row sitting at the boarding gap, or null when the cell is empty. */
-  passengerAtBoard(): string | null {
-    return this.ring[this.boardIndex]?.color ?? null;
+  /**
+   * The ring cells inside the doorway, in the order they must be offered seats: the cell
+   * about to LEAVE the window first, then upstream from it.
+   *
+   * Order is not cosmetic. Contents travel from index i to i + 1 (see `step`), so the cell
+   * at `boardIndex + boardHalf` is on its last tick inside the door while the one at
+   * `boardIndex - boardHalf` still has `2 * boardHalf` ticks to come. Serving the leaving
+   * edge first means a scarce run of seats goes to the row that will not get another
+   * chance, instead of to one that would have boarded two ticks later anyway. It also
+   * reads the way a door reads: whoever is nearest the exit gets on first.
+   */
+  boardIndices(): number[] {
+    const out: number[] = [];
+    for (let d = this.boardHalf; d >= -this.boardHalf; d--) {
+      out.push((this.boardIndex + d + this.capacity) % this.capacity);
+    }
+    return out;
+  }
+
+  /** Colour of the row in ring cell `cell`, or null when the cell is empty. */
+  passengerAt(cell: number): string | null {
+    return this.ring[cell]?.color ?? null;
+  }
+
+  /** How many are still standing in ring cell `cell`; 0 when it is empty. */
+  countAt(cell: number): number {
+    return this.ring[cell]?.count ?? 0;
   }
 
   /**
-   * Board ONE passenger out of the row at the gap. The row stays put, one figure
-   * shorter, until its last passenger leaves and the cell opens up — so a row only
-   * frees its cell (and lets a waiting row in) once it is fully aboard.
+   * Board ONE passenger out of ring cell `cell`. The row stays put, one figure shorter,
+   * until its last passenger leaves and the cell opens up — so a row only frees its cell
+   * (and lets a waiting row in) once it is fully aboard.
    */
-  boardPassenger(): void {
-    const group = this.ring[this.boardIndex];
+  boardPassengerAt(cell: number): void {
+    const group = this.ring[cell];
     if (!group) return;
     group.count--;
-    if (group.count <= 0) this.ring[this.boardIndex] = null;
+    if (group.count <= 0) this.ring[cell] = null;
+  }
+
+  /**
+   * Colour of the row at the MIDDLE of the doorway. Kept because the middle cell is still
+   * the one the ring is indexed from, and reading it is how a caller asks "is anything at
+   * the gap" without caring about the window's width.
+   */
+  passengerAtBoard(): string | null {
+    return this.passengerAt(this.boardIndex);
+  }
+
+  /** Board one passenger out of the middle cell. See `boardPassengerAt`. */
+  boardPassenger(): void {
+    this.boardPassengerAt(this.boardIndex);
   }
 
   step(): void {

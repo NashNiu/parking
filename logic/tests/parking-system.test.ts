@@ -182,3 +182,51 @@ test('an unlocked slot is immediately usable and starts empty', () => {
   expect(p.parked[slot]).toBeNull();
   expect(p.park(car({ id: 2, color: 'blue', cap: 'small' }))).toBe(slot);
 });
+/**
+ * `unlocksUsed` counts stalls the PLAYER opened, which is the only thing that separates the
+ * bay it started with from the bay it has now -- `unlocked` is the level's opening count and
+ * never moves, while `parked.length` IS the open count (see `unlock`).
+ *
+ * It is here rather than in the view because the star rating is computed from it, and a
+ * rating the view works out for itself is a rating no test can see.
+ */
+test('unlocksUsed counts only the stalls the player opened', () => {
+  const p = new ParkingSystem(7, 4);
+  expect(p.unlocksUsed()).toBe(0);
+  p.unlock();
+  expect(p.unlocksUsed()).toBe(1);
+  p.unlock();
+  p.unlock();
+  expect(p.unlocksUsed()).toBe(3);
+  // Refused, so it must not count: there is nothing left to open at 7 of 7.
+  expect(p.unlock()).toBe(-1);
+  expect(p.unlocksUsed()).toBe(3);
+});
+
+test('parking and departing cars leave unlocksUsed alone', () => {
+  const p = new ParkingSystem(7, 4);
+  p.park(car({ id: 1 }));
+  p.park(car({ id: 2 }));
+  expect(p.unlocksUsed()).toBe(0);
+  p.parked[0]!.filled = 16;
+  expect(p.removeFull()).toEqual([1]);
+  expect(p.unlocksUsed()).toBe(0);
+});
+/**
+ * `locked` is what the blocked-stall prompt tells the player they have left, so it counts
+ * stalls STILL SHUT -- the mirror of `unlocksUsed`, and the number `canUnlock` reduces to a
+ * yes or no.
+ */
+test('locked counts the stalls still shut', () => {
+  const p = new ParkingSystem(7, 4);
+  expect(p.locked()).toBe(3);
+  p.unlock();
+  expect(p.locked()).toBe(2);
+  p.unlock();
+  p.unlock();
+  expect(p.locked()).toBe(0);
+  expect(p.canUnlock()).toBe(false);
+  // Refused, so it must not go negative -- the prompt would print "剩 -1 次".
+  p.unlock();
+  expect(p.locked()).toBe(0);
+});

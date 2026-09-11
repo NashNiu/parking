@@ -31,9 +31,18 @@ import { mergeParts, MeshPart } from './slabs';
  * itself sits at world +Z looking toward -Z (GameController.setupCamera), so +Z is
  * also, concretely, the direction toward the camera.
  *
- * No face: no eyes, no mouth. The human explicitly did not ask for one, and a face
- * would make the figure's orientation legible enough to matter -- which is the
- * problem the four earlier rounds were spent on.
+ * NO FACE, and it has now been settled from both directions. The figure had none because a
+ * face was never asked for; that came back as "the passengers don't seem to have a facing"
+ * once the board tilted and they stood up, which is the same fact read the other way round --
+ * a one-coloured blob with nothing on its front has no facing to see, whatever its transform
+ * says. So one was built (a darker spherical cap on the front of the head, a per-vertex tint
+ * so the crowd still shared one mesh), shown, and REJECTED: "the passengers don't need to
+ * tell front from back". Do not put it back without being asked; the reasoning above is not
+ * an argument for it, it is the record of it having been tried.
+ *
+ * What survives is the part that was worth keeping either way: track-view.ts now DERIVES the
+ * direction a figure faces instead of hand-picking a sign, so if a face is ever wanted again
+ * the orientations under it are already right.
  */
 
 // Every size below is a FRACTION of the `height` argument, not an absolute unit: the
@@ -307,6 +316,13 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     const root = new Node(name);
     const fit = new Node('fit');
     fit.setScale(height, height, height);
+    // STANDING UP, along the board's normal, and facing back down the screen at the viewer.
+    // `figureMesh` builds the figure along +Y with its front toward +Z, which is what a flat
+    // board wanted: seen straight on, a figure lying on the board reads as one standing up.
+    // Under a tilted board it reads as a figure lying down, so it is turned a quarter to put
+    // its length along +Z. The rotation lives here rather than in the mesh so the mesh stays
+    // the one thing the whole crowd shares.
+    fit.setRotationFromEuler(90, 0, 0);
     root.addChild(fit);
 
     // One colour for the whole figure, so one material -- which is also why the four parts

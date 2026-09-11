@@ -1,5 +1,5 @@
 import { Node, Color } from 'cc';
-import { makeSlab, makeMerged, makeShadowSlab, boxPart, MeshPart } from './slabs';
+import { makeSlab, makeMerged, boxPart, MeshPart } from './slabs';
 
 /**
  * The scene's flat graphic layer: ground, grid, lot, roads. Every colour here is the
@@ -10,10 +10,26 @@ import { makeSlab, makeMerged, makeShadowSlab, boxPart, MeshPart } from './slabs
  * palette's floor, so it cannot go much lighter than this — the passenger track is white,
  * and against the first version's near-white ground it disappeared.
  */
-const GROUND = new Color(205, 215, 236);
+export const GROUND = new Color(205, 215, 236);
 /** Grid line: a lighter tint of GROUND, opaque. */
 const GRID_LINE = new Color(224, 232, 247);
-const LOT = new Color(190, 200, 226);
+/**
+ * The lot, six units under the ground and BEHIND the grid, which is a change of kind rather
+ * than of shade. It was 190,200,226 -- fifteen units under -- and it sat in FRONT of the grid,
+ * so the lower half of the screen was a large flat panel of a different colour with no grid on
+ * it while the upper half was gridded. Reported, twice, as the background not carrying on: once
+ * about the top of the screen (which was the ground panel falling short; see `setupBackground`)
+ * and once about the bottom, which was this.
+ *
+ * Now the grid runs unbroken from the top of the frame to the bottom and the lot is a faint
+ * tint under it, still bounded by its dashed border. Six units is enough to see when you look
+ * for the play area and not enough to read as a second background.
+ *
+ * ITS DROP SHADOW WENT WITH IT. A panel you can barely see cannot be lifted off anything, and
+ * a shadow under an invisible edge reads as dirt. The parking bay above still has one, and
+ * should -- that panel is genuinely a raised tray.
+ */
+const LOT = new Color(199, 209, 231);
 const LOT_DASH = new Color(255, 255, 255);
 const ROAD = new Color(166, 177, 204);
 const ROAD_LINE = new Color(242, 246, 253);
@@ -21,9 +37,11 @@ const ROAD_LINE = new Color(242, 246, 253);
 const GRID_PITCH = 0.66;
 const GRID_THICK = 0.03;
 
-/** Corner radii, and the drop-shadow offset every panel shares. */
+/**
+ * The lot's corner radius. The drop-shadow offset that used to live beside it went with the
+ * lot's shadow (see LOT); the parking bay keeps its own copy, which is where it is used.
+ */
 const LOT_R = 0.24;
-const DROP = 0.11;
 
 /**
  * The depth stack, front to back. Cars stand ON the board plane (wheels at z = 0) with a
@@ -34,20 +52,26 @@ const DROP = 0.11;
  *
  *   -0.06  car contact shadows
  *   -0.08  stall pads          -0.09  stall rims (parking-view)
- *   -0.08  lot dashed border
- *   -0.10  lot                 -0.11  parking bay panel (parking-view)
- *   -0.17  panel drop shadows
- *   -0.23  ring road
- *   -0.30  grid lines          -0.325 ground
+ *   -0.11  lot dashed border    -0.11  parking bay panel (parking-view)
+ *   -0.18  panel drop shadows
+ *   -0.28  ring road
+ *   -0.32  grid lines
+ *   -0.35  lot                  -0.5   ground
  *
  * Neighbouring faces stay at least 0.01 apart and never coplanar, so the ordering holds
  * without depth-bias tricks.
  */
 const GROUND_Z = -0.5;
 const GRID_Z = -0.32;
-const LOT_Z = -0.13;
+/**
+ * BEHIND the grid, not in front of it, which is what lets the grid cross the lot -- see LOT.
+ * The dashed border stays where it was, well in front of both, because the border is the thing
+ * that has to be read.
+ */
+const LOT_Z = -0.35;
 const DASH_Z = -0.11;
 const ROAD_Z = -0.28;
+/** Exported for the parking bay's shadow, which is the only panel that still casts one. */
 export const SHADOW_Z = -0.18;
 
 /**
@@ -74,12 +98,32 @@ export interface RingRoad {
 
 /**
  * The ground: one big panel in the base colour with a white grid over it, both parented
- * under `root` (the tilted boardRoot) and sized to cover the frame at their depth. The
- * grid is a single merged mesh — 52 separate line nodes would be 52 draw calls for
- * something the eye reads as one texture.
+ * under `root` (the tilted boardRoot). The grid is a single merged mesh — 60-odd separate
+ * line nodes would be 60 draw calls for something the eye reads as one texture.
+ *
+ * SIZED AND CENTRED FROM THE FRAME, where it used to be a hard-coded 13 x 21 centred on
+ * board y = -1. Both halves of that were wrong once the board tilted and the lot grew:
+ *
+ *  - The frame is about 25.7 board units tall on a phone (2 * orthoHeight / cos(tilt) --
+ *    board units up the screen foreshorten, so the camera holds MORE of them than of world
+ *    units), against a panel 21 tall. Nearly five units short.
+ *  - The camera centres on the CONTENT's midpoint, not on board y = 0, and that midpoint
+ *    moves down whenever the lot grows. So the panel's own centre has to follow it or the
+ *    shortfall all lands at the top.
+ *
+ * Both together left a band across the top of the screen with NO GRID on it. The ground
+ * COLOUR was never missing there -- `setupCamera`'s clear colour is exactly GROUND, which is
+ * why this went unnoticed for so long -- what was missing was the grid over it, and the
+ * report was "extend the background at the top of the screen up to the edge".
+ *
+ * MARGIN, not an exact fit: a viewport resize re-runs `fitCamera` and can only ever zoom
+ * FURTHER out, and it does not rebuild the board -- so the panel has to be bigger than the
+ * frame it was built for, by more than a plausible resize.
  */
-export function setupBackground(root: Node): void {
-    const W = 13, H = 21, cy = -1;
+const BG_MARGIN = 2;
+
+export function setupBackground(root: Node, halfW: number, halfH: number, cy: number): void {
+    const W = 2 * (halfW + BG_MARGIN), H = 2 * (halfH + BG_MARGIN);
     const ground = makeSlab('Ground', W, H, 0.35, GROUND);
     ground.setPosition(0, cy, GROUND_Z);
     root.addChild(ground);
@@ -106,10 +150,6 @@ export function setupBackground(root: Node): void {
  * caller knows how wide that is.
  */
 export function setupStage(root: Node, bw: number, bh: number, gridY: number): void {
-    const shadow = makeShadowSlab('LotShadow', bw, bh, LOT_R);
-    shadow.setPosition(0, gridY - DROP, SHADOW_Z);
-    root.addChild(shadow);
-
     const lot = makeSlab('Lot', bw, bh, 0.06, LOT, LOT_R);
     lot.setPosition(0, gridY, LOT_Z);
     root.addChild(lot);

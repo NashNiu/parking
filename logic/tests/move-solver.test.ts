@@ -115,13 +115,23 @@ test('a blocker is never missed, whatever angle it sits at or how far off the la
   // check that nothing was there to hit. Dropping the blocker's own radius from the bound
   // -- the obvious way to get this wrong -- makes 29 of these 40 cases report a blocker
   // that is really there as absent, and every one of them fails here.
+  //
+  // BARE BODIES, and finely stepped. This used to walk the mover inflated by a whole
+  // CLEARANCE, which asserted a rule firstBlocker deliberately does not follow: it sweeps
+  // bare bodies on purpose, so that a car is never refused a gap that is genuinely open
+  // (see its own note, and CLEARANCE in types.ts). The inflation was there as slack against
+  // the coarse step, and it was not even sound slack -- growing ONE body by the whole
+  // clearance is a different rule from half on each once the boxes can rotate, worth up to
+  // sqrt(2) of it at 45 degrees. It went off when medium and big bodies were resized: one of
+  // these 64 cases settled 0.028 apart, which is clear, and the inflation read it as a
+  // 0.012 overlap. The step carries the slack instead, at 0.05 against a body 0.5 across.
   const mover = car({ id: 1, x: -4, y: 0, angle: 0 });
   for (const angle of [0, 23, 45, 67, 90, 134, 200, 300]) {
     for (const offset of [0, 0.2, 0.4, 0.6, 0.75, 0.8, 1.0, 1.2]) {
       const blocker = car({ id: 2, x: 0, y: offset, angle, cap: 'big' });
       if (firstBlocker(mover, [mover, blocker], LOT)) continue;
-      const body = inflate(carBox(mover), CLEARANCE);
-      for (let t = 0; t <= 9; t += 0.25) {
+      const body = carBox(mover);
+      for (let t = 0; t <= 9; t += 0.05) {
         expect(overlapMTV({ ...body, x: body.x + t }, carBox(blocker))).toBeNull();
       }
     }
@@ -169,8 +179,14 @@ test('a car parked behind you is not your blocker, on a lot the level rule accep
   // So a pair the level rule calls legal could still overlap under the lane test -- and
   // sweepHit answers 0 for boxes that already overlap WHATEVER the heading, which is how a
   // car behind you ends up named as the thing in your way.
+  // The pair is level 1's, moved 0.022 apart when CLEARANCE doubled to 0.08: at the original
+  // spacing it is no longer a pair the level rule accepts, so the premise below would fail and
+  // the test would be asserting nothing. Both halves were re-checked at the new spacing rather
+  // than assumed -- it is still legal under the split rule AND still overlapping under the old
+  // whole-clearance-on-the-mover rule, which is the combination the regression lives in. Of the
+  // 340 nearby placements with that property this is the closest to where the bug was found.
   const mover = car({ id: 27, x: 0.7237, y: 2.4712, angle: 29.7888, cap: 'small' });
-  const behind = car({ id: 26, x: -0.5793, y: 1.8721, angle: 58.3434, cap: 'big' });
+  const behind = car({ id: 26, x: -0.5993, y: 1.8821, angle: 58.3434, cap: 'big' });
 
   // The pair is legal -- this line is exactly what validateLevel enforces.
   expect(overlapMTV(
@@ -209,4 +225,34 @@ test('nothing parked astern is ever a blocker, at every pair of headings', () =>
       }
     }
   }
+});
+
+test('a static blocker stops a car, and reports carId -1', () => {
+  // Tunnel body at x=1 spans x 0.4..1.6. The car nose sits at -1.518.
+  const body = { x: 1, y: 0, angle: 0, len: 1.2, wid: 0.76 };
+  const mover = car({ id: 1, x: -2, y: 0, angle: 0 });
+  const hit = firstBlocker(mover, [mover], LOT, [body]);
+  expect(hit).not.toBeNull();
+  expect(hit!.carId).toBe(-1);
+  expect(hit!.gap).toBeCloseTo(0.4 - (-2 + CAP_BOX.small.len / 2), 6);
+});
+
+test('a static blocker behind the mover is not a blocker', () => {
+  const body = { x: 1, y: 0, angle: 0, len: 1.2, wid: 0.76 };
+  // Same body, but the car is past it and driving away.
+  const mover = car({ id: 1, x: 2.122, y: 0, angle: 0 });
+  expect(firstBlocker(mover, [mover], LOT, [body])).toBeNull();
+  expect(pathClear(mover, [mover], LOT, [body])).toBe(true);
+});
+
+test('the nearest of a car and a static blocker wins', () => {
+  const body = { x: 3, y: 0, angle: 0, len: 1.2, wid: 0.76 };
+  const mover = car({ id: 1, x: -3, y: 0, angle: 0 });
+  const near = car({ id: 2, x: 0, y: 0, angle: 0 });
+  expect(firstBlocker(mover, [mover, near], LOT, [body])!.carId).toBe(2);
+});
+
+test('no blockers argument behaves exactly as before', () => {
+  const mover = car({ id: 1, x: -2, y: 0, angle: 0 });
+  expect(firstBlocker(mover, [mover], LOT)).toBeNull();
 });

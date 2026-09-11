@@ -14,6 +14,17 @@ export type FeedSide = 'far' | 'near';
 
 export type Cap = 'small' | 'medium' | 'big';
 
+/**
+ * How many stars a cleared level can show, and so how many unlocks a full-marks clear has to
+ * do without.
+ *
+ * Three because the shipped levels open 4 of 7 stalls, leaving exactly three lockable -- the
+ * rating and the resource it is spent from are the same three things. A level shaped
+ * differently still rates out of three (`GameCore.stars` clamps), so this is the SCALE, not a
+ * count of anything on the board.
+ */
+export const STAR_MAX = 3;
+
 export const CAP_SIZE: Record<Cap, number> = {
   small: 16,
   medium: 24,
@@ -56,11 +67,24 @@ export interface Lot { w: number; h: number }
  * work: a model AABB was fitted to a grid cell and the size fell out of the fit. Do
  * not re-derive CAP_BOX from a model at runtime -- core cannot see models, and the two
  * directions together would be a circle.
+ *
+ * THE MODELS ARE GONE, so these are simply the authored sizes now: a car is drawn from
+ * `car-mesh.ts` into whatever box this table gives it, and the guard tool that used to check
+ * them against the glb files went with the models.
+ *
+ * medium and big came DOWN in this revision, asked for as "a bit smaller": medium by 9.1% and
+ * big by 8%, both UNIFORMLY, so each keeps its proportions. Medium's aspect ratio being
+ * unchanged is load-bearing rather than tidy -- `REFERENCE_ASPECT` in car-mesh.ts is that
+ * ratio, and the drawn body's corner radius is worked out at it, so a medium car that changed
+ * shape would silently move every car's corners.
+ *
+ * It pairs with the lot growing to 8 x 10 (see LOT): smaller bodies and more board are the two
+ * halves of "park more cars", and CARS_PER_LEVEL is what spends them.
  */
 export const CAP_BOX: Record<Cap, Box> = {
   small: { len: 0.964, wid: 0.471 },
-  medium: { len: 1.772, wid: 0.567 },
-  big: { len: 1.949, wid: 0.620 },
+  medium: { len: 1.611, wid: 0.515 },
+  big: { len: 1.793, wid: 0.570 },
 };
 
 /**
@@ -93,11 +117,82 @@ export const CAR_SCALE = 1.0;
  * axis-aligned and parted company the moment angles became free. Add a reader, split it in
  * half.
  *
- * 0.04 is today's TIGHTEST gap (a small car nose to tail: pitch 1 minus body 0.964),
- * not the average. M7 spent several rounds tightening these gaps and this must not
- * quietly give that back.
+ * 0.08, and this is the TIGHTEST gap a parked pair may have, not their average -- the
+ * measured mean nearest-neighbour gap that comes out of it is 0.103.
+ *
+ * Doubled from 0.04, asked for as "a bit more room between the cars". At 0.04 (about 2.6
+ * screen px) adjacent bodies read as touching; 0.08 is about 5.2 px, which is a seam the eye
+ * actually resolves. It costs nothing anywhere it was feared it might:
+ *
+ *  - THE PACKER still seats all 60 cars, and the body coverage is unchanged (0.494 against
+ *    0.491). The gap is bought out of air the lot already had, not out of cars.
+ *  - THE LOT GETS MORE EVEN, NOT PATCHIER, which is the opposite of the obvious worry.
+ *    `pack` settles by pushing overlapping pairs apart, so a larger demanded gap is a
+ *    stronger mutual repulsion and the arrangement spreads out instead of clumping.
+ *    Measured on level 2 as the radius of the largest empty disc that fits between the
+ *    cars: 0.847 board units at 0.04, 0.720 at 0.08. The old tight lot was the one with a
+ *    blank patch in it.
+ *  - THE DIFFICULTY does not move: level 2 comes out at 38 blocked cars either way, which
+ *    is its target. That follows from the split above -- this margin never governed driving,
+ *    so widening it cannot hand a car a lane it did not have.
+ *
+ * It does not go further than 0.08 for one measured reason: at 0.10 the blocked count starts
+ * to drift (level 2 falls to 37), and levels 7 to 10 are already asking for every blocked car
+ * their geometry can produce (see BLOCKED_LAST in level-gen.ts), so a drift of one would take
+ * them off target and flatten the back of the curve.
+ *
+ * This does give back some of what M7 spent several rounds tightening. That was deliberate
+ * then and this is deliberate now; what must not happen is it moving again by accident.
  */
-export const CLEARANCE = 0.04;
+export const CLEARANCE = 0.08;
+
+/** One car waiting in a tunnel. Everything else about it -- where it stands, which way
+ * it leaves, what id it gets -- belongs to the tunnel, not to the car. */
+export interface TunnelCar { color: string; cap: Cap }
+
+/**
+ * A queue of cars behind a fixed mouth. The car at the head stands OUTSIDE, in front of
+ * the body, and is a `CarSpec` like any other: it is tapped, blocked, parked and boarded
+ * by exactly the code every other car goes through. When it leaves, the next one takes
+ * its place (see `LotSystem.removeCar`).
+ *
+ * `x`/`y`/`angle` describe the BODY. The mouth car's position is derived from them by
+ * `mouthCar` rather than stored, because two stored copies is two chances to disagree.
+ * `angle` is the direction cars LEAVE in: 0 = +X, counter-clockwise, [0, 360), the same
+ * convention `CarSpec.angle` uses.
+ *
+ * `cars[0]` is whoever is at the mouth right now; the array is consumed from the head.
+ * Its LENGTH is the number the player sees on the tunnel -- the mouth car included,
+ * because it has not left yet.
+ */
+export interface TunnelSpec {
+  id: number;
+  x: number;
+  y: number;
+  angle: number;
+  cars: TunnelCar[];
+}
+
+/**
+ * The tunnel body's own size in board units, the same units and the same role as CAP_BOX.
+ *
+ * SQUARE, and SHORTER THAN A SMALL CAR. Both of those are the point, and both were measured
+ * off the reference game rather than chosen: with a small car (0.471 x 0.964) as the ruler in
+ * the same screenshot, its count tile comes out 0.73 x 0.71 board units.
+ *
+ * This started at 1.2 x 0.76 -- longer than a small car and half as wide -- and the reports
+ * were all the same: it reads as another car. It was a long rounded box among sixty long
+ * rounded boxes, in a blue the cars also come in. What separates this element from a car is
+ * not fidelity, it is SHAPE: nothing else on this board is square, so a square is legible at a
+ * glance in a way no amount of modelling on a car-shaped body ever was.
+ *
+ * Being smaller also buys packing room back: the reservation is symmetric about the body (see
+ * `tunnelReservation`), so this takes it from 3.208 board units long to 2.748.
+ *
+ * core owns this number and the view reads it, the same direction CAP_BOX runs. Do not
+ * re-derive it from whatever `tunnel-mesh.ts` draws.
+ */
+export const TUNNEL_BOX: Box = { len: 0.74, wid: 0.74 };
 
 export interface QueueGroup {
   color: string;
@@ -121,10 +216,36 @@ export interface QueueGroup {
  * colour's passengers into a full row plus a ragged remainder, and the ring would show
  * half-empty cells that no boarding produced. 4 divides all three; so does 8; 12 does not.
  *
- * It is also the ceiling on how many passengers board in one tick, so halving it doubles
- * how many ticks a level's passengers take to clear.
+ * It is no longer the ceiling on how many passengers board in one tick -- BOARD_CELLS rows
+ * board together now -- but it is still the ceiling per ROW, so halving it doubles how many
+ * rows a level's passengers take to clear.
  */
 export const GROUP_SIZE = 4;
+
+/**
+ * How many CONSECUTIVE ring cells the boarding doorway covers: every row inside it boards on
+ * the same tick, as far as the matching cars can take it.
+ *
+ * ODD, so the window is symmetric about `boardIndex` and the doorway's middle stays at the
+ * bottom of the ring where the bay is. An even width would put the door's centre half a cell
+ * off the lowest point of the track, which reads as a door hung crooked.
+ *
+ * 3, against rows that come in BANDS -- `bandedQueue` deals one band per car, a car's worth of
+ * rows. The pair is the whole point: a band is four same-coloured rows, so a window of three
+ * takes eight to twelve people out of it in one flight instead of four, and a colour the
+ * player set a car up for pays off in one visible burst rather than four separate ones. That
+ * burst is what the width buys; it is
+ * NOT extra throughput, because the ring is still fed one row per tick at the live entrance
+ * (see `LoopSystem.step`), so what changes is how lumpy the boarding is, not how long a
+ * level runs.
+ *
+ * The window must not reach an entry cell (`boardIndex +- capacity / 4`), or a row would be
+ * boarded on the tick it entered and the entry animation would fly a figure that is already
+ * gone. `LoopSystem` clamps the half-width to `capacity / 4 - 1` for exactly that, which is
+ * how the toy four-cell rings in the tests keep the single-cell doorway they were written
+ * against; every legal capacity (28 and up) has room for the full 3.
+ */
+export const BOARD_CELLS = 3;
 
 /** One row of same-coloured passengers. `count` falls as they board, 1..GROUP_SIZE. */
 export interface PaxGroup {
@@ -154,7 +275,7 @@ export const DEFAULT_FEEDS: Feed[] = [
 
 export interface LevelData {
   id: number;
-  lot: { w: number; h: number; cars: CarSpec[] };
+  lot: { w: number; h: number; cars: CarSpec[]; tunnels?: TunnelSpec[] };
   parking: { slots: number; unlocked: number };
   loop: {
     capacity: number;
