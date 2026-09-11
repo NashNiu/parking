@@ -129,16 +129,18 @@ const SCRIM_SPAN = 0.42;
  * and which axis `layout` and the drag read. `rail-math.ts` did not change at all: it is
  * one-dimensional offset arithmetic and never knew which direction it was pointing.
  *
- * LIGHTER THAN THE REFERENCE, which is what was asked for. The mock's road is about
- * 138,143,150 and reads as wet asphalt under a bright menu; at 176,182,190 it is a pale
- * kerbed street, the stops still sit clearly on top of it, and it does not fight the photo
- * behind it for being the darkest thing on the screen.
+ * TRANSLUCENT, AND IT IS THE BACKDROP'S OWN COLOUR. It was an opaque pale grey first, on the
+ * argument that the photograph has a road of its own running to a vanishing point and a
+ * see-through strip would leave two roads arguing. On a device that argument lost: an opaque
+ * band down the middle of a photograph does not read as a road laid over a street, it reads
+ * as the photograph having a hole in it, and the two strips of picture left either side are
+ * the only place the backdrop survives at all.
  *
- * Opaque, not tinted: the backdrop photograph has a road of its own going to a vanishing
- * point, and two roads arguing is exactly what a translucent strip would produce. This one
- * covers it.
+ * At BG's own navy and 150 of alpha the street shows through the whole width and the middle
+ * simply sits back. It is the same colour the menu had before there was a photograph, which
+ * is why the stops -- picked against that navy -- still sit on it the way they were drawn to.
  */
-const ROAD = new Color(176, 182, 190, 255);
+const ROAD = new Color(24, 30, 50, 150);
 const ROAD_W = 620;
 const ROAD_DASH = new Color(248, 250, 252, 235);
 const ROAD_DASH_W = 12;
@@ -155,6 +157,13 @@ const ROAD_DASH_GAP = 56;
  */
 const ZIG_X = 158;
 
+/**
+ * How much clear space the button keeps under it, past the home indicator's own reservation.
+ *
+ * 90 rather than nothing: flush against the inset the button looks like it fell off the
+ * screen, and on a phone with no inset at all it would genuinely be on the edge.
+ */
+const START_MARGIN = 90;
 const START_W = 400;
 const START_H = 116;
 const START_R = 40;
@@ -193,6 +202,10 @@ const STOP_DONE_BASE = new Color(42, 79, 124, 255);
 const STOP_SHUT = new Color(52, 62, 90, 255);
 const STOP_SHUT_BASE = new Color(38, 46, 70, 255);
 const STOP_INK = new Color(255, 255, 255, 240);
+// Dimmer on a locked stop, and shifted right of the padlock beside it. See setProgress.
+const STOP_INK_SHUT = new Color(190, 200, 224, 220);
+const NUM_X_SHUT = 40;
+const LOCK_X_SHUT = -50;
 /** The halo on the middle stop. It fades out as that stop leaves the middle. */
 const STOP_RING = new Color(86, 199, 104, 90);
 const STOP_RING_PAD = 15;
@@ -380,7 +393,11 @@ export class HomeView {
         this.resetNode = this.topPlate;
         this.topPlate.active = false;
 
-        const startY = -h * 0.25;
+        // Against the BOTTOM EDGE rather than a fraction of the height, and clear of the
+        // home indicator. A quarter of the way up put it in the middle of the route, where
+        // it covered two stops and read as part of the road; down here it is a bar the route
+        // runs behind, which is what the reference does with its own.
+        const startY = -h / 2 + safeInsets().bottom * h + START_H / 2 + START_MARGIN;
         const start = this.buildStart(startY);
         this.startBtn = start.node;
         this.startFace = start.face;
@@ -631,6 +648,7 @@ export class HomeView {
         const face = roundedSprite('face', STOP_W, STOP_H, STOP, STOP_R);
         node.addChild(face);
         const num = makeLabel(face, 'n', 62, STOP_NUM_Y);
+        num.node.setPosition(0, STOP_NUM_Y, 0);
         num.color = STOP_INK;
         num.isBold = true;
         num.string = `${i + 1}`;
@@ -653,6 +671,8 @@ export class HomeView {
         lock.layer = Layers.Enum.UI_2D;
         lock.addComponent(UITransform);
         face.addChild(lock);
+        // Left of centre, because the level's number sits to its right now.
+        lock.setPosition(LOCK_X_SHUT, STOP_NUM_Y, 0);
         const shackle = dotSprite('shackle', 38, LOCK_INK);
         lock.addChild(shackle);
         shackle.setPosition(0, 13, 0);
@@ -685,7 +705,14 @@ export class HomeView {
                 !open ? STOP_SHUT : (done ? STOP_DONE : STOP);
             stop.base.getComponent(Sprite)!.color =
                 !open ? STOP_SHUT_BASE : (done ? STOP_DONE_BASE : STOP_BASE);
-            stop.num.node.active = open;
+            // THE NUMBER STAYS ON WHEN IT IS LOCKED, beside the padlock rather than instead
+            // of it. Hiding it made every locked stop identical -- a column of eight
+            // indistinguishable pills with no way to tell which level you were looking at,
+            // which is not what a route is for. The reference shows the number on its locked
+            // stops too. Dimmer, so a locked number does not read as an invitation.
+            stop.num.node.active = true;
+            stop.num.color = open ? STOP_INK : STOP_INK_SHUT;
+            stop.num.node.setPosition(open ? 0 : NUM_X_SHUT, STOP_NUM_Y, 0);
             stop.lock.active = !open;
             for (let s = 0; s < stop.stars.length; s++) {
                 // Absent, not empty, on a level never cleared: three grey stars would say it
