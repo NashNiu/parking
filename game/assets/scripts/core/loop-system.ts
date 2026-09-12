@@ -165,6 +165,28 @@ export class LoopSystem {
   }
 
   /**
+   * Whether the ring can still take a row on its own -- an empty cell, and a queue with
+   * something left to put in it.
+   *
+   * WHILE THIS IS TRUE, NOTHING ABOUT THE RING IS SETTLED, and the deadlock checks in
+   * `GameCore` hold off. `reachableColors` below is exact about where this ends up, but it
+   * is a PREDICTION, and it was being used to tell the player the level was stuck at a
+   * moment when they could see gaps on the ring and rows still streaming in. A true answer
+   * nobody can check reads as a wrong one. Asked after this goes false, the same question is
+   * answered by what is on the screen.
+   *
+   * It always does go false, which is the part that matters -- the alternative would be the
+   * board going quiet forever, which is the defect the prompt exists to fix. `step` admits a
+   * row whenever the live entrance's cell is null, and every cell rotates past that entrance
+   * within `capacity` steps, so the number of empty cells strictly falls until either the
+   * ring is full or the queues are spent.
+   */
+  stillFilling(): boolean {
+    return this.channels.some((c) => c.queue.length > 0)
+      && this.ring.some((grp) => grp === null);
+  }
+
+  /**
    * Colors that can still reach the boarding index.
    *
    * Passengers only enter the ring through the live entrance (channels drain in
