@@ -179,7 +179,7 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
  */
 const WHEEL_X = 0.30;
 const BUS_WHEEL_X_FRONT = 0.35;
-const BUS_WHEEL_X_REAR = -0.315;
+const BUS_WHEEL_X_REAR = -0.265;
 const BUS_WHEEL_REAR_HALF_GAP = 0.065;
 const WHEEL_Y = 0.45;
 const WHEEL_W = 0.15;
@@ -194,9 +194,15 @@ const TYRE = new Color(25, 28, 34);
  *
  * +X is the nose; see ARROW_X, which points that way. Measured against a body that spans
  * -0.47..+0.47 (BODY_ALONG halved), the coach's three clear it with 0.070 at the nose and
- * 0.040 at the tail, and its rear pair leaves 0.030 of daylight between the two tyres --
+ * 0.090 at the tail, and its rear pair leaves 0.030 of daylight between the two tyres --
  * about a third of a tyre's own length, which is what makes them read as two wheels side by
  * side rather than as one long one.
+ *
+ * THE TAIL CLEARANCE IS THE NUMBER THAT WAS WRONG. The tandem sat at -0.315, which left 0.040
+ * behind the rearmost tyre -- 10% of the body, so the wheels were effectively flush with the
+ * back and the coach looked like it was sitting on its bumper. At -0.265 the overhang is 15%,
+ * which is about what a real coach carries behind its rear axle for the engine bay, and the
+ * wheelbase is still 65% of the body.
  */
 function axles(cap: Cap): { xs: readonly number[]; w: number } {
     return cap === 'big'
