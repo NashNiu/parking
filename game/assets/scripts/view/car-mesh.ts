@@ -159,16 +159,28 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
  * looks at the board from up-screen, so a car lying across the screen shows the two wheels on
  * its near side and nothing of the far pair, while a car pointing up the screen shows both
  * sides in profile. That is why every vehicle read as a two-wheeler however long it was, and
- * why "the coach should have four wheels" was a request for four along ONE side -- so the big
- * cap gets four per side, at the two mirrored offsets below, and its wheels are narrower so
- * the four read as four rather than as a smear. Small and medium keep one axle at each end.
+ * why "the coach should have four wheels" was a request for four along ONE side. Its wheels
+ * are narrower than the others' so that the several read as several rather than as a smear.
+ * Small and medium keep one axle at each end.
  *
- * The count is now a SIZE CUE, which is worth more than it cost: medium and big are within
- * 11% of each other in length (1.611 against 1.793, see CAP_BOX) and were hard to tell apart.
+ * The count is a SIZE CUE, which is worth more than it cost: medium and big are within 11% of
+ * each other in length (1.611 against 1.793, see CAP_BOX) and were hard to tell apart.
+ *
+ * THE COACH IS 2 + 4, NOT 4 + 4. It had four evenly spaced along each side, which is eight
+ * wheels on a vehicle and not an arrangement any vehicle has. A coach has ONE axle at the
+ * front and a TANDEM PAIR at the back, so that is what these three offsets are: one forward
+ * wheel per side, and two behind it close enough together to read as one bogie. Six wheels,
+ * which is what a coach has.
+ *
+ * The pair is written as a centre and a half-spacing rather than as two positions, because
+ * "these two are a pair" is the thing that has to survive somebody retuning it -- two loose
+ * numbers that happen to be near each other do not say that, and drift apart the first time
+ * one of them is nudged.
  */
 const WHEEL_X = 0.30;
-const BUS_WHEEL_X_OUTER = 0.37;
-const BUS_WHEEL_X_INNER = 0.13;
+const BUS_WHEEL_X_FRONT = 0.35;
+const BUS_WHEEL_X_REAR = -0.315;
+const BUS_WHEEL_REAR_HALF_GAP = 0.065;
 const WHEEL_Y = 0.45;
 const WHEEL_W = 0.15;
 const BUS_WHEEL_W = 0.10;
@@ -179,11 +191,21 @@ const TYRE = new Color(25, 28, 34);
 /**
  * Where this capacity's wheels sit along the body, as fractions of its length from the centre,
  * and how wide each one is. Mirrored across the centreline already, so the list IS one side.
+ *
+ * +X is the nose; see ARROW_X, which points that way. Measured against a body that spans
+ * -0.47..+0.47 (BODY_ALONG halved), the coach's three clear it with 0.070 at the nose and
+ * 0.040 at the tail, and its rear pair leaves 0.030 of daylight between the two tyres --
+ * about a third of a tyre's own length, which is what makes them read as two wheels side by
+ * side rather than as one long one.
  */
 function axles(cap: Cap): { xs: readonly number[]; w: number } {
     return cap === 'big'
         ? {
-            xs: [BUS_WHEEL_X_OUTER, BUS_WHEEL_X_INNER, -BUS_WHEEL_X_INNER, -BUS_WHEEL_X_OUTER],
+            xs: [
+                BUS_WHEEL_X_FRONT,
+                BUS_WHEEL_X_REAR + BUS_WHEEL_REAR_HALF_GAP,
+                BUS_WHEEL_X_REAR - BUS_WHEEL_REAR_HALF_GAP,
+            ],
             w: BUS_WHEEL_W,
         }
         : { xs: [WHEEL_X, -WHEEL_X], w: WHEEL_W };
