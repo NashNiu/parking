@@ -160,8 +160,19 @@ const TITLE_PILL_H = PILL_H;
  * busiest thing on the screen, so the board showing through was costing it exactly the
  * legibility it exists for.
  */
-const TOAST_W = 660;
-const TOAST_H = 200;
+/**
+ * A UNIFORM 0.82 DOWN FROM 660x200 AT 96, asked for as 稍微小一点.
+ *
+ * Every proportion is unchanged, which is what makes it a step rather than a redesign: the
+ * text still fills 58% of the pill's width, still keeps 21% of padding on each side, and the
+ * outline is still a sixteenth of the font size. Only the whole thing is smaller.
+ *
+ * It had grown with the dialogs when the canvas turned out to be 1280 wide rather than 720,
+ * and that scale-up was right for a card you have to answer and too much for this: the toast
+ * takes no answer and is gone in TOAST_HOLD, so it only has to be read, not dealt with.
+ */
+const TOAST_W = 540;
+const TOAST_H = 164;
 const TOAST_HOLD = 1.5;
 /**
  * The card's colours, not the dark slab this used to be -- 所有提示都做成同一种风格.
@@ -174,7 +185,8 @@ const TOAST_HOLD = 1.5;
 const TOAST_BG = new Color(64, 172, 236, 245);
 const TOAST_BASE = new Color(28, 112, 176, 245);
 const TOAST_LIFT = 11;
-const TOAST_SIZE = 96;
+const TOAST_SIZE = 78;
+const TOAST_RIM_W = 5;
 
 /**
  * THE CARD: the shape both of this HUD's dialogs are cut from -- a thick coloured rim, a
@@ -1251,7 +1263,7 @@ export class HudView {
         // CJK glyphs at about 384 wide inside a 660 pill, which leaves room for the five that
         // 「进度已清除」 needs, and reads as the same HUD as the plates above it, only louder.
         this.toastTitle = makeLabel(face, 'ToastTitle', TOAST_SIZE, 0);
-        rimLabel(this.toastTitle, TOAST_BASE, 6);
+        rimLabel(this.toastTitle, TOAST_BASE, TOAST_RIM_W);
         pill.active = false;
         this.toast = pill;
     }
