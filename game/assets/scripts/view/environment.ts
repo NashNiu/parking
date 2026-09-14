@@ -57,7 +57,7 @@ export function setupEnvironment(root: Node): void {
         // the roof along with the wall and so bought nothing; it is back at 20000.
         dl.illuminance = 42000;
         dl.color = new Color(255, 250, 240);
-        // Real-time ShadowMap is disabled: on the ~52°-tilted board it casts long,
+        // Real-time ShadowMap is disabled: on the tilted board (BOARD_TILT) it casts long,
         // offset, hard shadows onto the slanted ground and is expensive. We use
         // fake blob shadows (blob-shadow.ts) attached to each car/passenger instead.
         dl.shadowEnabled = false;
@@ -79,6 +79,20 @@ export function setupEnvironment(root: Node): void {
         // is not what was wanted. Lowering the KEY does the same job one-sidedly -- see the note
         // on `illuminance` above.
         globals.ambient.skyIllum = 20000;
+        // A HAND-PICKED FILL, NOT A SAMPLE OF THE FLOOR, which is the thing to know before
+        // reaching for it. It has never matched the ground panel -- this is warm, every version
+        // of GROUND has been cool -- and nothing here reads scene-stage to keep them in step.
+        //
+        // So: repainting the floor does not move the lighting, in either direction. The scene
+        // panels are UNLIT (see the head of scene-stage and `makeSlab`); their colour is the
+        // colour that reaches the screen and none of it bounces onto a car. When the ground
+        // went up 22 luminance units and the lot came down 51, nothing in this function needed
+        // re-tuning, and it was checked rather than assumed.
+        //
+        // Worth stating because the opposite instinct is well earned: `illuminance` above
+        // carries a "the roofs look white" regression. That one came from TILTING THE BOARD --
+        // a geometry change that turned every up-facing surface toward the key -- and the
+        // lesson it teaches is about normals, not about floor colour.
         globals.ambient.groundAlbedo = new Color(150, 145, 138, 255) as unknown as any;
     }
 

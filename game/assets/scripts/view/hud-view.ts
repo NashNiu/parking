@@ -105,8 +105,23 @@ const PILL_H = 88;
  * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
  * blue-grey (see GROUND in scene-stage), so a neutral shadow under a white plate reads as
  * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
+ *
+ * It tracks GROUND at the same few units under it that it always sat at, so it followed the
+ * floor down when the floor moved (see scene-stage). Left where it was, a base still carrying
+ * the old pale blue would have been lighter than the board it is supposed to be a shadow on.
+ *
+ * IT HAS NOW FOLLOWED THE FLOOR BACK UP, to -4 under 199 where it was -4 under 177, and the
+ * paragraph above is the whole reason it had to. The failure it describes has a mirror image
+ * and this constant was one edit away from it: a base held at 173 against a 199 floor is 26
+ * units under the board rather than 4, which does not read as a soft lip beneath the plate --
+ * it reads as a dark bar drawn round it. Too light and too dark break this the same way,
+ * because what makes it a shadow is that it is CLOSE to the surface and biased with it.
+ *
+ * Both readouts sit on the upper half of the screen, which is the half that stayed pavement
+ * when the scene split, so GROUND is still the right thing for it to track. Anything that
+ * moves onto the asphalt wants its own base, not this one.
  */
-const PILL_BASE = new Color(202, 211, 231, 255);
+const PILL_BASE = new Color(185, 196, 214, 255);
 const PILL_LIFT = 6;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;

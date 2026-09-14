@@ -331,9 +331,15 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     const mr = fit.addComponent(MeshRenderer);
     mr.mesh = figureMesh();
     mr.material = mat;
-    // Nothing here casts a shadow: `setupEnvironment` turns the shadow map off and the board
-    // paints blob shadows instead. Saying so per renderer keeps the crowd out of any shadow
-    // pass a future pipeline change might switch back on.
+    // Nothing here casts a shadow: `setupEnvironment` turns the shadow map off. Saying so per
+    // renderer keeps the crowd out of any shadow pass a future pipeline change might switch
+    // back on.
+    //
+    // AND NOTHING PAINTS ONE FOR IT EITHER. This used to claim the board paints blob shadows
+    // for the crowd; it does not -- `blobShadow`'s only caller is `car-builder`. A passenger
+    // has no contact shadow of any kind. Left as it is rather than fixed, because adding 256
+    // of them is a performance question (see ROW_AS_DOT in track-view for what the crowd
+    // already costs) and not a comment's to decide.
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
 
     registry.set(root, { renderer: mr, mat });

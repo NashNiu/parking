@@ -4,6 +4,7 @@ import {
     makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, triPart, MeshPart,
 } from './slabs';
 import { SHADOW_Z } from './scene-stage';
+import { LIFT, shadowThrow } from './shadow';
 import { CAP_BOX, CAR_SCALE } from '../core/index';
 
 /**
@@ -80,7 +81,7 @@ const RIM = 0.045;
 const PAD_Z = -0.11;
 const RIM_Z = -0.12;
 const PANEL_Z = -0.14;
-const DROP = 0.11;
+/* DROP (0.11) is `LIFT.tray` in shadow.ts now. */
 
 /**
  * The padlock, front to back: the shackle sits FURTHEST BACK on purpose. It is drawn as a
@@ -115,7 +116,23 @@ const LOCK_SHACKLE_TUBE = 0.04;
 const LOCK_BODY_Y = -(LOCK_SHACKLE_R + LOCK_SHACKLE_TUBE) / 2;
 const LOCK_SHACKLE_Y = LOCK_BODY_Y + LOCK_BODY_H / 2;
 
-const PANEL = new Color(220, 227, 245);
+/**
+ * The raised tray. It held +12 luminance over GROUND for as long as there was one ground; the
+ * split into light pavement and dark asphalt (see scene-stage) left it at -10 instead, and the
+ * VALUE is deliberately unchanged through that.
+ *
+ * Tracking GROUND up would have put it at 211, and 211 is four units off the yellow car wall at
+ * 217 -- the exact failure the scene-stage header measures and exists to avoid. A car parks on
+ * the PAD below, not on this tray, so the collision would not be quite as total as that sounds;
+ * it would be a yellow bus against a tray the same brightness with only the pad's rim between
+ * them, which is close enough to bad.
+ *
+ * Staying put costs nothing, because the tray never needed to be lighter than its surroundings
+ * to read as raised -- it needed its drop shadow, and it has one. Slightly darker than the
+ * pavement with a shadow under it is what a raised slab of concrete actually looks like, and it
+ * is also what the reference art has.
+ */
+const PANEL = new Color(186, 189, 197);
 const PAD = new Color(76, 87, 115);
 const PAD_LOCKED = new Color(57, 66, 90);
 const PAD_RIM = new Color(147, 160, 192);
@@ -195,7 +212,7 @@ export class ParkingView {
         // road below. It separates the stalls from the ground and gives the dark pads
         // something to read against.
         const shadow = makeShadowSlab('ParkingShadow', panelW, panelH, PANEL_R * g);
-        shadow.setPosition(0, this.y - DROP * g, SHADOW_Z);
+        shadow.setPosition(0, this.y + shadowThrow(LIFT.tray) * g, SHADOW_Z);
         this.parent.addChild(shadow);
 
         const panel = makeSlab('ParkingPanel', panelW, panelH, 0.06, PANEL, PANEL_R * g);

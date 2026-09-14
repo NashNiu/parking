@@ -1,11 +1,19 @@
 import { Node, Color, Mesh, MeshRenderer, utils, primitives, Material } from 'cc';
+import { SHADOW_INK, CONTACT_ALPHA } from './shadow';
 
 /**
  * Fake "contact" shadow for the 2.5D tilted board. Real-time ShadowMap looks
- * wrong here (the whole board is tilted ~52°, so a directional light casts long,
- * offset, hard shadows onto the slanted "ground") and is expensive. Instead each
- * car/passenger carries a soft dark translucent ellipse that lies flat against the
- * board plane beneath it — clean, cheap, and always reads as grounded.
+ * wrong here (the whole board is tilted -- see BOARD_TILT -- so a directional light casts long,
+ * offset, hard shadows onto the slanted "ground") and is expensive. Instead a car carries a
+ * soft dark translucent ellipse that lies flat against the board plane beneath it — clean,
+ * cheap, and always reads as grounded.
+ *
+ * CARS. NOT PASSENGERS. This said "each car/passenger" and that was wrong: `blobShadow` has
+ * exactly one caller in the scene, `car-builder`, and the crowd wears nothing. The claim cost
+ * something real before it was checked -- a later pass reasoned from it that this material was
+ * stuck serving both the asphalt and the white track, and left the cars' shadows at a third of
+ * the weight they should have had. If the crowd should have contact shadows, that is a feature
+ * to add and to price (there can be 256 of them), not something this comment can assert.
  */
 
 let shadowMat: Material | null = null;
@@ -21,7 +29,16 @@ function shadowMaterial(): Material {
     mat.initialize({
         effectName: 'builtin-unlit', technique: 1, defines: { USE_INSTANCING: true },
     });
-    mat.setProperty('mainColor', new Color(0, 0, 0, 45));
+    // SHARED INK, AND CONTACT_ALPHA IS WHAT KEEPS THE WEIGHT UNCHANGED ACROSS THAT SWITCH.
+    // This was flat black at 45 while every panel in the scene used the cool board-biased ink;
+    // see shadow.ts for why one ink, and CONTACT_ALPHA for why 67 is the same weight 45 was on
+    // black rather than a decision to darken anything.
+    //
+    // ONE ALPHA, ONE KIND OF FLOOR. Every shadow drawn with this material belongs to a car, and
+    // cars only ever stand on dark surfaces -- asphalt 102, ring road 93, stall pad 87 -- so
+    // there is no second background to balance against. CONTACT_ALPHA is set from that; see its
+    // note for the measurements and for the phantom constraint that held it at 67.
+    mat.setProperty('mainColor', new Color(SHADOW_INK.r, SHADOW_INK.g, SHADOW_INK.b, CONTACT_ALPHA));
     shadowMat = mat;
     return mat;
 }

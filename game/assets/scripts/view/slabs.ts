@@ -1,5 +1,6 @@
 import { Color, Mesh, MeshRenderer, Node, utils } from 'cc';
 import { flatMaterial, alphaMaterial } from './materials';
+import { SHADOW_INK, SHADOW_ALPHA } from './shadow';
 
 /** One primitive geometry, in the shape `utils.createMesh` and `mergeParts` both take. */
 export interface MeshPart {
@@ -200,14 +201,14 @@ export function makeMerged(name: string, parts: MeshPart[], color: Color): Node 
 /**
  * The soft drop shadow under a panel: the same rounded shape in translucent black,
  * offset down and set behind the panel so only the sliver below it shows. Real shadows
- * are wrong here (the whole board is tilted ~52°, so a directional light throws long
+ * are wrong here (the whole board is tilted -- see BOARD_TILT -- so a directional light throws long
  * offset shadows onto a slanted ground) and this is what the reference art does anyway.
  */
-export function makeShadowSlab(name: string, w: number, h: number, r: number, alpha = 42): Node {
+export function makeShadowSlab(name: string, w: number, h: number, r: number, alpha = SHADOW_ALPHA): Node {
     const node = new Node(name);
     const mr = node.addComponent(MeshRenderer);
     mr.mesh = mergeParts([roundedSlabPart(w, h, 0.02, r)]);
-    mr.material = alphaMaterial(new Color(24, 34, 56, alpha));
+    mr.material = alphaMaterial(new Color(SHADOW_INK.r, SHADOW_INK.g, SHADOW_INK.b, alpha));
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
     return node;
 }
