@@ -30,14 +30,17 @@ import sys
 import zlib
 
 MESH = 'game/assets/scripts/view/car-mesh.ts'
-BUILDER = 'game/assets/scripts/view/car-builder.ts'
+PALETTE = 'game/assets/scripts/view/colors.ts'
+BUILDER = 'game/assets/scripts/view/shadow.ts'
 CTRL = 'game/assets/scripts/view/board-layout.ts'
 ENV = 'game/assets/scripts/view/environment.ts'
 TYPES = 'game/assets/scripts/core/types.ts'
-CAR = (244, 67, 72)                 # COLORS.red, the busiest colour on a board
+CAR = (244, 67, 72)                 # COLORS.red, the busiest colour on a board -- see `--color`
 BG = (222, 226, 232)
 SHADOW_ALPHA = 45 / 255             # blob-shadow.ts's mainColor alpha
 PPU, PAD, SS = 240, 0.20, 2         # SS supersamples the whole frame, then it is box-filtered
+PLAY_PPU = 40                       # about what a portrait phone gives the board -- see `--play`
+NO_ARROW = False                    # set from `--no-arrow` below; see the note in `triangles`
 
 # How much of a fully-lit surface's light is ambient, read out of `setupEnvironment` rather than
 # fitted, so it tracks the scene. It is a ROUGH stand-in -- the hemisphere ambient and the key
@@ -70,18 +73,25 @@ def illuminances():
 
 
 def constants():
-    needed = ('BODY_ALONG', 'BODY_ACROSS', 'BODY_CORNER', 'CORNER_SEGMENTS',
+    needed = ('BODY_ALONG', 'BODY_ACROSS', 'CORNER_NOSE', 'CORNER_TAIL', 'CORNER_SEGMENTS',
               'EDGE_GROW_ALONG', 'EDGE_GROW_ACROSS', 'DOME_NARROW', 'DOME_RISE',
               'CAR_HEIGHT', 'WALL_LIFT', 'WALL_FOOT', 'WHEEL_Z', 'Z_STEP',
               'WHEEL_X', 'WHEEL_Y', 'WHEEL_W', 'WHEEL_H', 'WHEEL_R',
-              'BUS_WHEEL_X_OUTER', 'BUS_WHEEL_X_INNER', 'BUS_WHEEL_W',
+              'BUS_WHEEL_X_FRONT', 'BUS_WHEEL_X_REAR', 'BUS_WHEEL_REAR_HALF_GAP', 'BUS_WHEEL_W',
               'GLASS_LOW', 'GLASS_HIGH', 'GLASS_OUT', 'GLASS_SHADE',
-              'RAIL_X', 'RAIL_W', 'RAIL_H', 'RAIL_SHADE',
-              'ARROW_X', 'ARROW_W', 'ARROW_H', 'ARROW_SHAFT', 'ARROW_HEAD')
+              'OUTLINE_L_DROP', 'OUTLINE_S_GAIN', 'SKIRT_TOP',
+              'SCREEN_LEN', 'SCREEN_SHADE',
+              'TAIL_X', 'TAIL_Y', 'TAIL_W', 'TAIL_H', 'TAIL_R',
+              'TRIM_LAYER', 'ARROW_BACK_LAYER', 'ARROW_LAYER',
+              'ARROW_X', 'ARROW_W', 'ARROW_H', 'ARROW_SHAFT', 'ARROW_HEAD', 'ARROW_OUTLINE')
     k, t = numbers(MESH, needed)
     tyre = re.search(r'const TYRE = new Color\((\d+), (\d+), (\d+)', t)
     if not tyre:
         raise SystemExit(f'could not read TYRE out of {MESH}')
+    lamp = re.search(r'const TAILLIGHT = new Color\((\d+), (\d+), (\d+)', t)
+    if not lamp:
+        raise SystemExit(f'could not read TAILLIGHT out of {MESH}')
+    globals()['TAILLIGHT'] = tuple(int(g) for g in lamp.groups())
     block = re.search(r'DOME_PROFILE[^=]*=\s*\[(.*?)\];', t, re.S)
     if not block:
         raise SystemExit(f'DOME_PROFILE not found in {MESH}')
@@ -89,7 +99,11 @@ def constants():
                re.findall(r'at:\s*([0-9.]+),\s*tilt:\s*([0-9.]+)', block.group(1))]
     if len(profile) < 2:
         raise SystemExit(f'DOME_PROFILE in {MESH} needs at least two rings')
-    k.update(numbers(BUILDER, ('SHADOW_LIFT',))[0])
+    with open(BUILDER, encoding='utf-8') as f:
+        lift = re.search(r'contact:\s*(-?[0-9.]+)', f.read())
+    if not lift:
+        raise SystemExit(f'LIFT.contact not found in {BUILDER}')
+    k['SHADOW_LIFT'] = float(lift.group(1))
     k.update(numbers(CTRL, ('BOARD_TILT',))[0])
     k.update(numbers(ENV, ('KEY_LIGHT_PITCH_DEG',))[0])
     # The medium car's aspect, exactly as car-mesh.ts derives REFERENCE_ASPECT from CAP_BOX.
@@ -165,16 +179,31 @@ def lit(c, normal, ln, wd):
     return tuple(max(0, min(255, round(v * k))) for v in c)
 
 
-def round_rect(cx, cy, w, h, r):
-    """Mirror of `roundRect` in car-mesh.ts, anisotropic radius and segment count included."""
+def round_rect(cx, cy, w, h, r, r_tail=None):
+    """Mirror of `roundRect` in car-mesh.ts, anisotropic radius and segment count included.
+
+    `r_tail` is the -X end's radius and defaults to `r`, exactly as the TypeScript does, so the
+    symmetric callers are unaffected by the body's two ends being allowed to differ.
+    """
+    if r_tail is None:
+        r_tail = r
     hw, hh = w / 2, h / 2
     a_ref = K['REFERENCE_ASPECT']
-    world = r * min(w * a_ref, h)
-    rx, ry = min(world / a_ref, hw), min(world, hh)
-    ix, iy = hw - rx, hh - ry
+    minor = min(w * a_ref, h)
+
+    def radii(f):
+        world = f * minor
+        return min(world / a_ref, hw), min(world, hh)
+
+    nrx, nry = radii(r)
+    trx, trry = radii(r_tail)
     seg = int(K['CORNER_SEGMENTS'])
+    corners = [(hw - nrx, -(hh - nry), nrx, nry),
+               (hw - nrx, hh - nry, nrx, nry),
+               (-(hw - trx), hh - trry, trx, trry),
+               (-(hw - trx), -(hh - trry), trx, trry)]
     pts = []
-    for c, (ox, oy) in enumerate([(ix, -iy), (ix, iy), (-ix, iy), (-ix, -iy)]):
+    for c, (ox, oy, rx, ry) in enumerate(corners):
         start = -math.pi / 2 + c * (math.pi / 2)
         for s in range(seg + 1):
             a = start + (s / seg) * (math.pi / 2)
@@ -183,7 +212,68 @@ def round_rect(cx, cy, w, h, r):
 
 
 def body_outline(along, across):
-    return round_rect(0, 0, K['BODY_ALONG'] * along, K['BODY_ACROSS'] * across, K['BODY_CORNER'])
+    return round_rect(0, 0, K['BODY_ALONG'] * along, K['BODY_ACROSS'] * across,
+                      K['CORNER_NOSE'], K['CORNER_TAIL'])
+
+
+def outline_of(c):
+    """Mirror of `outlineOf` in car-mesh.ts: the body colour at L-20%, S+10% in HSL."""
+    r, g, b = (v / 255 for v in c)
+    hi, lo = max(r, g, b), min(r, g, b)
+    l = (hi + lo) / 2
+    d = hi - lo
+    h = s = 0.0
+    if d > 1e-6:
+        s = d / (2 - hi - lo) if l > 0.5 else d / (hi + lo)
+        if hi == r:
+            h = ((g - b) / d + (6 if g < b else 0)) / 6
+        elif hi == g:
+            h = ((b - r) / d + 2) / 6
+        else:
+            h = ((r - g) / d + 4) / 6
+    s = min(1.0, s * (1 + K['OUTLINE_S_GAIN']))
+    l = l * (1 - K['OUTLINE_L_DROP'])
+    q = l * (1 + s) if l < 0.5 else l + s - l * s
+    pp = 2 * l - q
+
+    def channel(t):
+        x = t % 1.0
+        if x < 1 / 6:
+            return pp + (q - pp) * 6 * x
+        if x < 1 / 2:
+            return q
+        if x < 2 / 3:
+            return pp + (q - pp) * (2 / 3 - x) * 6
+        return pp
+
+    return tuple(round(max(0.0, min(1.0, channel(t))) * 255) for t in (h + 1 / 3, h, h - 1 / 3))
+
+
+def clip_min_x(pts, x0):
+    """Mirror of `clipMinX` in car-mesh.ts: the convex polygon at or in front of x0."""
+    out = []
+    n = len(pts)
+    for i in range(n):
+        a, b = pts[i], pts[(i + 1) % n]
+        a_in, b_in = a[0] >= x0, b[0] >= x0
+        if a_in:
+            out.append(a)
+        if a_in != b_in:
+            t = (x0 - a[0]) / (b[0] - a[0])
+            out.append((x0, a[1] + (b[1] - a[1]) * t))
+    return out
+
+
+def windscreen_band(crown):
+    """Mirror of `windscreenBand` in car-mesh.ts: the nose SCREEN_LEN of the crown outline."""
+    return clip_min_x(crown, max(p[0] for p in crown) - K['SCREEN_LEN'])
+
+
+def grow(pts, d):
+    """Mirror of `grow` in car-mesh.ts: the polygon pushed out along its own plan normals."""
+    out = outwards(pts)
+    a_ref = K['REFERENCE_ASPECT']
+    return [(pt[0] + o[0] * d / a_ref, pt[1] + o[1] * d) for pt, o in zip(pts, out)]
 
 
 def outwards(pts):
@@ -217,8 +307,9 @@ def ellipse(cx, cy, w, h, seg=48):
 def axles(cap):
     """Mirrors `axles` in car-mesh.ts: the wheel offsets along one side, and their width."""
     if cap == 'big':
-        return ([K['BUS_WHEEL_X_OUTER'], K['BUS_WHEEL_X_INNER'],
-                 -K['BUS_WHEEL_X_INNER'], -K['BUS_WHEEL_X_OUTER']], K['BUS_WHEEL_W'])
+        return ([K['BUS_WHEEL_X_FRONT'],
+                 K['BUS_WHEEL_X_REAR'] + K['BUS_WHEEL_REAR_HALF_GAP'],
+                 K['BUS_WHEEL_X_REAR'] - K['BUS_WHEEL_REAR_HALF_GAP']], K['BUS_WHEEL_W'])
     return ([K['WHEEL_X'], -K['WHEEL_X']], K['WHEEL_W'])
 
 
@@ -263,9 +354,13 @@ def triangles(ln, wd, cap):
             flat(round_rect(x, sy * K['WHEEL_Y'],
                             ww, K['WHEEL_H'], K['WHEEL_R']), K['WHEEL_Z'], TYRE)
 
-    # The wall: the rim extruded from the board up to the roof, normals flat and outward.
+    # The wall: the rim extruded from the board up to the roof, normals flat and outward, with
+    # the outline ink taking its bottom SKIRT_TOP as a contact edge.
     wall = lighten(CAR, K['WALL_LIFT'])
-    band(rim, 0.0, shade(wall, K['WALL_FOOT']), 90, rim, height, wall, 90)
+    ink = outline_of(CAR)
+    skirt_top = height * K['SKIRT_TOP']
+    band(rim, 0.0, ink, 90, rim, skirt_top, ink, 90)
+    band(rim, skirt_top, shade(wall, K['WALL_FOOT']), 90, rim, height, wall, 90)
 
     # The window band, on the same outline grown just enough not to z-fight the wall.
     gp = body_outline(K['EDGE_GROW_ALONG'] * K['GLASS_OUT'],
@@ -285,14 +380,26 @@ def triangles(ln, wd, cap):
     crown_pts, crown_z, _ = rings[-1]
     flat(crown_pts, crown_z, CAR)
 
-    # Roof seams and the arrow, on the crown.
-    rail = shade(CAR, K['RAIL_SHADE'])
+    # The trim and the arrow, on the crown. Each plate carries the LAYER it sits on rather than
+    # its index in this list -- see the `Plate` note in car-mesh.ts.
+    trim, back, front = K['TRIM_LAYER'], K['ARROW_BACK_LAYER'], K['ARROW_LAYER']
     over = [
-        (round_rect(K['RAIL_X'], 0, K['RAIL_W'], K['RAIL_H'], 0.5), rail),
-        (round_rect(-K['RAIL_X'], 0, K['RAIL_W'], K['RAIL_H'], 0.5), rail),
-    ] + [(piece, (255, 255, 255)) for piece in arrow_pieces()]
-    for i, (pts, col) in enumerate(over):
-        flat(pts, crown_z + (i + 1) * K['Z_STEP'], col)
+        (windscreen_band(crown_pts), shade(CAR, K['SCREEN_SHADE']), trim),
+        (round_rect(K['TAIL_X'], K['TAIL_Y'], K['TAIL_W'], K['TAIL_H'], K['TAIL_R']),
+         TAILLIGHT, trim),
+        (round_rect(K['TAIL_X'], -K['TAIL_Y'], K['TAIL_W'], K['TAIL_H'], K['TAIL_R']),
+         TAILLIGHT, trim),
+    ]
+    # `--no-arrow` leaves the arrow and its backing off, which is not a debugging convenience:
+    # the car is REQUIRED to say which way it is pointing without them ("遮住箭头也能一眼看出车
+    # 朝哪边"), and that is a claim about the windscreen and the tail lights alone. Rendering it
+    # with the arrow on cannot test it -- the arrow answers the question before the eye gets to
+    # anything else. This is the acceptance criterion, run rather than eyeballed.
+    if not NO_ARROW:
+        over += [(grow(piece, K['ARROW_OUTLINE']), ink, back) for piece in arrow_pieces()]
+        over += [(piece, (255, 255, 255), front) for piece in arrow_pieces()]
+    for pts, col, layer in over:
+        flat(pts, crown_z + layer * K['Z_STEP'], col)
     return tris
 
 
@@ -423,4 +530,40 @@ def render(out_path):
     print(f'shadow throw {throw:.3f} (negative = up-screen, behind the car)')
 
 
-render(sys.argv[1] if len(sys.argv) > 1 else '.tmp/car-plan.png')
+def palette():
+    """The play colours, read out of `colors.ts` so this cannot drift from the game's."""
+    with open(PALETTE, encoding='utf-8') as f:
+        body = re.search(r'export const COLORS[^{]*\{(.*?)\n\};', f.read(), re.S)
+    if not body:
+        raise SystemExit(f'could not find COLORS in {PALETTE}')
+    return {n: (int(r), int(g), int(b)) for n, r, g, b in
+            re.findall(r'(\w+):\s*new Color\((\d+),\s*(\d+),\s*(\d+)\)', body.group(1))}
+
+
+# `--color NAME` swaps the body colour for another of the play palette's. RED IS THE DEFAULT AND
+# NOT AN ARBITRARY ONE -- it is the busiest colour on a board -- but it is also the EASIEST, and
+# that matters for anything judged by contrast against the paint: the outline ink and the arrow
+# were both reported as weak on YELLOW and CYAN, which are the palette's two lightest colours,
+# and a change tuned on red alone will pass on red alone. Judge those two before shipping.
+args = [a for a in sys.argv[1:]]
+NO_ARROW = '--no-arrow' in args
+if NO_ARROW:
+    args.remove('--no-arrow')
+# `--play` renders at the size the game actually plays at, and it exists because TWO rounds of
+# head/tail marking passed the big render and failed on a device. At 240 pixels per world unit a
+# medium car is 390 pixels long and every detail on it reads; on a phone it is about forty, and
+# anything under two pixels is averaged away by the antialiaser. The big render is still the only
+# way to judge SHAPE -- use both, and believe this one about whether a cue survives.
+if '--play' in args:
+    PPU, SS = PLAY_PPU, 4
+    args.remove('--play')
+if '--color' in args:
+    i = args.index('--color')
+    name = args[i + 1]
+    pal = palette()
+    if name not in pal:
+        raise SystemExit(f'--color {name}: pick one of {", ".join(pal)}')
+    CAR = pal[name]
+    del args[i:i + 2]
+
+render(args[0] if args else '.tmp/car-plan.png')
