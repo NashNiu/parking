@@ -26,7 +26,7 @@ import { Cap, CAP_BOX } from '../core/index';
  *   2. ONE hue. The paint, and whatever the light does to it. A second hue anywhere reads as a
  *      decal, not as form.
  *   3. A CRISP silhouette: straight sides and ends, with only enough corner radius to take the
- *      hard point off. See the note on BODY_CORNER.
+ *      hard point off. See the notes on CORNER_NOSE and CORNER_TAIL.
  *   4. Glass ON THE WALL, as a band round the car at window height, not panels on the roof. On
  *      a flat board the roof was the only surface there was, so the windows had to go there and
  *      read as dark holes punched in it; with a wall to put them on they read as windows. The
@@ -91,7 +91,19 @@ const BODY_ACROSS = 0.90;
  * way to judge the shading, the glass and the arrow, but on the OUTLINE it disagreed with the
  * device and the device won. If the corners are ever revisited, look at both.
  */
-const BODY_CORNER = 0.10;
+/*
+ * SPLIT NOSE FROM TAIL, which is the cheap half of telling one end from the other. 0.10 was one
+ * radius for all four corners, and a car with equal ends has no front. The nose is rounded past
+ * what the note above settled on and the tail is pulled in tighter than it, so the pair still
+ * averages near the old value -- the point is the DIFFERENCE, not either number.
+ *
+ * IT IS WORTH LITTLE ON ITS OWN, and the note above says why: the radius divides by
+ * REFERENCE_ASPECT on the way along the car, so even at 0.22 the nose's corner is about three
+ * screen pixels of length. What actually carries head-from-tail is the windscreen and the tail
+ * lights (SCREEN_* and TAIL_*); this only stops the SILHOUETTE arguing with them.
+ */
+const CORNER_NOSE = 0.22;
+const CORNER_TAIL = 0.08;
 
 /**
  * The car's real silhouette: the body outline grown a little, more across than along. It is the
@@ -177,6 +189,64 @@ const DOME_PROFILE: readonly { at: number; tilt: number }[] = [
  * numbers that happen to be near each other do not say that, and drift apart the first time
  * one of them is nudged.
  */
+/**
+ * THE OUTLINE INK: the body's own colour taken down and out -- L-20%, S+10% in HSL.
+ *
+ * RELATIVE, NOT ABSOLUTE. `l * (1 - drop)`, not `l - drop`: the palette's luminances run wide on
+ * purpose (see `colors.ts`, which spends its whole argument on keeping that range), and
+ * subtracting a fixed amount would crush the dark end of it toward black while barely touching
+ * the light end. Multiplying takes the same BITE out of every colour.
+ *
+ * 0.45, AND IT WAS ASKED FOR AS 0.20. Twenty percent is the number you would pick for a normal
+ * palette and it does almost nothing to this one, because these colours are already at or near
+ * the top of their chroma (that is the entire argument of `colors.ts`) and so sit at HSL
+ * saturation 0.85-1.00. Dropping L on a colour whose S is pinned at 1 mostly just walks it along
+ * the same face of the cube. Measured as the ink's luminance against the paint's:
+ *
+ *      drop      red   blue  green yellow purple  cyan
+ *      0.20      53%    67%    85%    87%    61%    80%
+ *      0.45      35%    46%    58%    60%    40%    55%
+ *      0.55      29%    37%    48%    49%    33%    45%
+ *
+ * At 0.20 the ink on GREEN and YELLOW is 85-87% of the paint -- no boundary at all, and yellow
+ * is one of the two colours the arrow was reported as vanishing on, so the fix would have missed
+ * exactly the case it was for.
+ *
+ * 0.55, up from a first pass at 0.45, and PLAY SIZE is what moved it. 0.45 holds every colour's
+ * ink under 60% of the paint, which is a clear boundary in the plan renderer at 240 pixels per
+ * world unit and is not one at the forty-odd a phone gives a car. Under half the paint's
+ * luminance on every colour is what survives being shrunk. The spread that is left is the
+ * gamut's: red and purple fall furthest because their S was already clamped and they lose only
+ * L, while yellow and green get some of it back through OUTLINE_S_GAIN.
+ *
+ * NOT BLACK, and that is the whole point of doing it in HSL rather than lerping toward zero. A
+ * black edge on a saturated toy-coloured car reads as a printing artefact -- the colour of the
+ * line has nothing to do with the object. A darker, slightly MORE saturated version of the paint
+ * reads as the paint turning away from the light, which is what an edge on a rounded solid
+ * actually is. The S+10% is what stops the darkening washing it grey: reducing L in HSL pulls a
+ * colour toward the achromatic axis, so saturation has to be given back or the edge comes out
+ * muddy rather than deep.
+ */
+const OUTLINE_L_DROP = 0.55;
+const OUTLINE_S_GAIN = 0.10;
+
+/**
+ * How much of the wall's height the skirt takes: the dark contact edge at its foot.
+ *
+ * THIS IS THE OUTLINE, AND IT IS ONLY ON THREE SIDES OF THE SILHOUETTE. From up here a car's
+ * screen outline is its roof's far edge along the top and its wall along the bottom and sides,
+ * so a skirt at the wall's FOOT draws the bottom and the sides and nothing along the top. That
+ * is deliberate rather than a shortfall: what sits above a car on a packed board is another
+ * car's WALL, which the tilt makes about a fifth of a world unit tall (see the note on
+ * EDGE_GROW_*), so the top edge already has its separator. Drawing a dark line along the top as
+ * well would be the removed rim lip again -- it faces UP, so darkening it turns it into a halo.
+ *
+ * 0.16 of a wall that shows 0.209 world units on screen is a bit over a pixel on a phone, which
+ * is the 1-2px this stands in for. It replaces nothing: WALL_FOOT's grade still runs over the
+ * wall ABOVE the skirt, so the wall reads as shaded and the skirt as its edge.
+ */
+const SKIRT_TOP = 0.16;
+
 const WHEEL_X = 0.30;
 const BUS_WHEEL_X_FRONT = 0.35;
 const BUS_WHEEL_X_REAR = -0.265;
@@ -237,15 +307,71 @@ const GLASS_OUT = 1.006;
 const GLASS_SHADE = 0.66;
 
 /**
- * Two thin lines across the roof, at +-RAIL_X, which is clear of the arrow (it spans -0.19 to
- * +0.15). They read as panel seams, and their job is to give the roof something for the eye to
- * measure its curve against -- a single flat expanse of colour reads flatter than it is however
- * well it is shaded.
+ * THE WINDSCREEN, and the two ROOF RAILS it replaces.
+ *
+ * What was here: two thin seams across the roof at +-0.34, clear of the arrow, whose job was to
+ * give the eye something to measure the roof's curve against. They did that, and they were
+ * MIRROR IMAGES -- so the roof's only asymmetry was the arrow, and a car read as a bar with a
+ * direction printed on it. Both are gone; the windscreen stands where the nose one did and the
+ * tail lights where the tail one did, so the roof keeps its rhythm and gains an end.
+ *
+ * WHY IT IS ON THE ROOF AND NOT ON THE WALL, which is where GLASS_* correctly puts the windows.
+ * The nose wall faces along the car, so it is visible only while the car points DOWN the screen
+ * -- a windscreen there would appear and vanish as the car turned, which is the one thing a
+ * head/tail cue must not do. The roof is the surface the camera always sees.
+ *
+ * IT IS NOT THE ROOF PANELS THAT FAILED. The note at the top of this file records windows being
+ * moved off the roof because they "read as dark holes punched in it", and that was two panels,
+ * SYMMETRIC, on a flat board with no wall to carry real glass. This is one trapezoid, at one
+ * end, with the window band still running round the wall underneath it. The shape is what
+ * reads: a rectangle would be a hole, and a trapezoid narrowing toward the nose is a raked
+ * screen.
+ *
+ * A BAND RIGHT ACROSS THE ROOF, not a shape sitting on it, and PLAY SIZE is the whole argument.
+ * Two versions of this were trapezoids inset from the roof's edges -- first narrowing toward the
+ * nose, which drew a dark arrowhead in front of the white one and competed with it, then
+ * widening toward it. Both read at 240 pixels per world unit and NEITHER read on a phone, where
+ * a car is about forty pixels long: an inset shape is a small mark near one end, and a small
+ * mark is indistinguishable from the tail lights at the other end. Two sets of small marks on
+ * one car is not a head and a tail, it is noise, which is exactly how it came back.
+ *
+ * What a band buys is that it cannot be mistaken for a detail. It runs the full width of the
+ * crown and takes SCREEN_LEN of the car's length, so at any size it is one of the two or three
+ * things a car is made of rather than something printed on it.
+ *
+ * SCREEN_LEN IS THE CAR'S LENGTH, NOT THE CROWN'S, so 0.20 is the 20% it reads as. Where the
+ * band STOPS is derived from the crown rather than written down -- see `windscreenBand`.
  */
-const RAIL_X = 0.34;
-const RAIL_W = 0.020;
-const RAIL_H = 0.50;
-const RAIL_SHADE = 0.84;
+const SCREEN_LEN = 0.20;
+const SCREEN_SHADE = 0.60;
+
+/**
+ * Tail lights: two small plates at the other end, and the one place the car's paint is allowed
+ * a second hue.
+ *
+ * THE "ONE HUE" RULE AT THE TOP OF THIS FILE IS ABOUT FORM, and this is not form. That rule is
+ * there because a second hue used for SHADING reads as a decal instead of as a surface turning
+ * away; a tail light IS a decal, and a lamp lens is the one part of a real car that disagrees
+ * with the paint. The tyres already take the same exemption.
+ *
+ * DARK RED, NOT BRIGHT. These are about four pixels square on a phone, and at that size hue is
+ * nearly unreadable -- what reads is that there are TWO of them and that they are dark. Bright
+ * lamps would also compete with the white arrow, which is the one thing on the roof that has to
+ * win. On the palette's own red the pair lands close to a plain dark shade of the paint, which
+ * is exactly what it should look like there.
+ *
+ * SMALLER AND SQUARER THAN THE FIRST VERSION, which at 0.07 x 0.24 and a 0.35 radius came out
+ * as two round buttons taking up most of the tail's width. A lamp is a small hard-edged rectangle
+ * set near the corner; roundness and size both pushed it toward reading as a decorative dot.
+ *
+ * They sit inboard of x -0.409, where the crown's tail corner starts under CORNER_TAIL.
+ */
+const TAIL_X = -0.365;
+const TAIL_Y = 0.175;
+const TAIL_W = 0.055;
+const TAIL_H = 0.19;
+const TAIL_R = 0.26;
+const TAILLIGHT = new Color(190, 40, 46);
 
 /** The exit arrow, pointing +X (the body's own forward). */
 const ARROW_X = -0.02;
@@ -253,6 +379,29 @@ const ARROW_W = 0.34;
 const ARROW_H = 0.54;
 const ARROW_SHAFT = 0.42;
 const ARROW_HEAD = 0.52;
+
+/**
+ * How far the arrow's dark backing is grown past the arrow itself, in fractions of the car's
+ * WIDTH -- so about two pixels on a phone.
+ *
+ * 0.12, UP FROM 0.07, AND THE FIRST TRY WAS THE ONE PICKED TO SPEC. A one-pixel outline was what
+ * was asked for and 0.07 measures as one pixel on a phone, and it came back from a device still
+ * unreadable on yellow: a one-pixel line between two light colours is mostly eaten by the
+ * antialiaser, which averages it with the paint on both sides. The line has to be wide enough
+ * that its middle survives sampling, which means two pixels, not one. Judge this on yellow or
+ * cyan and at play size (`--ppu`), never on red in the big render.
+ *
+ * WHY A GROWN COPY AND NOT A TRANSLUCENT PAD. A pad at alpha 0.2 multiplies whatever is under
+ * it, so on a yellow or a cyan roof -- the two the arrow was reported as vanishing on -- it
+ * lands as a slightly darker yellow, and the white arrow is still white on light. What was
+ * missing is a BOUNDARY, and a boundary has to be opaque and dark against BOTH sides of itself:
+ * the outline ink is dark against the roof and the arrow is white against the ink, so the arrow
+ * reads on all six colours by the same mechanism instead of six different ones.
+ *
+ * Grown along the polygon's own outward normals (see `grow`), so the shaft and the head each
+ * thicken and their shared seam only overlaps harder -- there is no join to open up.
+ */
+const ARROW_OUTLINE = 0.12;
 
 /**
  * How tall the car stands off the board, in WORLD units.
@@ -338,22 +487,70 @@ function shade(c: Color, f: number): Color {
     return new Color(Math.round(c.r * f), Math.round(c.g * f), Math.round(c.b * f), 255);
 }
 
+/** HSL back to a Color. `h`, `s` and `l` are all 0..1. */
+function fromHsl(h: number, s: number, l: number): Color {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const channel = (t: number): number => {
+        let x = t;
+        if (x < 0) x += 1;
+        if (x > 1) x -= 1;
+        if (x < 1 / 6) return p + (q - p) * 6 * x;
+        if (x < 1 / 2) return q;
+        if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+        return p;
+    };
+    const to = (t: number): number => Math.round(Math.max(0, Math.min(1, channel(t))) * 255);
+    return new Color(to(h + 1 / 3), to(h), to(h - 1 / 3), 255);
+}
+
+/** The outline ink for a body colour: darker and a little more saturated. See OUTLINE_L_DROP. */
+function outlineOf(c: Color): Color {
+    const r = c.r / 255, g = c.g / 255, b = c.b / 255;
+    const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
+    const l = (hi + lo) / 2;
+    const d = hi - lo;
+    let h = 0, s = 0;
+    if (d > 1e-6) {
+        s = l > 0.5 ? d / (2 - hi - lo) : d / (hi + lo);
+        if (hi === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+        else if (hi === g) h = ((b - r) / d + 2) / 6;
+        else h = ((r - g) / d + 4) / 6;
+    }
+    return fromHsl(h, Math.min(1, s * (1 + OUTLINE_S_GAIN)), l * (1 - OUTLINE_L_DROP));
+}
+
 /**
  * A rounded rectangle as a counter-clockwise polygon. `r` is a fraction of the shape's shorter
  * side MEASURED AT REFERENCE_ASPECT, so the corner comes out circular once the node's stretch
  * is applied; see that constant.
+ *
+ * `rTail` is the radius for the -X end, and it DEFAULTS TO `r` so every symmetric caller here
+ * -- the wheels, the tail lights, the glass -- reads exactly as it did before the body's two
+ * ends were allowed to differ. Only `bodyOutline` passes the pair.
  */
-function roundRect(cx: number, cy: number, w: number, h: number, r: number): Pt[] {
+function roundRect(
+    cx: number, cy: number, w: number, h: number, r: number, rTail: number = r,
+): Pt[] {
     const hw = w / 2, hh = h / 2;
     // In world terms the shape is (w * aspect) by h; take the radius there, then bring it back.
-    const world = r * Math.min(w * REFERENCE_ASPECT, h);
-    const rx = Math.min(world / REFERENCE_ASPECT, hw), ry = Math.min(world, hh);
-    const ix = hw - rx, iy = hh - ry;
+    const minor = Math.min(w * REFERENCE_ASPECT, h);
+    const radii = (f: number): { rx: number; ry: number } => {
+        const world = f * minor;
+        return { rx: Math.min(world / REFERENCE_ASPECT, hw), ry: Math.min(world, hh) };
+    };
+    const nose = radii(r), tail = radii(rTail);
     const pts: Pt[] = [];
-    // Corner centres in counter-clockwise order, each swept a quarter turn.
-    const corners: readonly Pt[] = [[ix, -iy], [ix, iy], [-ix, iy], [-ix, -iy]];
+    // Corner centres in counter-clockwise order, each swept a quarter turn: the two +X (nose)
+    // corners first, then the two -X (tail) ones, which is the order `outwards` walks too.
+    const corners: readonly { ox: number; oy: number; rx: number; ry: number }[] = [
+        { ox: hw - nose.rx, oy: -(hh - nose.ry), rx: nose.rx, ry: nose.ry },
+        { ox: hw - nose.rx, oy: hh - nose.ry, rx: nose.rx, ry: nose.ry },
+        { ox: -(hw - tail.rx), oy: hh - tail.ry, rx: tail.rx, ry: tail.ry },
+        { ox: -(hw - tail.rx), oy: -(hh - tail.ry), rx: tail.rx, ry: tail.ry },
+    ];
     for (let c = 0; c < 4; c++) {
-        const [ox, oy] = corners[c];
+        const { ox, oy, rx, ry } = corners[c];
         const start = -Math.PI / 2 + c * (Math.PI / 2);
         for (let s = 0; s <= CORNER_SEGMENTS; s++) {
             const a = start + (s / CORNER_SEGMENTS) * (Math.PI / 2);
@@ -369,7 +566,60 @@ function roundRect(cx: number, cy: number, w: number, h: number, r: number): Pt[
  * dome steps looking like one curved roof rather than a stack of differently-rounded plates.
  */
 function bodyOutline(along: number, across: number): Pt[] {
-    return roundRect(0, 0, BODY_ALONG * along, BODY_ACROSS * across, BODY_CORNER);
+    return roundRect(0, 0, BODY_ALONG * along, BODY_ACROSS * across, CORNER_NOSE, CORNER_TAIL);
+}
+
+/**
+ * The part of a convex polygon at or in front of `x0`, cut off square there.
+ *
+ * Sutherland-Hodgman against one half-plane. Every outline it is used on comes from `roundRect`
+ * and is convex, so the result is convex too and `addFlat`'s fan is valid. Winding is preserved.
+ */
+function clipMinX(pts: readonly Pt[], x0: number): Pt[] {
+    const out: Pt[] = [];
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+        const a = pts[i], b = pts[(i + 1) % n];
+        const aIn = a[0] >= x0, bIn = b[0] >= x0;
+        if (aIn) out.push(a);
+        if (aIn !== bIn) {
+            const t = (x0 - a[0]) / (b[0] - a[0]);
+            out.push([x0, a[1] + (b[1] - a[1]) * t]);
+        }
+    }
+    return out;
+}
+
+/**
+ * The windscreen: the nose end of the CROWN'S OWN OUTLINE, cut off square SCREEN_LEN back.
+ *
+ * TAKEN FROM THE CROWN RATHER THAN DRAWN, which is what makes it a band rather than a plate
+ * lying on one. Its sides ARE the roof's sides, nose corner rounding included, so it reaches
+ * exactly as wide as the flat top goes and stops where the shoulder starts curving away. A
+ * rectangle sized to match would either fall short of the edge -- leaving a sliver of paint
+ * that reads as a gap -- or overhang the shoulder and float above it.
+ *
+ * It also cannot drift: CORNER_NOSE, DOME_NARROW and EDGE_GROW_* all move the crown, and the
+ * band follows all three without being retuned.
+ */
+function windscreenBand(crown: readonly Pt[]): Pt[] {
+    let nose = -Infinity;
+    for (const [x] of crown) if (x > nose) nose = x;
+    return clipMinX(crown, nose - SCREEN_LEN);
+}
+
+/**
+ * A polygon grown outward by `d`, in fractions of the car's WIDTH.
+ *
+ * ANISOTROPIC, the same correction `roundRect` makes and for the same reason: the node stretches
+ * X by the car's length and Y by its width, so an equal offset in mesh space comes out three
+ * times thicker along the car than across it. Dividing the X component by REFERENCE_ASPECT makes
+ * the grown border about even in world units on a medium car.
+ */
+function grow(pts: readonly Pt[], d: number): Pt[] {
+    const out = outwards(pts);
+    return pts.map((pt, i) =>
+        [pt[0] + out[i][0] * d / REFERENCE_ASPECT, pt[1] + out[i][1] * d] as Pt);
 }
 
 /** The arrow, as the two convex pieces it is made of: a shaft rectangle and a head triangle. */
@@ -407,6 +657,26 @@ interface Ring { pts: readonly Pt[]; z: number; c: Color; tilt: number }
 
 /** A flat, straight-up-facing piece: the rim, the wheels, the glass, the arrow. */
 interface Flat { pts: readonly Pt[]; c: Color }
+
+/**
+ * A plate on the roof, and WHICH LAYER it sits on, counted in Z_STEPs above the crown.
+ *
+ * It used to be the plate's index in the list, which meant every plate added to the roof lifted
+ * every plate after it. That was survivable at four and is not at seven: the stack would stand
+ * 0.056 world units off the crown, and on a board tilted 38 degrees the topmost plate -- the
+ * arrow, the one thing that must look painted on -- would visibly float above the roof it is
+ * painted on.
+ *
+ * Layers are assigned by what OVERLAPS what, not by position in the list, so the plates that
+ * cannot overlap each other share one. Three layers is the whole stack: the trim (windscreen and
+ * tail lights, which are at opposite ends of the car), then the arrow's dark backing, then the
+ * arrow. See ARROW_OUTLINE for why the last two are a pair rather than one shape.
+ */
+interface Plate extends Flat { layer: number }
+
+const TRIM_LAYER = 1;
+const ARROW_BACK_LAYER = 2;
+const ARROW_LAYER = 3;
 
 /** Vertex/index accumulator. Flat convex polygons, plus rings stitched into shaded bands. */
 class Plan {
@@ -466,7 +736,7 @@ class Plan {
  */
 function design(
     color: Color, cap: Cap,
-): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring[]; over: Flat[] } {
+): { rim: readonly Pt[]; wheels: Flat[]; rings: Ring[]; over: Plate[] } {
     const rim = bodyOutline(EDGE_GROW_ALONG, EDGE_GROW_ACROSS);
     const wheels: Flat[] = [];
     const axle = axles(cap);
@@ -490,11 +760,18 @@ function design(
         tilt,
     }));
 
-    const rail = shade(color, RAIL_SHADE);
-    const over: Flat[] = [
-        { pts: roundRect(RAIL_X, 0, RAIL_W, RAIL_H, 0.5), c: rail },
-        { pts: roundRect(-RAIL_X, 0, RAIL_W, RAIL_H, 0.5), c: rail },
-        ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE }) as Flat),
+    const ink = outlineOf(color);
+    const over: Plate[] = [
+        {
+            pts: windscreenBand(rings[rings.length - 1].pts),
+            c: shade(color, SCREEN_SHADE),
+            layer: TRIM_LAYER,
+        },
+        { pts: roundRect(TAIL_X, TAIL_Y, TAIL_W, TAIL_H, TAIL_R), c: TAILLIGHT, layer: TRIM_LAYER },
+        { pts: roundRect(TAIL_X, -TAIL_Y, TAIL_W, TAIL_H, TAIL_R), c: TAILLIGHT, layer: TRIM_LAYER },
+        ...arrowPieces().map((pts) =>
+            ({ pts: grow(pts, ARROW_OUTLINE), c: ink, layer: ARROW_BACK_LAYER }) as Plate),
+        ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE, layer: ARROW_LAYER }) as Plate),
     ];
     return { rim, wheels, rings, over };
 }
@@ -542,9 +819,19 @@ export function carMesh(color: Color, cap: Cap): Mesh {
     // normals lying flat and pointing outward (tilt 90). That is what makes the engine light the
     // four sides differently -- and, unlike everything the fake wall tried, it turns with the
     // car, so the side facing the viewer is always the side facing the viewer.
+    //
+    // THE SKIRT is the bottom band of it: the same outline, the same flat outward normals, just
+    // the outline ink instead of the paint. It is a band rather than a separate plate so it
+    // costs nothing -- one more ring in the same mesh, no renderer, no material, no draw call.
     const wall = lighten(color, WALL_LIFT);
+    const skirtTop = CAR_HEIGHT * SKIRT_TOP;
+    const ink = outlineOf(color);
     plan.addBand(
-        { pts: rim, z: 0, c: shade(wall, WALL_FOOT), tilt: 90 },
+        { pts: rim, z: 0, c: ink, tilt: 90 },
+        { pts: rim, z: skirtTop, c: ink, tilt: 90 },
+    );
+    plan.addBand(
+        { pts: rim, z: skirtTop, c: shade(wall, WALL_FOOT), tilt: 90 },
         { pts: rim, z: CAR_HEIGHT, c: wall, tilt: 90 },
     );
     // The window band, on the same outline grown just enough not to z-fight the wall.
@@ -557,10 +844,8 @@ export function carMesh(color: Color, cap: Cap): Mesh {
     for (let i = 0; i + 1 < rings.length; i++) plan.addBand(rings[i], rings[i + 1]);
     const roof = rings[rings.length - 1];
     plan.addFlat(roof.pts, roof.z, roof.c);            // the crown, inside the innermost ring
-    for (let i = 0; i < over.length; i++) {
-        plan.addFlat(over[i].pts, roof.z + (i + 1) * Z_STEP, over[i].c);
-    }
-    const top = roof.z + over.length * Z_STEP;
+    for (const plate of over) plan.addFlat(plate.pts, roof.z + plate.layer * Z_STEP, plate.c);
+    const top = roof.z + ARROW_LAYER * Z_STEP;
     const geometry: primitives.IGeometry = {
         positions: plan.positions,
         normals: plan.normals,
