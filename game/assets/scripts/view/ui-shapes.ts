@@ -40,6 +40,17 @@ const BURST_SPOKES = 12;
 const BURST_FADE = 0.30;
 
 /**
+ * The play-head triangle, painted into a 64-square texture.
+ *
+ * Half of STAR_SIZE's 128, because a triangle asks less of the texture than a star does. This
+ * shape is never drawn larger than about 48 design units -- an icon on the start button -- and
+ * it has only three straight edges, so the one thing magnification can soften is the single
+ * pixel of border along each of them. A star needs the full 128 because it has five points, and
+ * a soft point reads as round rather than sharp.
+ */
+const TRI_SIZE = 64;
+
+/**
  * One rounded frame per corner radius asked for, painted on demand.
  *
  * It used to be a single 32px frame with a radius of 15 -- half its width, so the painted
@@ -59,6 +70,7 @@ let dotFrame: SpriteFrame | null = null;
 let rampFrame: SpriteFrame | null = null;
 let starFrame: SpriteFrame | null = null;
 let burstFrame: SpriteFrame | null = null;
+let triFrame: SpriteFrame | null = null;
 
 /**
  * White pixels whose alpha comes from `coverage`, evaluated at each pixel centre and
@@ -193,6 +205,52 @@ function burstCoverage(size: number): (x: number, y: number) => number {
     };
 }
 
+/**
+ * Coverage for an equilateral triangle inscribed in a `size` texture, tip pointing RIGHT -- a
+ * play head.
+ *
+ * A triangle is CONVEX, which makes this the third distinct technique in this file for turning
+ * a shape into coverage: `roundedCoverage` clamps to the nearest corner, `starCoverage` casts a
+ * ray from the centre because a star is NOT convex, and a convex polygon needs neither trick --
+ * the signed distance to each edge, minimum taken over all three, is exact inside and
+ * conservative outside (the same reasoning `polyIn`, further down, spells out in full for the
+ * icon shapes). Of the three, a convex polygon is the easiest to get right.
+ *
+ * The 1.5 inset on the circumradius exists for the same reason `starCoverage` has one: a vertex
+ * sitting exactly on the texture's edge has nowhere to fade out to, so the triangle is pulled in
+ * half a pixel short of the frame.
+ */
+function triCoverage(size: number): (x: number, y: number) => number {
+    const c = size / 2;
+    const r = c - 1.5;
+    // Vertex 0 sits straight right (angle 0); the other two follow at 120-degree steps. Texture
+    // y runs DOWN, so walking the vertices in this order traces them clockwise on screen -- the
+    // opposite sense from `polyIn`'s edges below, which are wound so the interior sits on the
+    // LEFT of each one. That is why the edge distance is negated (`-d`, not `d`) before it goes
+    // into the minimum: checked numerically, this makes the centre come out strongly positive
+    // (+15.75 at TRI_SIZE) and a texture corner strongly negative (-15.25), which is what
+    // "positive inside" requires.
+    const pts: [number, number][] = [0, 1, 2].map((k) => {
+        const a = (k * 2 * Math.PI) / 3;
+        return [c + r * Math.cos(a), c + r * Math.sin(a)] as [number, number];
+    });
+    return (x, y) => {
+        let min = Infinity;
+        for (let k = 0; k < 3; k++) {
+            const [ax, ay] = pts[k];
+            const [bx, by] = pts[(k + 1) % 3];
+            const ex = bx - ax, ey = by - ay;
+            const len = Math.hypot(ex, ey);
+            // Cross product over edge length = signed distance to the line this edge sits on,
+            // negated here because these vertices wind the opposite way from `polyIn`'s -- see
+            // above.
+            const d = ((x - ax) * ey - (y - ay) * ex) / len;
+            min = Math.min(min, -d);
+        }
+        return min + 0.5;
+    };
+}
+
 function spriteNode(
     name: string, w: number, h: number, color: Color, frame: SpriteFrame, type: number,
 ): Node {
@@ -282,6 +340,16 @@ export function burstSprite(name: string, d: number, color: Color): Node {
         burstFrame = frameFrom(paint(BURST_SIZE, burstCoverage(BURST_SIZE)), BURST_SIZE);
     }
     return spriteNode(name, d, d, color, burstFrame, Sprite.Type.SIMPLE);
+}
+
+/**
+ * A `d`-unit-wide triangular play head, tip right, tinted `color`. SIMPLE, not sliced -- like
+ * the star, it has no middle that can be stretched, so it scales as a whole and one frame
+ * serves every size it is drawn at.
+ */
+export function triSprite(name: string, d: number, color: Color): Node {
+    if (!triFrame) triFrame = frameFrom(paint(TRI_SIZE, triCoverage(TRI_SIZE)), TRI_SIZE);
+    return spriteNode(name, d, d, color, triFrame, Sprite.Type.SIMPLE);
 }
 
 /**
