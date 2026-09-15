@@ -14,3 +14,4 @@ export * from './settings';
 export * from './wallet';
 export * from './game-core';
 export * from './solvability';
+export * from './home-path';

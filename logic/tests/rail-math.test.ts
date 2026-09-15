@@ -1,7 +1,8 @@
 import {
-  RAIL_FLICK_MAX, RAIL_FLICK_UNIT, RAIL_PITCH, railFlick, railNearest, railOffset, railRubber,
+  RAIL_FLICK_MAX, RAIL_FLICK_UNIT, railFlick, railNearest, railOffset, railRubber,
   railStopT,
 } from '../../game/assets/scripts/view/rail-math';
+import { RAIL_PITCH } from '../../game/assets/scripts/core/home-path';
 
 /**
  * The level rail's arithmetic, which is the whole risky half of a drag gesture: the drawing
