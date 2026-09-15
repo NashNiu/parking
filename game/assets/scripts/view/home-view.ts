@@ -288,6 +288,13 @@ export class HomeView {
      * `BREATHE_TO`. Multiplying it into `CUR_SCALE` again would give 1.51.
      */
     private breath = { v: CUR_SCALE };
+    /**
+     * Whether the save HAS a current level to breathe, remembered so `show` can restart the
+     * tween `hide` stopped without having to re-read the progress.
+     *
+     * False for a save with every level cleared, and false before the first `setProgress`.
+     */
+    private breathing = false;
 
     private loadingLayer: Node;
     private loadingFade: UIOpacity;
@@ -668,8 +675,14 @@ export class HomeView {
      *
      * A game with every level cleared has no current level at all, and then there is nothing to
      * breathe: the tween is stopped and the field is parked at its resting value.
+     *
+     * `hide` stops it too and `show` restarts it from `breathing`, which is why the answer is
+     * remembered rather than recomputed -- a `repeatForever` left running through a whole level
+     * costs almost nothing, but this file's habit is that whatever starts a tween is responsible
+     * for stopping it, and a habit with an exception in it is not a habit.
      */
     private setBreathing(on: boolean): void {
+        this.breathing = on;
         Tween.stopAllByTarget(this.breath);
         this.breath.v = CUR_SCALE;
         if (!on) return;
@@ -685,14 +698,17 @@ export class HomeView {
      * The y the rail is centred on: the middle of the free band between the top bar's bottom
      * edge and the start button's top edge.
      *
-     * NOT THE CANVAS CENTRE. The canvas centre has a bar eating into it from above and a button
-     * eating into it from below, and those two bites are not the same size -- so a rail centred
-     * on the canvas puts the level it has scrolled to visibly low, wedged against the button.
-     * That is the real cause of "the lobby does not scroll to my level": it does scroll there,
-     * onto a centre that is not the centre of the space the player can see.
+     * NOT THE CANVAS CENTRE, because the canvas centre is not the centre of anything the player
+     * can see: a bar eats into the space from above and the start button eats into it from
+     * below, and the two bites are not the same size. Centring on the free band puts the badge
+     * the rail has scrolled to in the middle of the room it actually has.
      *
-     * Recomputed rather than cached because `safeInsets` and `capsuleInset` are themselves
-     * cached and may still have been unread when this screen was constructed.
+     * IT IS A SMALL MOVE, and this docblock used to overclaim it. On h = 2770 with no insets
+     * the band centre is +35.8, and with a typical notch and home indicator +21.95 -- about a
+     * tenth of a badge. It is a tidier layout, NOT the fix for 打开大厅没滚到当前关. That
+     * complaint was the halo: it was the only loud marker on the screen and it followed the
+     * scroll, so the badge a player had dragged to looked like the badge they were up to. What
+     * fixes it is the three state badges, not this function.
      */
     private railCenterY(): number {
         const top = barBottomY(this.w, this.h);
@@ -797,6 +813,11 @@ export class HomeView {
 
     show(): void {
         this.root.active = true;
+        // Restarted here rather than left to the caller. `GameController.showHome` does call
+        // `setProgress` immediately before this, so in practice the breath is already running --
+        // but a screen that only animates because of what its caller happens to do next is one
+        // refactor away from a badge that sits still.
+        this.setBreathing(this.breathing);
         // To the front. Seat chips and tunnel badges are appended to the canvas as a level
         // runs, which makes them later -- and so higher-drawing -- siblings than anything
         // built at startup. The HUD's panels raise themselves for the same reason.
@@ -805,6 +826,11 @@ export class HomeView {
 
     hide(): void {
         this.root.active = false;
+        // Stop what this screen started. The rest of the file already does this for the gate
+        // arm and the loading fade; the breath was the one tween left ticking off screen.
+        // `breathing` is deliberately NOT cleared -- it is what the save says, not what is
+        // currently running, and `show` reads it back.
+        Tween.stopAllByTarget(this.breath);
     }
 
     open(): boolean {
@@ -900,9 +926,11 @@ export class HomeView {
      * Which stop `ui` landed on, 0-based, or -1 for none. A tap on a stop brings it to the
      * middle; it does NOT start the level, which is the button's job alone.
      *
-     * Measured against the stop's DRAWN size, so a resting chip has a resting chip's target
-     * -- a hit box left at the focused size would overlap its neighbours' and bring the
-     * wrong level in.
+     * Measured against the badge's DRAWN size, which is now its STATE's size: only the current
+     * level is scaled, and only it can change size while a finger is on the screen. The
+     * paragraph that used to sit here reasoned about a resting size that shrank with distance
+     * from the middle, and that no longer exists -- see NODE_D. See the box itself below for
+     * why no two of them can ever meet.
      */
     hitsStop(ui: Vec3): number {
         if (!this.open() || this.waiting) return -1;

@@ -239,8 +239,15 @@ export class HomeScene {
      * own ROAD only reaches `ROAD_W / 2` (48). The 10-unit annulus in between, where leg i's
      * road runs, was repainted kerb and never restored: a 101 x 57 kerb-coloured crescent,
      * about 1175 square units, immediately below EVERY interior stop. It hid under the stop
-     * chip, but the chip rests at 190 of 255, so a quarter of a 64-68-72 colour step came
-     * through it.
+     * chip, but the chip was translucent -- it rested at 190 of 255 -- so about a quarter of a
+     * 64-68-72 colour step came through it.
+     *
+     * THAT LAST SENTENCE IS NOW HISTORY, and the fix is not. The badges are opaque at every
+     * scroll position since they started meaning something (see `home-view`'s NODE_D), and a
+     * 101 x 57 crescent at the stop's own centre is well inside a 205 badge -- so the same
+     * defect would be invisible today. Drawing order is not something to get right only where
+     * it happens to show: the next leg, the next decoration or the next change of badge size
+     * is another chance for it to come out from under whatever is covering it.
      *
      * Two containers instead. All the kerb in the scene is drawn before any of the road, so the
      * invariant holds globally and cannot be broken by adding a leg.
