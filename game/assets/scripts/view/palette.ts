@@ -243,8 +243,11 @@ export const KERB = new Color(150, 161, 180);
  * where the baseline would give 28.5, and the edge still reads because it is against the
  * lightest surface in the scene.
  *
- * RENAMED FROM `LOT_SHADOW_ALPHA`: this file is shared palette now, and a tree's shadow is not
- * the car park's -- a caller reusing this name for a different surface should re-derive its own
- * separation figures rather than borrow the lot's reasoning by association.
+ * RENAMED FROM `LOT_SHADOW_ALPHA` to `AREA_SHADOW_ALPHA`, not to `SHADOW_ALPHA`: the departure
+ * is about AREA, not about which object owns the shadow -- a large area needs less ink before it
+ * reads as a smudge rather than an edge, which is exactly the argument above. A small shadow
+ * (a tree's, say) has no reason to borrow this figure; it should take shadow.ts's standard 44
+ * like everything else does, and reach for this one only when its own shadow is large enough to
+ * need the same discount.
  */
-export const SHADOW_ALPHA = 30;
+export const AREA_SHADOW_ALPHA = 30;

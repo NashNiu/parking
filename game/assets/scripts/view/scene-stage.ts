@@ -1,7 +1,7 @@
 import { Node, Color } from 'cc';
 import { makeSlab, makeMerged, makeShadowSlab, boxPart, MeshPart } from './slabs';
 import { LIFT, shadowThrow } from './shadow';
-import { GRID_LINE, GROUND, LOT, LOT_DASH, ROAD, ROAD_LINE, SHADOW_ALPHA } from './palette';
+import { GRID_LINE, GROUND, LOT, LOT_DASH, ROAD, ROAD_LINE, AREA_SHADOW_ALPHA } from './palette';
 
 /**
  * The scene's flat graphic layer: ground, grid, lot, roads. Every colour here is the
@@ -183,7 +183,7 @@ export function setupBackground(root: Node, halfW: number, halfH: number, cy: nu
 export function setupStage(root: Node, bw: number, bh: number, gridY: number): void {
     // Built before the lot so it is the earlier sibling, the same order the parking bay uses.
     // Depth orders these two regardless, but sibling order is what a reader checks first.
-    const shadow = makeShadowSlab('LotShadow', bw, bh, LOT_R, SHADOW_ALPHA);
+    const shadow = makeShadowSlab('LotShadow', bw, bh, LOT_R, AREA_SHADOW_ALPHA);
     shadow.setPosition(0, gridY + shadowThrow(LIFT.surface), LOT_SHADOW_Z);
     root.addChild(shadow);
 
