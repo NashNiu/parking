@@ -1,11 +1,12 @@
 import {
-    Color, Label, Layers, Node, resources, Sprite, SpriteFrame, Texture2D, tween, Tween,
-    UIOpacity, UITransform, Vec3,
+    Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
-import { dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
+import { dotSprite, roundedSprite, starSprite } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
 import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
 import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rail-math';
+import { nodeCenter } from '../core/home-path';
+import { HomeScene } from './home-scene';
 
 /**
  * The home screen: the game's name, a rail of levels you drag through, and one button that
@@ -32,7 +33,6 @@ import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rai
  * it. One place, because this screen owns what the player can see.
  */
 
-const BG = new Color(24, 30, 50, 255);
 /**
  * The secondary type went from a slate grey to near-white when the backdrop became a
  * photograph, and it had to: 150,163,196 was chosen against a flat navy, and against a
@@ -72,90 +72,6 @@ const SUB_SIZE = 46;
 const PLATE = new Color(36, 46, 74, 236);
 const PLATE_W = 320;
 const PLATE_H = 88;
-
-/**
- * The backdrop: one photograph, `home-bg`, filling the screen.
- *
- * IT REPLACED A WHOLE PROCEDURAL SCENE. What used to be here was the board's own grid knocked
- * back to a few percent, a sky-and-floor wash, a kerb with stall ticks, four parked cars and
- * a dozen waiting passengers -- every one of them a flat tinted rectangle, because until
- * `rampSprite` there was no way to put light anywhere. All of it is gone. A grid and a row of
- * abstract cars laid over a real street is not decoration on top of decoration, it is two
- * backgrounds arguing, and the photograph wins that argument on its own.
- *
- * It is deliberately DEFOCUSED, which is what makes it usable: a background plate for UI
- * rather than a picture you look at. That is also why it needs so little help -- one scrim
- * and an outline on the type.
- *
- * This is the FIRST image asset in the bundle. Everything else this game draws is painted at
- * runtime by `ui-shapes.ts`, so `resources.load` here is the only reason the folder contains
- * a picture at all, and the flat BG behind it is not redundant: the load is asynchronous, and
- * if the asset ever fails to import the menu still has a background.
- *
- * THE TEXTURE, NOT THE SPRITE FRAME, and that is the whole of why the first attempt failed.
- * This project imports images as `type: "texture"`, so the asset has ONE sub-asset -- the
- * built bundle registers exactly `home-bg` and `home-bg/texture` and nothing else. There is
- * no `home-bg/spriteFrame` to load, and asking for one fails at runtime with nothing in the
- * .meta or the build to suggest why. Loading the texture and wrapping it works under EITHER
- * import type, because a sprite-frame import registers `/texture` as well -- so this cannot
- * break again if the project's default ever changes.
- *
- * Not the parent `home-bg` either: with `type: "texture"` the .meta carries a `redirect` to
- * the sub-asset, so what comes back under that name is not reliably the ImageAsset.
- */
-const HOME_BG = 'home-bg/texture';
-
-/**
- * The scrim over the photograph's top, so the title has something to sit on.
- *
- * Opaque at the very top edge and eased out going down -- `rampSprite`'s own direction, no
- * rotation. It is the sky that needs knocking back: the title sits about a fifth of the way
- * down the screen, on bright blue on one phone and on a white cloud on the next.
- *
- * THE SPAN IS THE NUMBER TO EYEBALL ON A DEVICE. The ramp is strongest where there is nothing
- * to read and weakest where the type is, which is backwards, and the only lever is to make it
- * reach further: at 0.42 of the height the wash is still at about half strength behind the
- * title. Stronger than this and the top of the screen reads as a black bar; weaker and the
- * outline on the type is doing all the work by itself.
- */
-const SCRIM = new Color(16, 22, 40, 110);
-const SCRIM_SPAN = 0.42;
-
-/**
- * The road the stops ride on: a full-height strip up the middle with a dashed centre line.
- *
- * IT USED TO RUN ACROSS. The rail was horizontal -- a band at mid-screen with five chips on
- * it and a caption saying 左右滑动 -- and the whole of that change is this block, `buildRoad`,
- * and which axis `layout` and the drag read. `rail-math.ts` did not change at all: it is
- * one-dimensional offset arithmetic and never knew which direction it was pointing.
- *
- * TRANSLUCENT, AND IT IS THE BACKDROP'S OWN COLOUR. It was an opaque pale grey first, on the
- * argument that the photograph has a road of its own running to a vanishing point and a
- * see-through strip would leave two roads arguing. On a device that argument lost: an opaque
- * band down the middle of a photograph does not read as a road laid over a street, it reads
- * as the photograph having a hole in it, and the two strips of picture left either side are
- * the only place the backdrop survives at all.
- *
- * At BG's own navy and 150 of alpha the street shows through the whole width and the middle
- * simply sits back. It is the same colour the menu had before there was a photograph, which
- * is why the stops -- picked against that navy -- still sit on it the way they were drawn to.
- */
-const ROAD = new Color(24, 30, 50, 150);
-const ROAD_W = 620;
-const ROAD_DASH = new Color(248, 250, 252, 235);
-const ROAD_DASH_W = 12;
-const ROAD_DASH_H = 64;
-const ROAD_DASH_GAP = 56;
-
-/**
- * How far off the road's centre line the stops sit, alternating side by side.
- *
- * The zig-zag is not decoration: it is what turns a column of buttons into a route. At 158
- * against a 236-wide stop the two columns clear each other by 80 units down the middle --
- * the dashes stay visible between them -- and each stop keeps 34 units inside the road's
- * edge, so none of them hangs off it.
- */
-const ZIG_X = 158;
 
 /**
  * How much clear space the button keeps under it, past the home indicator's own reservation.
@@ -311,6 +227,8 @@ export class HomeView {
     private startFace: Node;
     private startBase: Node;
     private startLabel: Label;
+    /** The street the rail runs up. See `home-scene`. */
+    private scene: HomeScene;
     /** The stops' parent, parked on the lane. Stops are positioned within it. */
     private railRoot: Node;
     private stops: Stop[] = [];
@@ -364,7 +282,10 @@ export class HomeView {
         this.root.addComponent(UITransform);
         canvas.addChild(this.root);
 
-        this.buildBackdrop();
+        // THE STREET GOES IN FIRST, and that is the whole of its z-ordering: everything after
+        // it -- the stops, the plate, the button -- draws over it. It builds only its ground
+        // here; the road itself needs the level count, so it is finished in `setLevels`.
+        this.scene = new HomeScene(this.root, w, h);
 
         // NO TITLE. The route fills the screen top to bottom now, and the game's name is
         // already the largest thing on the first screen this hands over from -- a second
@@ -372,7 +293,10 @@ export class HomeView {
         //
         // The count takes the place it used to sit under: under the notch, not under the top
         // edge, the same reservation the HUD's title plate makes.
-        this.railRoot = this.buildRoad();
+        this.railRoot = new Node('RailStops');
+        this.railRoot.layer = Layers.Enum.UI_2D;
+        this.railRoot.addComponent(UITransform);
+        this.root.addChild(this.railRoot);
 
         // The plate goes in AFTER the road, so the stops pass BEHIND it. On a route that
         // fills the screen there is nowhere to put a line of type that a scrolling stop does
@@ -413,92 +337,6 @@ export class HomeView {
 
         this.setLoading(true);
         this.root.active = false;
-    }
-
-    /** See HOME_BG and SCRIM for what this draws and why there is so little of it. */
-    private buildBackdrop(): void {
-        const { w, h } = this;
-
-        // Twice the canvas, like the modal scrims: a viewport wider than the design
-        // resolution would otherwise show a strip of empty 3D scene down either side. It is
-        // also the background for the first frames, and for a build where the asset is
-        // missing -- see HOME_BG.
-        const bg = roundedSprite('HomeBg', w * 2, h * 2, BG, 2);
-        this.root.addChild(bg);
-
-        const photo = new Node('HomePhoto');
-        photo.layer = Layers.Enum.UI_2D;
-        const box = photo.addComponent(UITransform);
-        const sprite = photo.addComponent(Sprite);
-        sprite.type = Sprite.Type.SIMPLE;
-        // CUSTOM, so the node's own content size decides how big the picture is drawn rather
-        // than the frame's pixel dimensions. With TRIMMED the sprite would come out at 1440
-        // wide on a 1280 canvas and there would be nothing to size it with.
-        sprite.sizeMode = Sprite.SizeMode.CUSTOM;
-        this.root.addChild(photo);
-
-        resources.load(HOME_BG, Texture2D, (err, tex) => {
-            if (err || !tex) {
-                // Not fatal, and it says so: the flat BG above is a background. The likely
-                // cause is a build that has not re-imported `resources/home-bg.jpg`.
-                console.warn('[Home] home-bg did not load, keeping the flat fill:', err);
-                return;
-            }
-            // NOT A PREFERENCE. The engine's own note on `setWrapMode` reads "if the size of
-            // the texture is not power of two, only WrapMode.CLAMP_TO_EDGE is allowed", and
-            // 1440x3360 is not. The importer's default here is REPEAT, under which a WebGL1
-            // device -- which in a mini-game is most of them -- treats the texture as
-            // incomplete and samples it as BLACK. Enforced here rather than left to the
-            // .meta because it is an invariant of the image's size, not a setting.
-            tex.setWrapMode(Texture2D.WrapMode.CLAMP_TO_EDGE, Texture2D.WrapMode.CLAMP_TO_EDGE);
-            const frame = new SpriteFrame();
-            // A fresh frame has a zero rect, which is what makes the setter take the whole
-            // texture and compute the UVs from it. This is the engine's own documented way
-            // of building a frame from a texture.
-            frame.texture = tex;
-            sprite.spriteFrame = frame;
-            // COVER, not contain: scale by whichever axis needs the MORE of it, so the
-            // photograph always fills and never letterboxes. `Math.min` here would be the
-            // classic version of this bug -- a picture that fits inside the screen with the
-            // flat colour showing along two edges.
-            const scale = Math.max(w / tex.width, h / tex.height);
-            box.setContentSize(tex.width * scale, tex.height * scale);
-            // Pinned to the TOP, so whatever the aspect ratio leaves over comes off the
-            // BOTTOM. The same choice, for the same reason, as the first screen: the sky and
-            // the title are at the top of the plate and the road at the foot of it is the
-            // part nothing is lost by cutting.
-            photo.setPosition(0, h / 2 - tex.height * scale / 2, 0);
-        });
-
-        const scrim = rampSprite('HomeScrim', w * 2, h * SCRIM_SPAN, SCRIM);
-        this.root.addChild(scrim);
-        scrim.setPosition(0, h / 2 - h * SCRIM_SPAN / 2, 0);
-    }
-
-    /** The band the stops ride on, and the node they live in. */
-    private buildRoad(): Node {
-        // Taller than the screen, so a road that is meant to run off both edges does. The
-        // dashes are laid over the whole of that span for the same reason -- a dash pattern
-        // that stops short of the edge says the road ends there.
-        const span = this.h * 1.2;
-        const strip = roundedSprite('Road', ROAD_W, span, ROAD, 2);
-        this.root.addChild(strip);
-        strip.setPosition(0, 0, 0);
-
-        const step = ROAD_DASH_H + ROAD_DASH_GAP;
-        const n = Math.ceil(span / step);
-        for (let i = 0; i < n; i++) {
-            const dash = roundedSprite(`dash-${i}`, ROAD_DASH_W, ROAD_DASH_H, ROAD_DASH, 6);
-            strip.addChild(dash);
-            dash.setPosition(0, -span / 2 + step / 2 + i * step, 0);
-        }
-
-        const rail = new Node('RailStops');
-        rail.layer = Layers.Enum.UI_2D;
-        rail.addComponent(UITransform);
-        this.root.addChild(rail);
-        rail.setPosition(0, 0, 0);
-        return rail;
     }
 
     /**
@@ -624,6 +462,9 @@ export class HomeView {
         if (this.stops.length > 0) return;
         this.levelCount = levelCount;
         this.sub.string = `共 ${levelCount} 关`;
+        // The street's road runs stop to stop, so it is built from the same number at the same
+        // moment -- there is no state in which one of the two exists and the other does not.
+        this.scene.build(levelCount);
         for (let i = 0; i < levelCount; i++) this.stops.push(this.buildStop(i));
         this.layout();
     }
@@ -787,6 +628,12 @@ export class HomeView {
      */
     private layout(): void {
         const edge = this.h * 0.75;
+        // THE STREET SCROLLS ON THIS OFFSET AND CULLS AGAINST THIS EDGE, the same two numbers
+        // the stops below are about to use. `core/home-path` guarantees the road passes through
+        // the stop centres; feeding the road a different scroll would spend that guarantee on
+        // nothing, and the symptom -- a road running just past every badge -- looks like a
+        // drawing mistake rather than an arithmetic one.
+        this.scene.layout(this.offset, edge);
         for (let i = 0; i < this.stops.length; i++) {
             const stop = this.stops[i];
             // Level 1 at the bottom and the numbers climbing, which is what makes the column
@@ -799,7 +646,10 @@ export class HomeView {
             stop.node.active = true;
             const t = Math.min(1, railStopT(this.offset, i));
             const scale = 1 + (STOP_REST - 1) * t;
-            stop.node.setPosition(i % 2 === 0 ? -ZIG_X : ZIG_X, y, 0);
+            // x FROM `home-path`, not from a local copy of the zig: the road is stroked through
+            // `nodeCenter` and the stop has to stand on the same point, or the two drift apart
+            // the moment either number is retuned.
+            stop.node.setPosition(nodeCenter(i).x, y, 0);
             stop.node.setScale(scale, scale, 1);
             stop.fade.opacity = Math.round(255 + (STOP_ALPHA_REST - 255) * t);
             // The halo belongs to the middle alone, and is gone by half a pitch out, so two

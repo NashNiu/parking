@@ -6,7 +6,7 @@ const VIEW = path.join(__dirname, '../../game/assets/scripts/view');
  * Every view file that builds a panel by appending children, which is all of them that hold
  * one. A file added here needs no other change: the first test walks the list.
  */
-const FILES = ['hud-view.ts', 'home-view.ts'];
+const FILES = ['hud-view.ts', 'home-view.ts', 'home-scene.ts'];
 
 /** `.children[<number>]` in code, with comments stripped. See the test below for why. */
 function indexedChildLookups(src: string): string[] {
@@ -99,85 +99,64 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
 });
 
 /**
- * The backdrop photograph must COVER the screen, and the difference is one word.
+ * No line of type on the home screen sits on anything but an opaque face.
  *
- * `Math.max(w / raw.width, h / raw.height)` fills the screen and crops whatever the aspect
- * ratio does not want; `Math.min` fits the picture INSIDE the screen and leaves the flat
- * background showing along two edges. Both compile, both draw a picture, and only one of them
- * is a background -- and the wrong one looks deliberate enough that it can survive a glance
- * at a device. Which is the entire reason this is asserted in text: the value is decided
- * inside a `resources.load` callback against a frame that only exists at runtime, so no test
- * in this suite can reach it.
+ * WHAT IT USED TO GUARD, and the reason it is still here after the thing it guarded against
+ * went away: this screen was a photograph, which puts arbitrary colour behind arbitrary text --
+ * the title landed on bright sky on one phone and on a white cloud on the next, and no ink
+ * survives both. The answer was an outline on every fixed label. The street is drawn in code
+ * now, so the colour behind any given point is knowable, and the outlines are no longer what is
+ * holding the type up.
  *
- * The limits are the usual ones for a source guard: it proves the expression is written, not
- * that it is reached, and a rewrite that keeps the behaviour under a different shape has to
- * come and change this line.
+ * The plate is. It is opaque so a SCROLLING STOP cannot pass through the one fixed label left,
+ * and that hazard is untouched by how the background is drawn -- the route still fills the
+ * screen top to bottom. So the assertion stays and only its justification moved.
  */
-test('the home backdrop covers the screen rather than fitting inside it', () => {
+test('the home screen has no fixed label standing on anything but the plate', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  expect(src).toMatch(/Math\.max\(w \/ tex\.width, h \/ tex\.height\)/);
-  expect(src).not.toMatch(/Math\.min\(w \/ tex\.width, h \/ tex\.height\)/);
-  // And it is pinned to the top, so the crop comes off the bottom -- the road, not the sky.
-  expect(src).toContain('photo.setPosition(0, h / 2 - tex.height * scale / 2, 0);');
-});
-
-/**
- * THE ONE THAT ACTUALLY SHIPPED BROKEN. `resources.load('home-bg/spriteFrame', ...)` is the
- * obvious line to write and it fails at runtime with nothing to explain it: this project
- * imports images as `type: "texture"`, so the built bundle registers exactly `home-bg` and
- * `home-bg/texture` and no sprite frame exists to load. Loading the texture and wrapping it
- * works under either import type, because a sprite-frame import registers `/texture` too.
- *
- * A source guard because the path is a string resolved inside the engine's asset manager
- * against a bundle this suite does not build -- there is no way to fail it from here.
- */
-test('the home backdrop loads the texture, not a sprite frame', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  expect(src).toContain("const HOME_BG = 'home-bg/texture';");
-  expect(src).not.toContain("'home-bg/spriteFrame'");
-});
-
-/**
- * 1440x3360 is not a power of two, and the engine's note on `setWrapMode` says only
- * CLAMP_TO_EDGE is allowed for such a texture. The importer's default is REPEAT, under which
- * a WebGL1 device samples the whole thing as black -- a symptom that looks like "the image
- * did not load" and is not.
- */
-test('the backdrop texture is clamped, which a non-power-of-two texture requires', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  expect(src).toContain('Texture2D.WrapMode.CLAMP_TO_EDGE');
-});
-
-/**
- * The two lines of type that sit DIRECTLY on the backdrop need an outline, because a
- * photograph puts arbitrary colour behind them and no ink survives both a bright sky and a
- * white cloud. See HOME_RIM in home-view.ts.
- *
- * It names them rather than counting them, which is the lesson of the version before this
- * one: that asserted "at least three rimLabel calls", and three was right only while the
- * title existed. A count breaks when the screen changes for an unrelated reason and says
- * nothing about what is actually wrong. Everything else on this screen -- the stop numbers,
- * the button's label -- sits on an opaque face and needs no rim.
- */
-test('nothing on the home screen is bare type over the backdrop', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  // The only fixed label left is the plate's, and it reads because the plate under it is
-  // opaque -- which is also what stops a scrolling stop from passing through it.
   expect(src).toContain("this.sub = makeLabel(this.topPlate, 'HomeSub', SUB_SIZE, 0);");
   expect(src).toMatch(/const PLATE = new Color\(\d+, \d+, \d+, (2[0-4]\d|25[0-5])\)/);
 });
 
 /**
- * The plate is built AFTER the road and the rail, and that order is the whole point of it:
- * a plate drawn before the stops is a plate the stops slide over, which is the bare-type
- * problem it was introduced to solve, with an extra draw call.
+ * The home screen is built back to front: street, then rail, then plate.
+ *
+ * Cocos draws siblings in the order they were appended, so build order IS z-order here, and
+ * both of these pairs are load-bearing. THE STREET BEFORE THE RAIL: `HomeScene` strokes a road
+ * through the stop centres, and a road appended after the stops paints over the stops it is
+ * meant to run under. THE PLATE AFTER THE RAIL: a plate drawn before the stops is a plate the
+ * stops slide over, which is the bare-type problem it was introduced to solve, with an extra
+ * draw call on top.
+ *
+ * Anchored on the three lines that actually construct them, so moving any one of them past
+ * another has to come and change this test rather than changing only the picture.
  */
-test('the top plate is built after the rail, so stops pass behind it', () => {
+test('the home screen builds street, then rail, then plate', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  const rail = src.indexOf('this.railRoot = this.buildRoad();');
+  const street = src.indexOf('this.scene = new HomeScene(this.root, w, h);');
+  const rail = src.indexOf("this.railRoot = new Node('RailStops');");
   const plate = src.indexOf("this.topPlate = roundedSprite('HomePlate'");
-  expect(rail).toBeGreaterThan(0);
+  expect(street).toBeGreaterThan(0);
+  expect(rail).toBeGreaterThan(street);
   expect(plate).toBeGreaterThan(rail);
+});
+
+/**
+ * The street scrolls on the rail's own offset and culls against the rail's own edge.
+ *
+ * `core/home-path` exists to make "the road passes exactly through the stop centres" a fact a
+ * test can assert without an engine, and `legSamples(i)[0] === nodeCenter(i)` is that test. ALL
+ * OF THAT IS SPENT if the view hands the road a different scroll position from the one it hands
+ * the stops: the road comes out parallel to the route and a few units beside it, which reads as
+ * a drawing mistake rather than as the arithmetic error it is, and no test in the core suite can
+ * see it because both halves are individually correct.
+ *
+ * One call, both numbers, taken from the same two locals the stop loop below it reads.
+ */
+test('the street is laid out on the same offset and edge as the stops', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  expect(src).toContain('this.scene.layout(this.offset, edge);');
+  expect(src).toMatch(/const edge = this\.h \* 0\.75;/);
 });
 
 /**
