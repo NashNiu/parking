@@ -25,8 +25,9 @@ import {
 import { setHaptics } from './haptics';
 import { setupEnvironment, setupAntiAliasing } from './environment';
 import {
-    setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
+    setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad,
 } from './scene-stage';
+import { GROUND } from './palette';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
