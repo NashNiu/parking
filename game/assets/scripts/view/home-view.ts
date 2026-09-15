@@ -2,7 +2,7 @@ import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
 import { dotSprite, roundedSprite, starSprite } from './ui-shapes';
-import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
+import { canvasSize, makeLabel, safeInsets } from './ui-layout';
 import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
 import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rail-math';
 import { nodeCenter } from '../core/home-path';
@@ -34,22 +34,20 @@ import { HomeScene } from './home-scene';
  */
 
 /**
- * The secondary type went from a slate grey to near-white when the backdrop became a
- * photograph, and it had to: 150,163,196 was chosen against a flat navy, and against a
- * sunlit street it is a grey word on a grey wall. Same reason every line on this screen now
- * carries a rim -- see HOME_RIM.
+ * The count on the plate, and it is near-white because the plate under it is a near-opaque
+ * navy -- see PLATE. It has nowhere else to sit.
+ *
+ * IT USED TO BE A SLATE GREY, 150,163,196, chosen when this screen was a flat navy field and
+ * raised to this when the field became a photograph and a grey word landed on a grey wall. The
+ * photograph is gone and the street behind the plate is now a pale pavement, which would argue
+ * for taking it back down -- except that the plate is what the type actually stands on, and the
+ * plate has not changed. So the value stays and only the reason for it does.
+ *
+ * The OUTLINE that used to go with it has gone: `HOME_RIM` and `SUB_RIM_W` existed because a
+ * photograph puts arbitrary colour behind arbitrary text, and neither they nor `rimLabel` had a
+ * caller left once the title was removed. A drawn street has no such surprise in it.
  */
 const SUB_INK = new Color(236, 242, 255, 255);
-/**
- * The outline every line of type on this screen wears, and the width of it at each size.
- *
- * A photograph puts arbitrary colour behind arbitrary text: the title lands on bright sky on
- * one phone and on a white cloud on the next, and no ink colour survives both. An outline
- * does, which is why the artwork's own title wears one. Widths are about a tenth of the font
- * size, the figure `rimLabel` documents.
- */
-const HOME_RIM = new Color(16, 22, 40, 255);
-const SUB_RIM_W = 5;
 /**
  * The two type sizes left on this screen, on a canvas 1280 design units wide (see
  * `canvasSize` -- NOT 720, which is what the first pass at every panel here was built on).

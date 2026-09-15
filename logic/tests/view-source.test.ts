@@ -152,11 +152,19 @@ test('the home screen builds street, then rail, then plate', () => {
  * see it because both halves are individually correct.
  *
  * One call, both numbers, taken from the same two locals the stop loop below it reads.
+ *
+ * ALL THREE LINES ARE PINNED, not just the call. The first version of this guard asserted the
+ * `scene.layout` call and the declaration of `edge` and stopped there -- which would have stayed
+ * green while somebody changed what the STOPS cull against, leaving the street culling on a
+ * threshold nothing else uses. A guard that only watches one end of an agreement is watching
+ * nothing.
  */
 test('the street is laid out on the same offset and edge as the stops', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  expect(src).toContain('this.scene.layout(this.offset, edge);');
   expect(src).toMatch(/const edge = this\.h \* 0\.75;/);
+  expect(src).toContain('this.scene.layout(this.offset, edge);');
+  // The stop loop's own cull, reading the same local.
+  expect(src).toContain('Math.abs(y) > edge');
 });
 
 /**

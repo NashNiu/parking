@@ -162,24 +162,41 @@ function lerp(a: number, b: number, t: number): number {
 }
 
 /**
- * Stroke a polyline as rotated rounded rectangles, with a dot at every sample.
+ * Stroke a polyline as rotated rounded rectangles, one per chord.
  *
  * `ui-shapes` has no line drawer and is not getting one: a straight run of road IS a rounded
  * rectangle, and `Node.angle` is free.
  *
- * THE DOTS ARE THE JOIN, and they are not optional. Two rectangles meeting at an angle leave a
- * wedge of bare ground open on the outside of the turn, and a circle of the stroke's own width
- * centred on the shared sample fills it exactly -- a round join, done by hand. The turns here
- * are real: a leg's own interior corners reach 32 degrees, and the corner AT a stop, where one
- * leg hands over to the next, reaches 46.5 -- the sharpest on the screen, and the reason the
- * seam cannot simply be left to the two legs' tangents agreeing (they do agree, but a CHORD is
- * not a tangent, and the first chord out of a stop is already 23 degrees off it).
+ * THE SEGMENTS' OWN CAPS ARE THE ROUND JOIN, and there is one condition for it that is worth
+ * stating precisely because it is invisible and the next person will not re-derive it:
  *
- * A DOT AT BOTH ENDS AS WELL, which costs one sprite per leg per pass and buys that seam. Each
- * segment is drawn `len + width` long -- half a width of overhang at either end -- so its end
- * cap is a semicircle of radius `width / 2` centred exactly on the endpoint, which is
- * precisely the dot the NEXT leg puts there. Neighbouring legs therefore overlap rather than
- * gap, and culling one cannot leave a notch in the other, because each carries its own copy.
+ *      the corner radius must equal HALF THE STROKE WIDTH.
+ *
+ * At that radius -- and only at that radius -- `roundedSprite`'s 9-slice inner box collapses to
+ * zero height, so what is painted is not a rectangle with rounded ends but the set of points
+ * within `width / 2` of the CHORD ITSELF: a capsule. A capsule therefore contains the whole
+ * disc of radius `width / 2` at each endpoint, not merely an outward semicircle, because for
+ * any q within that distance of the endpoint P, dist(q, chord) <= |q - P| <= width / 2. Two
+ * consecutive capsules sharing P already cover that disc twice over, which is exactly what a
+ * round join is.
+ *
+ * Drop the radius below `width / 2` and the caps become flat, the union of two chords leaves a
+ * wedge of bare ground open on the outside of every turn, and this needs a dot at each sample
+ * to fill it again. The turns are real, so that would be visible: a leg's interior corners
+ * reach 32 degrees and the corner AT a stop reaches 46.5 -- the two legs' TANGENTS are vertical
+ * and continuous there, but a chord is not a tangent, and the first chord out of a stop is
+ * already 23 degrees off it.
+ *
+ * This file used to draw that dot at all seven samples of both passes -- 126 sprites of 270,
+ * every one of them inside a shape already drawn, and each breaking the UI batch because it
+ * came from a different frame. Checked before removing them, by rasterising two adjacent legs
+ * at 0.4 units: of 571,541 cells inside some joint dot, the number NOT inside a segment capsule
+ * was zero.
+ *
+ * The `width` of overhang (`len + width`, half a width at either end) stays, and is now doing
+ * the whole of the work at the leg-to-leg seam: it puts each leg's end cap exactly on the stop
+ * the next leg starts from, so neighbours overlap rather than gap, and culling one cannot leave
+ * a notch in the other.
  */
 function strokePath(
     parent: Node, pts: PathPoint[], width: number, color: Color, tag: string,
@@ -189,6 +206,7 @@ function strokePath(
         const b = pts[k + 1];
         const dx = b.x - a.x;
         const dy = b.y - a.y;
+        // The radius is `width / 2` and must stay there -- see above.
         const seg = roundedSprite(
             `${tag}-seg${k}`, Math.hypot(dx, dy) + width, width, color, width / 2,
         );
@@ -197,11 +215,6 @@ function strokePath(
         // Cocos angles are DEGREES, anticlockwise positive, with 0 along +x -- which is the
         // direction the rectangle's length already runs in.
         seg.angle = Math.atan2(dy, dx) * 180 / Math.PI;
-    }
-    for (let k = 0; k < pts.length; k++) {
-        const joint = dotSprite(`${tag}-joint${k}`, width, color);
-        parent.addChild(joint);
-        joint.setPosition(pts[k].x, pts[k].y, 0);
     }
 }
 
@@ -216,8 +229,35 @@ export class HomeScene {
      * the road registered against the stops -- see `layout`.
      */
     private street: Node;
-    /** One node per leg, so culling is an `active` assignment and not a walk over sprites. */
-    private legs: Node[] = [];
+    /**
+     * ONE PASS PER LAYER, NOT ONE PASS PER LEG, and this is a bug fix rather than tidiness.
+     *
+     * Every leg used to hold its own kerb and its own road, which enforced kerb-before-road
+     * WITHIN a leg and not between two of them. Legs are siblings, so leg i+1 draws after leg i
+     * in full -- and leg i+1's KERB reaches `KERB_W / 2` (58) from the stop they share while its
+     * own ROAD only reaches `ROAD_W / 2` (48). The 10-unit annulus in between, where leg i's
+     * road runs, was repainted kerb and never restored: a 101 x 57 kerb-coloured crescent,
+     * about 1175 square units, immediately below EVERY interior stop. It hid under the stop
+     * chip, but the chip rests at 190 of 255, so a quarter of a 64-68-72 colour step came
+     * through it.
+     *
+     * Two containers instead. All the kerb in the scene is drawn before any of the road, so the
+     * invariant holds globally and cannot be broken by adding a leg.
+     */
+    private kerbs: Node;
+    private roads: Node;
+    /**
+     * One node per leg in each container, so culling a leg is two `active` assignments rather
+     * than a walk over its sprites. The two arrays are the same length and index together.
+     */
+    private kerbLegs: Node[] = [];
+    private roadLegs: Node[] = [];
+    /**
+     * Set unconditionally by `build`, which `kerbLegs.length` is not: a one-level game has no
+     * legs at all, so the re-entry guard cannot be a count of them without letting a second
+     * call append a second pair of fades.
+     */
+    private built = false;
 
     private w: number;
     private h: number;
@@ -242,6 +282,9 @@ export class HomeScene {
         this.root.addChild(ground);
 
         this.street = container('StreetScroll', this.root);
+        // Appended in this order, which IS their draw order: kerb under road. See `kerbs`.
+        this.kerbs = container('Kerbs', this.street);
+        this.roads = container('Roads', this.street);
     }
 
     /**
@@ -251,17 +294,21 @@ export class HomeScene {
      * the road and the things riding on it come into existence together or not at all.
      */
     build(levelCount: number): void {
-        if (this.legs.length > 0) return;
+        if (this.built) return;
+        this.built = true;
         for (let i = 0; i < levelCount - 1; i++) {
-            const leg = container(`Leg${i}`, this.street);
-            this.legs.push(leg);
             const pts = legSamples(i);
-            // THE KERB IN FULL, THEN THE ROAD IN FULL. Alternating them segment by segment
-            // would let each road segment paint over the kerb the previous segment had just
-            // laid down, and the kerb would survive only where the road happened not to reach.
-            strokePath(leg, pts, KERB_W, KERB, 'kerb');
-            strokePath(leg, pts, ROAD_W, ROAD, 'road');
-            this.dress(leg, i);
+            const kerbLeg = container(`Leg${i}`, this.kerbs);
+            strokePath(kerbLeg, pts, KERB_W, KERB, 'kerb');
+            this.kerbLegs.push(kerbLeg);
+
+            const roadLeg = container(`Leg${i}`, this.roads);
+            strokePath(roadLeg, pts, ROAD_W, ROAD, 'road');
+            // The scenery rides with the road rather than in a third container, and it is safe
+            // there: the verge starts at 354 and no road surface reaches past 258, so a later
+            // leg's road cannot paint over an earlier leg's tree.
+            this.dress(roadLeg, i);
+            this.roadLegs.push(roadLeg);
         }
         this.buildFades();
     }
@@ -279,13 +326,19 @@ export class HomeScene {
      */
     layout(offset: number, visibleHalfHeight: number): void {
         this.street.setPosition(0, -offset, 0);
-        for (let i = 0; i < this.legs.length; i++) {
+        for (let i = 0; i < this.roadLegs.length; i++) {
             // A leg spans stop i to stop i + 1. It is worth drawing unless BOTH of its ends are
             // past the threshold -- a leg with one end on screen is the one running off the
             // edge, which is what says the route continues.
             const a = nodeCenter(i).y - offset;
             const b = nodeCenter(i + 1).y - offset;
-            this.legs[i].active = Math.min(Math.abs(a), Math.abs(b)) <= visibleHalfHeight;
+            // The same verdict to both halves of the leg. They are only in two containers so
+            // that all the kerb draws under all the road; they are one leg for every other
+            // purpose, and a kerb left on with its road culled would be a pale ghost of the
+            // route running off the top of the screen.
+            const on = Math.min(Math.abs(a), Math.abs(b)) <= visibleHalfHeight;
+            this.kerbLegs[i].active = on;
+            this.roadLegs[i].active = on;
         }
     }
 
@@ -318,8 +371,8 @@ export class HomeScene {
     /**
      * One tree beside every leg, and one lamp beside every other one.
      *
-     * They go INSIDE the leg's own node, which means `layout`'s single `active` assignment
-     * culls the scenery along with the road it stands beside, at no extra cost.
+     * They go INSIDE the leg's own road node, which means `layout`'s `active` assignment culls
+     * the scenery along with the road it stands beside, at no extra cost.
      *
      * NOTHING IS MIRRORED AND NO TWO AGREE. The distance out, the distance along and the
      * crown's size are three independent draws from `pick`; only the SIDE is regular, for the
