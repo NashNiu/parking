@@ -18,10 +18,14 @@
  * Centre-to-centre distance between adjacent stops.
  *
  * 340, up from 272, and that rise is a consequence of the round badges, not of taste: badge
- * diameter is 205 (16% of the 1280 design width), the current level is drawn at 1.2x, which is
- * 246, and the stars sit BELOW the badge -- so one stop spans +148 at the top to -162 at the
- * star row. Two adjacent stops clear each other at 162 + 148 + 30 (gap) = 340. The old pill was
- * only 148 tall, which is why 272 was enough for it.
+ * diameter is 205 (16% of the 1280 design width), radius 102.5, and the stars sit BELOW the
+ * badge, bottoming out at -161.5 (star centre at -(102.5 + 8 + 25.5) = -136, star radius 25.5).
+ * The current level's badge breathes up to 1.26x, topping out at 102.5 x 1.26 = 129.2. The
+ * binding case is a CLEARED stop sitting above a CURRENT one: the cleared stop's star row
+ * reaches down to -161.5 and the current stop's badge reaches up to +129.2, so the two need
+ * 161.5 + 129.2 + 30 (gap) = 320.7 to clear each other. 340 is that figure with about 19 units
+ * of headroom, not a number measured to the millimetre. The old pill was only 148 tall, which
+ * is why 272 was enough for it.
  *
  * The cost: about 7 levels visible on a tall phone (h ~ 2770), only a little over 3 on a 4:3
  * tablet (h ~ 1707). That is an accepted cost of a vertical rail, not something a second layout
