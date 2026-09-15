@@ -1,31 +1,43 @@
 import { bestStars, Progress, unlockedThrough } from './progress';
 
 /**
- * 一关在大厅里的样子,三选一。
+ * What a level looks like on the lobby screen, one of three.
  *
- * 一个函数而不是三个谓词,而且**顺序即优先级** —— 这是这个文件唯一的设计内容。
+ * One function returning a union instead of three predicates, and the ORDER is the
+ * priority -- that is the only design content in this file.
  *
- * 在这之前 `home-view` 自己算三件事:`open = isUnlocked(...)`、`best = bestStars(...)`、
- * `done = best > 0`,然后把星星画成 `active = open && done`。"锁着"和"有星"是两个可以
- * 同时为真的独立事实(存档有缺口时就会:通了 1235,第 4 关空着,于是第 5 关既锁着又有
- * 三星),靠每个调用点都记得把它们 `&&` 起来。少写一次就是一个自相矛盾的节点。
+ * Before this, `home-view` computed three things itself: `open = isUnlocked(...)`,
+ * `best = bestStars(...)`, `done = best > 0`, then drew stars as `active = open && done`.
+ * "Locked" and "has stars" are two independent facts that can both be true at once (a save
+ * with a gap does exactly this: levels 1, 2, 3, 5 cleared, level 4 empty, so level 5 is both
+ * locked AND holds three stars) -- relying on every call site to remember to `&&` them
+ * together. Miss it once and that is a self-contradicting frame on screen.
  *
- * 收成一个返回联合类型的函数之后,三态由类型互斥,调用点不可能同时拿到两个。
+ * Collapsed into one function that returns a union, the three states are mutually exclusive
+ * by construction -- a call site cannot come away holding both.
  */
 export type LevelState = 'done' | 'current' | 'locked';
 
 export function levelState(p: Progress, level: number): LevelState {
-    // 锁先判,锁赢。缺口存档里第 5 关有星也照锁不误。
+    // Lock is checked first, and lock wins. A gapped save where level 5 already has stars
+    // still gets locked.
+    //
+    // Written as `!(level <= unlockedThrough(p))`, not `level > unlockedThrough(p)`: NaN
+    // compares false against everything, so the `>` form would send `levelState(p, NaN)`
+    // straight past the lock check, into `bestStars` (which returns 0 for a key that is not
+    // there), and out as `'current'` -- "level NaN is the current level". Negated, NaN fails
+    // the `<=` and lands on `'locked'`, which is the only answer that makes sense here.
     if (!(level <= unlockedThrough(p))) return 'locked';
     if (bestStars(p, level) > 0) return 'done';
     return 'current';
 }
 
 /**
- * 该画几颗星。非 `done` 一律 0。
+ * How many stars to draw. Anything that is not `done` is 0, unconditionally.
  *
- * view 只该问这个,不该自己去调 `bestStars` —— 那样就又有了第二个真值来源,
- * 而"锁着却画了三星"正是第二个真值来源造出来的那类画面。
+ * `view` should ask this and never call `bestStars` itself -- doing so would reintroduce a
+ * second source of truth, and "locked but drawn with three stars" is exactly the kind of
+ * picture a second source of truth produces.
  */
 export function starsFor(p: Progress, level: number): number {
     return levelState(p, level) === 'done' ? bestStars(p, level) : 0;
