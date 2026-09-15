@@ -37,8 +37,9 @@ import { SHADOW_ALPHA, SHADOW_INK } from './shadow';
 /**
  * The road surface's width.
  *
- * Wide enough to read as a road rather than as a line: the stars under a stop are 26 across
- * and sit on a 30 pitch, so 96 is about three of them side by side. It is deliberately much
+ * Wide enough to read as a road rather than as a line: 96 is a little under half the 205 badge
+ * that stands on it, so the badge reads as sitting ON the road and the road still reads as a
+ * road where it runs between two of them. It is deliberately much
  * narrower than the strip it replaces (620) -- that one was a lane the whole rail sat inside,
  * this one is a road the rail's stops sit ON.
  */
@@ -258,6 +259,14 @@ export class HomeScene {
      * call append a second pair of fades.
      */
     private built = false;
+    /**
+     * The canvas y that rail offset 0 sits at. See `setRailCenter`.
+     *
+     * Zero until told otherwise, which is the canvas centre -- the behaviour this had before
+     * the rail was recentred, so a caller that never calls `setRailCenter` gets the old street
+     * rather than a broken one.
+     */
+    private centreY = 0;
 
     private w: number;
     private h: number;
@@ -323,9 +332,19 @@ export class HomeScene {
      * passes exactly through the stop centres; if the road and the stops scrolled on two
      * different numbers the road would drift off the stops by the difference and the whole of
      * that guarantee would be spent. One number, read once, passed in.
+     *
+     * `setRailCenter` carries the OTHER half of that agreement: `HomeView` hangs its rail off
+     * the middle of the free band between the top bar and the start button rather than off the
+     * middle of the canvas, and the street has to hang off the same y. It is a separate call
+     * rather than a third argument to `layout` because it changes about once, when the screen is
+     * built, while `layout` runs on every frame of a drag.
      */
+    setRailCenter(y: number): void {
+        this.centreY = y;
+    }
+
     layout(offset: number, visibleHalfHeight: number): void {
-        this.street.setPosition(0, -offset, 0);
+        this.street.setPosition(0, this.centreY - offset, 0);
         for (let i = 0; i < this.roadLegs.length; i++) {
             // A leg spans stop i to stop i + 1. It is worth drawing unless BOTH of its ends are
             // past the threshold -- a leg with one end on screen is the one running off the

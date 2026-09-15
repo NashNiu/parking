@@ -168,6 +168,43 @@ test('the street is laid out on the same offset and edge as the stops', () => {
 });
 
 /**
+ * `home-view` asks `core/level-state` what a level's state is, and never works it out itself.
+ *
+ * WHAT IT PINS. `levelState(p, level)` returns one of `'done' | 'current' | 'locked'` and
+ * `starsFor(p, level)` returns 0 for anything that is not `'done'`. Between them there is
+ * exactly ONE place that decides what a level is, and the three answers are mutually exclusive
+ * because they are a union rather than three booleans. The moment the view calls `bestStars`
+ * itself there are two places again, and the second one has no idea about the lock.
+ *
+ * WHAT THAT COST. This screen used to compute `open = isUnlocked(...)`, `best = bestStars(...)`,
+ * `done = best > 0`, and then draw the stars as `open && done` -- correct, but only because
+ * somebody remembered the `&&`. "Locked" and "has stars" are independent facts that a gapped
+ * save makes both true at once, so dropping that one operator paints three stars on a level the
+ * same frame draws a padlock on. The earlier investigation deliberately did NOT pin the
+ * `open && done` expression, because pinning a workaround would have blocked the rewrite that
+ * removed the need for it; this pins the invariant that replaced it instead.
+ *
+ * A SOURCE GUARD because `home-view.ts` imports `cc` and this suite does not load the engine --
+ * the same limit every test in this file works under. It cannot prove the view draws the right
+ * badge; it can prove the view is not asking a second source what to draw.
+ */
+test('home-view reads level state from core and never calls bestStars itself', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const code = src
+    .split('\n')
+    .filter((l) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+  expect(code).not.toMatch(/\bbestStars\s*\(/);
+  // And the pair that replaced it is genuinely being called, so "no bestStars" cannot be
+  // satisfied by a file that stopped reading the save at all.
+  expect(code).toMatch(/\blevelState\s*\(/);
+  expect(code).toMatch(/\bstarsFor\s*\(/);
+});
+
+/**
  * `props.ts` cancels its holder's rotation when it bakes a prop's board position into the mesh.
  *
  * WHAT IT CAUGHT, on a device rather than here. The props are merged by colour into one mesh

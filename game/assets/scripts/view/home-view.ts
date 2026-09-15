@@ -2,8 +2,10 @@ import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
 import { dotSprite, roundedSprite, starSprite } from './ui-shapes';
-import { canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { bestStars, isUnlocked, Progress, STAR_MAX, unlockedThrough } from '../core/index';
+import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
+import {
+    LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
+} from '../core/index';
 import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rail-math';
 import { nodeCenter } from '../core/home-path';
 import { HomeScene } from './home-scene';
@@ -90,46 +92,76 @@ const START_SHUT_BASE = new Color(45, 54, 78, 255);
 const BTN_LIFT = 8;
 
 /**
- * A stop is built at its FOCUSED size and scaled down as it leaves the middle, so one node
- * covers both states and the size is continuous while a finger is moving.
- */
-/**
- * The stops, now pills rather than chips: 236 x 148, which is the mock's proportion read off
- * its own screen width.
+ * A ROUND BADGE, and its size is decided by the SAVE rather than by the scroll.
  *
- * STOP_REST went from 0.58 to 0.86, and that is a consequence of the axis rather than a
- * preference. A horizontal rail showed five stops and used size to say which one the button
- * would play; a vertical one shows eight to eleven, and eight things at 58% read as a list
- * that has been shrunk rather than as a route with one stop chosen. The halo does most of
- * the pointing now, and the size difference only has to be noticeable.
+ * WHAT THIS REPLACES, and why it is a bug fix rather than a restyle. The stops used to be
+ * 236x148 pills that differed by state only in a shade of blue -- cleared was 59,108,168 and
+ * the current level was 74,144,226, two steps apart on one hue -- while the one loud marker on
+ * the screen, the green halo, was bound to the SCROLL POSITION. A player who dragged to level 4
+ * saw a halo there and a button reading 开始 第 4 关, and nothing anywhere said that level 6 was
+ * where they had actually got to. It was reported as an unlock bug; the unlock logic was
+ * enumerated over all 1024 reachable saves and is correct. The screen simply had no language
+ * for progress.
+ *
+ * So the three states now differ in FORM, not in shade: a cleared badge is green and carries a
+ * row of stars, the current one is blue, a fifth larger, and breathing, a locked one is grey
+ * and wears a padlock. Every one of those reads without scrolling, which is the whole test.
+ *
+ * AND THE SCROLL-DRIVEN SIZING IS GONE. `STOP_REST` used to shrink a stop continuously with its
+ * distance from the middle, which was a nice piece of depth on a rail and is fatal here: a size
+ * that changes while a finger drags is a size that cannot mean anything about the save. The
+ * per-distance opacity fade went with it for the same reason -- "bright means cleared" is not a
+ * sentence you can say while brightness is also saying "near the middle". The rail's focus
+ * keeps the halo alone, which is the one signal that is genuinely about the scroll: it means
+ * "the button opens this one".
  */
-const STOP_W = 236;
-const STOP_H = 148;
-const STOP_R = 40;
-const STOP_REST = 0.86;
-const STOP_ALPHA_REST = 190;
-const STOP = new Color(74, 144, 226, 255);
-const STOP_BASE = new Color(44, 96, 165, 255);
-/** Cleared: the same blue, walked back, so a finished level reads as finished. */
-const STOP_DONE = new Color(59, 108, 168, 255);
-const STOP_DONE_BASE = new Color(42, 79, 124, 255);
-const STOP_SHUT = new Color(52, 62, 90, 255);
-const STOP_SHUT_BASE = new Color(38, 46, 70, 255);
+const NODE_D = Math.round(1280 * 0.16);
+/** Stars at a quarter of the badge, the proportion the requirement names. */
+const STAR_D = Math.round(NODE_D * 0.25);
+const STAR_PITCH = 56;
+/**
+ * The star row's centre, BELOW the badge rather than inside it.
+ *
+ * Three at this pitch span 2 * 56 + 51 = 163, narrower than the 205 badge, so the row reads as
+ * belonging to the badge above it rather than as a bar of its own. The row bottoms out at
+ * -(136 + 25.5) = -161.5, which is one of the two terms `RAIL_PITCH` (340) is derived from --
+ * see `core/home-path`. Do not move it without re-reading that derivation.
+ *
+ * The 8 of gap is measured off the FACE. The base sits `BTN_LIFT` lower, so at the centreline
+ * the base's lowest point and the middle star's highest point are the same y: they touch at one
+ * point and overlap nowhere. That is tight on purpose -- the stars have to read as attached.
+ */
+const STAR_Y = -(NODE_D / 2 + 8 + STAR_D / 2);
+/**
+ * The current level's scale, which is also the FLOOR of its breath -- see `breath`.
+ *
+ * 1.2 is the figure the requirement asks for, and `BREATHE_TO` is a 5% swell above it, NOT a
+ * multiplier applied to it: 1.2 * 1.26 would put the badge at 1.51 and a quarter bigger than
+ * anyone asked for.
+ */
+const CUR_SCALE = 1.2;
+const BREATHE_TO = 1.26;
+const BREATHE_TIME = 1.6;
+
+/** Cleared: bright. A finished level is a result, and it should look like one. */
+const NODE_DONE = new Color(86, 199, 104, 255);
+const NODE_DONE_BASE = new Color(56, 156, 76, 255);
+/** The current level: the one thing on this screen that moves, in the primary blue. */
+const NODE_CUR = new Color(74, 144, 226, 255);
+const NODE_CUR_BASE = new Color(44, 96, 165, 255);
+/** Not yet reached: grey, and wearing a padlock instead of its number. */
+const NODE_LOCK = new Color(52, 62, 90, 255);
+const NODE_LOCK_BASE = new Color(38, 46, 70, 255);
 const STOP_INK = new Color(255, 255, 255, 240);
-// Dimmer on a locked stop, and shifted right of the padlock beside it. See setProgress.
-const STOP_INK_SHUT = new Color(190, 200, 224, 220);
-const NUM_X_SHUT = 40;
-const LOCK_X_SHUT = -50;
-/** The halo on the middle stop. It fades out as that stop leaves the middle. */
+/**
+ * The halo on the middle stop. It fades out as that stop leaves the middle, and it is now the
+ * ONLY thing the scroll position draws -- see NODE_D. It says "the button opens this one",
+ * which is a fact about the rail and not about the save, so it is painted in the button's own
+ * green rather than in any of the three state colours.
+ */
 const STOP_RING = new Color(86, 199, 104, 90);
 const STOP_RING_PAD = 15;
 
-// Inside the pill, under the number: below it they would land in the 124 units of gap the
-// next stop needs, and two rows of stars between two stops reads as neither one's.
-const STOP_STAR_D = 26;
-const STOP_STAR_PITCH = 30;
-const STOP_STAR_Y = -40;
-const STOP_NUM_Y = 22;
 const STAR_ON = new Color(255, 201, 52, 255);
 const STAR_OFF = new Color(70, 82, 116, 255);
 
@@ -138,8 +170,14 @@ const STAR_OFF = new Color(70, 82, 116, 255);
  * stop-coloured rounded sprite over its middle to cut it hollow, and the body over the join.
  * `ui-shapes` has no ring, and an emoji lock is one font substitution away from a hollow box
  * -- the same reason the HUD's home button says 主页 rather than wearing a glyph.
+ *
+ * It is drawn at the size it was when it shared a pill with the level's number and then scaled
+ * up as a whole, rather than every piece being re-typed: three sprites that have to keep their
+ * proportions are one node with one factor on it.
  */
 const LOCK_INK = new Color(150, 163, 196, 255);
+/** The padlock has the badge to itself now, so it is drawn to fill it. See `setProgress`. */
+const LOCK_SCALE = 1.6;
 
 /**
  * The barrier arm, which IS the loading screen.
@@ -205,13 +243,17 @@ const TITLE_HIT_H = 140;
 /** Everything drawn for one level. Kept so `setProgress` can repaint without rebuilding. */
 interface Stop {
     node: Node;
-    fade: UIOpacity;
     ringFade: UIOpacity;
     face: Node;
     base: Node;
     num: Label;
     lock: Node;
     stars: Node[];
+    /**
+     * What the save says about this level, and the ONLY thing that decides how it is drawn.
+     * `open` is derived from it rather than computed alongside it -- see `setProgress`.
+     */
+    state: LevelState;
     open: boolean;
 }
 
@@ -230,6 +272,22 @@ export class HomeView {
     /** The stops' parent, parked on the lane. Stops are positioned within it. */
     private railRoot: Node;
     private stops: Stop[] = [];
+    /**
+     * The current level's scale, right now, while it breathes.
+     *
+     * A NUMBER IN A BOX RATHER THAN THE NODE'S OWN SCALE, and this is the one trap in this
+     * file worth naming. `layout()` runs every frame and writes `setScale` on every visible
+     * stop, so a tween on the node's scale would be overwritten before it was ever drawn -- the
+     * badge would simply sit still and nothing would say why. The tween drives this field
+     * instead and `layout()` reads it, which makes the two cooperate rather than race.
+     *
+     * A BOX (`{ v }`) rather than a bare field because `cc.tween` animates the PROPERTIES of an
+     * object it is handed, and it cannot be handed a primitive.
+     *
+     * It is the ABSOLUTE scale, not a multiplier: it rests at `CUR_SCALE` and swells to
+     * `BREATHE_TO`. Multiplying it into `CUR_SCALE` again would give 1.51.
+     */
+    private breath = { v: CUR_SCALE };
 
     private loadingLayer: Node;
     private loadingFade: UIOpacity;
@@ -295,6 +353,11 @@ export class HomeView {
         this.railRoot.layer = Layers.Enum.UI_2D;
         this.railRoot.addComponent(UITransform);
         this.root.addChild(this.railRoot);
+        // The rail hangs off the middle of the FREE BAND, not off the middle of the canvas --
+        // see `railCenterY`. The street has to hang off the same y or the road comes out
+        // parallel to the badges and a few dozen units beside them.
+        this.railRoot.setPosition(0, this.railCenterY(), 0);
+        this.scene.setRailCenter(this.railCenterY());
 
         // The plate goes in AFTER the road, so the stops pass BEHIND it. On a route that
         // fills the screen there is nowhere to put a line of type that a scrolling stop does
@@ -464,44 +527,47 @@ export class HomeView {
         // moment -- there is no state in which one of the two exists and the other does not.
         this.scene.build(levelCount);
         for (let i = 0; i < levelCount; i++) this.stops.push(this.buildStop(i));
+        this.railRoot.setPosition(0, this.railCenterY(), 0);
+        this.scene.setRailCenter(this.railCenterY());
         this.layout();
     }
 
     private buildStop(i: number): Stop {
         const node = new Node(`Stop${i + 1}`);
         node.layer = Layers.Enum.UI_2D;
-        node.addComponent(UITransform).setContentSize(STOP_W, STOP_H);
+        node.addComponent(UITransform).setContentSize(NODE_D, NODE_D);
         this.railRoot.addChild(node);
-        const fade = node.addComponent(UIOpacity);
 
-        // The halo first, so it sits behind the chip and reads as a glow rather than a frame.
-        const ring = roundedSprite(
-            'ring', STOP_W + STOP_RING_PAD * 2, STOP_H + STOP_RING_PAD * 2,
-            STOP_RING, STOP_R + 8,
-        );
+        // The halo first, so it sits behind the badge and reads as a glow rather than a frame.
+        // A DOT, like everything else here: a rounded square around a circle shows its four
+        // corners as green ears.
+        const ring = dotSprite('ring', NODE_D + STOP_RING_PAD * 2, STOP_RING);
         node.addChild(ring);
         const ringFade = ring.addComponent(UIOpacity);
-        const base = roundedSprite('base', STOP_W, STOP_H, STOP_BASE, STOP_R);
+        const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
         node.addChild(base);
+        // The base peeks out below the face, the lip every pressable thing in this project
+        // wears -- see BTN_LIFT. On a circle it shows as a crescent along the bottom edge.
         base.setPosition(0, -BTN_LIFT, 0);
-        const face = roundedSprite('face', STOP_W, STOP_H, STOP, STOP_R);
+        const face = dotSprite('face', NODE_D, NODE_CUR);
         node.addChild(face);
-        const num = makeLabel(face, 'n', 62, STOP_NUM_Y);
-        num.node.setPosition(0, STOP_NUM_Y, 0);
+        const num = makeLabel(face, 'n', 62, 0);
         num.color = STOP_INK;
         num.isBold = true;
         num.string = `${i + 1}`;
 
         const lock = this.buildLock(face);
+        // THE STARS HANG OFF `node`, NOT OFF `face`: they are below the badge now rather than
+        // inside it, so they are a sibling of the badge and not part of it.
         const stars: Node[] = [];
         for (let s = 0; s < STAR_MAX; s++) {
-            const star = starSprite(`star${s}`, STOP_STAR_D, STAR_OFF);
-            face.addChild(star);
-            star.setPosition((s - (STAR_MAX - 1) / 2) * STOP_STAR_PITCH, STOP_STAR_Y, 0);
+            const star = starSprite(`star${s}`, STAR_D, STAR_OFF);
+            node.addChild(star);
+            star.setPosition((s - (STAR_MAX - 1) / 2) * STAR_PITCH, STAR_Y, 0);
             star.active = false;
             stars.push(star);
         }
-        return { node, fade, ringFade, face, base, num, lock, stars, open: false };
+        return { node, ringFade, face, base, num, lock, stars, state: 'locked', open: false };
     }
 
     /** See LOCK_INK: a padlock out of three sprites, the middle one a hole. */
@@ -510,12 +576,14 @@ export class HomeView {
         lock.layer = Layers.Enum.UI_2D;
         lock.addComponent(UITransform);
         face.addChild(lock);
-        // Left of centre, because the level's number sits to its right now.
-        lock.setPosition(LOCK_X_SHUT, STOP_NUM_Y, 0);
+        // DEAD CENTRE, and the level's number is switched off behind it -- see `setProgress`.
+        lock.setPosition(0, 0, 0);
+        lock.setScale(LOCK_SCALE, LOCK_SCALE, 1);
         const shackle = dotSprite('shackle', 38, LOCK_INK);
         lock.addChild(shackle);
         shackle.setPosition(0, 13, 0);
-        const hole = roundedSprite('hole', 18, 24, STOP_SHUT, 9);
+        // The hole is a hole: it is painted the face's own colour, so it must track it.
+        const hole = roundedSprite('hole', 18, 24, NODE_LOCK, 9);
         lock.addChild(hole);
         hole.setPosition(0, 15, 0);
         const body = roundedSprite('body', 46, 34, LOCK_INK, 8);
@@ -533,38 +601,103 @@ export class HomeView {
      */
     setProgress(p: Progress): void {
         if (this.stops.length === 0) return;
+        let hasCurrent = false;
         for (let i = 0; i < this.stops.length; i++) {
             const level = i + 1;
             const stop = this.stops[i];
-            const open = isUnlocked(p, level);
-            const best = bestStars(p, level);
-            const done = best > 0;
-            stop.open = open;
+            // ONE SOURCE OF TRUTH. `levelState` returns a three-way union, so the states are
+            // mutually exclusive by construction and this loop cannot come away holding two of
+            // them at once. It used to read `open = isUnlocked(...)` and `done = bestStars(...)
+            // > 0` and then draw stars as `open && done` -- two independent facts that a call
+            // site had to remember to combine, and the `&&` is the only thing that stopped a
+            // gapped save from painting three stars on a level it had locked.
+            //
+            // `bestStars` is deliberately NOT called here, and `logic/tests/view-source.test.ts`
+            // fails if it comes back: `starsFor` already returns 0 for anything that is not
+            // `done`, so asking the core twice is the second source of truth arriving again.
+            const state = levelState(p, level);
+            const best = starsFor(p, level);
+            stop.state = state;
+            // Derived, not computed in parallel: what `setFocus` and `hitsStart` need is "may
+            // this be played", which is exactly "not locked".
+            stop.open = state !== 'locked';
+            if (state === 'current') hasCurrent = true;
             stop.face.getComponent(Sprite)!.color =
-                !open ? STOP_SHUT : (done ? STOP_DONE : STOP);
-            stop.base.getComponent(Sprite)!.color =
-                !open ? STOP_SHUT_BASE : (done ? STOP_DONE_BASE : STOP_BASE);
-            // THE NUMBER STAYS ON WHEN IT IS LOCKED, beside the padlock rather than instead
-            // of it. Hiding it made every locked stop identical -- a column of eight
-            // indistinguishable pills with no way to tell which level you were looking at,
-            // which is not what a route is for. The reference shows the number on its locked
-            // stops too. Dimmer, so a locked number does not read as an invitation.
-            stop.num.node.active = true;
-            stop.num.color = open ? STOP_INK : STOP_INK_SHUT;
-            stop.num.node.setPosition(open ? 0 : NUM_X_SHUT, STOP_NUM_Y, 0);
-            stop.lock.active = !open;
+                state === 'done' ? NODE_DONE : (state === 'current' ? NODE_CUR : NODE_LOCK);
+            stop.base.getComponent(Sprite)!.color = state === 'done'
+                ? NODE_DONE_BASE
+                : (state === 'current' ? NODE_CUR_BASE : NODE_LOCK_BASE);
+            // THE NUMBER GOES OFF WHEN IT IS LOCKED, and that reverses the decision the old
+            // comment here argued for. It is the SHAPE that changed, not the argument: the old
+            // stop was a 236-wide pill, so a padlock could sit left of centre with the number
+            // beside it and both could be read. A 205 circle has room for one of the two. The
+            // padlock wins, because "you have not got here yet" is what a locked stop is for
+            // saying, and the road itself counts the levels off in order for anyone who wants
+            // to know which one they are looking at.
+            stop.num.node.active = state !== 'locked';
+            stop.lock.active = state === 'locked';
             for (let s = 0; s < stop.stars.length; s++) {
                 // Absent, not empty, on a level never cleared: three grey stars would say it
                 // was cleared with none, which cannot happen (the rating floors at one).
-                stop.stars[s].active = open && done;
+                stop.stars[s].active = state === 'done';
                 stop.stars[s].getComponent(Sprite)!.color = s < best ? STAR_ON : STAR_OFF;
             }
         }
+        this.setBreathing(hasCurrent);
         this.setFocus(Math.max(1, Math.min(this.levelCount, unlockedThrough(p))) - 1);
         // Land there rather than glide there: this runs as the screen appears, and a rail
         // that slides in from level 1 every time would be an animation of loading a save.
         this.offset = this.target;
         this.layout();
+    }
+
+    /**
+     * Start or stop the current level's breath.
+     *
+     * IT IS BOUND TO THE SAVE, NOT TO THE SCROLL, and that is the entire point of it. The badge
+     * that breathes is the one the progress says you are up to; the badge in the middle of the
+     * screen wears a halo instead. Two facts, two marks -- the screen this replaces had one
+     * mark for both, so dragging the rail moved the only thing that looked like "you are here".
+     *
+     * Driven from `setProgress` rather than from `layout()` for the same reason: `layout()` only
+     * knows where the rail is.
+     *
+     * `stopAllByTarget` first, because `setProgress` is called again every time a level ends --
+     * without it each return to the lobby would stack another repeating tween on the same field
+     * and the breath would get faster and deeper for the rest of the session.
+     *
+     * A game with every level cleared has no current level at all, and then there is nothing to
+     * breathe: the tween is stopped and the field is parked at its resting value.
+     */
+    private setBreathing(on: boolean): void {
+        Tween.stopAllByTarget(this.breath);
+        this.breath.v = CUR_SCALE;
+        if (!on) return;
+        tween(this.breath)
+            .to(BREATHE_TIME, { v: BREATHE_TO }, { easing: 'sineInOut' })
+            .to(BREATHE_TIME, { v: CUR_SCALE }, { easing: 'sineInOut' })
+            .union()
+            .repeatForever()
+            .start();
+    }
+
+    /**
+     * The y the rail is centred on: the middle of the free band between the top bar's bottom
+     * edge and the start button's top edge.
+     *
+     * NOT THE CANVAS CENTRE. The canvas centre has a bar eating into it from above and a button
+     * eating into it from below, and those two bites are not the same size -- so a rail centred
+     * on the canvas puts the level it has scrolled to visibly low, wedged against the button.
+     * That is the real cause of "the lobby does not scroll to my level": it does scroll there,
+     * onto a centre that is not the centre of the space the player can see.
+     *
+     * Recomputed rather than cached because `safeInsets` and `capsuleInset` are themselves
+     * cached and may still have been unread when this screen was constructed.
+     */
+    private railCenterY(): number {
+        const top = barBottomY(this.w, this.h);
+        const bottom = -this.h / 2 + safeInsets().bottom * this.h + START_MARGIN + START_H;
+        return (top + bottom) / 2;
     }
 
     /** Which level the button plays, 1-based. */
@@ -616,13 +749,20 @@ export class HomeView {
     }
 
     /**
-     * Place every stop for the current offset: x from the rail's coordinate, scale and
-     * opacity from how far out of the middle it is.
+     * Place every stop for the current offset.
      *
-     * Everything here is continuous in `offset`, which is what makes a drag read as direct
-     * manipulation -- chips grow as they arrive rather than snapping between two sizes.
+     * BOTH COORDINATES COME FROM `nodeCenter`, which is the same function `home-scene` strokes
+     * the road through. That is what makes "the road passes through the badge centres" a fact
+     * rather than two pieces of arithmetic that happen to agree today -- the old lobby's dashed
+     * line and its column of pills were computed separately, and looked it.
+     *
+     * SCALE COMES FROM THE STATE, NOT FROM THE DISTANCE. Only the halo is continuous in
+     * `offset` now; see NODE_D for what that costs and why it is worth it. The current level's
+     * scale is read out of `breath`, which a tween is driving -- writing it here and tweening
+     * the node would be the two of them fighting over the same property every frame.
+     *
      * Stops fully off screen are deactivated; ones at the edge are left to be clipped by the
-     * screen itself, because a half-visible chip is what says there is more rail.
+     * screen itself, because a half-visible badge is what says there is more rail.
      */
     private layout(): void {
         const edge = this.h * 0.75;
@@ -635,23 +775,22 @@ export class HomeView {
         for (let i = 0; i < this.stops.length; i++) {
             const stop = this.stops[i];
             // Level 1 at the bottom and the numbers climbing, which is what makes the column
-            // read as a route rather than as a list: `railOffset` grows with i, and +y is up.
-            const y = railOffset(i) - this.offset;
+            // read as a route rather than as a list: `nodeCenter(i).y` grows with i, and +y is
+            // up. It is the same value `railOffset(i)` returns -- both are `i * RAIL_PITCH` --
+            // and taking it from `home-path` is what ties the badge to the road it stands on.
+            const c = nodeCenter(i);
+            const y = c.y - this.offset;
             if (Math.abs(y) > edge) {
                 stop.node.active = false;
                 continue;
             }
             stop.node.active = true;
-            const t = Math.min(1, railStopT(this.offset, i));
-            const scale = 1 + (STOP_REST - 1) * t;
-            // x FROM `home-path`, not from a local copy of the zig: the road is stroked through
-            // `nodeCenter` and the stop has to stand on the same point, or the two drift apart
-            // the moment either number is retuned.
-            stop.node.setPosition(nodeCenter(i).x, y, 0);
+            const scale = stop.state === 'current' ? this.breath.v : 1;
+            stop.node.setPosition(c.x, y, 0);
             stop.node.setScale(scale, scale, 1);
-            stop.fade.opacity = Math.round(255 + (STOP_ALPHA_REST - 255) * t);
             // The halo belongs to the middle alone, and is gone by half a pitch out, so two
-            // chips are never wearing it at once.
+            // badges are never wearing it at once.
+            const t = Math.min(1, railStopT(this.offset, i));
             stop.ringFade.opacity = Math.round(255 * Math.max(0, 1 - t * 2));
         }
     }
@@ -771,12 +910,15 @@ export class HomeView {
             const stop = this.stops[i];
             if (!stop.node.active) continue;
             const p = stop.node.worldPosition;
-            // Per axis, because the stop is a pill now and not a square: one `half` would
-            // make the hit box 236 tall as well as wide, and the 124 units of gap between
-            // two stops would be claimed by both of them.
-            const halfW = (STOP_W * stop.node.scale.x) / 2 + TAP_PAD;
-            const halfH = (STOP_H * stop.node.scale.y) / 2 + TAP_PAD;
-            if (Math.abs(ui.x - p.x) <= halfW && Math.abs(ui.y - p.y) <= halfH) return i;
+            // ONE `half`, because the badge is a circle: the two axes are the same measure
+            // again, which they were not while it was a pill. Squared off rather than tested
+            // radially, which makes the corners of the box slightly generous -- and a hit box
+            // that is a touch forgiving at the corners is the right side to err on for a target
+            // a thumb is aiming at. The widest it ever gets is the breathing badge's 139, against
+            // the 170 that is half of `RAIL_PITCH`, so no two boxes can ever meet in the middle
+            // and claim the same tap.
+            const half = (NODE_D * stop.node.scale.x) / 2 + TAP_PAD;
+            if (Math.abs(ui.x - p.x) <= half && Math.abs(ui.y - p.y) <= half) return i;
         }
         return -1;
     }
