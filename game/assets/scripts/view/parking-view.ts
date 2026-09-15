@@ -81,6 +81,13 @@ const RIM = 0.045;
 const PAD_Z = -0.11;
 const RIM_Z = -0.12;
 const PANEL_Z = -0.14;
+/**
+ * The tray's shaded side, one band behind its face and still in front of its drop shadow at
+ * SHADOW_Z (-0.18) -- a plinth belongs to the object, the shadow falls under all of it.
+ */
+const PLINTH_Z = -0.15;
+/** How much of the tray's side shows below it. See scene-stage's LOT_PLINTH for the reasoning. */
+const PLINTH_DROP = 0.06;
 /* DROP (0.11) is `LIFT.tray` in shadow.ts now. */
 
 /**
@@ -133,6 +140,15 @@ const LOCK_SHACKLE_Y = LOCK_BODY_Y + LOCK_BODY_H / 2;
  * is also what the reference art has.
  */
 const PANEL = new Color(186, 189, 197);
+/**
+ * The tray's own shaded side, 36 luminance under its face -- the same two-plate construction the
+ * lot now uses and the HUD has always used (PILL_BASE). It reads as the thickness of a raised
+ * concrete slab, which is what this panel is meant to be and what the reference art shows.
+ *
+ * It also clears the pavement behind it by 46, so the tray keeps an edge on the side away from
+ * the stalls even where its own face is only 10 units off the ground it sits on.
+ */
+const PANEL_PLINTH = new Color(148, 153, 166);
 const PAD = new Color(76, 87, 115);
 const PAD_LOCKED = new Color(57, 66, 90);
 const PAD_RIM = new Color(147, 160, 192);
@@ -214,6 +230,10 @@ export class ParkingView {
         const shadow = makeShadowSlab('ParkingShadow', panelW, panelH, PANEL_R * g);
         shadow.setPosition(0, this.y + shadowThrow(LIFT.tray) * g, SHADOW_Z);
         this.parent.addChild(shadow);
+
+        const plinth = makeSlab('ParkingPlinth', panelW, panelH, 0.06, PANEL_PLINTH, PANEL_R * g);
+        plinth.setPosition(0, this.y - PLINTH_DROP * g, PLINTH_Z);
+        this.parent.addChild(plinth);
 
         const panel = makeSlab('ParkingPanel', panelW, panelH, 0.06, PANEL, PANEL_R * g);
         panel.setPosition(0, this.y, PANEL_Z);

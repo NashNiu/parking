@@ -15,6 +15,7 @@ import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { buildTunnel, tunnelCrown, TUNNEL_SHELL } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
+import { setupProps, baySideProps } from './props';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { HomeView } from './home-view';
@@ -56,7 +57,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0903-01';
+const BUILD_TAG = 'build 0914-01';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -162,6 +163,33 @@ const CELL_MAX = 1.4;
  * spaced by core's CLEARANCE, not by this.
  */
 const CELL_GAP = 0.02;
+
+/**
+ * Clear air between the ring road and the parking bay, and between the bay and the track's
+ * outermost waiting figure. One constant for both, since both are the same job.
+ *
+ * Up here rather than beside the bay it spaces, because the cell budget has to add the whole
+ * stack above the lot up before it can know what is left below it -- see `cell`.
+ */
+const BAND_GAP = 0.16;
+
+/**
+ * How far the lot's SLAB overhangs the grid of cars, on every side. `lotWidth`/`lotHeight`
+ * own it; it is named here because the cell budget has to subtract it from both directions
+ * and two bare 0.3s are two chances to disagree with scene-stage.
+ */
+const SLAB_PAD = 0.3;
+
+/**
+ * A floor under the cell, so a frame too small to hold the board produces a small board
+ * rather than an inside-out one. The vertical budget is a SUBTRACTION now (see `cell`), and
+ * a subtraction can go negative where the old ratio could not -- `padTop` and `padBottom`
+ * are each clamped at 0.45, so a HUD claiming both would leave the board a fifth of the
+ * screen and the budget below zero. Nothing realistic reaches it: the phone this was
+ * measured on reserves 0.134 between them.
+ */
+const MIN_CELL = 0.2;
+
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_SPEED = 8;
@@ -1069,6 +1097,32 @@ export class GameController extends Component {
         // has to happen before the loop below re-adds the badges the new level actually owns.
         this.hud?.clearTunnelBadges();
 
+        // The track's shape, and how far the drawn ring reaches above and below its own
+        // origin. HERE, well before the ring is built, because the cell budget below has to
+        // add up everything that sits ABOVE the lot before it can tell what is left under
+        // it, and the ring is the tallest term in that sum. `buildShape`'s switch is
+        // exhaustive with no default, so an unrecognised shape would crash rather than draw
+        // -- hence the fallback; `validateTrack` further down says which field is wrong.
+        const rawTrack = level.loop.track as TrackShape;
+        const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
+        const path = new TrackPath(shape);
+        const reach = trackReach(path);
+        // The HUD's bands are part of the framing, not something to be overlapped. They
+        // arrive as fractions of the SCREEN's height because that is what they are -- a
+        // notch and a plate of fixed design units both scale with the viewport, and the
+        // board does not. So the board gets what is left: with `f` reserved, the content
+        // has to fit in (1 - f) of the frame, hence the divisor rather than a plain
+        // halving. On a screen with no notch this still reserves the plate's own band,
+        // which is the difference between the title clearing the ring by arithmetic and
+        // clearing it by luck.
+        //
+        // Read before the cell rather than after it (which is where it used to sit): the
+        // lot is sized into the same box `fitCamera` will frame it in, so these two are the
+        // same `usable` or the dead band comes straight back.
+        this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
+        this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
+        const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
+
         // The box the lot and its ring road have to live in. These were CONSTANTS
         // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
         // of the editor preview window -- and a phone's frame is neither of those numbers.
@@ -1079,9 +1133,8 @@ export class GameController extends Component {
         // now -- see the asymmetry below -- but by 0.21 and on purpose, where before it was
         // by 0.23 and by accident, on a lane the layout believed was fully visible.)
         //
-        // `ringLow` is the lowest a ring lane's CENTRELINE can sit with its outer edge still
-        // on screen; `lotHalfW` is what is left across once the lot's offset to the side
-        // lane comes off each side.
+        // `lotHalfW` is what is left across once the lot's offset to the side lane comes off
+        // each side.
         //
         // Note the asymmetry, which is deliberate. Downwards the whole lane has to fit,
         // because the bottom lane's outer kerb IS the bottom of the board and the lot sits
@@ -1094,7 +1147,6 @@ export class GameController extends Component {
         // 76% of the screen; this puts it at 82%, and the cell that comes free makes the
         // cars 2.5% bigger on top of that.
         const frame = this.viewFrame();
-        const ringLow = -(frame.halfH - ROAD_H / 2);
         // HALF the offset, not all of it. The side lanes carry no traffic (see the note
         // above), so what they owe the layout is a hint of kerb, not a whole lane: at
         // RING_OFF/2 their centreline sits 0.31 off screen and about 0.14 of inner kerb is
@@ -1103,13 +1155,51 @@ export class GameController extends Component {
         const lotHalfW = frame.halfW - RING_OFF / 2;
         // The lot hangs exactly one lane below the top road, so the road stays put and the
         // lot moves with the grid's size. The cell takes whichever budget is tighter — the
-        // rows against the height left under the stalls, or the columns against the width —
-        // and the slab is then widened to the full frame.
-        const cell = Math.min(
+        // rows against the height the rest of the board leaves, or the columns against the
+        // width — and the slab is then widened to the full frame.
+        //
+        // THE VERTICAL BUDGET IS MEASURED AGAINST WHERE THE FRAME ACTUALLY IS, and that is
+        // the fix for a band of dead screen under the lot that nothing could explain from
+        // the numbers on either side of it. It used to be
+        //
+        //     (ROAD_Y - 2 * RING_OFF - ringLow - SLAB_PAD) / level.lot.h
+        //
+        // with `ringLow = -(frame.halfH - ROAD_H / 2)` -- the lowest a lane's centreline can
+        // sit in a frame CENTRED ON y = 0. The camera is not centred on y = 0: `fitCamera`
+        // centres the drawn content and reserves the HUD's bands off the ends, so the real
+        // view on a 1170x2532 phone runs -14.59..11.06 where that formula assumed
+        // -12.82..12.82. The lot was therefore sized against a floor 1.8 units above the
+        // real one, and `fitCamera` then split the leftover evenly top and bottom: 2.38
+        // board units of nothing under the road's outer kerb, 1.03 of which is the home
+        // indicator's own band and the rest of which was simply lost. It is 1.32 now.
+        //
+        // So add the stack up instead. Everything above the lot's slab is either fixed or
+        // proportional to the scale, and the whole of it is
+        //
+        //     span = ROAD_H + 2 * BAND_GAP + 2 * RING_OFF + SLAB_PAD   (fixed)
+        //          + (reach.top - reach.bottom)                        (the drawn ring)
+        //          + scale * (bayPerScale + level.lot.h)               (bay and lot)
+        //
+        // and it has to fit in the `usable` share of the frame -- which is exactly the box
+        // `fitCamera` frames it into, so the two cannot drift. Solving for the scale gives
+        // the budget below. Checked against the shipped numbers: a portrait phone keeps the
+        // cell it has (1.032, width-bound either way), and the screens that were HEIGHT-bound
+        // come out bigger than they were even while carrying two more rows of lot -- 18:9
+        // 0.996 -> 1.032, 16:9 0.865 -> 0.873 -- because they were being under-sized for
+        // exactly the same reason the band under the lot was there.
+        //
+        // `stallFootprint(1)` is not a stall anyone parks in: a bay's HEIGHT is linear in
+        // the scale, so the bay at scale 1 IS the coefficient. Read off the real functions
+        // rather than restated, or this is a third place that has to be kept in step with
+        // `stallFootprint` and `bayPanelSize`.
+        const bayPerScale = bayPanelSize(level.parking.slots, stallFootprint(1)).h;
+        const above = ROAD_H + 2 * BAND_GAP + 2 * RING_OFF + SLAB_PAD
+            + (reach.top - reach.bottom);
+        const cell = Math.max(MIN_CELL, Math.min(
             CELL_MAX,
-            (ROAD_Y - 2 * RING_OFF - ringLow - 0.3) / level.lot.h - CELL_GAP,
-            (2 * lotHalfW - 0.3) / level.lot.w - CELL_GAP,
-        );
+            (2 * frame.halfH * usable - above) / (bayPerScale + level.lot.h) - CELL_GAP,
+            (2 * lotHalfW - SLAB_PAD) / level.lot.w - CELL_GAP,
+        ));
         const scale = cell + CELL_GAP;
         this.boardScale = scale;
         const lotH = lotHeight(level.lot.h, scale);
@@ -1164,11 +1254,6 @@ export class GameController extends Component {
         // validateTrack is the drawability gate; the offline tool already fails the build
         // on it, so anything reaching here is either hand-edited or from an older file.
         for (const problem of validateTrack(level)) console.warn(`[track] ${problem}`);
-        // buildShape's switch is exhaustive with no default, so an unrecognised shape would
-        // crash rather than draw. The warn loop above has already said which field is wrong.
-        const rawTrack = level.loop.track as TrackShape;
-        const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
-        const path = new TrackPath(shape);
 
         // Where the parking bay and the loop track go, up the board.
         //
@@ -1182,12 +1267,8 @@ export class GameController extends Component {
         // It also spends height that was going begging: the board reached y = 7.31 of the
         // 8.98 the phone's frame allows, so pushing the track up costs nothing and takes the
         // blank band from 23% of the screen to 16%.
-        const reach = trackReach(path);
         const stall = stallFootprint(scale);
         const bay = bayPanelSize(level.parking.slots, stall);
-        // Clear air between the road and the bay, and between the bay and the track's
-        // outermost waiting figure. One constant for both, since both are the same job.
-        const BAND_GAP = 0.16;
         const bandBottom = ROAD_Y + ROAD_H / 2 + BAND_GAP;
         const PARKING_Y = bandBottom + bay.h / 2;
         const LOOP_Y = bandBottom + bay.h + BAND_GAP - reach.bottom;
@@ -1231,17 +1312,6 @@ export class GameController extends Component {
         // 130 px of margin taken off one end of the screen and handed to the other.
         this.contentTop = LOOP_Y + reach.top;
         this.contentBottom = this.ring.bottom - ROAD_H / 2;
-        // The HUD's bands are part of the framing, not something to be overlapped. They
-        // arrive as fractions of the SCREEN's height because that is what they are -- a
-        // notch and a plate of fixed design units both scale with the viewport, and the
-        // board does not. So the board gets what is left: with `f` reserved, the content
-        // has to fit in (1 - f) of the frame, hence the divisor below rather than a plain
-        // halving. On a screen with no notch this still reserves the plate's own band,
-        // which is the difference between the title clearing the ring by arithmetic and
-        // clearing it by luck.
-        this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
-        this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
-        const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
         // The SLAB has to be on screen; the ring road around it does not. Reserving
         // `lotW / 2 + RING_OFF` here would undo the widening above entirely: a wider slab
         // would push this past LANE.edgeLimit, the camera would zoom out to fit a side lane
@@ -1294,6 +1364,17 @@ export class GameController extends Component {
             parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y, scale,
         );
         this.parkingView.render();
+
+        // Scene dressing, in the one strip of board that is not spoken for: either side of the
+        // bay, which is narrower than the lot's slab. `baySideProps` returns nothing when that
+        // strip is too tight, so a level with more stalls simply goes undressed rather than
+        // putting a tree through the bay. See props.ts for why there is so little room.
+        setupProps(parkingRoot, baySideProps(
+            bayPanelSize(level.parking.slots, stallFootprint(scale)).w / 2,
+            PARKING_Y,
+            lotW / 2,
+            scale,
+        ));
 
         const gridRoot = new Node('GridRoot');
         gridRoot.setPosition(0, GRID_Y, 0);

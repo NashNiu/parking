@@ -240,6 +240,27 @@ const LOT_R = 0.24;
 const LOT_SHADOW_ALPHA = 30;
 
 /**
+ * The lot's shaded side, and how much of it shows.
+ *
+ * THE SAME TWO-PLATE TRICK THE HUD USES -- a lit face with a darker plate peeking out below it,
+ * which is what PILL_BASE's note calls out as shared with the unlock button, the padlock rims
+ * and the win panel's stars. Here it turns the lot from a coloured region into a slab of asphalt
+ * with a thickness.
+ *
+ * IT SHOWS BELOW, not above, and that is the camera rather than the light. The board is tilted
+ * back, so the side of a raised object that faces the viewer is the one toward board -Y -- the
+ * same face car-mesh calls the near wall and spends WALL_LIFT on. The drop shadow goes the other
+ * way (see shadow.ts) because that is set by the light, not by the viewing angle; a plinth and a
+ * shadow on opposite sides is what a lit, tilted object actually looks like.
+ *
+ * 0.07 fits inside the 0.17 of pavement between the lot's top edge and the ring road's near
+ * kerb, so the plinth never touches the road. That clearance is RING_OFF minus half ROAD_H and
+ * lives in GameController; if the ring road ever moves in, this is what gives first.
+ */
+const LOT_PLINTH = new Color(70, 76, 90);
+const LOT_PLINTH_DROP = 0.07;
+
+/**
  * The depth stack, front to back. Cars stand ON the board plane (wheels at z = 0) with a
  * contact shadow at z = -0.06, so nothing may have a face in front of that or the shadows
  * get buried. Every panel is thin (0.06) for one reason: a drop shadow has to fit BEHIND
@@ -248,18 +269,21 @@ const LOT_SHADOW_ALPHA = 30;
  *
  *   -0.06  car contact shadows
  *   -0.08  stall pads          -0.09  stall rims (parking-view)
- *   -0.11  lot dashed border    -0.11  parking bay panel (parking-view)
+ *   -0.11  lot dashed border    -0.14  parking bay panel (parking-view)
+ *                               -0.15  parking bay plinth (parking-view)
  *   -0.18  panel drop shadows
  *   -0.28  ring road
- *   -0.30  lot
+ *   -0.29  lot
+ *   -0.30  lot plinth
  *   -0.31  lot drop shadow
  *   -0.32  grid lines
  *   -0.5   ground
  *
  * Neighbouring faces stay at least 0.01 apart and never coplanar, so the ordering holds
- * without depth-bias tricks. The lot and its shadow are the tightest pair in the stack at
- * exactly 0.01 on each side, which is the minimum this scheme allows -- anything inserted
- * between the ring road and the grid from here needs the band re-spaced, not squeezed.
+ * without depth-bias tricks. THE BAND FROM -0.28 TO -0.32 IS NOW FULL: ring road, lot, lot
+ * plinth, lot shadow and grid lines sit at exactly 0.01 apart all the way down, which is the
+ * minimum this scheme allows. Anything else that needs to go in there requires the whole band
+ * re-spaced, not squeezed -- there is no room left to borrow.
  */
 const GROUND_Z = -0.5;
 const GRID_Z = -0.32;
@@ -271,7 +295,13 @@ const GRID_Z = -0.32;
  * The dashed border stays where it was, well in front of both, because the border is the thing
  * that has to be read.
  */
-const LOT_Z = -0.30;
+const LOT_Z = -0.29;
+/**
+ * The lot's shaded side, one band behind the lot's face. It has to be BEHIND the face it belongs
+ * to (so only the sliver past the edge shows) and IN FRONT of the shadow (a plinth is part of the
+ * object; the shadow falls under the whole of it).
+ */
+const LOT_PLINTH_Z = -0.30;
 /**
  * The lot's own drop shadow, between the lot and the grid: it has to fall ON the paved ground
  * and UNDER the asphalt that casts it. Same reasoning as the panel shadows at -0.18, one band
@@ -364,6 +394,10 @@ export function setupStage(root: Node, bw: number, bh: number, gridY: number): v
     const shadow = makeShadowSlab('LotShadow', bw, bh, LOT_R, LOT_SHADOW_ALPHA);
     shadow.setPosition(0, gridY + shadowThrow(LIFT.surface), LOT_SHADOW_Z);
     root.addChild(shadow);
+
+    const plinth = makeSlab('LotPlinth', bw, bh, 0.06, LOT_PLINTH, LOT_R);
+    plinth.setPosition(0, gridY - LOT_PLINTH_DROP, LOT_PLINTH_Z);
+    root.addChild(plinth);
 
     const lot = makeSlab('Lot', bw, bh, 0.06, LOT, LOT_R);
     lot.setPosition(0, gridY, LOT_Z);

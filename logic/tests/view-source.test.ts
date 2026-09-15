@@ -179,3 +179,98 @@ test('the top plate is built after the rail, so stops pass behind it', () => {
   expect(rail).toBeGreaterThan(0);
   expect(plate).toBeGreaterThan(rail);
 });
+
+/**
+ * `props.ts` cancels its holder's rotation when it bakes a prop's board position into the mesh.
+ *
+ * WHAT IT CAUGHT, on a device rather than here. The props are merged by colour into one mesh
+ * each, which means a prop's position has to live in its VERTICES -- there is no per-prop node
+ * to put it on. The merged meshes then hang off one holder turned +90 about X, which is what
+ * stands the trees up: it maps model +Y onto board +Z (the height) and model +Z onto board -Y
+ * (the position). Writing `bz = spot.y` therefore mirrors every prop to the opposite half of
+ * the board. The trees were meant to flank the parking bay; they rendered on top of the lot,
+ * sitting over the cars.
+ *
+ * WHY A GUARD AND NOT A TEST. Nothing throws, nothing is out of bounds, and the picture is
+ * plausible -- a tree is a tree wherever it lands, so this reads as a placement choice rather
+ * than a defect until someone notices it is covering the board. `pax-figure` never meets it
+ * because it turns a per-figure `fit` node and positions the unrotated root above it; this
+ * file is the only place in the view that bakes a position through a rotation, and the sign is
+ * the whole of the correctness.
+ */
+test('props.ts negates the board Y it bakes into the mesh', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'props.ts'), 'utf8');
+  const code = src
+    .split('\n')
+    .filter((l) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+  // The depth fed to `placed` must be the negated board Y, never the raw one.
+  expect(code).toMatch(/const\s+bz\s*=\s*-\s*spot\.y\s*;/);
+  expect(code).not.toMatch(/const\s+bz\s*=\s*spot\.y\s*;/);
+});
+
+/**
+ * The scene dressing's vertical budget, checked against the band it has to live in.
+ *
+ * WHY THIS IS A TEST AND THE ONE ABOVE IS A GUARD. `PROP_ROWS` scatters six props DOWN from the
+ * bay's centre to stop them reading as four mirrored twins, and every one of those offsets is
+ * bounded by something it cannot see: a lamp is 1.15 tall and the loop track sits just past the
+ * bay's top edge, so a lamp nudged UP puts its head through the track; a bed is BED_D across and
+ * the ring road is just past the bottom edge, so a prop nudged DOWN spills its bed onto the road.
+ * Both failures are a few hundredths of a unit away from the values that ship, both look like
+ * plausible scenery in a screenshot, and NOTHING in the scene complains about either.
+ *
+ * The numbers come out of the sources rather than being written here, so the test tracks a
+ * retune of the props, of the stall, or of the car's scale instead of going stale against them.
+ */
+test('every scene prop stays inside the parking band, top and bottom', () => {
+  const num = (src: string, name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*(-?[0-9.]+)\\s*;`).exec(src);
+    if (!m) throw new Error(`${name} not found -- renamed?`);
+    return Number(m[1]);
+  };
+  const props = fs.readFileSync(path.join(VIEW, 'props.ts'), 'utf8');
+  const bay = fs.readFileSync(path.join(VIEW, 'parking-view.ts'), 'utf8');
+  const types = fs.readFileSync(path.join(VIEW, '../core/types.ts'), 'utf8');
+
+  // The bay band's half-height, derived exactly as `bayPanelSize(stallFootprint(scale))` does,
+  // in units of the board scale. CAP_BOX.big is the stall's sizing case: a bus has to fit.
+  const carScale = num(types, 'CAR_SCALE');
+  const bigLen = Number(/big:\s*\{[^}]*len:\s*([0-9.]+)/.exec(types)![1]);
+  const bigWid = Number(/big:\s*\{[^}]*wid:\s*([0-9.]+)/.exec(types)![1]);
+  const stallH = bigLen * carScale * num(bay, 'STALL_AIR_LEN');
+  const stallW = bigWid * carScale * num(bay, 'STALL_AIR_WID');
+  const halfH = (stallH + 2 * num(bay, 'PANEL_PAD_Y') * (stallW / num(bay, 'GLYPH_REF_W'))) / 2;
+
+  // How tall each kind stands off its own foot, and how wide the bed under it is.
+  const lampTop = num(props, 'BASE_H') + num(props, 'POLE_H') + num(props, 'SHADE_H');
+  const crownTop = Math.max(...[...props.matchAll(/\{\s*r:\s*([0-9.]+),\s*x:[^,]+,\s*y:\s*([0-9.]+)/g)]
+    .map((m) => Number(m[1]) + Number(m[2])));
+  const bedR = num(props, 'BED_D') / 2;
+
+  const rows = [...props.matchAll(
+    /\{\s*kind:\s*'(tree|lamp)',\s*side:\s*(-?1),\s*drop:\s*([0-9.]+),\s*size:\s*([0-9.]+)\s*\}/g,
+  )].map((m) => ({ kind: m[1], side: Number(m[2]), drop: Number(m[3]), size: Number(m[4]) }));
+  expect(rows.length).toBeGreaterThanOrEqual(4);
+
+  for (const r of rows) {
+    const top = -r.drop + (r.kind === 'lamp' ? lampTop : crownTop) * r.size;
+    expect(top).toBeLessThan(halfH);
+    // A lamp's bed is smaller than a tree's; using the tree's for both is the safe side.
+    expect(-r.drop - bedR * r.size).toBeGreaterThan(-halfH);
+  }
+
+  // Two trees sharing a side share an x lane, so their crowns must not run into each other.
+  const span = num(props, 'CROWN_SPAN');
+  for (const side of [-1, 1]) {
+    const lane = rows.filter((r) => r.kind === 'tree' && r.side === side)
+      .sort((a, b) => a.drop - b.drop);
+    for (let i = 0; i + 1 < lane.length; i++) {
+      const gap = lane[i + 1].drop - lane[i].drop;
+      expect(gap).toBeGreaterThan(span * (lane[i].size + lane[i + 1].size));
+    }
+  }
+});

@@ -25,9 +25,12 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
 /**
  * The lot, in board units.
  *
- * 8 x 8. Square, and the width is a MEASURED fit rather than a round number: the view sizes
- * one board unit from whichever budget is tighter, and on a phone that is the HEIGHT (1.032
- * against 1.0325 across), so widening the lot costs the cars nothing. At 8 the car area comes
+ * 8 x 12, and the paragraphs below are the revisions that got it there, newest last -- the
+ * width first, then the height twice.
+ *
+ * THE WIDTH is a MEASURED fit rather than a round number: the view sizes one board unit
+ * from whichever budget is tighter, and on a phone that was the HEIGHT (1.032 against
+ * 1.0325 across), so widening the lot to 8 cost the cars nothing. At 8 the car area comes
  * out 8.416 wide against a slab of 8.720 -- the difference is exactly the slab's own 0.3
  * border. At 7 the cars filled 7.364 of that same slab and left 0.37 of bare asphalt down
  * each side, which is what "the lot is not full" looked like.
@@ -55,26 +58,42 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * Both dimensions have to clear the longest body (CAP_BOX.big at 1.793) with room for it
  * to turn, which 8 does with 4.5x over.
  *
- * 8 x 10 AS OF THIS REVISION, up from 8 x 8, and the two rows came out of vertical budget that
- * was already going spare -- so the cars did NOT get smaller to pay for them. Two separate
- * slacks, both measured:
+ * 8 x 12 AS OF THIS REVISION, up from 8 x 10, asked for as 停车场一直延伸到最底部，只留一个
+ * 道路的宽度 -- and the two rows are the dead band under the lot, spent.
  *
- *  - THE CELL. The view sizes one board unit from whichever budget is tighter, and those were
- *    tied at 1.032 by construction on a phone. Tilting the board broke the tie: board units up
- *    the screen foreshorten by cos(38), so the same frame holds 27% more board HEIGHT and the
- *    vertical budget went to 1.3725 while the width budget stayed at 1.0325. At h = 10 the
- *    vertical budget is 1.094, still the looser of the two, so the cell is still 1.0325 and a
- *    car draws exactly the size it did. At 11 it would fall to 0.993 and start shrinking them,
- *    which is the wall -- clearing it means moving the upper half of the board up (ROAD_Y),
- *    which is a bigger change than two rows is worth.
- *  - THE FRAME. `fitCamera` centres the content and splits whatever is left over top and
- *    bottom, and that surplus measured about 3.8 board units on a 1170x2532 phone -- the blank
- *    bands above the ring and below the lot. Two rows spend 2.1 of it, so the camera does not
- *    step back and, because the lot grows DOWNWARD while the ring stays where it is, the whole
- *    board re-centres and the ring moves UP the screen. Which is what was asked for; it is the
- *    lot growing that does it, not the ring being moved.
+ * THE WALL THE PREVIOUS NOTE HIT WAS NOT REAL, which is the part worth keeping. It said h = 11
+ * would take the vertical budget to 0.993 and start shrinking the cars, and that was true of
+ * the formula the view had: it sized the lot against `ringLow`, the lowest a lane can sit in a
+ * frame CENTRED ON y = 0. `fitCamera` does not centre on y = 0 -- it centres the drawn content
+ * and reserves the HUD's bands off the ends -- so the real frame on a 1170x2532 phone runs
+ * -14.45..11.20 where that formula assumed -12.82..12.82. The budget was measured against a
+ * floor 1.6 units above the real one. `buildBoard` now adds the stack above the lot up and
+ * subtracts it from the frame the camera will actually use, and the wall moves from h = 11 to
+ * h = 12.58.
+ *
+ * 12, not 12.58, and the margin is the point. The height budget divides by
+ * (1 - padTop - padBottom), and those come from the DEVICE: a notched phone reserves 0.134
+ * between them, a Dynamic Island one about 0.155. At h = 12 the cell stays width-bound (so the
+ * cars stay exactly the size CAR_SCALE asks for) up to 0.165 of reserve; at 12.58 it would tip
+ * at 0.141 and every Dynamic Island phone would draw smaller cars.
+ *
+ * Measured, before against after, on the screens that matter -- cell, then the car's drawn
+ * length, then the dead band from the bottom road's outer kerb down to the edge of the screen:
+ *
+ *     19.5:9 notch   1.032 -> 1.032   1.887 -> 1.736 (-8.0%)   2.38 -> 1.32 board units
+ *     20:9           1.032 -> 1.032   1.887 -> 1.736 (-8.0%)   2.59 -> 1.54
+ *     18:9           0.996 -> 1.032   1.822 -> 1.736 (-4.7%)   1.29 -> 0.02
+ *     16:9           0.865 -> 0.873   1.586 -> 1.473 (-7.1%)   0.94 -> 0.00
+ *     4:3            0.601 -> 0.537   1.114 -> 0.920 (-17.4%)  0.17 -> 0.00
+ *
+ * Two things in that table are worth not being surprised by. The dead band does not go to zero
+ * on a phone because 1.03 of the 1.32 left under the kerb IS the home indicator's band, which
+ * is reserved on purpose. And the SHORT screens, where the lot is height-bound and always was,
+ * get a bigger cell than they do today despite carrying two more rows -- the frame fix hands
+ * them more than the rows take, because the old formula was under-sizing them for exactly the
+ * same reason it was leaving the band under the lot. Only the 4:3 tablet pays, at -17.4%.
  */
-export const LOT: Lot = { w: 8, h: 10 };
+export const LOT: Lot = { w: 8, h: 12 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -102,8 +121,27 @@ const ATTEMPTS = 200;
  * It costs the other tunnel levels NOTHING: the search stops as soon as it has PACKINGS
  * on-target packings, and levels 4-9 reach that inside 400 -- their files come out byte for
  * byte the same at either ceiling. Only a level that would otherwise fail pays for the raise.
+ *
+ * 4000 ON THE 8x12 LOT, and this time what it buys is CLEAR TUNNEL MOUTHS. At 89 cars roughly
+ * four cars in five are blocked at the opening position, so a mouth car that can actually
+ * drive out is the exception rather than the rule -- and a two-tunnel level needs two of them
+ * at once. At 1200 attempts levels 7 and 9 found no such packing at all: every candidate was
+ * welded, so WELDED_PENALTY had nothing to prefer and both shipped with a count badge the
+ * player cannot spend on the first tap. At 4000 both find one, and both come out HARDER for
+ * it rather than softer -- level 7 goes from 261 to 277 and level 9 from 250 to 258. The other
+ * tunnel levels were not stuck and were lifted anyway, because more attempts is a wider choice
+ * of packings: level 10 goes from 60 blocked to 67 and from 248 to 292, and level 8 stops
+ * missing its target altogether.
+ *
+ * What it costs is wall-clock, and only on the levels that need it: a two-tunnel level takes
+ * about 4m40s against 1m30s, and the ten-level run goes from roughly 12 minutes to 30. The
+ * one-tunnel levels still stop early at PACKINGS and are unchanged.
+ *
+ * The gate is `no tunnel is welded shut at the start` in logic/tests. If a future change makes
+ * that fail again, this is the first number to look at -- but check the DENSITY first, because
+ * what moved here was not the packer, it was how full the lot is.
  */
-const TUNNEL_ATTEMPTS = 1200;
+const TUNNEL_ATTEMPTS = 4000;
 /** Relaxation passes before an attempt is written off. */
 const RELAX_ITERS = 60;
 /**
@@ -229,8 +267,38 @@ export interface GenParams {
  *
  * The other three holes are handled by ranking rather than by filling: `generateLevel` now
  * picks the tidiest of its on-target candidates instead of the first.
+ *
+ * 89 AS OF THIS REVISION, and as every time before it, the number is not a difficulty dial
+ * turned on its own -- it is what the other two changes cost. The lot went 80 -> 96 square
+ * units and every body came down 8% in each dimension (see LOT and CAR_SCALE), which between
+ * them take the average body from 0.662 square units to 0.560 and leave a 63-car level
+ * covering 36.8% of the board where it used to cover 52.1% (on paper, from CAP_MIX). That is
+ * a visibly emptier car park and an EASIER one, which is the opposite of what was asked for.
+ * 89 cars put it back: measured across the shipped ten, body coverage is 48.3% against the
+ * 47.9% the 63-car levels carried.
+ *
+ * What it bought, measured the same way -- `estimateDifficulty` over the ten shipped levels,
+ * before against after: mean score 188.9 -> 279.7, blocked cars 40..42 -> 62..72, solver
+ * rounds 8..19 -> 13..21. All nine playable levels are `hard` on both sides of that (the gate
+ * is `isHardButFair`, not the score), so this is the same set of levels made 48% more tangled
+ * rather than a different set.
+ *
+ * BOTH CEILINGS THE NOTE ABOVE NAMES MOVED, and neither moved by accident:
+ *
+ *  - THE PACKER. The wall was 66 cars, and it was a wall about DENSITY, not about the count:
+ *    what stops separating is rectangles per square unit. 89 smaller bodies on the larger lot
+ *    ask the packer for the same 52% coverage 63 larger ones asked of the smaller lot, so the
+ *    gate is unchanged -- and the gate itself is unchanged too, the generator's own test that
+ *    every car asked for is actually placed. If that starts failing, this is too high.
+ *  - THE PASSENGERS, which bind first and set this number's ceiling rather than its value.
+ *    The budget was 1400 and is now 2000 (`a level is short enough to finish`); a level runs
+ *    19.5 to 21.3 passengers per car, so 89 is at worst about 1900. It is a budget on TIME
+ *    wearing passengers as its unit, and this is the decision it encodes: about 72 seconds of
+ *    boarding where 63 cars were about 54. That is a level a third longer, taken deliberately
+ *    -- there is no way to make the lot denser without also making it longer, because every
+ *    car on the board is a carful of passengers that has to come round the ring.
  */
-export const CARS_PER_LEVEL = 63;
+export const CARS_PER_LEVEL = 89;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -244,6 +312,12 @@ export const CARS_PER_LEVEL = 63;
  *
  * Kept as one constant so the generator and the offline tool's "on target" column cannot
  * disagree about what on target means.
+ *
+ * STILL 1 ON THE 8x12 LOT, and it is no longer load-bearing in the way it was. Missing the
+ * target is not the failure it used to be: `generateLevel` now paints the nearest miss too
+ * (it used to ship it round-robin, which is the one painting the one-line rule beats), so a
+ * level that cannot reach its target takes the most tangled packing its geometry offers and
+ * is painted hard from there. Widening this would only make a level settle for LESS tangle.
  */
 export const BLOCKED_TOLERANCE = 1;
 
@@ -303,9 +377,58 @@ export const BLOCKED_TOLERANCE = 1;
  * A lower share of a fuller lot is more cars, not fewer. (See TUNNEL_CURVE for why the board
  * grew: 0.78 was measured when a tunnel swallowed six cars, and it was never a taste
  * judgement then either.)
+ *
+ * 0.795 TO 0.835 ON THE 8x12 LOT, AND THE BAND NOW AIMS HIGH ON PURPOSE. Both numbers went up
+ * by more than a tenth, and the reason is a measurement that changes what this knob is for.
+ *
+ * Every level's reachable range, swept by pinning the target unreachably low and then
+ * unreachably high and reading the nearest miss off each (blocked cars, against the board each
+ * level actually opens with):
+ *
+ *     level     2      3      4      5      6      7      8      9     10
+ *     floor    65     62     59     60     61     59     59     58     60
+ *     ceiling  77     74     74     71     72     65     63     58     60
+ *
+ * The first band tried on this geometry ran 0.710 to 0.725, which put every level near its
+ * FLOOR -- and a packing at its floor is the least tangled one the level can produce. Level 2
+ * came out of that unpaintable: 2000 paintings of the packing it settled on, and not one of
+ * them beat the one-line rule. The same level aimed at 72 blocked instead of 63 is hard on the
+ * first painting the search tries, and scores 289 against 254. The target does not measure
+ * tangle, it SELECTS it, and aiming low selects a level that cannot be made hard.
+ *
+ * So it aims high. Levels 2 to 6 and 8 land on target, at 71, 72, 70, 70, 70 and 69. Levels
+ * 7, 9 and 10 cannot reach what they are asked for -- their boards are the emptiest, because
+ * the tunnel curve holds eight cars off them -- so they fall to the nearest miss, which is BY
+ * DEFINITION the most tangled packing any of their attempts found. That is the right level for
+ * them, and it is only usable because the nearest miss is painted now; see `generateLevel`.
+ *
+ * A RISING RAMP IS NOT AVAILABLE AT THIS DENSITY, and it is worth knowing why rather than
+ * trying again. Level 2's floor is 0.730 of its board and level 9's ceiling is 0.699 of its
+ * own, so no rising line passes through both: the late levels have FEWER cars on the board and
+ * therefore less tangle available, not more. That was hidden before, because the blocked COUNT
+ * on the shipped 8x10 levels ran 42, 42, 41, 42, 41, 42, 40, 41, 42 -- flat. The rising ratio
+ * was the denominator shrinking, never the levels getting more tangled.
+ *
+ * So the ramp is where it always actually was: the colour count (4, then 5, then 6 from level
+ * 5), the tunnel curve, and `choosePainting`. These endpoints still rise, which keeps the
+ * early levels off their own ceilings -- level 2 at 71 of an available 77 is a step below the
+ * wall, not the wall.
  */
-const BLOCKED_FIRST = 0.635;
-const BLOCKED_LAST = 0.75;
+/**
+ * The least tangled a packed level may be: blocked cars as a share of the board it opens
+ * with. It is a FLOOR and not a target -- what it catches is the search settling for a slack
+ * lot, which is the failure the blocked band cannot catch on its own now that levels 7 to 10
+ * are allowed to fall short of it (see BLOCKED_FIRST).
+ *
+ * 0.70, set just under the lowest the shipped ten produce so it fires on a real regression
+ * rather than on noise. Together with `blocked <= target + BLOCKED_TOLERANCE` it brackets the
+ * count from both sides: the band says no level may be MORE tangled than it was asked for,
+ * this says none may be slack.
+ */
+export const BLOCKED_FLOOR = 0.70;
+
+const BLOCKED_FIRST = 0.795;
+const BLOCKED_LAST = 0.835;
 
 export function levelParams(id: number): GenParams {
     // Linear from first to last across the authored ten, then held. The old curve stepped by
@@ -1620,19 +1743,35 @@ export function generateLevel(id: number): LevelData {
         })
         .sort(better);
 
+    // THE NEAREST MISSES GET PAINTED TOO, and the order below is the whole point: a level
+    // that is one blocked car off target and HARD beats one exactly on target and FREE.
+    // Hardness is what the level is for; the blocked count is a proxy for it.
+    //
+    // This was a real hole, and level 7 fell straight down it. `onTarget` requires
+    // `welded === 0`, so a level whose every candidate has a bricked-up tunnel mouth reaches
+    // the end with an empty `onTarget` -- and the old fallback shipped `tied[0]` WITHOUT EVER
+    // CALLING choosePainting. Round-robin is exactly the painting the one-line rule beats, so
+    // that level shipped free by construction. It was invisible while every level found
+    // something on target; it stopped being invisible the moment one did not.
+    //
+    // It costs a second painting search only on levels that fail the first one, which are
+    // precisely the levels that have nothing to lose. Painting is cheap next to packing --
+    // the queue is derived from the cars, so no repaint can fail `validateLevel`.
     const ranked = rank(onTarget);
     for (const { cars, tunnels } of ranked) {
         const painted = choosePainting(id, cars, tunnels, p);
         if (painted) return assemble(id, painted, tunnels);
     }
-    if (ranked.length > 0) return assemble(id, ranked[0].cars, ranked[0].tunnels);
-    // Nothing on target. The ties are all equally far off the difficulty the curve asked
-    // for, so there is nothing left to choose them on but how they look -- and one of them
-    // being untidy is not a reason to ship the untidiest.
-    if (tied.length > 0) {
-        const fallback = rank(tied)[0];
-        return assemble(id, fallback.cars, fallback.tunnels);
+    // The ties are all equally far off the difficulty the curve asked for, so there is
+    // nothing left to choose them on but how they look -- and one of them being untidy is
+    // not a reason to ship the untidiest.
+    const missed = rank(tied);
+    for (const { cars, tunnels } of missed) {
+        const painted = choosePainting(id, cars, tunnels, p);
+        if (painted) return assemble(id, painted, tunnels);
     }
+    if (ranked.length > 0) return assemble(id, ranked[0].cars, ranked[0].tunnels);
+    if (missed.length > 0) return assemble(id, missed[0].cars, missed[0].tunnels);
     const fallback = scatter(mulberry32(id * 7919), p, tp);
     return assemble(id, repair(id, fallback.cars, fallback.tunnels), fallback.tunnels);
 }

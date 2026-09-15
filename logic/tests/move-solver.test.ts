@@ -1,6 +1,19 @@
 import { carBox, heading, pathClear, firstBlocker } from '../../game/assets/scripts/core/move-solver';
-import { CarSpec, CAP_BOX, CLEARANCE } from '../../game/assets/scripts/core/types';
+import { CarSpec, CAP_BOX, CAR_SCALE, CLEARANCE } from '../../game/assets/scripts/core/types';
 import { inflate, overlapMTV } from '../../game/assets/scripts/core/geometry';
+
+/**
+ * A body's drawn size: its CAP_BOX row times CAR_SCALE, which is what `carBox` answers and
+ * therefore what every expectation below has to be written in.
+ *
+ * Spelt out rather than reaching for CAP_BOX directly, because reaching for CAP_BOX directly
+ * is how five of these tests broke the moment CAR_SCALE came off 1. They were not wrong about
+ * the behaviour -- they were writing a derived number down.
+ */
+const BODY = (cap: 'small' | 'medium' | 'big') => ({
+  len: CAP_BOX[cap].len * CAR_SCALE,
+  wid: CAP_BOX[cap].wid * CAR_SCALE,
+});
 
 const LOT = { w: 9, h: 6 };
 const car = (over: Partial<CarSpec>): CarSpec => ({
@@ -14,15 +27,15 @@ const car = (over: Partial<CarSpec>): CarSpec => ({
  * a moving car needs.
  */
 const contact = (gapBetweenCentres: number): number =>
-  gapBetweenCentres - CAP_BOX.small.len;
+  gapBetweenCentres - BODY('small').len;
 
 test('a car box is its model size at its own heading', () => {
   const b = carBox(car({ x: 1, y: 2, angle: 90 }));
   expect(b.x).toBe(1);
   expect(b.y).toBe(2);
   expect(b.angle).toBe(90);
-  expect(b.len).toBeCloseTo(CAP_BOX.small.len, 6);
-  expect(b.wid).toBeCloseTo(CAP_BOX.small.wid, 6);
+  expect(b.len).toBeCloseTo(BODY('small').len, 6);
+  expect(b.wid).toBeCloseTo(BODY('small').wid, 6);
 });
 
 test('a big car has a bigger box than a small one', () => {
@@ -87,13 +100,13 @@ test('a channel the body exactly fits is a lane', () => {
   // and it goes with NO daylight, which is the deliberate trade: the lane demands no
   // clearance margin, only that the bodies miss. Room to spare naturally also goes.
   const a = car({ id: 1, x: -3, y: 0, angle: 0 });
-  expect(pathClear(a, [a, ...channel(CAP_BOX.small.wid)], LOT)).toBe(true);
-  expect(pathClear(a, [a, ...channel(CAP_BOX.small.wid + CLEARANCE)], LOT)).toBe(true);
+  expect(pathClear(a, [a, ...channel(BODY('small').wid)], LOT)).toBe(true);
+  expect(pathClear(a, [a, ...channel(BODY('small').wid + CLEARANCE)], LOT)).toBe(true);
 });
 
 test('a channel narrower than the body is not a lane', () => {
   const a = car({ id: 1, x: -3, y: 0, angle: 0 });
-  expect(pathClear(a, [a, ...channel(CAP_BOX.small.wid - 0.01)], LOT)).toBe(false);
+  expect(pathClear(a, [a, ...channel(BODY('small').wid - 0.01)], LOT)).toBe(false);
 });
 
 test('a car does not block itself', () => {
@@ -154,7 +167,7 @@ test('a car goes if its BODY would clear the neighbour, however fine the margin'
   // lot is laid out and how forgiving a tap is -- not about how much daylight a moving car
   // needs. This is the deliberate trade named in the README: a car may now squeeze past with
   // a margin too fine to see, in exchange for never refusing a gap that is genuinely open.
-  const touch = (CAP_BOX.small.wid + CAP_BOX.big.wid) / 2;
+  const touch = (BODY('small').wid + BODY('big').wid) / 2;
   const a = car({ id: 1, x: 0, y: 0, angle: 0, cap: 'small' });
   // Placed well along the lane, so the PAIR is a legal parked pair (the level rule looks at
   // where cars stand, and these stand 3 units apart); the squeeze happens only once the
@@ -234,7 +247,7 @@ test('a static blocker stops a car, and reports carId -1', () => {
   const hit = firstBlocker(mover, [mover], LOT, [body]);
   expect(hit).not.toBeNull();
   expect(hit!.carId).toBe(-1);
-  expect(hit!.gap).toBeCloseTo(0.4 - (-2 + CAP_BOX.small.len / 2), 6);
+  expect(hit!.gap).toBeCloseTo(0.4 - (-2 + BODY('small').len / 2), 6);
 });
 
 test('a static blocker behind the mover is not a blocker', () => {
