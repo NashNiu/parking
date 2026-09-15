@@ -19,6 +19,7 @@
 - **画布宽固定 1280 设计单位**(`designResolution 1280x720, policy 4` FIXED_WIDTH)。高随宽高比变化,约 1707(4:3)到 2770(19.5:9)。**x 可以写绝对设计单位,y 必须从 `canvasSize(canvas).h` 推。**
 - **子节点一律按名字查找,不许 `children[数字]`。** `logic/tests/view-source.test.ts` 会扫源码拦截。
 - **`makeLabel` 建出来的 Label 初始 `string` 是空的**,忘了赋值就是屏幕上一个洞,不是引擎占位符"label"。
+- **`game/assets/` 下每新建一个 `.ts`,必须把同名 `.ts.meta` 一起提交。** Cocos Creator 打开着工程时会自动生成它;没开着就照同目录兄弟(如 `progress.ts.meta`)的格式手写一份,换一个新的 uuid。`.meta` 没有被 gitignore。漏掉它,别人 clone 之后 Creator 会重新导入并生成不同的 uuid,场景里对这个脚本的引用就断了。`logic/tests/` 不在 Cocos 资源目录里,不需要 `.meta`。
 - 提交信息用中文正文可以,但标题遵循仓库现有的 `type(scope): 说明` 英文风格。每个任务单独提交。
 
 ---
@@ -172,7 +173,7 @@ export function starsFor(p: Progress, level: number): number {
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd logic && npx jest tests/level-state.test.ts`
-Expected: PASS,6 个 test(含 `test.each` 展开的 4 个)
+Expected: PASS,9 个 test(5 个顶层 `test` + `test.each` 展开的 4 个)
 
 - [ ] **Step 5: 接进 core 的桶文件**
 
@@ -193,7 +194,7 @@ Expected: 无输出(tsc 成功)
 - [ ] **Step 7: 提交**
 
 ```bash
-git add game/assets/scripts/core/level-state.ts game/assets/scripts/core/index.ts logic/tests/level-state.test.ts
+git add game/assets/scripts/core/level-state.ts game/assets/scripts/core/level-state.ts.meta game/assets/scripts/core/index.ts logic/tests/level-state.test.ts
 git commit -m "feat(core): a level is in one of three states, and the lock wins"
 ```
 
@@ -400,7 +401,7 @@ Run: `cd logic && npm run typecheck:view` → 无输出
 - [ ] **Step 7: 提交**
 
 ```bash
-git add game/assets/scripts/core/wallet.ts game/assets/scripts/core/index.ts logic/tests/wallet.test.ts
+git add game/assets/scripts/core/wallet.ts game/assets/scripts/core/wallet.ts.meta game/assets/scripts/core/index.ts logic/tests/wallet.test.ts
 git commit -m "feat(core): coins, and a clear pays only for the stars it beat"
 ```
 
@@ -649,7 +650,7 @@ Expected: 无输出
 - [ ] **Step 9: 提交**
 
 ```bash
-git add game/assets/scripts/core/home-path.ts game/assets/scripts/core/index.ts game/assets/scripts/view/rail-math.ts logic/tests/home-path.test.ts logic/tests/rail-math.test.ts
+git add game/assets/scripts/core/home-path.ts game/assets/scripts/core/home-path.ts.meta game/assets/scripts/core/index.ts game/assets/scripts/view/rail-math.ts logic/tests/home-path.test.ts logic/tests/rail-math.test.ts
 git commit -m "feat(core): the lobby path is geometry, and it goes through the stops"
 ```
 
@@ -808,7 +809,7 @@ Expected: 只有三个文件。`scene-stage.ts` 的增删行数应该大致相�
 - [ ] **Step 6: 提交**
 
 ```bash
-git add game/assets/scripts/view/palette.ts game/assets/scripts/view/scene-stage.ts game/assets/scripts/view/GameController.ts
+git add game/assets/scripts/view/palette.ts game/assets/scripts/view/palette.ts.meta game/assets/scripts/view/scene-stage.ts game/assets/scripts/view/GameController.ts
 git commit -m "refactor(view): the board's colours move out to where the lobby can read them"
 ```
 
@@ -1437,7 +1438,7 @@ Run: `node tools/preview.mjs`
 - [ ] **Step 7: 提交**
 
 ```bash
-git add game/assets/scripts/view/ui-layout.ts game/assets/scripts/view/top-bar.ts game/assets/scripts/view/home-view.ts game/assets/scripts/view/ui-shapes.ts logic/tests/view-source.test.ts
+git add game/assets/scripts/view/ui-layout.ts game/assets/scripts/view/top-bar.ts game/assets/scripts/view/top-bar.ts.meta game/assets/scripts/view/home-view.ts game/assets/scripts/view/ui-shapes.ts logic/tests/view-source.test.ts
 git commit -m "feat(view): the lobby gets a bar that clears the capsule"
 ```
 
