@@ -83,7 +83,8 @@ def constants():
               'SCREEN_LEN', 'SCREEN_SHADE',
               'TAIL_X', 'TAIL_Y', 'TAIL_W', 'TAIL_H', 'TAIL_R',
               'TRIM_LAYER', 'ARROW_BACK_LAYER', 'ARROW_LAYER',
-              'ARROW_X', 'ARROW_W', 'ARROW_H', 'ARROW_SHAFT', 'ARROW_HEAD', 'ARROW_OUTLINE')
+              'ARROW_X', 'ARROW_W', 'ARROW_H', 'ARROW_SHAFT', 'ARROW_HEAD', 'ARROW_OUTLINE',
+              'ARROW_FLIP_LUMA', 'ARROW_DARK_L_DROP')
     k, t = numbers(MESH, needed)
     tyre = re.search(r'const TYRE = new Color\((\d+), (\d+), (\d+)', t)
     if not tyre:
@@ -216,8 +217,8 @@ def body_outline(along, across):
                       K['CORNER_NOSE'], K['CORNER_TAIL'])
 
 
-def outline_of(c):
-    """Mirror of `outlineOf` in car-mesh.ts: the body colour at L-20%, S+10% in HSL."""
+def hsl_darken(c, drop):
+    """Mirror of `hslDarken` in car-mesh.ts: the body colour taken down by `drop` of its L."""
     r, g, b = (v / 255 for v in c)
     hi, lo = max(r, g, b), min(r, g, b)
     l = (hi + lo) / 2
@@ -232,7 +233,7 @@ def outline_of(c):
         else:
             h = ((r - g) / d + 4) / 6
     s = min(1.0, s * (1 + K['OUTLINE_S_GAIN']))
-    l = l * (1 - K['OUTLINE_L_DROP'])
+    l = l * (1 - drop)
     q = l * (1 + s) if l < 0.5 else l + s - l * s
     pp = 2 * l - q
 
@@ -247,6 +248,27 @@ def outline_of(c):
         return pp
 
     return tuple(round(max(0.0, min(1.0, channel(t))) * 255) for t in (h + 1 / 3, h, h - 1 / 3))
+
+
+def outline_of(c):
+    """Mirror of `outlineOf` in car-mesh.ts."""
+    return hsl_darken(c, K['OUTLINE_L_DROP'])
+
+
+def luma(c):
+    """Mirror of `luma` in car-mesh.ts: how bright a colour LOOKS, not HSL's lightness."""
+    return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255
+
+
+def arrow_paint(color):
+    """Mirror of `arrowPaint` in car-mesh.ts: (fill, backing) for the arrow on this paint.
+
+    The rule is luminance against ARROW_FLIP_LUMA, NOT HSL lightness, and the note on
+    ARROW_FLIP_LUMA in car-mesh.ts has the table showing the two disagree on all six colours.
+    """
+    if luma(color) > K['ARROW_FLIP_LUMA']:
+        return hsl_darken(color, K['ARROW_DARK_L_DROP']), (255, 255, 255)
+    return (255, 255, 255), outline_of(color)
 
 
 def clip_min_x(pts, x0):
@@ -396,8 +418,9 @@ def triangles(ln, wd, cap):
     # with the arrow on cannot test it -- the arrow answers the question before the eye gets to
     # anything else. This is the acceptance criterion, run rather than eyeballed.
     if not NO_ARROW:
-        over += [(grow(piece, K['ARROW_OUTLINE']), ink, back) for piece in arrow_pieces()]
-        over += [(piece, (255, 255, 255), front) for piece in arrow_pieces()]
+        fill, backing = arrow_paint(CAR)
+        over += [(grow(piece, K['ARROW_OUTLINE']), backing, back) for piece in arrow_pieces()]
+        over += [(piece, fill, front) for piece in arrow_pieces()]
     for pts, col, layer in over:
         flat(pts, crown_z + layer * K['Z_STEP'], col)
     return tris

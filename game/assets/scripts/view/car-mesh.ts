@@ -404,6 +404,47 @@ const ARROW_HEAD = 0.52;
 const ARROW_OUTLINE = 0.12;
 
 /**
+ * THE ARROW FLIPS TO DARK ON A LIGHT CAR, and this is the rule rather than a tuning: above
+ * ARROW_FLIP_LUMA the paint carries a dark arrow, at or below it a white one. No colour is
+ * exempt and there is no per-colour override, so "a white arrow on a yellow car" cannot come
+ * back by someone adding a seventh colour.
+ *
+ * MEASURED AS RELATIVE LUMINANCE, AND IT WAS ASKED FOR AS HSL LIGHTNESS. That substitution is
+ * the whole of why this note is long, because the two disagree on EVERY COLOUR IN THE PALETTE:
+ *
+ *      colour    HSL L   -> arrow      luma   -> arrow
+ *      red       0.637      DARK      0.430      white
+ *      blue      0.637      DARK      0.518      white
+ *      green     0.537     white      0.689       DARK
+ *      yellow    0.555     white      0.779       DARK
+ *      purple    0.639      DARK      0.499      white
+ *      cyan      0.500     white      0.759       DARK
+ *
+ * Six for six, and INVERTED rather than merely noisy. HSL's L is (max + min) / 2, which knows
+ * nothing about which channel it is: yellow's blue channel is 32, so yellow -- the brightest
+ * thing on the board -- scores 0.555 and keeps a white arrow, while red's green and blue sit
+ * near 70 and red scores 0.637 and loses one. Taken literally the rule would have put dark
+ * arrows on the three colours a white arrow already reads on and left white arrows on yellow
+ * and cyan, which are the two it was written to fix. It would have contradicted its own
+ * purpose on the only case anyone cared about.
+ *
+ * Luminance weights the channels the way the eye does (0.2126 / 0.7152 / 0.0722) and puts
+ * yellow 0.779, cyan 0.759 and green 0.689 above the line with red, blue and purple below it.
+ * The THRESHOLD is the 0.60 that was asked for; only the quantity it is applied to changed.
+ *
+ * THE BACKING SWAPS WITH THE ARROW. A boundary has to be dark against both sides of itself
+ * (see ARROW_OUTLINE), so a white arrow gets the outline ink behind it and a dark arrow gets
+ * white -- the same mechanism, mirrored, rather than a dark arrow inside a dark halo, which
+ * would be a shape with no edge.
+ *
+ * ARROW_DARK_L_DROP is 0.45 as asked, and it is deliberately SHALLOWER than the outline ink's
+ * 0.55: the dark arrow is a large filled shape reading against the paint, while the ink is a
+ * two-pixel line that has to survive being averaged with the colours on both sides of it.
+ */
+const ARROW_FLIP_LUMA = 0.60;
+const ARROW_DARK_L_DROP = 0.45;
+
+/**
  * How tall the car stands off the board, in WORLD units.
  *
  * WORLD, not a fraction: the node's scale is (len, wid, 1), so Z is the one axis the three caps
@@ -504,8 +545,11 @@ function fromHsl(h: number, s: number, l: number): Color {
     return new Color(to(h + 1 / 3), to(h), to(h - 1 / 3), 255);
 }
 
-/** The outline ink for a body colour: darker and a little more saturated. See OUTLINE_L_DROP. */
-function outlineOf(c: Color): Color {
+/**
+ * A body colour taken down by `drop` of its HSL lightness, and out by OUTLINE_S_GAIN.
+ * See OUTLINE_L_DROP for why the drop is relative and why it is not a lerp toward black.
+ */
+function hslDarken(c: Color, drop: number): Color {
     const r = c.r / 255, g = c.g / 255, b = c.b / 255;
     const hi = Math.max(r, g, b), lo = Math.min(r, g, b);
     const l = (hi + lo) / 2;
@@ -517,7 +561,30 @@ function outlineOf(c: Color): Color {
         else if (hi === g) h = ((b - r) / d + 2) / 6;
         else h = ((r - g) / d + 4) / 6;
     }
-    return fromHsl(h, Math.min(1, s * (1 + OUTLINE_S_GAIN)), l * (1 - OUTLINE_L_DROP));
+    return fromHsl(h, Math.min(1, s * (1 + OUTLINE_S_GAIN)), l * (1 - drop));
+}
+
+/** The outline ink for a body colour. See OUTLINE_L_DROP. */
+function outlineOf(c: Color): Color {
+    return hslDarken(c, OUTLINE_L_DROP);
+}
+
+/**
+ * How bright a colour LOOKS, 0..1 -- the sRGB coefficients, not HSL's lightness.
+ * The note on ARROW_FLIP_LUMA has the table showing why the difference decides the arrow.
+ */
+function luma(c: Color): number {
+    return (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) / 255;
+}
+
+/**
+ * What the arrow and the plate behind it are painted, given the body colour.
+ * The rule, and why it is measured this way, is the note on ARROW_FLIP_LUMA.
+ */
+function arrowPaint(color: Color): { fill: Color; back: Color } {
+    return luma(color) > ARROW_FLIP_LUMA
+        ? { fill: hslDarken(color, ARROW_DARK_L_DROP), back: Color.WHITE }
+        : { fill: Color.WHITE, back: outlineOf(color) };
 }
 
 /**
@@ -760,7 +827,7 @@ function design(
         tilt,
     }));
 
-    const ink = outlineOf(color);
+    const arrow = arrowPaint(color);
     const over: Plate[] = [
         {
             pts: windscreenBand(rings[rings.length - 1].pts),
@@ -770,8 +837,8 @@ function design(
         { pts: roundRect(TAIL_X, TAIL_Y, TAIL_W, TAIL_H, TAIL_R), c: TAILLIGHT, layer: TRIM_LAYER },
         { pts: roundRect(TAIL_X, -TAIL_Y, TAIL_W, TAIL_H, TAIL_R), c: TAILLIGHT, layer: TRIM_LAYER },
         ...arrowPieces().map((pts) =>
-            ({ pts: grow(pts, ARROW_OUTLINE), c: ink, layer: ARROW_BACK_LAYER }) as Plate),
-        ...arrowPieces().map((pts) => ({ pts, c: Color.WHITE, layer: ARROW_LAYER }) as Plate),
+            ({ pts: grow(pts, ARROW_OUTLINE), c: arrow.back, layer: ARROW_BACK_LAYER }) as Plate),
+        ...arrowPieces().map((pts) => ({ pts, c: arrow.fill, layer: ARROW_LAYER }) as Plate),
     ];
     return { rim, wheels, rings, over };
 }
