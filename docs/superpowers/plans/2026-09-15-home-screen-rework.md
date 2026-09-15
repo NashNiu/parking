@@ -725,7 +725,7 @@ Run: `cd logic && npm run typecheck:view` → 无输出
 - Modify: `game/assets/scripts/view/GameController.ts:27-29`(`GROUND` 的来源换成 `palette`)
 
 **Interfaces:**
-- Produces(全部 `export`):`GROUND`、`GRID_LINE`、`LOT`、`LOT_DASH`、`ROAD`、`ROAD_LINE`、`KERB`(`Color`);`SHADOW_ALPHA`(`number`)
+- Produces(全部 `export`):`GROUND`、`GRID_LINE`、`LOT`、`LOT_DASH`、`ROAD`、`ROAD_LINE`、`KERB`(`Color`);`AREA_SHADOW_ALPHA`(`number`)
 
 - [ ] **Step 1: 建 palette.ts**
 
@@ -757,9 +757,11 @@ import { Color } from 'cc';
  */
 export const KERB = new Color(150, 161, 180);
 
-// LOT_SHADOW_ALPHA 改名为 SHADOW_ALPHA 搬过来:它现在也要给大厅的树用,而树的影子
-// 不是停车场的影子。两处使用点(scene-stage 一处、home-scene 一处)。
-export const SHADOW_ALPHA = 30;
+// LOT_SHADOW_ALPHA 改名为 AREA_SHADOW_ALPHA 搬过来。
+// 不能叫 SHADOW_ALPHA —— `view/shadow.ts` 已经有一个 `SHADOW_ALPHA = 44` 自称标准值,
+// 而这个 30 在注释里正是"对那个标准的唯一一处刻意偏离"。同名会让 grep 撞两个不相干的结果。
+// 区分点是**面积**:这片影子约为车位的十五倍,44 会糊成一摊。
+export const AREA_SHADOW_ALPHA = 30;
 ```
 
 - [ ] **Step 2: 改 scene-stage.ts**
@@ -767,10 +769,10 @@ export const SHADOW_ALPHA = 30;
 删掉 `scene-stage.ts` 第 110、127、179、201、210、212、240 行这七个常量的定义(连同已经搬走的 docblock),在文件顶部加:
 
 ```ts
-import { GRID_LINE, GROUND, LOT, LOT_DASH, ROAD, ROAD_LINE, SHADOW_ALPHA } from './palette';
+import { AREA_SHADOW_ALPHA, GRID_LINE, GROUND, LOT, LOT_DASH, ROAD, ROAD_LINE } from './palette';
 ```
 
-`scene-stage.ts` 里 `LOT_SHADOW_ALPHA` 的使用点改成 `SHADOW_ALPHA`。
+`scene-stage.ts` 里 `LOT_SHADOW_ALPHA` 的使用点改成 `AREA_SHADOW_ALPHA`。
 
 **不要 re-export `GROUND`。** 留一条转发就是留了两个入口。
 
@@ -926,7 +928,7 @@ git commit -m "feat(view): a triangle, for the button that starts a level"
 - Delete: `game/assets/resources/home-bg.jpg`、`game/assets/resources/home-bg.jpg.meta`
 
 **Interfaces:**
-- Consumes: `nodeCenter`、`legSamples`、`SAMPLES_PER_LEG` from `core/home-path`;`GROUND`、`KERB`、`ROAD`、`SHADOW_ALPHA` from `./palette`;`COLORS` from `./colors`;`roundedSprite`、`dotSprite`、`rampSprite` from `./ui-shapes`
+- Consumes: `nodeCenter`、`legSamples`、`SAMPLES_PER_LEG` from `core/home-path`;`GROUND`、`KERB`、`ROAD` from `./palette`;`SHADOW_ALPHA` from `./shadow`;`COLORS` from `./colors`;`roundedSprite`、`dotSprite`、`rampSprite` from `./ui-shapes`
 - Produces:
   - `class HomeScene`
   - `constructor(parent: Node, w: number, h: number, levelCount: number)`
@@ -959,7 +961,8 @@ import { Color, Layers, Node, UITransform } from 'cc';
 import { legSamples, nodeCenter, PathPoint, ZIG_X } from '../core/home-path';
 import { dotSprite, rampSprite, roundedSprite } from './ui-shapes';
 import { COLORS } from './colors';
-import { GROUND, KERB, ROAD, SHADOW_ALPHA } from './palette';
+import { GROUND, KERB, ROAD } from './palette';
+import { SHADOW_ALPHA } from './shadow';
 
 /**
  * 大厅的街道,正交俯视,全部由 `ui-shapes` 在运行时画出来。
