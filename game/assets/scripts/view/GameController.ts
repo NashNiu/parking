@@ -396,23 +396,6 @@ const LIT_MATERIAL = 'materials/lit';
 const PRELOAD_DEADLINE = 8;
 
 /**
- * How long the home screen's title must be held to clear the save.
- *
- * Three seconds is long enough that no ordinary tap or fumble reaches it, and short enough
- * that someone who has been told about it does not give up. See `wipeProgress`.
- */
-const HOLD_SECONDS = 3;
-
-/**
- * How far the finger may stray and still be holding rather than swiping, in design units.
- *
- * 24, against the rail's own DRAG_SLOP of 14: a gesture can be a drag before it stops being
- * a hold. The gap is deliberate -- the two questions are different, and a thumb resting for
- * three seconds drifts further than one deciding whether to swipe.
- */
-const HOLD_SLOP = 24;
-
-/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -500,25 +483,10 @@ export class GameController extends Component {
      */
     private settings: Settings = defaultSettings();
     /**
-     * Whether the press-and-hold that wipes the save is counting down.
-     *
-     * A flag rather than trusting `unschedule` to undo an over-arm: on web a single click
-     * emits BOTH a mouse and a touch event, so the press handler runs twice for one press,
-     * and this keeps the second one from arming a timer the release cannot see.
-     */
-    private holdArmed = false;
-    /** Where the press that armed the hold landed, so a swipe off it can cancel the hold. */
-    private holdFromX = 0;
-    /**
      * Whether the release about to arrive was a rail DRAG rather than a tap. Set by
      * `onPressEnd`, read once by `handleTap`; see there for why the order matters.
      */
     private slidHome = false;
-    /**
-     * Held as a field because `unschedule` matches on the callback's identity -- an inline
-     * arrow would arm a timer that nothing could ever cancel.
-     */
-    private readonly holdWipe = (): void => this.wipeProgress();
 
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
@@ -838,7 +806,6 @@ export class GameController extends Component {
         input.off(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
         input.off(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
         input.off(Input.EventType.MOUSE_MOVE, this.onPressMove, this);
-        this.unschedule(this.holdWipe);
     }
 
     /**
@@ -2249,12 +2216,14 @@ export class GameController extends Component {
     }
 
     /**
-     * Arm the press-and-hold that clears the save, if this press landed on the home screen's
-     * title. Every other press in the game is a tap and is handled on release.
+     * Take hold of the rail. Every press in the game is a TAP, decided on release; the lobby
+     * is the one screen where a press also begins a gesture, so it needs the press itself.
      *
-     * It FIRES at HOLD_SECONDS rather than waiting for the release, so the confirmation
-     * arrives while the finger is still down -- a hidden control that only reacts after you
-     * let go leaves you unsure whether you held it long enough.
+     * IT USED TO ARM A THREE-SECOND HOLD that wiped the save, targeted at the home screen's
+     * floating caption plate. The plate is gone (it clipped the badges scrolling behind it --
+     * see `home-view`), and a hidden destructive gesture with no visible target is worse than
+     * no gesture: `wipeProgress` is now reached from the settings card, where it is a labelled
+     * button with a confirmation in front of it.
      */
     private onPressStart(e: EventTouch | EventMouse): void {
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
@@ -2263,26 +2232,17 @@ export class GameController extends Component {
         this.slidHome = false;
         // ui.y, because the home rail runs up the screen now.
         this.home.beginDrag(ui.y, nowMs() / 1000);
-        if (this.holdArmed || !this.home.hitsReset(ui)) return;
-        this.holdArmed = true;
-        this.holdFromX = ui.x;
-        this.scheduleOnce(this.holdWipe, HOLD_SECONDS);
     }
 
-    /**
-     * Carry the drag, and cancel the press-and-hold once the finger has really moved: a hold
-     * is a hold, and a swipe that happens to start on the title is not one.
-     */
+    /** Carry the drag. */
     private onPressMove(e: EventTouch | EventMouse): void {
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
         // MOUSE_MOVE fires on every desktop mouse move, button or no button, so the cheap
-        // check comes before the projection rather than after it. A press always begins a
-        // drag on this screen, so "not dragging" also means "no hold can be armed".
+        // check comes before the projection rather than after it.
         if (!this.home.isDragging()) return;
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
         this.home.moveDrag(ui.y, nowMs() / 1000);
-        if (this.holdArmed && Math.abs(ui.x - this.holdFromX) > HOLD_SLOP) this.cancelHold();
     }
 
     /**
@@ -2294,30 +2254,11 @@ export class GameController extends Component {
      * lets a tap be told from the end of a swipe.
      */
     private onPressEnd(): void {
-        this.cancelHold();
         if (this.screen === 'home' && this.home) {
             this.slidHome = this.home.endDrag(nowMs() / 1000) === 'slid';
         }
     }
 
-    private cancelHold(): void {
-        if (!this.holdArmed) return;
-        this.holdArmed = false;
-        this.unschedule(this.holdWipe);
-    }
-
-    /**
-     * Throw the save away, on a three-second hold of the home screen's title.
-     *
-     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why it is a long hold on
-     * an unlabelled target rather than a button. A "clear my progress" button on the home
-     * screen of a ten-level game is louder than the thing it does, and this is the only
-     * destructive path in the game.
-     *
-     * The confirmation is two things: the grid repaints fully locked, which is evidence
-     * rather than a claim, and a toast that says so in words. The toast activates its own
-     * node, so it works with the in-level HUD hidden.
-     */
     /**
      * Hand the preferences to the things that obey them.
      *
@@ -2351,8 +2292,26 @@ export class GameController extends Component {
         vibrate('light');
     }
 
+    /**
+     * Throw the save away.
+     *
+     * NOTHING CALLS THIS RIGHT NOW, and that is a deliberate, two-commit gap rather than dead
+     * code. Its one caller was a three-second press-and-hold on the home screen's floating
+     * caption plate, and the plate has gone: a 320x88 slab with a 285-tall badge scrolling
+     * behind it read as a clipping fault, which is what the lobby's new top bar is for. The
+     * gesture could not follow the caption into the bar -- an unlabelled destructive hold
+     * needs a target a player has been TOLD about, and a bar of live controls is the worst
+     * place to hide one. The settings card grows an explicit button with a confirmation in
+     * front of it, and this is what that button will call.
+     *
+     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why the replacement is a
+     * confirmed button rather than a bare one.
+     *
+     * The confirmation is two things: the grid repaints fully locked, which is evidence rather
+     * than a claim, and a toast that says so in words. The toast activates its own node, so it
+     * works with the in-level HUD hidden.
+     */
     private wipeProgress(): void {
-        this.holdArmed = false;
         clearProgressText();
         this.progress = emptyProgress();
         this.home?.setProgress(this.progress);

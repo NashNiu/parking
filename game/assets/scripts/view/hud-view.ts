@@ -1,6 +1,7 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import {
     roundedSprite, dotSprite, starSprite, burstSprite, gearSprite, speakerSprite, buzzSprite,
+    liftedPill, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
 import { STAR_MAX } from '../core/index';
@@ -71,23 +72,6 @@ function paxGlyph(parent: Node): void {
 }
 
 /**
- * A readout plate: a white face over a base of the same shape, offset down so it shows as a
- * lip. Returns both, because callers hang their contents off the FACE (so the contents move
- * with it) and position the HOLDER.
- */
-function liftedPill(name: string, w: number, h: number): { holder: Node; face: Node } {
-    const holder = new Node(name);
-    holder.layer = Layers.Enum.UI_2D;
-    holder.addComponent(UITransform).setContentSize(w, h);
-    const base = roundedSprite('base', w, h, PILL_BASE);
-    holder.addChild(base);
-    base.setPosition(0, -PILL_LIFT, 0);
-    const face = roundedSprite('face', w, h, PILL_BG);
-    holder.addChild(face);
-    return { holder, face };
-}
-
-/**
  * The remaining-passenger pill, sized off its own type so it stays in step with the HUD.
  *
  * 236 wide, up from 210: the count reaches FOUR digits now (a level runs 1200-1350 passengers,
@@ -95,34 +79,6 @@ function liftedPill(name: string, w: number, h: number): { holder: Node; face: N
  */
 const PILL_W = 240;
 const PILL_H = 88;
-/**
- * Both readouts are drawn as TWO plates -- a white face over a cool-grey base peeking out
- * below -- which is the same trick as the unlock button, the padlock rims on the board and the
- * win panel's stars. They were flat white stadiums, and flat is what "redesign these" was
- * about: on a HUD where the pressable things have a top face, the readouts having none made
- * them read as unfinished rather than as a different kind of object.
- *
- * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
- * blue-grey (see GROUND in scene-stage), so a neutral shadow under a white plate reads as
- * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
- *
- * It tracks GROUND at the same few units under it that it always sat at, so it followed the
- * floor down when the floor moved (see scene-stage). Left where it was, a base still carrying
- * the old pale blue would have been lighter than the board it is supposed to be a shadow on.
- *
- * IT HAS NOW FOLLOWED THE FLOOR BACK UP, to -4 under 199 where it was -4 under 177, and the
- * paragraph above is the whole reason it had to. The failure it describes has a mirror image
- * and this constant was one edit away from it: a base held at 173 against a 199 floor is 26
- * units under the board rather than 4, which does not read as a soft lip beneath the plate --
- * it reads as a dark bar drawn round it. Too light and too dark break this the same way,
- * because what makes it a shadow is that it is CLOSE to the surface and biased with it.
- *
- * Both readouts sit on the upper half of the screen, which is the half that stayed pavement
- * when the scene split, so GROUND is still the right thing for it to track. Anything that
- * moves onto the asphalt wants its own base, not this one.
- */
-const PILL_BASE = new Color(185, 196, 214, 255);
-const PILL_LIFT = 6;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
 
@@ -820,7 +776,6 @@ const TUNNEL_CHIP_DROP = 3;
 const TUNNEL_COUNT_INK = new Color(24, 44, 88);
 const TUNNEL_COUNT_SIZE = 40;
 
-const PILL_BG = new Color(252, 252, 255);
 const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
 /**

@@ -1,8 +1,10 @@
 import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
-import { dotSprite, roundedSprite, starSprite } from './ui-shapes';
+import { dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
+import { GROUND } from './palette';
+import { TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
 } from '../core/index';
@@ -36,42 +38,30 @@ import { HomeScene } from './home-scene';
  */
 
 /**
- * The count on the plate, and it is near-white because the plate under it is a near-opaque
- * navy -- see PLATE. It has nowhere else to sit.
+ * The fade across the rail's top edge.
  *
- * IT USED TO BE A SLATE GREY, 150,163,196, chosen when this screen was a flat navy field and
- * raised to this when the field became a photograph and a grey word landed on a grey wall. The
- * photograph is gone and the street behind the plate is now a pale pavement, which would argue
- * for taking it back down -- except that the plate is what the type actually stands on, and the
- * plate has not changed. So the value stays and only the reason for it does.
+ * A BADGE MUST NOT HARD-CUT AT THE BAR'S LOWER EDGE. The rail scrolls up past the top bar and
+ * `layout()` culls a stop only at 0.75 of the screen height, which is far above the bar -- so
+ * without this a 205 badge and its star row simply stop existing along a straight line a few
+ * units under the coin plate. That line is exactly the artefact the floating plate was reported
+ * for (see where `TopBar`'s caption is built): an edge that cuts a moving object reads as a
+ * clipping fault, not as a frame.
  *
- * The OUTLINE that used to go with it has gone: `HOME_RIM` and `SUB_RIM_W` existed because a
- * photograph puts arbitrary colour behind arbitrary text, and neither they nor `rimLabel` had a
- * caller left once the title was removed. A drawn street has no such surprise in it.
+ * SAME TOOL AND SAME ARGUMENT AS `HomeScene`'s side fades, down to the tint. `rampSprite` is
+ * opaque along its own TOP edge and gone by its bottom, and it is painted in `GROUND` -- the
+ * pavement it is lying on -- so over plain pavement it is a no-op and over anything standing in
+ * it (a badge, a tree, the road) it is a dissolve. It has no hard edge anywhere, which is the
+ * property that makes a translucent overlay safe here at all.
+ *
+ * WHAT IT COSTS, said plainly: where the ROAD runs under the bar, a pavement-tinted ramp pales
+ * the asphalt as it climbs. That is the same trade `buildFades` takes on the left and right
+ * edges of this screen, and it is the right one -- the road is scenery up there, and the thing
+ * the fade is protecting is the moving badge.
+ *
+ * 110, a little over half a badge: enough for a 205 disc to be visibly dissolving before its
+ * top edge reaches the bar, and not so much that the road looks washed out for a whole screen.
  */
-const SUB_INK = new Color(236, 242, 255, 255);
-/**
- * The two type sizes left on this screen, on a canvas 1280 design units wide (see
- * `canvasSize` -- NOT 720, which is what the first pass at every panel here was built on).
- * There were three: the 124 title went with the rail's turn, see where `resetNode` is set.
- *
- * 「左右滑动选择关卡」 was 28, asked for as 这几个字大一点: that is 2.2% of the screen's width for
- * the one line telling a new player that the rail moves, which is the only instruction on the
- * screen. At 52 it is 4%, and it sits on the same step as the subtitle rather than below it.
- */
-const SUB_SIZE = 46;
-
-/**
- * The plate at the top: what level count you are looking at, and the press-and-hold target
- * that clears the save.
- *
- * OPAQUE, and that is the whole reason it is a plate and not a line of type. See where it is
- * built: on a route that fills the screen, every fixed label is eventually crossed by a
- * scrolling stop.
- */
-const PLATE = new Color(36, 46, 74, 236);
-const PLATE_W = 320;
-const PLATE_H = 88;
+const RAIL_FADE_H = 110;
 
 /**
  * How much clear space the button keeps under it, past the home indicator's own reservation.
@@ -232,14 +222,6 @@ const DRAG_SLOP = 14;
  */
 const RAIL_EASE = 12;
 
-/**
- * The title's hit box, for the press-and-hold that clears the save. Much larger than the
- * three characters it covers, because it is a hidden control: a player who has been told
- * where it is should not also have to find it precisely.
- */
-const TITLE_HIT_W = 400;
-const TITLE_HIT_H = 140;
-
 /** Everything drawn for one level. Kept so `setProgress` can repaint without rebuilding. */
 interface Stop {
     node: Node;
@@ -260,9 +242,11 @@ interface Stop {
 export class HomeView {
     /** Everything this screen draws, under one node, so `show`/`hide` is one flag. */
     private root: Node;
-    private resetNode: Node;
-    private sub: Label;
-    private topPlate: Node;
+    /**
+     * The standing top bar. NOT in `revealMenu` -- see `top-bar.ts`: the coin count and the
+     * gear are true while the barrier is still down, so the bar is up from the first frame.
+     */
+    private topBar: TopBar;
     private startBtn: Node;
     private startFace: Node;
     private startBase: Node;
@@ -366,24 +350,20 @@ export class HomeView {
         this.railRoot.setPosition(0, this.railCenterY(), 0);
         this.scene.setRailCenter(this.railCenterY());
 
-        // The plate goes in AFTER the road, so the stops pass BEHIND it. On a route that
-        // fills the screen there is nowhere to put a line of type that a scrolling stop does
-        // not eventually cross, and bare text with a stop sliding through it looks like a
-        // fault. An opaque plate is what the reference does with its chapter banner, and it
-        // is the only thing that actually solves it.
-        const plateY = h / 2 - safeInsets().top * h - h * 0.06;
-        this.topPlate = roundedSprite('HomePlate', PLATE_W, PLATE_H, PLATE, PLATE_H / 2);
-        this.root.addChild(this.topPlate);
-        this.topPlate.setPosition(0, plateY, 0);
-        this.sub = makeLabel(this.topPlate, 'HomeSub', SUB_SIZE, 0);
-        this.sub.color = SUB_INK;
-        this.sub.isBold = true;
-        // THE CLEAR-SAVE GESTURE LIVES HERE NOW, and it is why removing the title was not a
-        // pure deletion: the press-and-hold that wipes progress had the title for a target
-        // and would have gone with it. The plate is what took the title's place on the
-        // screen, so it takes its second job too.
-        this.resetNode = this.topPlate;
-        this.topPlate.active = false;
+        // AFTER THE RAIL, so both of these draw over the scrolling stops. The fade first and
+        // the bar over it: the fade's job is to dissolve a badge before it reaches the bar, so
+        // it has to lie between the two of them. See RAIL_FADE_H.
+        const fade = rampSprite('RailFade', w, RAIL_FADE_H, GROUND);
+        this.root.addChild(fade);
+        fade.setPosition(0, barBottomY(w, h) - RAIL_FADE_H / 2, 0);
+
+        // THE FLOATING PLATE IS GONE and the count it carried is in the bar. The plate was a
+        // 320x88 slab over the road with a 205-wide badge scrolling behind it; the badge is
+        // about 285 tall once its star row is counted, so it stuck out top and bottom and the
+        // pair read as clipping. The clear-save hold that had taken the title's place on that
+        // plate went with it -- see `GameController`, where its timer used to live; the
+        // settings card grows an explicit button with a confirmation instead.
+        this.topBar = new TopBar(this.root, w, h);
 
         // Against the BOTTOM EDGE rather than a fraction of the height, and clear of the
         // home indicator. A quarter of the way up put it in the middle of the route, where
@@ -509,8 +489,11 @@ export class HomeView {
             .start();
     }
 
+    /**
+     * Everything that belongs to the MENU, on or off. The top bar is deliberately absent: it
+     * is standing, and it is up while the barrier is still down. See `top-bar.ts`.
+     */
     private revealMenu(on: boolean): void {
-        this.topPlate.active = on;
         this.startBtn.active = on;
         this.railRoot.active = on;
     }
@@ -529,7 +512,7 @@ export class HomeView {
     setLevels(levelCount: number): void {
         if (this.stops.length > 0) return;
         this.levelCount = levelCount;
-        this.sub.string = `共 ${levelCount} 关`;
+        this.topBar.setCaption(`共 ${levelCount} 关`);
         // The street's road runs stop to stop, so it is built from the same number at the same
         // moment -- there is no state in which one of the two exists and the other does not.
         this.scene.build(levelCount);
@@ -901,25 +884,32 @@ export class HomeView {
         return 'slid';
     }
 
+    // --- the top bar ------------------------------------------------------------------
+
+    /**
+     * Forwarded to the bar rather than exposing it, so `GameController` talks to one screen
+     * object. The bar is STANDING, so none of these three consults `waiting` the way the
+     * rail's own hit tests do -- the gear and the coin count mean the same thing while the
+     * barrier is down as they do after it lifts.
+     */
+    setCoins(n: number): void {
+        this.topBar.setCoins(n);
+    }
+
+    hitsGear(ui: Vec3): boolean {
+        return this.topBar.hitsGear(ui);
+    }
+
+    hitsSlot(ui: Vec3): 0 | 1 | -1 {
+        return this.topBar.hitsSlot(ui);
+    }
+
     /** Whether `ui` (UI-space) landed on the start button, and there is a level to start. */
     hitsStart(ui: Vec3): boolean {
         if (!this.open() || this.waiting || !this.focusOpen) return false;
         const p = this.startBtn.worldPosition;
         return Math.abs(ui.x - p.x) <= START_W / 2 + TAP_PAD
             && Math.abs(ui.y - p.y) <= START_H / 2 + TAP_PAD;
-    }
-
-    /**
-     * Whether `ui` landed on the hold target that clears the save.
-     *
-     * It was the title until the rail turned vertical and the title went. See where
-     * `resetNode` is assigned: the caption carries it now.
-     */
-    hitsReset(ui: Vec3): boolean {
-        if (!this.open() || this.waiting) return false;
-        const p = this.resetNode.worldPosition;
-        return Math.abs(ui.x - p.x) <= TITLE_HIT_W / 2
-            && Math.abs(ui.y - p.y) <= TITLE_HIT_H / 2;
     }
 
     /**

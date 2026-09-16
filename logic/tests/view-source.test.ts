@@ -6,7 +6,7 @@ const VIEW = path.join(__dirname, '../../game/assets/scripts/view');
  * Every view file that builds a panel by appending children, which is all of them that hold
  * one. A file added here needs no other change: the first test walks the list.
  */
-const FILES = ['hud-view.ts', 'home-view.ts', 'home-scene.ts'];
+const FILES = ['hud-view.ts', 'home-view.ts', 'home-scene.ts', 'top-bar.ts'];
 
 /** `.children[<number>]` in code, with comments stripped. See the test below for why. */
 function indexedChildLookups(src: string): string[] {
@@ -99,46 +99,62 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
 });
 
 /**
- * No line of type on the home screen sits on anything but an opaque face.
+ * The lobby's one fixed label is held up by a RIM, because its plate is gone.
  *
- * WHAT IT USED TO GUARD, and the reason it is still here after the thing it guarded against
- * went away: this screen was a photograph, which puts arbitrary colour behind arbitrary text --
- * the title landed on bright sky on one phone and on a white cloud on the next, and no ink
- * survives both. The answer was an outline on every fixed label. The street is drawn in code
- * now, so the colour behind any given point is knowable, and the outlines are no longer what is
- * holding the type up.
+ * WHAT IT USED TO GUARD, kept because the hazard survived the fix and only the answer changed.
+ * This screen was a photograph, which puts arbitrary colour behind arbitrary text -- the title
+ * landed on bright sky on one phone and on a white cloud on the next. The answer then was an
+ * outline on every fixed label; when the street became code the colour behind a point became
+ * knowable, and an OPAQUE PLATE took the outlines' place, guarding against the second hazard: a
+ * scrolling stop passing through fixed type on a route that fills the screen.
  *
- * The plate is. It is opaque so a SCROLLING STOP cannot pass through the one fixed label left,
- * and that hazard is untouched by how the background is drawn -- the route still fills the
- * screen top to bottom. So the assertion stays and only its justification moved.
+ * THE PLATE IS NOW GONE TOO, and it went because it was the bug. It was 320x88 with a 205-wide
+ * badge scrolling behind it whose full extent, star row included, is about 285 tall -- so the
+ * badge stuck out above and below the plate and the pair read as clipping. 「共 N 关」 lives in
+ * the standing top bar now, above the rail entirely, which settles the scrolling-stop hazard by
+ * moving the label out of the rail's way rather than by covering the rail.
+ *
+ * WHAT IS LEFT IS THE FIRST HAZARD, and it is why this test still exists. `HomeScene` culls its
+ * road legs at 0.75 of the screen height, well above the bar, so the surface behind this label
+ * is pale pavement sometimes and dark asphalt at others -- exactly the "two backgrounds, one
+ * ink" problem the photograph had, arrived at from the other direction. No single ink survives
+ * both; a rim does. So the assertion moved to the rim and to the rim being OPAQUE, which is the
+ * property that actually does the work.
  */
-test('the home screen has no fixed label standing on anything but the plate', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
-  expect(src).toContain("this.sub = makeLabel(this.topPlate, 'HomeSub', SUB_SIZE, 0);");
-  expect(src).toMatch(/const PLATE = new Color\(\d+, \d+, \d+, (2[0-4]\d|25[0-5])\)/);
+test('the lobby caption is rimmed, and the rim is opaque', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'top-bar.ts'), 'utf8');
+  expect(src).toContain('rimLabel(this.caption, CAPTION_RIM,');
+  expect(src).toMatch(/const CAPTION_RIM = new Color\(\d+, \d+, \d+, (2[0-4]\d|25[0-5])\)/);
+  // And the plate it replaced has not quietly come back on the home screen.
+  const home = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  expect(home).not.toContain("roundedSprite('HomePlate'");
 });
 
 /**
- * The home screen is built back to front: street, then rail, then plate.
+ * The home screen is built back to front: street, then rail, then the fade, then the bar.
  *
  * Cocos draws siblings in the order they were appended, so build order IS z-order here, and
- * both of these pairs are load-bearing. THE STREET BEFORE THE RAIL: `HomeScene` strokes a road
- * through the stop centres, and a road appended after the stops paints over the stops it is
- * meant to run under. THE PLATE AFTER THE RAIL: a plate drawn before the stops is a plate the
- * stops slide over, which is the bare-type problem it was introduced to solve, with an extra
- * draw call on top.
+ * every one of these pairs is load-bearing. THE STREET BEFORE THE RAIL: `HomeScene` strokes a
+ * road through the stop centres, and a road appended after the stops paints over the stops it
+ * is meant to run under. THE FADE AFTER THE RAIL: it exists to dissolve a badge before the
+ * badge reaches the bar, and a fade drawn under the badges dissolves nothing. THE BAR AFTER THE
+ * FADE: the bar is the frame, and a frame a pavement-tinted ramp is drawn over is a frame with
+ * a pale wash across its lower edge.
  *
- * Anchored on the three lines that actually construct them, so moving any one of them past
- * another has to come and change this test rather than changing only the picture.
+ * It replaces a plate that used to be the last of the three, and the plate's own entry in this
+ * list is why the order is pinned by CONSTRUCTION LINES rather than by prose: moving any one of
+ * them past another has to come and change this test rather than changing only the picture.
  */
-test('the home screen builds street, then rail, then plate', () => {
+test('the home screen builds street, then rail, then fade, then bar', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
   const street = src.indexOf('this.scene = new HomeScene(this.root, w, h);');
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
-  const plate = src.indexOf("this.topPlate = roundedSprite('HomePlate'");
+  const fade = src.indexOf("const fade = rampSprite('RailFade', w, RAIL_FADE_H, GROUND);");
+  const bar = src.indexOf('this.topBar = new TopBar(this.root, w, h);');
   expect(street).toBeGreaterThan(0);
   expect(rail).toBeGreaterThan(street);
-  expect(plate).toBeGreaterThan(rail);
+  expect(fade).toBeGreaterThan(rail);
+  expect(bar).toBeGreaterThan(fade);
 });
 
 /**
