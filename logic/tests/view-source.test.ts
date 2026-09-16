@@ -131,30 +131,41 @@ test('the lobby caption is rimmed, and the rim is opaque', () => {
 });
 
 /**
- * The home screen is built back to front: street, then rail, then the fade, then the bar.
+ * The home screen is built back to front: street, rail, the cap and its ramp, then the bar.
  *
  * Cocos draws siblings in the order they were appended, so build order IS z-order here, and
  * every one of these pairs is load-bearing. THE STREET BEFORE THE RAIL: `HomeScene` strokes a
  * road through the stop centres, and a road appended after the stops paints over the stops it
- * is meant to run under. THE FADE AFTER THE RAIL: it exists to dissolve a badge before the
- * badge reaches the bar, and a fade drawn under the badges dissolves nothing. THE BAR AFTER THE
- * FADE: the bar is the frame, and a frame a pavement-tinted ramp is drawn over is a frame with
- * a pale wash across its lower edge.
+ * is meant to run under. THE CAP AND RAMP AFTER THE RAIL: they exist to hide the top of a
+ * climbing badge, and a cover drawn under the badges covers nothing. THE BAR LAST: the bar is
+ * the frame, and a frame with a pavement-tinted cap drawn over it is a frame behind a wash.
  *
- * It replaces a plate that used to be the last of the three, and the plate's own entry in this
- * list is why the order is pinned by CONSTRUCTION LINES rather than by prose: moving any one of
- * them past another has to come and change this test rather than changing only the picture.
+ * BOTH HALVES OF THE COVER ARE PINNED, not just the ramp, and that is the point of this
+ * revision. The first version of this screen's top edge was the ramp ALONE, anchored with its
+ * opaque side at `barBottomY` -- which covers a badge right up to that line and nothing above
+ * it, so the badge reappeared at full opacity one pixel higher behind a razor cut across the
+ * full width. A guard that watched only the ramp would have stayed green through exactly that.
+ * It replaces a plate that used to be the last of the list, and the plate's own entry here is
+ * why the order is pinned by CONSTRUCTION LINES rather than by prose: moving any one of them
+ * past another has to come and change this test rather than changing only the picture.
  */
-test('the home screen builds street, then rail, then fade, then bar', () => {
+test('the home screen builds street, then rail, then cap and ramp, then bar', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
   const street = src.indexOf('this.scene = new HomeScene(this.root, w, h);');
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
-  const fade = src.indexOf("const fade = rampSprite('RailFade', w, RAIL_FADE_H, GROUND);");
+  const cap = src.indexOf("const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);");
+  const fade = src.indexOf("const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);");
   const bar = src.indexOf('this.topBar = new TopBar(this.root, w, h);');
   expect(street).toBeGreaterThan(0);
   expect(rail).toBeGreaterThan(street);
+  expect(cap).toBeGreaterThan(rail);
   expect(fade).toBeGreaterThan(rail);
+  expect(bar).toBeGreaterThan(cap);
   expect(bar).toBeGreaterThan(fade);
+  // The cap's opaque band reaches the screen's top edge, and the ramp hangs BELOW the cap's
+  // lower edge rather than sharing it -- the two numbers that make the join seamless.
+  expect(src).toContain('cap.setPosition(0, (this.barBottom + h) / 2, 0);');
+  expect(src).toContain('fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);');
 });
 
 /**

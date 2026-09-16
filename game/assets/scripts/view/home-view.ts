@@ -38,28 +38,40 @@ import { HomeScene } from './home-scene';
  */
 
 /**
- * The fade across the rail's top edge.
+ * The rail's top edge: an OPAQUE CAP over the bar's whole band, and a ramp under it.
  *
- * A BADGE MUST NOT HARD-CUT AT THE BAR'S LOWER EDGE. The rail scrolls up past the top bar and
- * `layout()` culls a stop only at 0.75 of the screen height, which is far above the bar -- so
- * without this a 205 badge and its star row simply stop existing along a straight line a few
- * units under the coin plate. That line is exactly the artefact the floating plate was reported
- * for (see where `TopBar`'s caption is built): an edge that cuts a moving object reads as a
- * clipping fault, not as a frame.
+ * A BADGE MUST NOT HARD-CUT ANYWHERE. The rail scrolls up past the top bar and `layout()` only
+ * culls a stop at 0.75 of the screen height, which is far above the bar -- so without something
+ * over it a 205 badge and its star row simply stop existing along a straight line. That line is
+ * the artefact the floating plate was reported for (see where `TopBar`'s caption is built): an
+ * edge that cuts a moving object reads as a clipping fault, not as a frame.
  *
- * SAME TOOL AND SAME ARGUMENT AS `HomeScene`'s side fades, down to the tint. `rampSprite` is
- * opaque along its own TOP edge and gone by its bottom, and it is painted in `GROUND` -- the
- * pavement it is lying on -- so over plain pavement it is a no-op and over anything standing in
- * it (a badge, a tree, the road) it is a dissolve. It has no hard edge anywhere, which is the
- * property that makes a translucent overlay safe here at all.
+ * IT TAKES TWO SPRITES, AND THE FIRST VERSION OF IT SHIPPED WITH ONLY ONE -- worth writing down
+ * because the one-sprite version looks right and is exactly wrong. `rampSprite` is opaque along
+ * its own TOP edge and gone by its bottom, so a lone ramp with its top at `barBottomY` covers a
+ * badge completely as the badge climbs to that line and covers NOTHING above it. The badge
+ * vanishes into the ramp and then reappears at full opacity one pixel higher, with a razor cut
+ * across the full 1280 exactly at `barBottomY` -- the same artefact, moved up one band. The
+ * uncovered band is `w * BAR_MARGIN_F + BAR_H` tall, the bar draws no background of its own, and
+ * a badge reaches it after about half a pitch of drag. It is not an edge case.
  *
- * WHAT IT COSTS, said plainly: where the ROAD runs under the bar, a pavement-tinted ramp pales
- * the asphalt as it climbs. That is the same trade `buildFades` takes on the left and right
- * edges of this screen, and it is the right one -- the road is scenery up there, and the thing
- * the fade is protecting is the moving badge.
+ * So the CAP is what makes the bar's band opaque and the RAMP is what dissolves the edge of the
+ * cap. Both are painted in `GROUND` -- the pavement they are lying on -- and they meet at
+ * `barBottomY`, where both are fully opaque, so the join is invisible and there is no hard edge
+ * anywhere on the screen. Same tool and same argument as `HomeScene`'s side fades.
  *
- * 110, a little over half a badge: enough for a 205 disc to be visibly dissolving before its
- * top edge reaches the bar, and not so much that the road looks washed out for a whole screen.
+ * WHAT IT COSTS, and it is more than the ramp alone cost: under the bar the road is now paled
+ * ALL the way rather than partly, so the route reads as running out from under a band of
+ * pavement. That is the trade -- the road up there is scenery, and the thing being protected is
+ * the moving badge and the one line of type standing over it.
+ *
+ * THE CAP IS OVERSIZED the way `HomeScene`'s ground is, and for the same reason: a viewport
+ * wider or taller than the design box otherwise shows a strip of bare clear colour past its
+ * edge. It reaches to `h` rather than to `h / 2`.
+ *
+ * 110 for the ramp, a little over half a badge: enough for a 205 disc to be visibly dissolving
+ * before its top edge reaches the cap, and not so much that the road looks washed out for a
+ * whole screen.
  */
 const RAIL_FADE_H = 110;
 
@@ -307,6 +319,20 @@ export class HomeView {
 
     private w = 720;
     private h = 1280;
+    /**
+     * The bar's bottom edge, READ ONCE in the constructor and used for everything on this
+     * screen that measures off it: the rail's centre, the cap and the ramp above it.
+     *
+     * A SNAPSHOT RATHER THAN A CALL PER USE, because `capsuleInset()` no longer caches a failed
+     * read (see `ui-layout` -- it used to, and a capsule that was not ready on the first call
+     * pinned the bar under the system UI for the rest of the session). That retry is the right
+     * behaviour and it means `barBottomY` can legitimately return one number early in a session
+     * and a larger one later. `railCenterY()` is called again from `setLevels`, several frames
+     * after the bar and the cap were built, so without this the rail could end up centred on a
+     * band the bar is not in -- which is the exact disagreement `BAR_H` and `barBottomY` were
+     * put in `ui-layout` to prevent, arriving through the back door.
+     */
+    private barBottom = 0;
 
     /**
      * Builds everything that does NOT depend on knowing the levels: the background, the
@@ -323,6 +349,9 @@ export class HomeView {
         const { w, h } = canvasSize(canvas);
         this.w = w;
         this.h = h;
+        // BEFORE ANYTHING READS IT. See the field: every y on this screen that is measured off
+        // the bar comes from this one read, so they cannot disagree with each other.
+        this.barBottom = barBottomY(w, h);
 
         this.root = new Node('Home');
         this.root.layer = Layers.Enum.UI_2D;
@@ -330,16 +359,15 @@ export class HomeView {
         canvas.addChild(this.root);
 
         // THE STREET GOES IN FIRST, and that is the whole of its z-ordering: everything after
-        // it -- the stops, the plate, the button -- draws over it. It builds only its ground
-        // here; the road itself needs the level count, so it is finished in `setLevels`.
+        // it -- the stops, the cap over them, the top bar, the button -- draws over it. It
+        // builds only its ground here; the road itself needs the level count, so it is
+        // finished in `setLevels`.
         this.scene = new HomeScene(this.root, w, h);
 
         // NO TITLE. The route fills the screen top to bottom now, and the game's name is
         // already the largest thing on the first screen this hands over from -- a second
-        // copy of it over the road is a caption on a picture that has one.
-        //
-        // The count takes the place it used to sit under: under the notch, not under the top
-        // edge, the same reservation the HUD's title plate makes.
+        // copy of it over the road is a caption on a picture that has one. The level count
+        // that used to sit under it is in the top bar; see below.
         this.railRoot = new Node('RailStops');
         this.railRoot.layer = Layers.Enum.UI_2D;
         this.railRoot.addComponent(UITransform);
@@ -350,12 +378,15 @@ export class HomeView {
         this.railRoot.setPosition(0, this.railCenterY(), 0);
         this.scene.setRailCenter(this.railCenterY());
 
-        // AFTER THE RAIL, so both of these draw over the scrolling stops. The fade first and
-        // the bar over it: the fade's job is to dissolve a badge before it reaches the bar, so
-        // it has to lie between the two of them. See RAIL_FADE_H.
-        const fade = rampSprite('RailFade', w, RAIL_FADE_H, GROUND);
+        // AFTER THE RAIL AND BEFORE THE BAR, so both of these draw over the scrolling stops and
+        // under the row that stands on them. See RAIL_FADE_H for why it takes two sprites and
+        // what the one-sprite version does instead.
+        const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);
+        this.root.addChild(cap);
+        cap.setPosition(0, (this.barBottom + h) / 2, 0);
+        const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);
         this.root.addChild(fade);
-        fade.setPosition(0, barBottomY(w, h) - RAIL_FADE_H / 2, 0);
+        fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);
 
         // THE FLOATING PLATE IS GONE and the count it carried is in the bar. The plate was a
         // 320x88 slab over the road with a 205-wide badge scrolling behind it; the badge is
@@ -694,7 +725,7 @@ export class HomeView {
      * fixes it is the three state badges, not this function.
      */
     private railCenterY(): number {
-        const top = barBottomY(this.w, this.h);
+        const top = this.barBottom;
         const bottom = -this.h / 2 + safeInsets().bottom * this.h + START_MARGIN + START_H;
         return (top + bottom) / 2;
     }
@@ -888,9 +919,14 @@ export class HomeView {
 
     /**
      * Forwarded to the bar rather than exposing it, so `GameController` talks to one screen
-     * object. The bar is STANDING, so none of these three consults `waiting` the way the
-     * rail's own hit tests do -- the gear and the coin count mean the same thing while the
-     * barrier is down as they do after it lifts.
+     * object. The bar is STANDING, so none of these consults `waiting` the way the rail's own
+     * hit tests do -- the gear and the coin count mean the same thing while the barrier is
+     * down as they do after it lifts.
+     *
+     * ALL FIVE OF THEM, and that is not tidiness. `hitsSlot` can only ever return -1 unless
+     * `setSlot` has populated a place, and the handler `setSlot` was given is only reachable
+     * through `tapSlot` -- forwarding a subset would leave a caller holding one end of a
+     * three-part protocol with no way to reach the other two.
      */
     setCoins(n: number): void {
         this.topBar.setCoins(n);
@@ -902,6 +938,14 @@ export class HomeView {
 
     hitsSlot(ui: Vec3): 0 | 1 | -1 {
         return this.topBar.hitsSlot(ui);
+    }
+
+    setSlot(i: 0 | 1, slot: { icon: Node; onTap: () => void } | null): void {
+        this.topBar.setSlot(i, slot);
+    }
+
+    tapSlot(i: 0 | 1): void {
+        this.topBar.tapSlot(i);
     }
 
     /** Whether `ui` (UI-space) landed on the start button, and there is a level to start. */

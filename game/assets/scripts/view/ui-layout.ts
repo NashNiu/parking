@@ -64,27 +64,48 @@ export function safeInsets(): { top: number; bottom: number } {
  * `bottom`, not `top`, because what a layout needs is the first y that is clear of it -- the
  * capsule's own top edge tells you nothing about where it stops.
  *
- * Same shape and same failure policy as `safeInsets` above, deliberately: read once, cached,
- * clamped into a sane band, and ZERO off-device. There is no capsule in a browser or in the
- * editor preview, and a layout that reserved room for one there would be wrong on the only
- * screen a developer actually looks at.
+ * Same shape as `safeInsets` above -- read once, clamped into a sane band, ZERO off-device,
+ * because there is no capsule in a browser or in the editor preview and a layout that reserved
+ * room for one there would be wrong on the only screen a developer actually looks at.
+ *
+ * ONE DELIBERATE DIVERGENCE FROM `safeInsets`, AND IT IS THE WHOLE POINT OF THE SHAPE BELOW:
+ * only an ANSWERED read is cached. `safeInsets` caches its zero before it tries, which is fine
+ * there -- a missing notch inset costs a few units of margin. It is NOT fine here. If wx is
+ * present but `getMenuButtonBoundingClientRect` is not ready yet and hands back zeros, caching
+ * that zero pins every control anchored to the top UNDERNEATH the system capsule for the rest of
+ * the process, the try/catch eats the reason, and the failure is invisible to everything except
+ * a person holding the phone. A wrong answer here is a control the player cannot reach.
+ *
+ * So the three cases are told apart rather than collapsed:
+ *
+ *   - NO wx, or a wx without the call. There is no capsule and there never will be one. That
+ *     zero is an answer, so it is cached and this never runs again.
+ *   - A usable rect. Cached, and this never runs again.
+ *   - wx is here and the rect is not usable yet (zeros, a throw). NOT an answer, NOT cached:
+ *     zero is returned for this caller and the next one asks again.
+ *
+ * The cost of the retry is that this function can return one number early in a session and a
+ * larger one later, so a screen that measures several things off it must read it ONCE and share
+ * the result -- see `HomeView.barBottom`, which does exactly that and says why.
  */
 let capsule: number | null = null;
 
 export function capsuleInset(): number {
     if (capsule !== null) return capsule;
-    capsule = 0;
     try {
-        const rect = typeof wx !== 'undefined' && wx.getMenuButtonBoundingClientRect
-            ? wx.getMenuButtonBoundingClientRect() : null;
-        const info = typeof wx !== 'undefined' && wx.getSystemInfoSync
-            ? wx.getSystemInfoSync() : null;
+        if (typeof wx === 'undefined' || !wx.getMenuButtonBoundingClientRect) {
+            capsule = 0;
+            return capsule;
+        }
+        const rect = wx.getMenuButtonBoundingClientRect();
+        const info = wx.getSystemInfoSync ? wx.getSystemInfoSync() : null;
         const h = info && info.screenHeight;
         if (rect && h > 0 && rect.bottom > 0) {
             capsule = Math.max(0, Math.min(0.3, rect.bottom / h));
+            return capsule;
         }
-    } catch { /* leave it at zero -- a missing inset is a cosmetic loss, not a crash */ }
-    return capsule;
+    } catch { /* not an answer either -- fall through and let the next caller ask again */ }
+    return 0;
 }
 
 /**

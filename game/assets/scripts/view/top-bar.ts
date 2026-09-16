@@ -36,10 +36,20 @@ const COIN_H = 88;
 /** The coin itself, at the plate's left end, the way the passenger badge sits on the HUD's. */
 const COIN_D = 52;
 const COIN_PAD = 12;
+/**
+ * TWO DISCS, DARKER FIRST: the rim is the full 52 and the bright face is drawn on top at
+ * `COIN_FACE_F` of it, which leaves the darker colour showing as a ring about 7 units wide.
+ *
+ * THE ORDER IS THE WHOLE OF IT, and the first version had it backwards -- gold underneath, the
+ * darker disc on top -- which draws a dark 38-unit centre with gold surviving only as a thin
+ * outer ring. That is a washer, not a coin, and it inverts the layering every other object in
+ * this project uses: `liftedPill`, `buildGear` and the rail's own badges all put the darker
+ * plate down first and the brighter face over it. Same rule here, so the name and the picture
+ * agree.
+ */
 const COIN_GOLD = new Color(255, 196, 46, 255);
-/** A darker ring inside the coin, so it reads as a struck disc rather than a yellow dot. */
 const COIN_RIM = new Color(214, 152, 20, 255);
-const COIN_RIM_F = 0.74;
+const COIN_FACE_F = 0.74;
 const COIN_INK = new Color(48, 60, 92, 255);
 const COIN_SIZE = 44;
 
@@ -152,14 +162,13 @@ export class TopBar {
         this.root.addChild(holder);
         holder.setPosition(x, 0, 0);
 
-        const coin = dotSprite('coin', COIN_D, COIN_GOLD);
+        // A concentric pair rather than a struck glyph: at 52 units a minted face would be
+        // three pixels of detail, and this project's rule for a small icon is the silhouette
+        // (see the padlock, the passenger). Darker disc, brighter face on it -- see COIN_GOLD.
+        const coin = dotSprite('coin', COIN_D, COIN_RIM);
         face.addChild(coin);
         coin.setPosition(-COIN_W / 2 + COIN_PAD + COIN_D / 2, 0, 0);
-        // A concentric disc rather than a struck glyph: at 52 units a minted face would be
-        // three pixels of detail, and this project's rule for a small icon is the silhouette
-        // (see the padlock, the passenger). Two rings read as a coin edge-lit from above.
-        const rim = dotSprite('rim', COIN_D * COIN_RIM_F, COIN_RIM);
-        coin.addChild(rim);
+        coin.addChild(dotSprite('face', COIN_D * COIN_FACE_F, COIN_GOLD));
 
         // Centred in what the coin leaves, not nudged off the plate's middle -- the same
         // arithmetic the HUD's passenger count uses for the same reason.
