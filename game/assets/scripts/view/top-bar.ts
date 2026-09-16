@@ -1,6 +1,6 @@
 import { Color, Label, Layers, Node, UITransform, Vec3 } from 'cc';
 import { dotSprite, gearSprite, liftedPill, PILL_LIFT } from './ui-shapes';
-import { BAR_H, BAR_MARGIN_F, barBottomY, makeLabel, rimLabel } from './ui-layout';
+import { BAR_H, BAR_MARGIN_F, makeLabel, rimLabel } from './ui-layout';
 
 /**
  * The lobby's standing top bar: the coin readout on the left, the settings gear on the right,
@@ -11,18 +11,20 @@ import { BAR_H, BAR_MARGIN_F, barBottomY, makeLabel, rimLabel } from './ui-layou
  * `ui-layout.capsuleInset` -- the short version is that the capsule is about a quarter of the
  * screen wide and its width drifts by device and by WeChat version, so reserving room for it
  * horizontally would cost one of this bar's four places AND be a number nobody can pin. The
- * bar sits below it and keeps the whole 1280 to itself. `barBottomY` is where that decision
- * is actually applied; this file only reads it.
+ * bar sits below it and keeps the whole 1280 to itself. `ui-layout.barBottomY` is where that
+ * decision is actually applied, and this file does not even call it -- see the constructor.
  *
  * IT IS STANDING. It is deliberately NOT part of `HomeView.revealMenu`: the coin count and the
  * settings gear are true while the game is still loading, and a bar that popped in with the
  * rail would read as part of the menu rather than as the frame around it.
  *
- * THE HEIGHT AND THE MARGIN ARE NOT DEFINED HERE. `BAR_H`, `BAR_MARGIN_F` and `barBottomY`
- * live in `ui-layout` because `home-view` centres the rail on the free band UNDER this bar and
- * has to measure that band with the same numbers. A copy here would be two layouts agreeing
- * until the first time one of them is retuned -- and the failure mode is silent: the rail would
- * simply be centred on a band the bar is not actually in.
+ * THE HEIGHT AND THE MARGIN ARE NOT DEFINED HERE, AND THE BAND IS NOT EVEN MEASURED HERE.
+ * `BAR_H`, `BAR_MARGIN_F` and `barBottomY` live in `ui-layout` because `home-view` centres the
+ * rail on the free band UNDER this bar and has to measure that band with the same numbers. A
+ * copy here would be two layouts agreeing until the first time one of them is retuned -- and the
+ * failure mode is silent: the rail would simply be centred on a band the bar is not actually in.
+ * This class imports the two constants and takes the band's position as an ARGUMENT, so there
+ * is exactly one call to `barBottomY` on the whole screen; the constructor says why.
  *
  * NO BACKGROUND PLATE. The bar is four objects on a row, each standing on its own face; a slab
  * behind them would be a second horizon across the top of a screen whose whole subject is a
@@ -109,14 +111,36 @@ export class TopBar {
     private slots: Slot[];
 
     /**
-     * `w` and `h` come from `canvasSize` -- the caller already has them, and reading the canvas
-     * twice for one row is how two things end up on two different screens.
+     * `barBottom` IS HANDED IN, NOT COMPUTED HERE, and that is the one thing about this
+     * signature worth defending -- it looks like a simplification waiting to happen, and it is
+     * not. `barBottomY(w, h)` is right there and this class imports its two constants already,
+     * so calling it would be shorter. Do not.
+     *
+     * WHAT IT PREVENTS. `barBottomY` reads `capsuleInset()`, which (see `ui-layout`) no longer
+     * caches an unanswered read: if wx is present but the capsule rect is not ready, it returns
+     * 0 WITHOUT caching and the next caller asks again. That is deliberate -- caching a failed
+     * read pins every top-anchored control under the system capsule for the life of the process
+     * -- but it means the function can legitimately return one number early in a session and a
+     * larger one later. Every extra caller is therefore another chance for two parts of one
+     * layout to be built against two different bands.
+     *
+     * That disagreement is EXACTLY what `BAR_H` and `barBottomY` were moved into `ui-layout` to
+     * make impossible: `HomeView` centres the rail on the free band under this bar, and if the
+     * rail's idea of the band and the bar's idea of the band differ, the rail is centred on
+     * nothing and nothing says so. `HomeView` pulled its own three reads down to one snapshot
+     * (`HomeView.barBottom`) for that reason; this constructor is the fourth caller, and taking
+     * the number rather than re-deriving it is what makes the guarantee STRUCTURAL instead of an
+     * argument about how fast two statements run.
+     *
+     * `h` is not a parameter at all, for the same reason stated positively: with the band already
+     * resolved there is no y on this bar that needs the screen's height, so the height is not in
+     * scope and the wrong thing cannot be computed from it.
      *
      * X IS ABSOLUTE, Y IS DERIVED, which is the rule `ui-layout.canvasSize` states: the width is
      * pinned at 1280 by FIXED_WIDTH, so the four x positions below are portable numbers, while
      * every y has to come off an edge.
      *
-     *     y            = barBottomY(w, h) + BAR_H / 2
+     *     y            = barBottom + BAR_H / 2
      *     coin centre  = -w/2 + margin + COIN_W/2        = -481.6   (left edge -601.6)
      *     gear centre  =  w/2 - margin - GEAR_D/2        =  563.6   (right edge 601.6)
      *     slot 1       =  gear - GEAR_D/2 - GAP - SLOT_D/2 = 471.6
@@ -130,9 +154,9 @@ export class TopBar {
      * populated slots with room to spare, which is the point of measuring it against the
      * POPULATED bar rather than against the empty one it ships as.
      */
-    constructor(parent: Node, w: number, h: number) {
+    constructor(parent: Node, w: number, barBottom: number) {
         const margin = w * BAR_MARGIN_F;
-        const y = barBottomY(w, h) + BAR_H / 2;
+        const y = barBottom + BAR_H / 2;
 
         this.root = new Node('TopBar');
         this.root.layer = Layers.Enum.UI_2D;

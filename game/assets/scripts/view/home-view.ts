@@ -321,7 +321,9 @@ export class HomeView {
     private h = 1280;
     /**
      * The bar's bottom edge, READ ONCE in the constructor and used for everything on this
-     * screen that measures off it: the rail's centre, the cap and the ramp above it.
+     * screen that measures off it: the rail's centre, the cap and the ramp above it, and the
+     * bar itself -- `TopBar` is HANDED this number rather than calling `barBottomY` again, and
+     * its constructor's docblock argues that at length.
      *
      * A SNAPSHOT RATHER THAN A CALL PER USE, because `capsuleInset()` no longer caches a failed
      * read (see `ui-layout` -- it used to, and a capsule that was not ready on the first call
@@ -331,6 +333,13 @@ export class HomeView {
      * after the bar and the cap were built, so without this the rail could end up centred on a
      * band the bar is not in -- which is the exact disagreement `BAR_H` and `barBottomY` were
      * put in `ui-layout` to prevent, arriving through the back door.
+     *
+     * ONE READ IS THE POINT, not "few reads". While `TopBar` still called `barBottomY` for
+     * itself the bar and the rail agreed only by ARGUMENT -- wx cannot change state between two
+     * statements of one synchronous constructor, which is true and is not a guarantee. With the
+     * number passed down there is a single read on this screen and everything below it is given
+     * the result, so the agreement holds by construction and a reader does not have to
+     * reconstruct the timing argument to trust it.
      */
     private barBottom = 0;
 
@@ -349,8 +358,8 @@ export class HomeView {
         const { w, h } = canvasSize(canvas);
         this.w = w;
         this.h = h;
-        // BEFORE ANYTHING READS IT. See the field: every y on this screen that is measured off
-        // the bar comes from this one read, so they cannot disagree with each other.
+        // BEFORE ANYTHING READS IT, and it is the ONLY call to `barBottomY` on this screen --
+        // the rail, the cap, the ramp and the bar are all given this one number. See the field.
         this.barBottom = barBottomY(w, h);
 
         this.root = new Node('Home');
@@ -394,7 +403,7 @@ export class HomeView {
         // pair read as clipping. The clear-save hold that had taken the title's place on that
         // plate went with it -- see `GameController`, where its timer used to live; the
         // settings card grows an explicit button with a confirmation instead.
-        this.topBar = new TopBar(this.root, w, h);
+        this.topBar = new TopBar(this.root, w, this.barBottom);
 
         // Against the BOTTOM EDGE rather than a fraction of the height, and clear of the
         // home indicator. A quarter of the way up put it in the middle of the route, where

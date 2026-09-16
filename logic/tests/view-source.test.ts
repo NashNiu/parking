@@ -148,6 +148,17 @@ test('the lobby caption is rimmed, and the rim is opaque', () => {
  * It replaces a plate that used to be the last of the list, and the plate's own entry here is
  * why the order is pinned by CONSTRUCTION LINES rather than by prose: moving any one of them
  * past another has to come and change this test rather than changing only the picture.
+ *
+ * THE BAR'S LINE NOW CARRIES A SECOND FACT, and it is the reason this string is spelled out in
+ * full rather than matched loosely. It used to read `new TopBar(this.root, w, h)`; it reads
+ * `new TopBar(this.root, w, this.barBottom)` because the bar is HANDED the band position this
+ * screen already resolved instead of calling `barBottomY` a fourth time. `capsuleInset()` does
+ * not cache an unanswered read (deliberately -- caching one pins every top-anchored control
+ * under the system capsule for the life of the process), so `barBottomY` may legitimately
+ * return different numbers at different moments, and every extra caller is another chance for
+ * the rail and the bar to be built against two different bands. Passing it down makes them
+ * agree BY CONSTRUCTION rather than by an argument about how fast two statements run, and
+ * pinning the argument list here is what stops the call being helpfully "simplified" back.
  */
 test('the home screen builds street, then rail, then cap and ramp, then bar', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
@@ -155,7 +166,7 @@ test('the home screen builds street, then rail, then cap and ramp, then bar', ()
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
   const cap = src.indexOf("const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);");
   const fade = src.indexOf("const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);");
-  const bar = src.indexOf('this.topBar = new TopBar(this.root, w, h);');
+  const bar = src.indexOf('this.topBar = new TopBar(this.root, w, this.barBottom);');
   expect(street).toBeGreaterThan(0);
   expect(rail).toBeGreaterThan(street);
   expect(cap).toBeGreaterThan(rail);
