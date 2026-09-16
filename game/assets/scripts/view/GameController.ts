@@ -2186,8 +2186,11 @@ export class GameController extends Component {
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
-        // Presses, for the one control in the game that is a HOLD rather than a tap. Nothing
-        // else reads them, so they only ever arm and disarm the wipe.
+        // Presses, for the lobby. Every other screen in the game decides on RELEASE; the
+        // lobby's rail is a gesture, so it needs the press that starts it and the moves that
+        // carry it -- and the start button's pressed state hangs off the same two events.
+        // They used to exist for a three-second HOLD that wiped the save; that gesture is
+        // gone (see `onPressStart`), and this is what took its place.
         input.on(Input.EventType.TOUCH_START, this.onPressStart, this);
         input.on(Input.EventType.TOUCH_MOVE, this.onPressMove, this);
         input.on(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
@@ -2258,9 +2261,18 @@ export class GameController extends Component {
      * see `home-view`), and a hidden destructive gesture with no visible target is worse than
      * no gesture: `wipeProgress` is now reached from the settings card, where it is a labelled
      * button with a confirmation in front of it.
+     *
+     * THE SETTINGS CARD OWNS THE PRESS WHILE IT IS UP, the same way `handleTap` gives it every
+     * tap on this screen and for the same reason: it is the topmost thing here, and a scrim
+     * over the lobby means the lobby is not being touched. Without this line a drag across the
+     * card scrolled the rail behind it -- `endDrag` runs `setFocus(railFlick(...))` on release,
+     * so closing the panel revealed a different level under a re-labelled button -- and a press
+     * over where the start button sits behind the scrim visibly depressed it. Same defect class
+     * the tap side closed: a control answering input it should not be able to hear.
      */
     private onPressStart(e: EventTouch | EventMouse): void {
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
+        if (this.hud?.settingsOpen()) return;
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
         this.slidHome = false;
@@ -2408,14 +2420,28 @@ export class GameController extends Component {
                 this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
                 return;
             }
+            // The bar's two reserved places, beside the gear and answering on the same terms.
+            // BOTH EMPTY TODAY -- `hitsSlot` cannot return anything but -1 until `setSlot` has
+            // populated one -- so this line does nothing until the daily check-in or the
+            // free-coins entry arrives. It is here anyway, because the alternative is a
+            // three-part protocol (`setSlot`, `hitsSlot`, `tapSlot`) with its middle wired up
+            // and its end missing: whoever ships the check-in button would find the icon drawn,
+            // the hit test answering and the tap doing nothing, with nothing to say why.
+            // `!== -1` rather than `>= 0`, because that is what narrows `0 | 1 | -1` to `0 | 1`.
+            const slot = this.home.hitsSlot(ui);
+            if (slot !== -1) {
+                this.sfx?.play('tap');
+                this.home.tapSlot(slot);
+                return;
+            }
             // A release that DRAGGED the rail is not also a tap -- otherwise every swipe
             // would end by selecting whatever it happened to stop over. `endDrag` already
             // ran, from `onPressEnd`, and said which it was.
             //
-            // AFTER THE GEAR AND THE PANEL, deliberately. The gear is not on the rail and
-            // neither is the card, so the end of a swipe has no business swallowing a tap on
-            // either of them -- while a tap that lands on the rail after a drag is precisely
-            // what this guard is for.
+            // AFTER THE PANEL, THE GEAR AND THE SLOTS, deliberately. None of those three is on
+            // the rail, so the end of a swipe has no business swallowing a tap on any of them
+            // -- while a tap that lands on the rail after a drag is precisely what this guard
+            // is for.
             if (this.slidHome) return;
             // THE BUTTON IS THE ONLY WAY IN, and it opens whatever is in the middle of the
             // rail (`focusedLevel`, which is also what labelled it). Tapping a stop only

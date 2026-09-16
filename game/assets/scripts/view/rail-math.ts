@@ -94,8 +94,16 @@ export function railRubber(offset: number, count: number): number {
  * How far stop `i` is from the centre, in PITCHES -- 0 for the focused one, 1 for its
  * neighbour, and fractional while a finger is moving.
  *
- * Continuous on purpose: the view turns this into scale and opacity, and a stepped value
- * would make the chips snap between sizes mid-drag instead of growing as they arrive.
+ * Continuous on purpose, and it now has exactly ONE consumer: the halo's alpha on the middle
+ * stop, which fades out over half a pitch so two badges are never wearing it at once. A stepped
+ * value would make that halo blink from stop to stop instead of handing over as the finger
+ * moves.
+ *
+ * IT USED TO DRIVE SIZE AND OPACITY TOO -- a stop shrank and dimmed with its distance from the
+ * middle -- and both were deliberately removed: a badge's size and brightness say what the SAVE
+ * says about that level, and a size that changes under a dragging finger cannot also mean that.
+ * See `home-view`'s NODE_D. The halo is what is genuinely about the scroll, so the halo is what
+ * is left reading this.
  */
 export function railStopT(offset: number, i: number): number {
     return Math.abs(railOffset(i) - offset) / RAIL_PITCH;

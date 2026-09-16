@@ -519,11 +519,11 @@ export const buzzSprite = iconSprite('buzz', buzzCoverage);
  * them read as unfinished rather than as a different kind of object.
  *
  * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
- * blue-grey (see GROUND in scene-stage), so a neutral shadow under a white plate reads as
+ * blue-grey (see GROUND in `palette.ts`), so a neutral shadow under a white plate reads as
  * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
  *
  * It tracks GROUND at the same few units under it that it always sat at, so it followed the
- * floor down when the floor moved (see scene-stage). Left where it was, a base still carrying
+ * floor down when the floor moved (see `palette.ts`). Left where it was, a base still carrying
  * the old pale blue would have been lighter than the board it is supposed to be a shadow on.
  *
  * IT HAS NOW FOLLOWED THE FLOOR BACK UP, to -4 under 199 where it was -4 under 177, and the
@@ -545,6 +545,18 @@ export const PILL_BASE = new Color(185, 196, 214, 255);
 export const PILL_LIFT = 6;
 /** The face: off-white, so ink on it is near-black rather than fighting pure white. */
 export const PILL_BG = new Color(252, 252, 255);
+/**
+ * The ink that goes ON that face: a very dark blue, not black, biased the same way as every
+ * other colour in this project.
+ *
+ * HERE RATHER THAN IN EACH CALLER, which is the same argument `PILL_BASE`, `PILL_BG` and
+ * `liftedPill` came out of `hud-view` on, and it was left behind by that move. The HUD's
+ * readouts and the lobby's coin plate carried identical copies of 48,60,92 under two private
+ * names -- one file's retune of its plate's face would have left the other file's ink on it,
+ * and nothing anywhere would have said so. A face and the only ink that ever lands on it are
+ * one fact.
+ */
+export const PILL_INK = new Color(48, 60, 92);
 
 /**
  * A readout plate: a white face over a base of the same shape, offset down so it shows as a

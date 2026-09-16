@@ -114,12 +114,19 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
  * the standing top bar now, above the rail entirely, which settles the scrolling-stop hazard by
  * moving the label out of the rail's way rather than by covering the rail.
  *
- * WHAT IS LEFT IS THE FIRST HAZARD, and it is why this test still exists. `HomeScene` culls its
- * road legs at 0.75 of the screen height, well above the bar, so the surface behind this label
- * is pale pavement sometimes and dark asphalt at others -- exactly the "two backgrounds, one
- * ink" problem the photograph had, arrived at from the other direction. No single ink survives
- * both; a rim does. So the assertion moved to the rim and to the rim being OPAQUE, which is the
- * property that actually does the work.
+ * THE SECOND HAZARD IS GONE TOO, and this docblock used to claim otherwise. It said the road
+ * still runs behind this label -- `HomeScene` culls its legs at 0.75 of the screen height, well
+ * above the bar -- so the surface behind the glyphs was pale pavement at one scroll position and
+ * dark asphalt at another. That stopped being true when the rail's top edge became an OPAQUE
+ * `GROUND` cap over the bar's whole band with the bar drawn on top of it: the background behind
+ * this label is `GROUND` (189,200,218), always.
+ *
+ * WHAT IS LEFT IS PLAIN CONTRAST, and it is why this test still exists. White on 189,200,218 is
+ * about 1.7:1 -- a knowable background is not a legible one, and a pale line on pale pavement is
+ * what the caption would be without help. A near-opaque navy rim puts a dark edge around every
+ * stroke and the row reads off that (about 12:1) rather than off the white. So the assertion is
+ * the rim, and the rim being OPAQUE, which is the property that actually does the work -- a rim
+ * faded to a low alpha is a rim that has stopped doing it while still being present.
  */
 test('the lobby caption is rimmed, and the rim is opaque', () => {
   const src = fs.readFileSync(path.join(VIEW, 'top-bar.ts'), 'utf8');
@@ -152,13 +159,19 @@ test('the lobby caption is rimmed, and the rim is opaque', () => {
  * THE BAR'S LINE NOW CARRIES A SECOND FACT, and it is the reason this string is spelled out in
  * full rather than matched loosely. It used to read `new TopBar(this.root, w, h)`; it reads
  * `new TopBar(this.root, w, this.barBottom)` because the bar is HANDED the band position this
- * screen already resolved instead of calling `barBottomY` a fourth time. `capsuleInset()` does
- * not cache an unanswered read (deliberately -- caching one pins every top-anchored control
- * under the system capsule for the life of the process), so `barBottomY` may legitimately
- * return different numbers at different moments, and every extra caller is another chance for
- * the rail and the bar to be built against two different bands. Passing it down makes them
- * agree BY CONSTRUCTION rather than by an argument about how fast two statements run, and
- * pinning the argument list here is what stops the call being helpfully "simplified" back.
+ * screen already resolved instead of calling `barBottomY` a fourth time. `HomeView` centres the
+ * rail on the free band UNDER the bar, so if the rail's idea of the band and the bar's idea of
+ * it differ, the rail is centred on nothing and nothing says so. One read, passed down, makes
+ * them agree BY CONSTRUCTION, and pinning the argument list here stops the call being helpfully
+ * "simplified" back into a second call to `barBottomY`.
+ *
+ * THAT IS A STRUCTURAL RULE, NOT A CLAIM ABOUT TIMING, and the difference matters because the
+ * timing claim is what this paragraph used to make. `capsuleInset()` spent a while deliberately
+ * NOT caching an unanswered read so that a later caller could retry, which made `barBottomY`
+ * legitimately return one number early in a session and a larger one later; the retry is gone
+ * (it had exactly one caller -- see `ui-layout`) and `capsuleInset` now caches whatever its
+ * single read answers. So two calls cannot disagree today. Today is not a guarantee, and the
+ * one-read shape costs nothing to keep.
  */
 test('the home screen builds street, then rail, then cap and ramp, then bar', () => {
   const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
@@ -177,6 +190,49 @@ test('the home screen builds street, then rail, then cap and ramp, then bar', ()
   // lower edge rather than sharing it -- the two numbers that make the join seamless.
   expect(src).toContain('cap.setPosition(0, (this.barBottom + h) / 2, 0);');
   expect(src).toContain('fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);');
+});
+
+/**
+ * The rail's centre and the street's centre are written TOGETHER, every time either is written.
+ *
+ * `HomeView` hangs its rail off the middle of the free band between the top bar and the start
+ * button rather than off the middle of the canvas, and `HomeScene` has to hang the road off the
+ * same y. Two objects, one number, and the number is written in FOUR places -- the pair runs
+ * once in the constructor (before the level count is known) and again in `setLevels` (once the
+ * road can be built). Drop or retune either half of either pair and the road comes out running
+ * parallel to the badges and a few dozen units beside them, which reads as a drawing mistake
+ * rather than as the arithmetic one it is, and `core/home-path`'s whole guarantee that the road
+ * passes through the stop centres is spent on nothing.
+ *
+ * THIS IS THE SHAPE BOTH OF ITS NEIGHBOURS WERE ALREADY BITTEN BY. The build-order guard above
+ * watched the ramp and not the cap, and would have stayed green through a defect in the half it
+ * was not watching; the offset/edge guard below watched `scene.layout` and not what the STOPS
+ * cull against, and would have stayed green while the two drifted apart. Both were widened for
+ * the same reason, and this is the third instance of it: watching `railRoot.setPosition` alone
+ * would stay green while somebody removed the `setRailCenter` beside it.
+ *
+ * So: every write of one is adjacent to a write of the other, both from `railCenterY()`, and
+ * there are no writes of either outside those pairs.
+ */
+test('the rail centre and the street centre are always written together', () => {
+  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  // Comments stripped, the rule every source guard in this file works under: a docblock that
+  // quotes one of these lines is prose about the pairing, not a second write of it.
+  const code = src
+    .split('\n')
+    .filter((l) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+  const pairs = code.match(
+    /this\.railRoot\.setPosition\(0, this\.railCenterY\(\), 0\);\n\s*this\.scene\.setRailCenter\(this\.railCenterY\(\)\);/g,
+  ) ?? [];
+  // Both call sites: the constructor's, and `setLevels`'s once the road exists.
+  expect(pairs.length).toBe(2);
+  // And neither half is ever written on its own, with any argument.
+  expect((code.match(/this\.railRoot\.setPosition\(/g) ?? []).length).toBe(pairs.length);
+  expect((code.match(/this\.scene\.setRailCenter\(/g) ?? []).length).toBe(pairs.length);
 });
 
 /**

@@ -1,7 +1,7 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import {
     roundedSprite, dotSprite, starSprite, burstSprite, gearSprite, speakerSprite, buzzSprite,
-    liftedPill, PILL_LIFT,
+    liftedPill, PILL_INK, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
 import { CONTROL_BASE, CONTROL_FACE } from './palette';
@@ -823,7 +823,6 @@ const TUNNEL_CHIP_DROP = 3;
 const TUNNEL_COUNT_INK = new Color(24, 44, 88);
 const TUNNEL_COUNT_SIZE = 40;
 
-const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
 /**
  * The passenger badge: a saturated disc at the pill's left end with a WHITE figure on it.

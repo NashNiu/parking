@@ -64,48 +64,55 @@ export function safeInsets(): { top: number; bottom: number } {
  * `bottom`, not `top`, because what a layout needs is the first y that is clear of it -- the
  * capsule's own top edge tells you nothing about where it stops.
  *
- * Same shape as `safeInsets` above -- read once, clamped into a sane band, ZERO off-device,
- * because there is no capsule in a browser or in the editor preview and a layout that reserved
- * room for one there would be wrong on the only screen a developer actually looks at.
+ * Same shape as `safeInsets` above -- READ ONCE AND CACHED, clamped into a sane band, ZERO
+ * off-device, because there is no capsule in a browser or in the editor preview and a layout
+ * that reserved room for one there would be wrong on the only screen a developer actually
+ * looks at.
  *
- * ONE DELIBERATE DIVERGENCE FROM `safeInsets`, AND IT IS THE WHOLE POINT OF THE SHAPE BELOW:
- * only an ANSWERED read is cached. `safeInsets` caches its zero before it tries, which is fine
- * there -- a missing notch inset costs a few units of margin. It is NOT fine here. If wx is
- * present but `getMenuButtonBoundingClientRect` is not ready yet and hands back zeros, caching
- * that zero pins every control anchored to the top UNDERNEATH the system capsule for the rest of
- * the process, the try/catch eats the reason, and the failure is invisible to everything except
- * a person holding the phone. A wrong answer here is a control the player cannot reach.
+ * ONE READ, AT CONSTRUCTION, AND NO RETRY -- which is a change, and the reason is that the
+ * retry stopped being reachable. This used to cache only an ANSWERED read: if wx was present
+ * but `getMenuButtonBoundingClientRect` handed back zeros, it returned 0 WITHOUT caching so
+ * that "the next caller asks again". The failure that shape guards against is real -- caching
+ * a premature zero pins every control anchored to the top UNDERNEATH the system capsule for
+ * the rest of the process, the try/catch eats the reason, and the failure is invisible to
+ * everything except a person holding the phone. BUT THERE IS NO NEXT CALLER. `barBottomY` is
+ * the only thing that calls this, and `HomeView`'s constructor is the only thing that calls
+ * `barBottomY` -- once, from `GameController.start()` on frame 0, and `HomeView` is never
+ * reconstructed. A retry with a single caller is machinery that reads like a guarantee and
+ * provides none, which is worse than not having it: the next person sizes something against a
+ * second chance that cannot arrive.
  *
- * So the three cases are told apart rather than collapsed:
+ * WHAT THE SINGLE READ RISKS, said rather than hidden. `wx.getMenuButtonBoundingClientRect`
+ * is SYNCHRONOUS, and the capsule is drawn by the platform before the mini program's first
+ * frame is -- so by the time an engine has started, a canvas has been sized and `start()` has
+ * run, a platform that is going to answer has answered. If one ever does not, this screen's
+ * top row sits under the capsule for that session and the next launch is fine. That is a
+ * cosmetic loss on one launch, weighed against a retry nothing can reach.
  *
- *   - NO wx, or a wx without the call. There is no capsule and there never will be one. That
- *     zero is an answer, so it is cached and this never runs again.
- *   - A usable rect. Cached, and this never runs again.
- *   - wx is here and the rect is not usable yet (zeros, a throw). NOT an answer, NOT cached:
- *     zero is returned for this caller and the next one asks again.
+ * SO THE THREE CASES COLLAPSE TO TWO: a usable rect is cached, and anything else (no wx, no
+ * call, a zero rect, a throw) caches zero. Either way this runs exactly once.
  *
- * The cost of the retry is that this function can return one number early in a session and a
- * larger one later, so a screen that measures several things off it must read it ONCE and share
- * the result -- see `HomeView.barBottom`, which does exactly that and says why.
+ * IF A SECOND SCREEN EVER MEASURES OFF THIS, the honest fix is not to bring the retry back --
+ * it is to re-read at a known later moment and REPOSITION what was already placed, which is a
+ * second positioning path somebody has to write and test. Do that, or pass the one number
+ * down the way `HomeView` passes it to `TopBar`. Do not make this function claim a retry it
+ * does not perform.
  */
 let capsule: number | null = null;
 
 export function capsuleInset(): number {
     if (capsule !== null) return capsule;
+    capsule = 0;
     try {
-        if (typeof wx === 'undefined' || !wx.getMenuButtonBoundingClientRect) {
-            capsule = 0;
-            return capsule;
-        }
+        if (typeof wx === 'undefined' || !wx.getMenuButtonBoundingClientRect) return capsule;
         const rect = wx.getMenuButtonBoundingClientRect();
         const info = wx.getSystemInfoSync ? wx.getSystemInfoSync() : null;
         const h = info && info.screenHeight;
         if (rect && h > 0 && rect.bottom > 0) {
             capsule = Math.max(0, Math.min(0.3, rect.bottom / h));
-            return capsule;
         }
-    } catch { /* not an answer either -- fall through and let the next caller ask again */ }
-    return 0;
+    } catch { /* zero is the answer, and it is cached -- see the docblock above */ }
+    return capsule;
 }
 
 /**

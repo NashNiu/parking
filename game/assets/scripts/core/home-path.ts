@@ -66,8 +66,11 @@ export const ZIG_X = 210;
  * How many segments a leg is cut into.
  *
  * 6: the curve is shallow, so 6 segments keep the polyline's error under a pixel, and each
- * segment costs two sprites (road surface + kerb) plus a joint dot in the view layer. Sampling
- * more buys invisible smoothness at a linear drawing cost.
+ * segment costs exactly two sprites in the view layer -- one of road surface, one of kerb.
+ * There used to be a joint dot at every sample as well, and there is not any more: `home-scene`
+ * strokes each chord as a capsule (corner radius exactly half the stroke width), which already
+ * contains the whole disc at either end, so the dots were 126 sprites drawn inside shapes that
+ * were already there. Sampling more buys invisible smoothness at a linear drawing cost.
  */
 export const SAMPLES_PER_LEG = 6;
 

@@ -13,8 +13,12 @@ import { nodeCenter } from '../core/home-path';
 import { HomeScene } from './home-scene';
 
 /**
- * The home screen: the game's name, a rail of levels you drag through, and one button that
- * plays the one in the middle.
+ * The home screen: a street drawn up it, a rail of round level badges you drag through, a
+ * standing top bar across the top, and one button that plays the level in the middle.
+ *
+ * THE GAME'S NAME IS NOT ON IT. It used to open this list, and it is gone -- the route fills
+ * the screen top to bottom now and the first screen this hands over from is already wearing
+ * the name at the largest size it gets. See the constructor, where the absence is argued.
  *
  * It is a UI screen in the SAME canvas as the HUD, not a Cocos scene of its own. A second
  * scene would mean a second copy of the camera rig and the preload chain that `start()`
@@ -247,7 +251,17 @@ const GATE_BOB_TIME = 0.9;
 const GATE_DROP = 74;
 
 const LOADING_SIZE = 34;
-const LOADING_INK = new Color(150, 163, 196, 255);
+/**
+ * 「正在放行…」, and it is the FIRST line of type the player ever reads.
+ *
+ * DARKENED FROM 150,163,196, which was picked against the deep navy this screen used to open
+ * on and came with it when the navy did not. On `GROUND` (189,200,218) that grey sat at about
+ * 1.5:1 -- a pale line on pale pavement, and the one line on the screen with nothing else to
+ * read it by, because the barrier is still down and the rail is not up yet. 64,76,108 is the
+ * same cool navy family the rest of this screen's ink comes from and measures about 5:1 on
+ * GROUND, which is a caption you can read rather than one you can find.
+ */
+const LOADING_INK = new Color(64, 76, 108, 255);
 
 /** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 const TAP_PAD = 10;
@@ -353,7 +367,6 @@ export class HomeView {
     /** Offset units per second, positive when later levels are coming to the middle. */
     private vel = 0;
 
-    private w = 720;
     private h = 1280;
     /**
      * The bar's bottom edge, READ ONCE in the constructor and used for everything on this
@@ -361,21 +374,25 @@ export class HomeView {
      * bar itself -- `TopBar` is HANDED this number rather than calling `barBottomY` again, and
      * its constructor's docblock argues that at length.
      *
-     * A SNAPSHOT RATHER THAN A CALL PER USE, because `capsuleInset()` no longer caches a failed
-     * read (see `ui-layout` -- it used to, and a capsule that was not ready on the first call
-     * pinned the bar under the system UI for the rest of the session). That retry is the right
-     * behaviour and it means `barBottomY` can legitimately return one number early in a session
-     * and a larger one later. `railCenterY()` is called again from `setLevels`, several frames
-     * after the bar and the cap were built, so without this the rail could end up centred on a
-     * band the bar is not in -- which is the exact disagreement `BAR_H` and `barBottomY` were
-     * put in `ui-layout` to prevent, arriving through the back door.
+     * WHEN IT IS READ, and it is the whole timing story for this screen: ONCE, in the
+     * constructor, which `GameController.start()` runs on frame 0, and never again --
+     * `HomeView` is not reconstructed. `capsuleInset()` (see `ui-layout`) caches whatever its
+     * one read answers, including a zero, so `barBottomY` is a constant for the session and
+     * this field is that constant. It used to be otherwise: `capsuleInset` deliberately did not
+     * cache an unanswered read, so that a caller arriving later could ask again. That retry was
+     * removed when this constructor became its only caller -- a second chance nobody can take
+     * is machinery that reads like a guarantee and is not one. What it accepts is stated there:
+     * `wx.getMenuButtonBoundingClientRect` is synchronous and normally ready at launch, and a
+     * platform that answered late would cost this screen's top row one session.
      *
-     * ONE READ IS THE POINT, not "few reads". While `TopBar` still called `barBottomY` for
-     * itself the bar and the rail agreed only by ARGUMENT -- wx cannot change state between two
-     * statements of one synchronous constructor, which is true and is not a guarantee. With the
-     * number passed down there is a single read on this screen and everything below it is given
-     * the result, so the agreement holds by construction and a reader does not have to
-     * reconstruct the timing argument to trust it.
+     * ONE READ IS STILL THE POINT, not "few reads", and the argument survives the retry it was
+     * originally written against. `railCenterY()` runs again from `setLevels`, many frames after
+     * the bar and the cap were built; the cap, the ramp and the bar were positioned from this
+     * field, so the second call reads the same number by construction rather than by a claim
+     * about how `capsuleInset` behaves. That is the disagreement `BAR_H` and `barBottomY` were
+     * moved into `ui-layout` to make impossible, and it is closed here by a field rather than by
+     * trusting a function to keep answering the same way -- a reader does not have to reconstruct
+     * the timing argument to know the rail and the bar are in the same band.
      */
     private barBottom = 0;
 
@@ -392,7 +409,10 @@ export class HomeView {
      */
     constructor(canvas: Node) {
         const { w, h } = canvasSize(canvas);
-        this.w = w;
+        // `w` stays a local: everything on this screen that needs the width is built right
+        // here, in this constructor, and the one y that outlives it is `barBottom` below.
+        // It used to be a field because `railCenterY()` called `barBottomY(this.w, this.h)`;
+        // that call is a field read now, and a width kept for nobody is a width that drifts.
         this.h = h;
         // BEFORE ANYTHING READS IT, and it is the ONLY call to `barBottomY` on this screen --
         // the rail, the cap, the ramp and the bar are all given this one number. See the field.
@@ -1039,9 +1059,23 @@ export class HomeView {
      * paragraph that used to sit here reasoned about a resting size that shrank with distance
      * from the middle, and that no longer exists -- see NODE_D. See the box itself below for
      * why no two of them can ever meet.
+     *
+     * NOTHING ABOVE `barBottom` ANSWERS, and that bound is not tidiness. `layout()` culls a stop
+     * at 0.75 of the screen height, which is far ABOVE the bar -- deliberately, because a stop
+     * has to be drawn while it is dissolving into the ramp -- and `RailCap` is opaque `GROUND`
+     * from `barBottom` to the top of the screen. Between those two lines there are badges that
+     * are fully invisible and were still taking taps. Worked on a 19.5:9 phone (h = 2770) with
+     * a typical capsule (bottom 80 of 812) and at offset 0: `barBottom` lands at about 978, the
+     * rail centres on about -43, and stop 5 sits at 4 * 340 - 43 = about y 1317 -- some 340
+     * units up inside an opaque cap, well short of the 2078 `layout()` culls at, and taking
+     * taps. A tap on the empty middle of the top bar scrolled the rail to a level nobody could
+     * see, and the button under it re-labelled itself to match. Same rule as
+     * `TopBar.hitsSlot`, `hitsGear` and the HUD's `inBox`: what cannot be seen does not answer.
+     * A badge straddling the line keeps the half of it that is showing.
      */
     hitsStop(ui: Vec3): number {
         if (!this.open() || this.waiting) return -1;
+        if (ui.y > this.barBottom) return -1;
         for (let i = 0; i < this.stops.length; i++) {
             const stop = this.stops[i];
             if (!stop.node.active) continue;

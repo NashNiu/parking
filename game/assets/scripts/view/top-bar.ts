@@ -1,5 +1,5 @@
 import { Color, Label, Layers, Node, UITransform, Vec3 } from 'cc';
-import { dotSprite, gearSprite, liftedPill, PILL_LIFT } from './ui-shapes';
+import { dotSprite, gearSprite, liftedPill, PILL_INK, PILL_LIFT } from './ui-shapes';
 import { BAR_H, BAR_MARGIN_F, makeLabel, rimLabel } from './ui-layout';
 import { CONTROL_BASE, CONTROL_FACE } from './palette';
 
@@ -53,7 +53,6 @@ const COIN_PAD = 12;
 const COIN_GOLD = new Color(255, 196, 46, 255);
 const COIN_RIM = new Color(214, 152, 20, 255);
 const COIN_FACE_F = 0.74;
-const COIN_INK = new Color(48, 60, 92, 255);
 const COIN_SIZE = 44;
 
 /** The gear, and the two reserved places beside it. All three are the same disc. */
@@ -71,11 +70,21 @@ const GEAR_GLYPH = 0.62;
  * plate's ends and the pair read as a clipping fault rather than as a caption. In the bar the
  * label is above the rail entirely and nothing scrolls through it.
  *
- * THE ROAD STILL PASSES BEHIND IT, which is why the rim stays. `HomeScene` culls its legs at
- * 0.75 of the screen height and this bar sits well inside that, so the surface behind these
- * glyphs is sometimes pale pavement (189,200,218) and sometimes dark asphalt (86,93,108). No
- * single ink survives both; white with a navy rim survives either, which is exactly the job
- * `rimLabel` exists for.
+ * THE RIM STAYS, FOR A DIFFERENT REASON THAN IT WAS ADDED FOR, and the change is worth
+ * writing down because the old reason is the one a reader would guess. It used to be that the
+ * road ran behind this label -- `HomeScene` culls its legs at 0.75 of the screen height, well
+ * above this bar -- so the surface behind these glyphs was pale pavement at one scroll position
+ * and dark asphalt at another, and no single ink survives both. That is no longer true.
+ * `HomeView` now lays an OPAQUE `GROUND` cap over the bar's whole band and draws this bar on top
+ * of it (see RAIL_FADE_H there), so the background here is `GROUND` (189,200,218), always,
+ * everywhere along the row.
+ *
+ * ONE KNOWN BACKGROUND IS NOT THE SAME AS A LEGIBLE ONE. White on 189,200,218 is about 1.7:1,
+ * which is a pale line on pale pavement rather than a caption. The rim is what carries it: a
+ * near-opaque navy outline puts a dark edge around every stroke, so what the eye reads is the
+ * outline's contrast against the pavement (about 12:1) rather than the white's. Turning the rim
+ * off and darkening the ink instead would work too -- and would cost this row the toy-UI
+ * treatment every other fixed label in the project wears. See `rimLabel`.
  */
 const CAPTION_SIZE = 36;
 const CAPTION_INK = new Color(255, 255, 255, 255);
@@ -104,21 +113,25 @@ export class TopBar {
      * not. `barBottomY(w, h)` is right there and this class imports its two constants already,
      * so calling it would be shorter. Do not.
      *
-     * WHAT IT PREVENTS. `barBottomY` reads `capsuleInset()`, which (see `ui-layout`) no longer
-     * caches an unanswered read: if wx is present but the capsule rect is not ready, it returns
-     * 0 WITHOUT caching and the next caller asks again. That is deliberate -- caching a failed
-     * read pins every top-anchored control under the system capsule for the life of the process
-     * -- but it means the function can legitimately return one number early in a session and a
-     * larger one later. Every extra caller is therefore another chance for two parts of one
-     * layout to be built against two different bands.
+     * WHAT IT PREVENTS. `HomeView` centres the rail on the free band UNDER this bar, and if the
+     * rail's idea of where the band is and the bar's idea of it ever differ, the rail is centred
+     * on nothing and nothing says so. That is exactly the disagreement `BAR_H` and `barBottomY`
+     * were moved into `ui-layout` to make impossible, and a second call site is the back door
+     * into it. `HomeView` reads `barBottomY` ONCE, in its constructor, into `HomeView.barBottom`,
+     * and hands the result to everything that measures off it -- the rail's centre, the cap, the
+     * ramp, and this bar. One read on the whole screen.
      *
-     * That disagreement is EXACTLY what `BAR_H` and `barBottomY` were moved into `ui-layout` to
-     * make impossible: `HomeView` centres the rail on the free band under this bar, and if the
-     * rail's idea of the band and the bar's idea of the band differ, the rail is centred on
-     * nothing and nothing says so. `HomeView` pulled its own three reads down to one snapshot
-     * (`HomeView.barBottom`) for that reason; this constructor is the fourth caller, and taking
-     * the number rather than re-deriving it is what makes the guarantee STRUCTURAL instead of an
-     * argument about how fast two statements run.
+     * WHY THAT IS A RULE AND NOT A MICRO-OPTIMISATION, given that `barBottomY` is in fact stable:
+     * `capsuleInset()` caches its one read, so today two calls cannot disagree. Today. That is a
+     * property of a function in another file, and this bar's agreement with the rail would be an
+     * inference from it rather than a fact about this screen -- the same shape as the argument
+     * that used to be made here, that wx cannot change state between two statements of one
+     * synchronous constructor. It was true and it was not a guarantee, and it stopped being true
+     * once: `capsuleInset` spent a while deliberately NOT caching an unanswered read so a later
+     * caller could retry, which made `barBottomY` legitimately return one number early in a
+     * session and a larger one later. The retry is gone (it had one caller; see `ui-layout`), and
+     * the number passed down is what makes this bar and that rail share a band BY CONSTRUCTION,
+     * whatever the next revision of `capsuleInset` decides to do.
      *
      * `h` is not a parameter at all, for the same reason stated positively: with the band already
      * resolved there is no y on this bar that needs the screen's height, so the height is not in
@@ -186,7 +199,9 @@ export class TopBar {
         // arithmetic the HUD's passenger count uses for the same reason.
         const coinRight = -COIN_W / 2 + COIN_PAD + COIN_D;
         const count = makeLabel(face, 'TopBarCoinCount', COIN_SIZE, 0, (coinRight + COIN_W / 2) / 2);
-        count.color = COIN_INK;
+        // `PILL_INK`, not a copy of it. This plate is `liftedPill`'s face, and the ink that
+        // goes on that face travels with it -- see `ui-shapes`, where both now live.
+        count.color = PILL_INK;
         count.isBold = true;
         count.string = '0';
         return count;
