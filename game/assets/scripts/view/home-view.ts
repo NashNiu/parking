@@ -1,7 +1,7 @@
 import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
-import { dotSprite, rampSprite, roundedSprite, starSprite } from './ui-shapes';
+import { dotSprite, rampSprite, roundedSprite, starSprite, triSprite } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
 import { GROUND } from './palette';
 import { TopBar } from './top-bar';
@@ -92,6 +92,34 @@ const START_SHUT = new Color(60, 71, 102, 255);
 const START_SHUT_BASE = new Color(45, 54, 78, 255);
 /** How far the base peeks out below the face. Same lip the HUD's buttons wear. */
 const BTN_LIFT = 8;
+
+/**
+ * The play-head icon on the button's face, and the shift that keeps icon-plus-label reading
+ * as one unit rather than as centred text with an icon hanging off its left side.
+ *
+ * 40, inside `ui-shapes.ts`'s own note on `triSprite` that this icon is "never drawn larger
+ * than about 48 design units -- an icon on the start button", which is exactly this one.
+ *
+ * START_LABEL_X is a FIXED shift, not one measured off the label's actual rendered width: the
+ * two strings this label ever carries ("开始 第 N 关" and its locked counterpart) differ by
+ * several characters, and `Label` does not report a settled size synchronously with
+ * `.string` inside `setFocus`, so there is nothing reliable to measure there. Treating the
+ * label's width as unknown but symmetric about its own centre, the shift that re-centres
+ * icon-plus-label as a whole works out to exactly half of the icon's own footprint
+ * (diameter + gap) -- independent of that unknown width, which is what makes a fixed
+ * constant the right tool here rather than an approximation of one:
+ *   icon [START_ICON_D] + gap [START_ICON_GAP] + label [L, unknown] centred as a whole
+ *   => label centre sits at (START_ICON_D + START_ICON_GAP) / 2, whatever L is.
+ * The icon's own x has no such width-independent answer -- it sits one gap to the left of
+ * where the label's left edge falls, which does depend on L -- so it is placed instead a
+ * fixed distance in from the face's rounded corner (START_R), clear of it. That is exact for
+ * the common, playable string and only approximate for the longer locked one; see the task
+ * report for the on-device check this leaves for a human.
+ */
+const START_ICON_D = 40;
+const START_ICON_GAP = 14;
+const START_LABEL_X = (START_ICON_D + START_ICON_GAP) / 2;
+const START_ICON_X = -START_W / 2 + START_R + START_ICON_D / 2 + 8;
 
 /**
  * A ROUND BADGE, and its size is decided by the SAVE rather than by the scroll.
@@ -263,6 +291,7 @@ export class HomeView {
     private startFace: Node;
     private startBase: Node;
     private startLabel: Label;
+    private startIcon: Node;
     /** The street the rail runs up. See `home-scene`. */
     private scene: HomeScene;
     /** The stops' parent, parked on the lane. Stops are positioned within it. */
@@ -415,6 +444,7 @@ export class HomeView {
         this.startFace = start.face;
         this.startBase = start.base;
         this.startLabel = start.label;
+        this.startIcon = start.icon;
 
         this.loadingLayer = new Node('Loading');
         this.loadingLayer.layer = Layers.Enum.UI_2D;
@@ -432,7 +462,9 @@ export class HomeView {
      * step with whatever is in the middle of the rail -- the two cannot disagree, because
      * one function writes both.
      */
-    private buildStart(y: number): { node: Node; face: Node; base: Node; label: Label } {
+    private buildStart(
+        y: number,
+    ): { node: Node; face: Node; base: Node; label: Label; icon: Node } {
         const btn = new Node('HomeStart');
         btn.layer = Layers.Enum.UI_2D;
         btn.addComponent(UITransform).setContentSize(START_W, START_H);
@@ -443,10 +475,14 @@ export class HomeView {
         base.setPosition(0, -BTN_LIFT, 0);
         const face = roundedSprite('face', START_W, START_H, START, START_R);
         btn.addChild(face);
-        const label = makeLabel(face, 'HomeStartLabel', 46, 0);
+        // Left of the label -- see START_ICON_X for where and why.
+        const icon = triSprite('icon', START_ICON_D, Color.WHITE);
+        face.addChild(icon);
+        icon.setPosition(START_ICON_X, 0, 0);
+        const label = makeLabel(face, 'HomeStartLabel', 46, 0, START_LABEL_X);
         label.isBold = true;
         label.string = '开始游戏';
-        return { node: btn, face, base, label };
+        return { node: btn, face, base, label, icon };
     }
 
     /** See GATE_POST_W for what this is and why its arm does not report a fraction. */
@@ -760,6 +796,10 @@ export class HomeView {
         this.startFace.getComponent(Sprite)!.color = this.focusOpen ? START : START_SHUT;
         this.startBase.getComponent(Sprite)!.color =
             this.focusOpen ? START_BASE : START_SHUT_BASE;
+        // Drained in step with the face and base, right here rather than in a second place
+        // that could fall out of step with them -- STAR_OFF is this file's own colour for
+        // "not lit", already worn by a star that has not been earned.
+        this.startIcon.getComponent(Sprite)!.color = this.focusOpen ? Color.WHITE : STAR_OFF;
         this.startLabel.string = this.focusOpen
             ? `开始 第 ${this.focused + 1} 关`
             : `通过第 ${this.focused} 关解锁`;
@@ -768,6 +808,17 @@ export class HomeView {
     /** Bring stop `i` to the middle, on a tap. */
     focusStop(i: number): void {
         this.setFocus(i);
+    }
+
+    /**
+     * Pressed drops the face onto the base by BTN_LIFT; released returns it to rest. That is
+     * the whole effect -- no scale, no colour change. Every pressable thing on this screen is
+     * a face over a base with a visible lip (see BTN_LIFT), so taking the lip away IS the
+     * press: it reuses the vocabulary the resting state already wears instead of inventing a
+     * second one.
+     */
+    setStartPressed(on: boolean): void {
+        this.startFace.setPosition(0, on ? -BTN_LIFT : 0, 0);
     }
 
     /**

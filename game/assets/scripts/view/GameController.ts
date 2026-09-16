@@ -2266,6 +2266,10 @@ export class GameController extends Component {
         this.slidHome = false;
         // ui.y, because the home rail runs up the screen now.
         this.home.beginDrag(ui.y, nowMs() / 1000);
+        // A press landing on the start button also depresses it. `hitsStart` already returns
+        // false when the focused level is locked (it reads `focusOpen`), so a press on a shut
+        // button leaves it flat -- the button visibly refusing rather than staying silent.
+        if (this.home.hitsStart(ui)) this.home.setStartPressed(true);
     }
 
     /** Carry the drag. */
@@ -2291,6 +2295,9 @@ export class GameController extends Component {
         if (this.screen === 'home' && this.home) {
             this.slidHome = this.home.endDrag(nowMs() / 1000) === 'slid';
         }
+        // Unconditional, not "if it was pressed" -- this also runs on TOUCH_CANCEL, and a
+        // button stuck in its pressed state is a worse outcome than one redundant assignment.
+        this.home?.setStartPressed(false);
     }
 
     /**
