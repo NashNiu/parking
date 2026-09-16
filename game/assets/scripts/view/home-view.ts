@@ -94,27 +94,34 @@ const START_SHUT_BASE = new Color(45, 54, 78, 255);
 const BTN_LIFT = 8;
 
 /**
- * The play-head icon on the button's face, and the shift that keeps icon-plus-label reading
- * as one unit rather than as centred text with an icon hanging off its left side.
+ * The play-head icon on the button's face, and the arithmetic that keeps icon-plus-label
+ * reading as one unit rather than as centred text with an icon hanging off its left side.
  *
  * 40, inside `ui-shapes.ts`'s own note on `triSprite` that this icon is "never drawn larger
  * than about 48 design units -- an icon on the start button", which is exactly this one.
  *
- * START_LABEL_X is a FIXED shift, not one measured off the label's actual rendered width: the
- * two strings this label ever carries ("开始 第 N 关" and its locked counterpart) differ by
- * several characters, and `Label` does not report a settled size synchronously with
- * `.string` inside `setFocus`, so there is nothing reliable to measure there. Treating the
- * label's width as unknown but symmetric about its own centre, the shift that re-centres
- * icon-plus-label as a whole works out to exactly half of the icon's own footprint
- * (diameter + gap) -- independent of that unknown width, which is what makes a fixed
- * constant the right tool here rather than an approximation of one:
- *   icon [START_ICON_D] + gap [START_ICON_GAP] + label [L, unknown] centred as a whole
- *   => label centre sits at (START_ICON_D + START_ICON_GAP) / 2, whatever L is.
- * The icon's own x has no such width-independent answer -- it sits one gap to the left of
- * where the label's left edge falls, which does depend on L -- so it is placed instead a
- * fixed distance in from the face's rounded corner (START_R), clear of it. That is exact for
- * the common, playable string and only approximate for the longer locked one; see the task
- * report for the on-device check this leaves for a human.
+ * Both positions fall out of one requirement: icon (width START_ICON_D), a gap
+ * (START_ICON_GAP), then the label (width L), read as a block centred as a whole under the
+ * button's own centre. Solving that for each node's centre, taking the label's own bounding
+ * box as symmetric about its centre (Label's default anchor, untouched here):
+ *   label centre = (START_ICON_D + START_ICON_GAP) / 2         -- independent of L
+ *   icon centre  = -(START_ICON_GAP + L) / 2                    -- depends on L
+ * The label's centre is therefore a plain constant, `START_LABEL_X`, good for every string it
+ * ever carries. The icon's is NOT, because L changes between the playable string
+ * ("开始 第 N 关") and the longer locked one ("通过第 N 关解锁") -- so the icon is
+ * repositioned every time the label's string changes, in `setFocus`, using `L` read back from
+ * the label itself via `Label.updateRenderData(true)`. That call is what makes `L` available
+ * synchronously: a plain `.string` assignment leaves the node's `UITransform` width stale
+ * until the renderer's next pass, but `updateRenderData(true)` flushes the assembler
+ * immediately -- the same mechanism `RichText` uses to measure a label right after changing
+ * it (see `updateRenderData` in the engine's `cocos/2d/components/label.ts`). It is not in
+ * this project's own `.d.ts` stub, only in the engine's, which is what `tsconfig.view.json`
+ * actually type-checks against (see its own comment on `game/temp/declarations/cc.d.ts`).
+ *
+ * `START_ICON_X` is used once, in `buildStart`, before the button has ever shown a real
+ * string -- `setFocus` (reached through `setProgress`) always runs before the button is first
+ * revealed, so this placeholder is never actually seen; it exists so the icon has SOME
+ * position between construction and that first `setFocus` rather than sitting on the origin.
  */
 const START_ICON_D = 40;
 const START_ICON_GAP = 14;
@@ -803,6 +810,13 @@ export class HomeView {
         this.startLabel.string = this.focusOpen
             ? `开始 第 ${this.focused + 1} 关`
             : `通过第 ${this.focused} 关解锁`;
+        // Flush the assembler so the label's UITransform width is the SETTLED width of the
+        // string just above, not last frame's -- see START_ICON_D for why this is safe to
+        // rely on. Only then can the icon be placed exactly, rather than approximately, for
+        // whichever of the two strings just went up.
+        this.startLabel.updateRenderData(true);
+        const labelW = this.startLabel.node.getComponent(UITransform)!.width;
+        this.startIcon.setPosition(-(START_ICON_GAP + labelW) / 2, 0, 0);
     }
 
     /** Bring stop `i` to the middle, on a tap. */
