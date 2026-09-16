@@ -1,6 +1,7 @@
 import { Color, Label, Layers, Node, UITransform, Vec3 } from 'cc';
 import { dotSprite, gearSprite, liftedPill, PILL_LIFT } from './ui-shapes';
 import { BAR_H, BAR_MARGIN_F, makeLabel, rimLabel } from './ui-layout';
+import { CONTROL_BASE, CONTROL_FACE } from './palette';
 
 /**
  * The lobby's standing top bar: the coin readout on the left, the settings gear on the right,
@@ -61,19 +62,6 @@ const SLOT_D = 76;
 const SLOT_GAP = 16;
 /** The cogwheel inside its disc, as a fraction of it -- the HUD's gear wears the same ratio. */
 const GEAR_GLYPH = 0.62;
-/**
- * The gear's two plates.
- *
- * THE SAME PAIR THE HUD'S GEAR WEARS, written out here rather than imported: the HUD's copy is
- * `CARD_RIM_FACE` / `CARD_RIM_BASE`, named for the settings CARD it rims, and it is private to
- * `hud-view`. Importing it would point the lobby at the in-game HUD for a colour, which is the
- * coupling `ui-layout`'s own header was split out to avoid. The honest position is that these
- * two want to be in `palette.ts` next to `GROUND` and `ROAD`, and moving them is a change to
- * every settings panel in `hud-view` -- more than this task should touch. Flagged, not hidden.
- */
-const GEAR_FACE = new Color(42, 138, 208, 255);
-const GEAR_BASE = new Color(20, 92, 150, 255);
-
 /**
  * 「共 N 关」, and the one line of type on this screen with nothing under it.
  *
@@ -204,17 +192,27 @@ export class TopBar {
         return count;
     }
 
-    /** See GEAR_FACE: the same disc, the same drawn cogwheel, as the one on the board's HUD. */
+    /**
+     * The same disc, wearing the same two plates and the same drawn cogwheel, as the gear on
+     * the board's HUD -- `CONTROL_FACE` / `CONTROL_BASE`, imported from `palette`.
+     *
+     * THIS FILE USED TO CARRY ITS OWN COPY of those two numbers, with a note saying it would
+     * rather import them: the HUD's pair was `CARD_RIM_FACE` / `CARD_RIM_BASE`, private to
+     * `hud-view` and named for the settings CARD it rims, so the lobby had nothing it could
+     * honestly import and wrote the values down instead. They are in `palette` now under a
+     * name that fits both callers, and the copy is gone -- the same resolution `liftedPill`
+     * got when this bar needed the HUD's pill. Nothing about the colour changed.
+     */
     private buildGear(x: number): Node {
         const holder = new Node('TopBarGear');
         holder.layer = Layers.Enum.UI_2D;
         holder.addComponent(UITransform).setContentSize(GEAR_D, GEAR_D);
         this.root.addChild(holder);
         holder.setPosition(x, 0, 0);
-        const base = dotSprite('base', GEAR_D, GEAR_BASE);
+        const base = dotSprite('base', GEAR_D, CONTROL_BASE);
         holder.addChild(base);
         base.setPosition(0, -PILL_LIFT, 0);
-        const face = dotSprite('face', GEAR_D, GEAR_FACE);
+        const face = dotSprite('face', GEAR_D, CONTROL_FACE);
         holder.addChild(face);
         face.addChild(gearSprite('glyph', GEAR_D * GEAR_GLYPH, Color.WHITE));
         return holder;

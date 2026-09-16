@@ -4,6 +4,7 @@ import {
     liftedPill, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
+import { CONTROL_BASE, CONTROL_FACE } from './palette';
 import { STAR_MAX } from '../core/index';
 
 /**
@@ -211,16 +212,13 @@ const CARD_PAGE_W = CARD_W - CARD_RIM * 2;
  */
 const CARD_TITLE_SIZE = 96;
 /**
- * The frame, DARKER than it was (64,172,236 over 28,112,176), asked for as 卡片外层的背景颜色再
- * 深一些.
+ * The frame is drawn in the family's blue, `CONTROL_FACE` / `CONTROL_BASE`, which is imported
+ * from `palette` now rather than declared here as `CARD_RIM_FACE` / `CARD_RIM_BASE`.
  *
- * The bright cyan was competing with the cream page for the eye instead of holding it: a
- * frame's job is to be the edge of the thing, and an edge brighter than the page it frames
- * reads as the subject. It is still the family's blue -- the gear, the switches and the side
- * buttons all take these two -- just seated behind the page rather than in front of it.
+ * It moved because the lobby's top bar wears the same pair on its gear and had written its own
+ * copy of the two numbers -- a name that says CARD is not one another screen can honestly
+ * import. The colour did not change, and its history moved with it; `palette` has both.
  */
-const CARD_RIM_FACE = new Color(42, 138, 208, 255);
-const CARD_RIM_BASE = new Color(20, 92, 150, 255);
 const CARD_PAGE = new Color(253, 246, 232, 255);
 /**
  * Ink on the cream page, and the quieter ink under it.
@@ -415,6 +413,55 @@ const SET_SIDE_SIZE = 68;
 const SET_BTN_GAP_Y = 42;
 const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
 const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
+/**
+ * The clear-save button: a second row under the answers, RED, and only ever on the card the
+ * lobby opens. See `buildSettings` for why it is red and `confirmWipe` for the two taps.
+ *
+ * Narrower than the wide green one (320 against 560) because it is not the answer anyone came
+ * for -- the same reason the 主页/重玩 pair is narrower than 继续游戏. It is the LONGER string
+ * that sets the type size, and the longer string is the second one: 「确定清除?」 is four CJK
+ * glyphs plus a question mark, about 306 wide at the side buttons' 68, which leaves 7 units
+ * either side inside 320 -- type against the rounded corners. At 56 it comes to about 252,
+ * which leaves 34.
+ *
+ * ITS OWN GAP, 28 rather than SET_BTN_GAP_Y's 42: the answers are separated from the CARD, and
+ * this is separated from the answers. A row that sits as far from its neighbours as the block
+ * sits from the card reads as a third unrelated thing rather than as the bottom of this one.
+ */
+const SET_WIPE_W = 320;
+const SET_WIPE_GAP_Y = 28;
+const SET_WIPE_Y = SET_BTN_Y - PROMPT_BTN_H - SET_WIPE_GAP_Y;
+const SET_WIPE_SIZE = 56;
+/**
+ * Red, and the only red on this HUD. Nothing else in the game is destructive, so the colour
+ * has no second meaning to be confused with -- which is most of what it is buying: the button
+ * has to look unlike the two blue ones beside it before it is read, not after.
+ *
+ * Same two-plate treatment and the same darker-base ratio as the family blue, so it reads as
+ * the same KIND of control -- a button, pressable, part of this card -- in a different colour.
+ * A red that also broke the drawing convention would read as a warning graphic.
+ */
+const WIPE_FACE = new Color(230, 82, 78, 255);
+const WIPE_BASE = new Color(168, 52, 49, 255);
+/**
+ * What the button says before and after its first tap.
+ *
+ * The armed label ASKS rather than warns: a button that has changed from naming an action to
+ * asking about it is the whole of the confirmation, and it stays in the same place, in the same
+ * colour, so the second tap is a deliberate answer to a question the player can still read.
+ */
+const WIPE_TEXT = '清除进度';
+const WIPE_ASK = '确定清除?';
+/**
+ * How much further the lobby's panel is raised, so the card and BOTH rows under it centre on
+ * the screen the way the card and one row do in play.
+ *
+ * SET_RAISE's own note says what this is for: without it "the composition hangs low by half a
+ * button". The lobby's card hangs a whole extra button below the same card in play, so it needs
+ * half of that back -- the identical argument, applied to the taller of the two panels rather
+ * than restated as a second constant with a different derivation.
+ */
+const SET_RAISE_WIPE = SET_RAISE + (SET_WIPE_GAP_Y + PROMPT_BTN_H) / 2;
 /**
  * The cost line, smaller than the sub and directly under the button it applies to.
  *
@@ -859,14 +906,35 @@ export class HudView {
     private promptReplay: Node | null = null;
     /** The only line on the prompt that changes. See `showUnlockPrompt`. */
     private promptCost: Label | null = null;
-    /** The settings panel's scrim and its five hit targets, built on first use. */
+    /** The settings panel's scrim and its six hit targets, built on first use. */
     private settings: Node | null = null;
     private setClose: Node | null = null;
     private setResume: Node | null = null;
     private setHome: Node | null = null;
     private setReplay: Node | null = null;
+    private setWipe: Node | null = null;
     private sfxSwitch: SwitchParts | null = null;
     private hapticSwitch: SwitchParts | null = null;
+    /**
+     * This card was opened from the LOBBY, where three of its controls have nothing to act on.
+     *
+     * A field rather than a look at which nodes are switched on, and `hitsSettings` is where it
+     * earns that: `inBox` measures a node's `worldPosition`, and a node that is switched off
+     * keeps the position it had -- so hiding 主页 and 重玩 does not stop the card answering
+     * 'home' for a tap where they used to be, and in the lobby 'home' means a `showHome()` that
+     * resets the rail the player was reading. This flag is what the three branches are gated on.
+     */
+    private setLobby = false;
+    /**
+     * 清除进度 is armed: it has been tapped once and its label is asking. See `confirmWipe`.
+     *
+     * The state is HERE rather than in the controller because it belongs to the control: it is
+     * a fact about what this button currently says, not about the game, and it dies with the
+     * panel. `hideSettings` stands it back down.
+     */
+    private wipeArmed = false;
+    /** The wipe button's own label, which is the only thing that shows its armed state. */
+    private setWipeLabel: Label | null = null;
     private pickNodes: Node[] = [];
     /**
      * The two readout plates, by their HOLDERS rather than their labels: `setPlayVisible`
@@ -975,10 +1043,10 @@ export class HudView {
         holder.addComponent(UITransform).setContentSize(GEAR_D, GEAR_D);
         canvas.addChild(holder);
         holder.setPosition(x, y, 0);
-        const base = dotSprite('base', GEAR_D, CARD_RIM_BASE);
+        const base = dotSprite('base', GEAR_D, CONTROL_BASE);
         holder.addChild(base);
         base.setPosition(0, -PILL_LIFT, 0);
-        const face = dotSprite('face', GEAR_D, CARD_RIM_FACE);
+        const face = dotSprite('face', GEAR_D, CONTROL_FACE);
         holder.addChild(face);
         face.addChild(gearSprite('glyph', GEAR_D * GEAR_GLYPH, Color.WHITE));
         return holder;
@@ -1358,10 +1426,10 @@ export class HudView {
         const shadow = roundedSprite('shadow', w, h, PROMPT_SHADOW, CARD_R);
         card.addChild(shadow);
         shadow.setPosition(0, -CARD_LIFT - PROMPT_SHADOW_DROP, 0);
-        const rimBase = roundedSprite('rimBase', w, h, CARD_RIM_BASE, CARD_R);
+        const rimBase = roundedSprite('rimBase', w, h, CONTROL_BASE, CARD_R);
         card.addChild(rimBase);
         rimBase.setPosition(0, -CARD_LIFT, 0);
-        const rim = roundedSprite('rim', w, h, CARD_RIM_FACE, CARD_R);
+        const rim = roundedSprite('rim', w, h, CONTROL_FACE, CARD_R);
         card.addChild(rim);
 
         const pageH = h - CARD_HEAD - CARD_RIM;
@@ -1372,7 +1440,7 @@ export class HudView {
 
         // On the rim, centred in the band the page leaves above itself.
         const label = makeLabel(rim, 'title', CARD_TITLE_SIZE, h / 2 - CARD_HEAD / 2);
-        rimLabel(label, CARD_RIM_BASE, 6);
+        rimLabel(label, CONTROL_BASE, 6);
         label.string = title;
 
         // A child of the CARD and its LAST one, so it draws over the rim and the page both.
@@ -1383,10 +1451,10 @@ export class HudView {
         card.addChild(close);
         close.setPosition(w / 2 - CARD_X_INSET, h / 2 - CARD_X_INSET, 0);
         close.addChild(dotSprite('ring', CARD_X_D + CARD_X_RING * 2, Color.WHITE));
-        const xBase = dotSprite('base', CARD_X_D, CARD_RIM_BASE);
+        const xBase = dotSprite('base', CARD_X_D, CONTROL_BASE);
         close.addChild(xBase);
         xBase.setPosition(0, -CARD_X_LIFT, 0);
-        const xFace = dotSprite('face', CARD_X_D, CARD_RIM_FACE);
+        const xFace = dotSprite('face', CARD_X_D, CONTROL_FACE);
         close.addChild(xFace);
         const x = makeLabel(xFace, 'x', CARD_X_SIZE, 2);
         x.isBold = true;
@@ -1534,12 +1602,30 @@ export class HudView {
         const side = SET_WIDE_W / 2 + SET_BTN_GAP + SET_SIDE_W / 2;
         this.setHome = this.buildCardBtn(panel, {
             x: -side, y: SET_BTN_Y, w: SET_SIDE_W, text: '主页',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
         this.setReplay = this.buildCardBtn(panel, {
             x: side, y: SET_BTN_Y, w: SET_SIDE_W, text: '重玩',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
+
+        // The clear-save button, on a row of its own under the answers -- see SET_WIPE_W. It
+        // is built with the card rather than on demand, so the panel has one shape for its
+        // whole life and `showSettings` only ever switches this row on or off.
+        //
+        // IT REPLACES A THREE-SECOND HOLD on the home screen's caption plate. The plate is
+        // gone (it clipped the badges scrolling behind it), and a hidden destructive gesture
+        // is the worse half of that trade anyway: nobody found it, and nothing on screen said
+        // it was there. A labelled red button that asks once is the honest version.
+        this.setWipe = this.buildCardBtn(panel, {
+            x: 0, y: SET_WIPE_Y, w: SET_WIPE_W, text: WIPE_TEXT,
+            face: WIPE_FACE, base: WIPE_BASE, rim: WIPE_BASE, size: SET_WIPE_SIZE,
+        });
+        // Down through the two nodes `buildCardBtn` draws, BY NAME. This label is the only
+        // part of any button on this card that ever changes, which is not worth a sixth
+        // member on a helper the other five are happy with.
+        this.setWipeLabel = this.setWipe.getChildByName('face')!
+            .getChildByName('l')!.getComponent(Label)!;
 
         scrim.active = false;
         this.settings = scrim;
@@ -1565,12 +1651,12 @@ export class HudView {
         page.addChild(row);
         row.setPosition(0, y, 0);
 
-        const glyph = icon('icon', SET_ICON_D, CARD_RIM_FACE);
+        const glyph = icon('icon', SET_ICON_D, CONTROL_FACE);
         row.addChild(glyph);
         glyph.setPosition(SET_ICON_X, 0, 0);
 
         const label = makeLabel(row, 'label', SET_LABEL_SIZE, 0, SET_LABEL_X);
-        rimLabel(label, CARD_RIM_BASE, 6);
+        rimLabel(label, CONTROL_BASE, 6);
         label.string = text;
         // Anchored at its LEFT edge, so SET_LABEL_X is where the text starts rather than
         // where its middle happens to land. Both rows say two characters today and centring
@@ -1606,16 +1692,36 @@ export class HudView {
      * Raise the settings panel. `sfx` and `haptics` are the caller's current values -- the
      * panel draws them and reports taps; it does not remember them, because the thing that
      * has to be right is what the game is actually doing, not what a panel thinks.
+     *
+     * `lobby` says which screen raised it, and it is not cosmetic. The lobby has no level to
+     * go home from or replay, and it is the only screen where clearing the save makes sense,
+     * so three of this card's controls swap places between the two callers. It is passed on
+     * every raise rather than set once because one HudView serves both screens.
      */
-    showSettings(sfx: boolean, haptics: boolean): void {
+    showSettings(sfx: boolean, haptics: boolean, lobby: boolean): void {
         if (!this.settings) this.buildSettings();
         const scrim = this.settings!;
         this.paintSwitches(sfx, haptics);
+        this.setLobby = lobby;
+        // `setHome` and `setReplay` are `Node | null`, not a wrapper with a `.node` -- these
+        // are the nodes themselves. Switching them off is HALF of what makes them go away;
+        // the other half is the gate in `hitsSettings`, which is where the trap is.
+        this.setHome!.active = !lobby;
+        this.setReplay!.active = !lobby;
+        this.setWipe!.active = lobby;
+        // A raise is a fresh card: whatever the red button was asking last time, it is not
+        // asking now. `hideSettings` does this too -- both ends, because a panel can be taken
+        // down by `setPlayVisible` without either being called.
+        this.disarmWipe();
+        // The taller composition needs the bigger raise, or the lobby's card hangs low by
+        // half a button -- SET_RAISE_WIPE has the arithmetic. Set on every raise because the
+        // same panel node serves both shapes.
+        const panel = scrim.getChildByName('SetPanel')!;
+        panel.setPosition(0, lobby ? SET_RAISE_WIPE : SET_RAISE, 0);
         if (scrim.active) return;
         scrim.active = true;
         scrim.setSiblingIndex(this.canvas.children.length - 1);
         this.syncGear();
-        const panel = scrim.getChildByName('SetPanel')!;
         Tween.stopAllByTarget(panel);
         panel.setScale(0.86, 0.86, 1);
         tween(panel)
@@ -1641,7 +1747,42 @@ export class HudView {
 
     hideSettings(): void {
         if (this.settings) this.settings.active = false;
+        this.disarmWipe();
         this.syncGear();
+    }
+
+    /**
+     * Advance the clear-save button's two steps, and say whether the caller should now DO it.
+     *
+     * The first tap arms it and rewrites its label into a question; only the second returns
+     * true. The caller's whole part is `if (hud.confirmWipe()) this.wipeProgress();` -- it does
+     * not have to know there are two steps, and it cannot get the count wrong.
+     *
+     * NOT FOLDED INTO `hitsSettings`, which stays a pure question about where a tap landed, the
+     * way every hit test on both screens is. A hit test that also changed state would mean
+     * asking "what did they tap" had a side effect, and the answer to that is normally asked
+     * before the caller has decided whether the press was even a tap.
+     */
+    confirmWipe(): boolean {
+        if (this.wipeArmed) {
+            this.disarmWipe();
+            return true;
+        }
+        this.wipeArmed = true;
+        if (this.setWipeLabel) this.setWipeLabel.string = WIPE_ASK;
+        return false;
+    }
+
+    /**
+     * Stand the red button back down: it names the action again and the next tap only arms it.
+     *
+     * Called when the panel closes and after any OTHER answer on the card. A destructive
+     * button left armed while the player does something else is a trap -- they come back to a
+     * card that looks the way they left it, and the next tap on the red one is the last one.
+     */
+    disarmWipe(): void {
+        this.wipeArmed = false;
+        if (this.setWipeLabel) this.setWipeLabel.string = WIPE_TEXT;
     }
 
     /** Whether the panel is up, i.e. whether it owns the next tap. */
@@ -1654,14 +1795,29 @@ export class HudView {
      * that hits nothing is SWALLOWED rather than closing the panel, because the board behind
      * it is mid-level and a stray tap there would move a car.
      */
-    hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | null {
+    hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | 'wipe' | null {
         if (!this.settingsOpen()) return null;
         const c = this.setClose!.worldPosition;
         const r = CARD_X_D / 2 + 12;
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
         if (this.inBox(ui, this.setResume!, SET_WIDE_W, PROMPT_BTN_H)) return 'close';
-        if (this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
-        if (this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
+        // THE THREE GATED BRANCHES, and `setLobby` is what gates them. Switching a node off is
+        // not enough on its own: `inBox` compares a `worldPosition`, and a node that is not
+        // being drawn still has the position it was built at -- so without these, a tap where
+        // 主页 used to be would answer 'home' on the lobby's card, and the lobby's answer to
+        // 'home' is a `showHome()` that resets the rail the player was reading. The wipe row
+        // is gated the same way from the other side: it does not exist on the in-game card,
+        // and it is the one answer here that cannot be undone.
+        //
+        // The other three answers are NOT gated, because they are true on both cards: the X
+        // and 继续游戏 both mean close, and the two switches act on settings rather than on a
+        // level. See the class's `setLobby` for the field itself.
+        if (!this.setLobby
+            && this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
+        if (!this.setLobby
+            && this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
+        if (this.setLobby
+            && this.inBox(ui, this.setWipe!, SET_WIPE_W, PROMPT_BTN_H)) return 'wipe';
         // The whole ROW is the switch's target, icon and label included: a 150-wide track is
         // a small thing to ask of a thumb when the row it sits in is 588 wide and holds
         // nothing else. The row is a node with that size on it, so this is the same `inBox`
@@ -1672,7 +1828,23 @@ export class HudView {
         return null;
     }
 
+    /**
+     * Is `ui` inside `node`'s box? A BACKSTOP against the trap described on `setLobby`: a node
+     * that is switched off keeps its `worldPosition`, so this used to answer for buttons that
+     * were not on screen.
+     *
+     * The three branches above are gated on `setLobby` as well, and the redundancy is
+     * deliberate rather than an oversight. They say at the branch WHY an answer is not
+     * available on that card, which is the part a reader needs; this line makes the general
+     * rule true for the next button someone hides, who will not have read them. It is the same
+     * discipline `TopBar.hitsSlot` and `hitsGear` already keep -- the one flag that decides
+     * whether a control is drawn also decides whether it answers.
+     *
+     * Every other caller passes a node that is active whenever its own panel is up (the win
+     * and lose cards switch their SCRIM, never a button), so nothing else changes behaviour.
+     */
     private inBox(ui: Vec3, node: Node, wid: number, hgt: number): boolean {
+        if (!node.activeInHierarchy) return false;
         const p = node.worldPosition;
         return Math.abs(ui.x - p.x) <= wid / 2 + 8 && Math.abs(ui.y - p.y) <= hgt / 2 + 8;
     }
@@ -1878,7 +2050,7 @@ export class HudView {
         this.winReplay = this.buildCardBtn(page, {
             x: -total / 2 + WIN_REPLAY_W / 2, y: WIN_BTN_Y, w: WIN_REPLAY_W,
             text: '重玩本关',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
         this.winCta = this.buildCardBtn(page, {
             x: total / 2 - WIN_NEXT_W / 2, y: WIN_BTN_Y, w: WIN_NEXT_W, text: '下一关',
@@ -2069,7 +2241,7 @@ export class HudView {
         const total = LOSE_HOME_W + LOSE_BTN_GAP + LOSE_REPLAY_W;
         this.loseHome = this.buildCardBtn(page, {
             x: -total / 2 + LOSE_HOME_W / 2, y: LOSE_BTN_Y, w: LOSE_HOME_W, text: '主页',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
         this.loseReplay = this.buildCardBtn(page, {
             x: total / 2 - LOSE_REPLAY_W / 2, y: LOSE_BTN_Y, w: LOSE_REPLAY_W,

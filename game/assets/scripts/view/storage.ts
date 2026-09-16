@@ -76,3 +76,49 @@ export function clearProgressText(): void {
         console.warn('[Game] progress could not be cleared:', e);
     }
 }
+
+/**
+ * The wallet's own key, beside the progress rather than inside it -- `core/wallet` says why
+ * the balance is a save of its own. Its LIFETIME is the interesting part, and it is written
+ * out on `clearWalletText`.
+ */
+const WALLET_KEY = 'parking.wallet';
+
+export function loadWalletText(): string | null {
+    try {
+        return sys.localStorage.getItem(WALLET_KEY);
+    } catch (e) {
+        console.warn('[Game] wallet could not be read:', e);
+        return null;
+    }
+}
+
+export function saveWalletText(text: string): void {
+    try {
+        sys.localStorage.setItem(WALLET_KEY, text);
+    } catch (e) {
+        console.warn('[Game] wallet could not be saved:', e);
+    }
+}
+
+/**
+ * Wiping the progress wipes the wallet with it, and this is THE REVERSE of the rule stated on
+ * SETTINGS_KEY above -- deliberately, and the two are worth reading together.
+ *
+ * The settings survive a wipe because their lifetime has nothing to do with the save's: a
+ * player who clears their progress has not asked for the sound back on. Coins are the opposite
+ * case, because they are DERIVED from the progress rather than independent of it -- clearing a
+ * level is the only way one is ever earned. Keep them across a wipe and "clear -> wipe -> clear
+ * again" is an unlimited mint, and the wipe is now two taps away on the settings card rather
+ * than a three-second hold nobody ever found.
+ *
+ * So the test is not "is this a different key" -- both of these are -- but "does this outlive
+ * the thing that produced it". Settings do; coins cannot.
+ */
+export function clearWalletText(): void {
+    try {
+        sys.localStorage.removeItem(WALLET_KEY);
+    } catch (e) {
+        console.warn('[Game] wallet could not be cleared:', e);
+    }
+}

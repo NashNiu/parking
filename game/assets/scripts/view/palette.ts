@@ -251,3 +251,39 @@ export const KERB = new Color(150, 161, 180);
  * need the same discount.
  */
 export const AREA_SHADOW_ALPHA = 30;
+
+/**
+ * THE SECOND FAMILY IN THIS FILE, and it is worth saying that it is a different kind of thing
+ * from everything above. `GROUND` down to `AREA_SHADOW_ALPHA` are SURFACES -- floors the camera
+ * looks at, chosen against the car palette by luminance. What follows is CHROME: the colour the
+ * UI's furniture is drawn in, on a layer no car is ever on. They share a file because they share
+ * the one property that put this file here -- more than one view reads them.
+ *
+ * ONE PAIR, TWO PLATES. Every raised or framing piece of UI in this game is the same trick: a
+ * brighter FACE drawn over a darker BASE peeking out below it, which is what makes a flat shape
+ * read as something with a top to press (`liftedPill`, `buildCardBtn`, both gears, the card's
+ * rim, the stars, the padlock). So the pair is the unit, and either one alone is meaningless --
+ * that is why they are declared together and named for their roles in the pair.
+ *
+ * WHO WEARS IT: the settings card's rim and its close disc, the card's side buttons, the switch
+ * rows' icons, the HUD's gear and the lobby's gear.
+ *
+ * WHY IT IS HERE RATHER THAN IN `hud-view`, which is where it was born. It was `CARD_RIM_FACE` /
+ * `CARD_RIM_BASE`, private to that file and named for the settings CARD it rims; the lobby's top
+ * bar then needed the same two numbers for its gear and wrote its own copy of them, with a
+ * comment saying it would rather import them and that the honest home was here. Two copies of a
+ * colour is how two palettes drift apart -- the same argument this file's own header opens with,
+ * and the same resolution `liftedPill` got when the lobby needed the HUD's pill.
+ *
+ * THE NAME IS NOT `CARD_RIM_*` ANY MORE for the reason the move exists: a name that says CARD
+ * is a name the lobby's gear cannot honestly import. `CONTROL_*` is what the two callers have in
+ * common -- the game's chrome blue -- and it stops being a reason to write a third copy.
+ *
+ * THE COLOUR ITSELF is unchanged by the move, and its own history is worth keeping: it is
+ * DARKER than it first was (64,172,236 over 28,112,176), asked for as 卡片外层的背景颜色再深一些.
+ * The bright cyan was competing with the cream page for the eye instead of holding it -- a
+ * frame's job is to be the edge of the thing, and an edge brighter than the page it frames reads
+ * as the subject.
+ */
+export const CONTROL_FACE = new Color(42, 138, 208, 255);
+export const CONTROL_BASE = new Color(20, 92, 150, 255);

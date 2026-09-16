@@ -6,8 +6,9 @@ import {
 import {
     GameCore, validateLevel, LevelData, firstBlocker, Flight, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
-    emptyProgress, parseProgress, Progress, recordClear, serializeProgress, unlockedThrough,
-    defaultSettings, parseSettings, serializeSettings, Settings,
+    bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
+    unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
+    addCoins, coinsForClear, emptyWallet, parseWallet, serializeWallet, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -20,7 +21,8 @@ import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { HomeView } from './home-view';
 import {
-    clearProgressText, loadProgressText, loadSettingsText, saveProgressText, saveSettingsText,
+    clearProgressText, clearWalletText, loadProgressText, loadSettingsText, loadWalletText,
+    saveProgressText, saveSettingsText, saveWalletText,
 } from './storage';
 import { setHaptics } from './haptics';
 import { setupEnvironment, setupAntiAliasing } from './environment';
@@ -483,6 +485,15 @@ export class GameController extends Component {
      */
     private settings: Settings = defaultSettings();
     /**
+     * The coin balance, in memory, held exactly the way `progress` is: read once on boot,
+     * written only when it changes, never read back off the device again.
+     *
+     * It is a SECOND save under a second key, but not a second lifetime -- wiping the progress
+     * wipes this too (`clearWalletText` says why, and it is the opposite call from settings).
+     * Nothing spends coins yet; the lobby's top bar is the only thing that reads the number.
+     */
+    private wallet: Wallet = emptyWallet();
+    /**
      * Whether the release about to arrive was a rail DRAG rather than a tap. Set by
      * `onPressEnd`, read once by `handleTap`; see there for why the order matters.
      */
@@ -710,6 +721,9 @@ export class GameController extends Component {
         // so a corrupt or absent save costs the player their stars and not their game.
         this.progress = parseProgress(loadProgressText());
         this.settings = parseSettings(loadSettingsText());
+        // Beside the progress, and on the same terms: `parseWallet` cannot throw either, so a
+        // corrupt balance costs the player their coins and not their game.
+        this.wallet = parseWallet(loadWalletText());
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
@@ -854,6 +868,9 @@ export class GameController extends Component {
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
         this.home?.setProgress(this.progress);
+        // Every return to the lobby repaints the balance, which is what makes a clear's payout
+        // show up: the bar is standing and was drawn long before the coins were earned.
+        this.home?.setCoins(this.wallet.coins);
         this.home?.show();
     }
 
@@ -2121,11 +2138,28 @@ export class GameController extends Component {
             //
             // `rating`, not `stars`: `stars` in this file is the particle burst above.
             const rating = this.core!.stars();
+            // THE ORDER OF THESE TWO LINES IS LOAD-BEARING, and it is the kind of thing
+            // somebody reorders while tidying. `coinsForClear` pays the DIFFERENCE between what
+            // this rating is worth and what the level's previous best was worth, and
+            // `recordClear` is what replaces that previous best -- so asked afterwards it
+            // compares the new best against itself and always yields 0. Earn first, record
+            // second. (`core/wallet` says the same thing from its end.)
+            const earned = coinsForClear(bestStars(this.progress, this.levelIdNum), rating);
             const rec = recordClear(this.progress, this.levelIdNum, rating);
             this.progress = rec.progress;
             if (rec.changed) {
                 saveProgressText(serializeProgress(this.progress));
                 console.log(`[Game] level ${this.levelIdNum} cleared with ${rating} stars`);
+            }
+            // Only a payout that is actually worth something is written, which is the same
+            // discipline `rec.changed` enforces one line up and for the same reason: the store
+            // on the device is a synchronous call, and a re-clear that beats nothing has
+            // nothing to save. The balance is repainted by `showHome`, not here -- the bar is
+            // not on screen while this card is up.
+            if (earned > 0) {
+                this.wallet = addCoins(this.wallet, earned);
+                saveWalletText(serializeWallet(this.wallet));
+                console.log(`[Game] earned ${earned} coins, balance ${this.wallet.coins}`);
             }
             // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
@@ -2295,26 +2329,35 @@ export class GameController extends Component {
     /**
      * Throw the save away.
      *
-     * NOTHING CALLS THIS RIGHT NOW, and that is a deliberate, two-commit gap rather than dead
-     * code. Its one caller was a three-second press-and-hold on the home screen's floating
-     * caption plate, and the plate has gone: a 320x88 slab with a 285-tall badge scrolling
-     * behind it read as a clipping fault, which is what the lobby's new top bar is for. The
-     * gesture could not follow the caption into the bar -- an unlabelled destructive hold
-     * needs a target a player has been TOLD about, and a bar of live controls is the worst
-     * place to hide one. The settings card grows an explicit button with a confirmation in
-     * front of it, and this is what that button will call.
+     * ITS ONE CALLER IS THE RED BUTTON on the lobby's settings card, which asks once before it
+     * gets here (`HudView.confirmWipe`). It used to be a three-second press-and-hold on the
+     * home screen's floating caption plate, and the plate has gone: a 320x88 slab with a
+     * 285-tall badge scrolling behind it read as a clipping fault, which is what the lobby's
+     * top bar is for. The gesture could not follow the caption into the bar -- an unlabelled
+     * destructive hold needs a target a player has been TOLD about, and a bar of live controls
+     * is the worst place to hide one. Nobody ever found the hold; a labelled button that asks
+     * is the honest version of the same action.
      *
      * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why the replacement is a
      * confirmed button rather than a bare one.
      *
-     * The confirmation is two things: the grid repaints fully locked, which is evidence rather
-     * than a claim, and a toast that says so in words. The toast activates its own node, so it
-     * works with the in-level HUD hidden.
+     * THE WALLET GOES WITH IT, and `clearWalletText` is where that reasoning lives: coins are
+     * derived from the progress, so a wipe that spared them would make "clear -> wipe -> clear
+     * again" an unlimited mint. Both saves, both in-memory copies, and the readout.
+     *
+     * THE PANEL COMES DOWN FIRST, because the confirmation is two things the panel is standing
+     * in front of: the rail repaints fully locked, which is evidence rather than a claim, and a
+     * toast says so in words. Leaving the card up would put both behind its scrim, so the one
+     * irreversible action in the game would look like it had done nothing.
      */
     private wipeProgress(): void {
+        this.hud?.hideSettings();
         clearProgressText();
+        clearWalletText();
         this.progress = emptyProgress();
+        this.wallet = emptyWallet();
         this.home?.setProgress(this.progress);
+        this.home?.setCoins(0);
         this.hud?.showToast('进度已清除');
         this.sfx?.play('tap');
         vibrate('light');
@@ -2334,11 +2377,39 @@ export class GameController extends Component {
         // neither the start button nor a chip is swallowed rather than falling through.
         if (this.screen === 'home') {
             if (!this.uiCam || !this.home) return;
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            // THE PANEL IS ASKED FIRST, before the gear that opens it and before the rail:
+            // while it is up it is the topmost thing on this screen, which is exactly the
+            // priority it has in play (see the branch below, which this mirrors).
+            if (this.hud?.settingsOpen()) {
+                const hit = this.hud.hitsSettings(ui);
+                // Any other answer on the card stands the red button back down -- see
+                // `HudView.disarmWipe`. A destructive button left armed while the player does
+                // something else on the same card is a trap.
+                if (hit !== null && hit !== 'wipe') this.hud.disarmWipe();
+                if (hit === 'close') this.hud.hideSettings();
+                else if (hit === 'sfx' || hit === 'haptics') this.toggleSetting(hit);
+                // Two taps, and `confirmWipe` counts them: the first one only changes the
+                // button's label into a question. 'home' and 'replay' cannot arrive here --
+                // `hitsSettings` gates them on the lobby flag, because the nodes are switched
+                // off and `inBox` would otherwise still answer for where they used to be.
+                else if (hit === 'wipe' && this.hud.confirmWipe()) this.wipeProgress();
+                return;   // anything else on this screen is swallowed
+            }
+            if (this.home.hitsGear(ui)) {
+                this.sfx?.play('tap');
+                this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
+                return;
+            }
             // A release that DRAGGED the rail is not also a tap -- otherwise every swipe
             // would end by selecting whatever it happened to stop over. `endDrag` already
             // ran, from `onPressEnd`, and said which it was.
+            //
+            // AFTER THE GEAR AND THE PANEL, deliberately. The gear is not on the rail and
+            // neither is the card, so the end of a swipe has no business swallowing a tap on
+            // either of them -- while a tap that lands on the rail after a drag is precisely
+            // what this guard is for.
             if (this.slidHome) return;
-            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             // THE BUTTON IS THE ONLY WAY IN, and it opens whatever is in the middle of the
             // rail (`focusedLevel`, which is also what labelled it). Tapping a stop only
             // brings it to the middle. Two jobs on one control is how a stray tap starts a
@@ -2422,7 +2493,9 @@ export class GameController extends Component {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             if (this.hud.hitsGear(ui)) {
                 this.sfx?.play('tap');
-                this.hud.showSettings(this.settings.sfx, this.settings.haptics);
+                // `false`: this is the in-game card, which keeps its 主页 and 重玩 answers
+                // and has no clear-save button on it.
+                this.hud.showSettings(this.settings.sfx, this.settings.haptics, false);
                 return;
             }
         }
