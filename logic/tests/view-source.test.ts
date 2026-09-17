@@ -2,6 +2,25 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 const VIEW = path.join(__dirname, '../../game/assets/scripts/view');
+
+/**
+ * Read a source file with its line endings NORMALISED to `\n`.
+ *
+ * EVERY READ IN THIS FILE GOES THROUGH HERE, and that is a bug fix rather than tidiness. The
+ * repo stores these files with CRLF, and `core.autocrlf` is on, so a working tree on Windows
+ * has CRLF too. A guard that matches within one line never notices; one that spans a line
+ * break sees `;\r\n` where its pattern says `;\n` and silently matches nothing -- which reads
+ * as "the pattern is absent from the source", the exact thing these guards are built to
+ * report. The pairing guard below shipped in that state and never once ran green.
+ *
+ * A guard that cannot fail is worse than no guard: it costs a test run and buys a false
+ * assurance. Normalising at the single place the bytes enter the suite is what makes the
+ * pattern language in the guards mean what it looks like it means.
+ */
+function readSrc(file: string): string {
+  return fs.readFileSync(path.join(VIEW, file), 'utf8').replace(/\r\n/g, '\n');
+}
+
 /**
  * Every view file that builds a panel by appending children, which is all of them that hold
  * one. A file added here needs no other change: the first test walks the list.
@@ -54,7 +73,7 @@ function indexedChildLookups(src: string): string[] {
  * this mistake, and the failure is silent by construction.
  */
 test.each(FILES)('%s never locates a child node by sibling index', (file) => {
-  expect(indexedChildLookups(fs.readFileSync(path.join(VIEW, file), 'utf8'))).toEqual([]);
+  expect(indexedChildLookups(readSrc(file))).toEqual([]);
 });
 
 /**
@@ -73,7 +92,7 @@ test.each(FILES)('%s never locates a child node by sibling index', (file) => {
  * in a shipped build, which gets photographed.
  */
 test('makeLabel blanks the engine placeholder string', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'ui-layout.ts'), 'utf8');
+  const src = readSrc('ui-layout.ts');
   expect(src).toMatch(/^\s*label\.string = '';$/m);
 });
 
@@ -129,11 +148,11 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
  * faded to a low alpha is a rim that has stopped doing it while still being present.
  */
 test('the lobby caption is rimmed, and the rim is opaque', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'top-bar.ts'), 'utf8');
+  const src = readSrc('top-bar.ts');
   expect(src).toContain('rimLabel(this.caption, CAPTION_RIM,');
   expect(src).toMatch(/const CAPTION_RIM = new Color\(\d+, \d+, \d+, (2[0-4]\d|25[0-5])\)/);
   // And the plate it replaced has not quietly come back on the home screen.
-  const home = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const home = readSrc('home-view.ts');
   expect(home).not.toContain("roundedSprite('HomePlate'");
 });
 
@@ -174,7 +193,7 @@ test('the lobby caption is rimmed, and the rim is opaque', () => {
  * one-read shape costs nothing to keep.
  */
 test('the home screen builds street, then rail, then cap and ramp, then bar', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const src = readSrc('home-view.ts');
   const street = src.indexOf('this.scene = new HomeScene(this.root, w, h);');
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
   const cap = src.indexOf("const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);");
@@ -215,7 +234,7 @@ test('the home screen builds street, then rail, then cap and ramp, then bar', ()
  * there are no writes of either outside those pairs.
  */
 test('the rail centre and the street centre are always written together', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const src = readSrc('home-view.ts');
   // Comments stripped, the rule every source guard in this file works under: a docblock that
   // quotes one of these lines is prose about the pairing, not a second write of it.
   const code = src
@@ -254,7 +273,7 @@ test('the rail centre and the street centre are always written together', () => 
  * nothing.
  */
 test('the street is laid out on the same offset and edge as the stops', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const src = readSrc('home-view.ts');
   expect(src).toMatch(/const edge = this\.h \* 0\.75;/);
   expect(src).toContain('this.scene.layout(this.offset, edge);');
   // The stop loop's own cull, reading the same local.
@@ -283,7 +302,7 @@ test('the street is laid out on the same offset and edge as the stops', () => {
  * badge; it can prove the view is not asking a second source what to draw.
  */
 test('home-view reads level state from core and never calls bestStars itself', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'home-view.ts'), 'utf8');
+  const src = readSrc('home-view.ts');
   const code = src
     .split('\n')
     .filter((l) => {
@@ -317,7 +336,7 @@ test('home-view reads level state from core and never calls bestStars itself', (
  * the whole of the correctness.
  */
 test('props.ts negates the board Y it bakes into the mesh', () => {
-  const src = fs.readFileSync(path.join(VIEW, 'props.ts'), 'utf8');
+  const src = readSrc('props.ts');
   const code = src
     .split('\n')
     .filter((l) => {
@@ -350,9 +369,9 @@ test('every scene prop stays inside the parking band, top and bottom', () => {
     if (!m) throw new Error(`${name} not found -- renamed?`);
     return Number(m[1]);
   };
-  const props = fs.readFileSync(path.join(VIEW, 'props.ts'), 'utf8');
-  const bay = fs.readFileSync(path.join(VIEW, 'parking-view.ts'), 'utf8');
-  const types = fs.readFileSync(path.join(VIEW, '../core/types.ts'), 'utf8');
+  const props = readSrc('props.ts');
+  const bay = readSrc('parking-view.ts');
+  const types = readSrc('../core/types.ts');
 
   // The bay band's half-height, derived exactly as `bayPanelSize(stallFootprint(scale))` does,
   // in units of the board scale. CAP_BOX.big is the stall's sizing case: a bus has to fit.
