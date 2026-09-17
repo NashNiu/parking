@@ -532,6 +532,75 @@ test('the road shadow falls down-right, at the alpha that was chosen over shadow
 });
 
 /**
+ * The lobby's ground is four layers, appended in one fixed order: lawn, then paving, then
+ * shadow, then road -- and never rearranged into a per-leg stack.
+ *
+ * WHY THIS MATTERS MORE FOR `PAVING` THAN FOR THE PAIR ABOVE. `PAVING` is wider than `ROAD`
+ * the same way the deleted kerb was (see `home-scene.ts`'s header), so it is the layer that
+ * would actually repeat that old bug if a leg drew its own paving-then-road pair instead of
+ * every leg's paving being drawn, across the whole street, before any leg's road: a
+ * neighbouring leg's later, wider paving would repaint this leg's already-drawn, narrower road
+ * right where they share a stop, leaving the same crescent of wrong colour the kerb used to.
+ *
+ * Checked as container-DECLARATION lines in source order, not as one regex over the whole
+ * file, because source order of these four `container(...)` calls is exactly what determines
+ * paint order here -- Cocos draws siblings in the order they were appended to `street`, not in
+ * whatever order `build()`'s per-leg loop happens to create their children.
+ */
+test('home-scene appends its four ground containers lawn -> paving -> shadow -> road', () => {
+  const src = readSrc('home-scene.ts');
+  const lawn = src.indexOf("roundedSprite('Lawn', w * 2, h * 2, LAWN, 2)");
+  const paving = src.indexOf("this.paving = container('Paving', this.street);");
+  const shadows = src.indexOf("this.shadows = container('Shadows', this.street);");
+  const roads = src.indexOf("this.roads = container('Roads', this.street);");
+  expect(lawn).toBeGreaterThan(0);
+  expect(paving).toBeGreaterThan(lawn);
+  expect(shadows).toBeGreaterThan(paving);
+  expect(roads).toBeGreaterThan(shadows);
+});
+
+/**
+ * The centre dashes are appended AFTER the road -- a fifth container, not a spot inside the
+ * road's own per-leg loop -- and their length/gap/thickness keep the ratios the board's own
+ * dashed lot border uses, not its raw board-unit figures.
+ *
+ * WHY A CONTAINER OF ITS OWN, EVEN THOUGH A DASH IS NARROWER THAN THE ROAD. `strokePath`'s own
+ * segments overhang by half their width at each end to bridge a shared stop, so a later leg's
+ * road reaching back over that stop would still paint over an earlier leg's already-drawn dash
+ * if the dash lived inside the road's own per-leg container -- "wider eats narrower" is not the
+ * only way this class of bug shows up.
+ *
+ * THE RATIO CHECK READS BOTH SIDES OUT OF SOURCE rather than hard-coding the board's numbers a
+ * second time, so a deliberate retune of either file's dash geometry moves both sides of the
+ * comparison together instead of leaving this test comparing stale figures to a live file.
+ */
+test('the centre dashes sit after the road, and their ratios track the lot border\'s', () => {
+  const src = readSrc('home-scene.ts');
+  const roads = src.indexOf("this.roads = container('Roads', this.street);");
+  const dashes = src.indexOf("this.dashes = container('Dashes', this.street);");
+  expect(roads).toBeGreaterThan(0);
+  expect(dashes).toBeGreaterThan(roads);
+
+  const num = (source: string, name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*([0-9.]+);`).exec(source);
+    if (!m) throw new Error(`${name} not found in home-scene.ts -- renamed?`);
+    return Number(m[1]);
+  };
+  const dashLen = num(src, 'DASH_LEN');
+  const dashGap = num(src, 'DASH_GAP');
+  const dashThick = num(src, 'DASH_THICK');
+
+  const board = readSrc('scene-stage.ts');
+  const boardDash = Number(/\bdash = ([0-9.]+)/.exec(board)![1]);
+  const boardGap = Number(/\bgap = ([0-9.]+)/.exec(board)![1]);
+  const boardThick = Number(/\bthick = ([0-9.]+)/.exec(board)![1]);
+
+  // The RATIOS travel, not the board-unit figures -- see `DASH_LEN`'s own docblock.
+  expect(dashGap / dashLen).toBeCloseTo(boardGap / boardDash, 1);
+  expect(dashThick / dashLen).toBeCloseTo(boardThick / boardDash, 1);
+});
+
+/**
  * Whether two substrings ever occur within `window` characters of one another, anywhere in
  * `src`. Every occurrence of `a` is checked against every occurrence of `b`, so it does not
  * matter which one comes first or how many times either appears.
