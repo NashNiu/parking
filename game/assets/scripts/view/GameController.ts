@@ -2576,13 +2576,17 @@ export class GameController extends Component {
             // -- while a tap that lands on the rail after a drag is precisely what this guard
             // is for.
             if (this.slidHome) return;
-            // THE BUTTON IS THE ONLY WAY IN, and it opens the level the save allows
-            // (`currentLevel()`), independent of wherever the rail happens to be scrolled.
-            // Tapping a stop only brings it to the middle. Two jobs on one control is how a
-            // stray tap starts a level nobody asked for -- and on a rail, a stray tap is what
-            // a slightly-too-still drag looks like.
+            // THE BUTTON IS THE ONLY WAY IN, and it opens whatever `selectedLevel()` says --
+            // the level the rail is aimed at when the save allows it, and the newest allowed
+            // level when it does not. The gate lives entirely on that side: nothing here needs
+            // to re-check whether the level is unlocked, and nothing here should, because two
+            // places deciding that is how they come to disagree.
+            //
+            // Tapping a stop only brings it to the middle; it never starts anything. Two jobs
+            // on one control is how a stray tap starts a level nobody asked for -- and on a
+            // rail, a stray tap is what a slightly-too-still drag looks like.
             if (this.home.hitsStart(ui)) {
-                this.enterLevel(`level-${this.home.currentLevel()}`);
+                this.enterLevel(`level-${this.home.selectedLevel()}`);
                 return;
             }
             const stop = this.home.hitsStop(ui);

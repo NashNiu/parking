@@ -5,8 +5,8 @@ import {
     dotSprite, liftedPill, PILL_INK, rampSprite, roundedSprite, starSprite, triSprite,
 } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { CONTROL_BASE, CONTROL_FACE, GROUND, shade } from './palette';
-import { TopBar } from './top-bar';
+import { CONTROL_BASE, CONTROL_FACE, LAWN, shade } from './palette';
+import { CHECKIN_D, COL_SCALE, TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
 } from '../core/index';
@@ -38,10 +38,12 @@ import { HomeScene } from './home-scene';
  * level nobody asked for, and on a rail a stray tap is exactly what a slightly-too-still
  * drag looks like.
  *
- * It draws the save, and it is the only place the level gate is enforced: a locked level can
- * be brought to the middle and read, and tapping it explains itself with a toast rather than
- * by touching the button -- the button always plays the level the save allows, wherever the
- * rail is scrolled. One place, because this screen owns what the player can see.
+ * It draws the save, and it is the only place the level gate is enforced. WHAT THE BUTTON PLAYS
+ * FOLLOWS THE RAIL, but only onto levels the save has already opened: bring a cleared level to
+ * the middle and the button offers to replay it, bring a LOCKED one and the button does not move
+ * at all -- it goes on offering the newest level the save allows, and the locked badge explains
+ * itself with a toast instead. One place, because this screen owns what the player can see. See
+ * `setFocus`, which is where that choice is actually made, and `selectedLevel`.
  */
 
 /**
@@ -63,15 +65,28 @@ import { HomeScene } from './home-scene';
  * a badge reaches it after about half a pitch of drag. It is not an edge case.
  *
  * So the CAP is what makes the bar's band opaque and the RAMP is what dissolves the edge of the
- * cap. Both are painted in `GROUND` -- the pavement they are lying on -- and they meet at
- * `barBottomY`, where both are fully opaque, so the join is invisible and there is no hard edge
- * anywhere on the screen. `HomeScene` used to carry a matching pair down the screen's left and
- * right; they went when the scenery they dissolved did, so this is the only ramp left.
+ * cap. Both are painted in `LAWN` and they meet at `barBottomY`, where both are fully opaque, so
+ * the join is invisible and there is no hard edge anywhere on the screen. `HomeScene` used to
+ * carry a matching pair down the screen's left and right; they went when the scenery they
+ * dissolved did, so this is the only ramp left.
  *
- * WHAT IT COSTS, and it is more than the ramp alone cost: under the bar the road is now paled
- * ALL the way rather than partly, so the route reads as running out from under a band of
- * pavement. That is the trade -- the road up there is scenery, and the thing being protected is
- * the moving badge and the one line of type standing over it.
+ * `LAWN`, NOT `GROUND`, AND THAT IS THE WHOLE OF ONE REQUIREMENT: 「顶部的背景色改成一样的」. They
+ * were the board's pavement blue-grey, which made the top sixth of this screen a flat grey band
+ * with a road running up into it and grass everywhere else -- a header, drawn, on a screen that
+ * has no header. `LAWN` is the colour of the lowest ground layer the street already lays down
+ * (see `home-scene`), so the cap is now INVISIBLE where it is opaque: the grass simply continues
+ * to the top of the screen and the road fades out into it.
+ *
+ * THE CAP IS STILL THERE, and it still has to be. It is doing the same job it always did --
+ * covering the badges that `layout()` deliberately leaves alive above the bar -- and the fact
+ * that it is now the same colour as the ground under it does not make it optional: without it,
+ * a badge would still hard-cut across the full 1280 the moment it passed `barBottomY`. What
+ * changed is only which colour it hides them in.
+ *
+ * WHAT IT COSTS, and it is more than the ramp alone cost: under the bar the road is now hidden
+ * ALL the way rather than partly, so the route reads as running off into the grass rather than
+ * out from under a band of pavement. That is the trade -- the road up there is scenery, and the
+ * thing being protected is the moving badge.
  *
  * THE CAP IS OVERSIZED the way `HomeScene`'s ground is, and for the same reason: a viewport
  * wider or taller than the design box otherwise shows a strip of bare clear colour past its
@@ -426,17 +441,33 @@ const LOADING_SIZE = 34;
  * 「正在放行…」, and it is the FIRST line of type the player ever reads.
  *
  * DARKENED FROM 150,163,196, which was picked against the deep navy this screen used to open
- * on and came with it when the navy did not. On `GROUND` (189,200,218) that grey sat at about
- * 1.5:1 -- a pale line on pale pavement, and the one line on the screen with nothing else to
- * read it by, because the barrier is still down and the rail is not up yet. 64,76,108 is the
- * same cool navy family the rest of this screen's ink comes from and measures about 5:1 on
- * GROUND, which is a caption you can read rather than one you can find.
+ * on and came with it when the navy did not. On the pavement grey this screen opened on next
+ * (189,200,218) that pale grey sat at about 1.5:1 -- a pale line on pale ground, and the one
+ * line on the screen with nothing else to read it by, because the barrier is still down and the
+ * rail is not up yet. 64,76,108 is the same cool navy family the rest of this screen's ink
+ * comes from, and it measured 5.04:1 there.
+ *
+ * IT IS READ ON `LAWN` NOW, not on that grey, since the cap over this band became grass -- see
+ * RAIL_FADE_H. RE-MEASURED RATHER THAN ASSUMED, and the number is worth stating exactly because
+ * it is close to a line: 64,76,108 on 147,203,128 is 4.49:1. That is a hair UNDER the 4.5 a
+ * body-sized line is held to, and comfortably past the 3:1 that actually applies at this size --
+ * `LOADING_SIZE` is 34 design units, about 29 device pixels on a 1080-wide phone, which is large
+ * type by every threshold that draws the distinction. So the ink did not have to move with the
+ * background, but it no longer has the margin it had: lightening `LAWN` costs contrast here
+ * one-for-one, and this ink is what has to change if it ever does.
  */
 const LOADING_INK = new Color(64, 76, 108, 255);
 
 /**
- * The check-in disc: the gear's own diameter (see `top-bar.ts`'s `GEAR_D` / `CHECKIN_D`) and the
- * project's standard lip.
+ * The check-in icon's lip. Its DIAMETER is not here at all -- see `CHECKIN_D`, imported from
+ * `top-bar`, which is the place this icon has to fill rather than a size it gets to pick. This
+ * file used to write that 96 down itself, and the copy went out of step the first time the
+ * column was resized.
+ *
+ * THE LIP DOES NOT SCALE WITH THE COLUMN, unlike everything else about this control. It is
+ * `PILL_LIFT`'s 6, the same lip the gear beside it wears and the same one every raised plate in
+ * the project wears; a lip that grew with its button would make this one control's edge thicker
+ * than the rest of the game's.
  *
  * THE FREE-COINS ENTRY THAT USED TO SIT BESIDE THIS ONE IS GONE. It drew a second coin -- with a
  * plus struck into it -- and did nothing when tapped, and the top bar's own coin readout already
@@ -446,15 +477,19 @@ const LOADING_INK = new Color(64, 76, 108, 255);
  * than copied. `buildFreeCoinsIcon` and the constants it alone used (`FREE_COIN_D`,
  * `FREE_COIN_FACE_F`, `PLUS_L`, `PLUS_W`) went with it.
  */
-const CHECKIN_ICON_D = 96;
 const CHECKIN_ICON_LIFT = 6;
 
-/** The calendar leaf on the check-in entry: a page, a head band, and two rings on it, scaled up
- * with the disc (96/76 against the row's own numbers). */
-const CAL_W = 53;
-const CAL_H = 51;
-const CAL_HEAD_H = 16;
-const CAL_RING_D = 11;
+/**
+ * The calendar leaf on the check-in entry: a page, a head band, and two rings on it.
+ *
+ * SCALED BY THE COLUMN'S OWN STEP, imported rather than applied by hand, so the glyph keeps its
+ * proportions against a disc whose size is decided in another file. The numbers below are the
+ * ones this leaf wore at a 96 disc (themselves 96/76 of what it wore in the old row).
+ */
+const CAL_W = Math.round(53 * COL_SCALE);
+const CAL_H = Math.round(51 * COL_SCALE);
+const CAL_HEAD_H = Math.round(16 * COL_SCALE);
+const CAL_RING_D = Math.round(11 * COL_SCALE);
 
 /** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 const TAP_PAD = 10;
@@ -555,8 +590,16 @@ export class HomeView {
     private offset = 0;
     private target = 0;
     private focused = 0;
-    /** The level the button plays: the newest one the save allows. Set by `setCurrent`. */
-    private current = 1;
+    /**
+     * The newest level the save allows, capped at `levelCount`. Written by `setProgress` alone.
+     *
+     * NOT WHAT THE BUTTON PLAYS -- that is `selected`. This is the FALLBACK it drops back to
+     * when the rail is aimed at a level the save has not opened, and it is the only number on
+     * this screen that comes from `unlockedThrough` rather than from where the rail is looking.
+     */
+    private unlocked = 1;
+    /** What the button plays. Written by `setFocus` alone -- see `selectedLevel`. */
+    private selected = 1;
 
     private dragging = false;
     private dragFromY = 0;
@@ -653,10 +696,10 @@ export class HomeView {
         // AFTER THE RAIL AND BEFORE THE BAR, so both of these draw over the scrolling stops and
         // under the row that stands on them. See RAIL_FADE_H for why it takes two sprites and
         // what the one-sprite version does instead.
-        const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);
+        const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, LAWN, 2);
         this.root.addChild(cap);
         cap.setPosition(0, (this.barBottom + h) / 2, 0);
-        const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);
+        const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, LAWN);
         this.root.addChild(fade);
         fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);
 
@@ -865,7 +908,6 @@ export class HomeView {
     setLevels(levelCount: number): void {
         if (this.stops.length > 0) return;
         this.levelCount = levelCount;
-        this.topBar.setCaption(`共 ${levelCount} 关`);
         // The street's road runs stop to stop, so it is built from the same number at the same
         // moment -- there is no state in which one of the two exists and the other does not.
         this.scene.build(levelCount);
@@ -1020,7 +1062,11 @@ export class HomeView {
         }
         this.setBreathing(hasCurrent);
         const current = Math.max(1, Math.min(this.levelCount, unlockedThrough(p)));
-        this.setCurrent(current);
+        this.unlocked = current;
+        // THE ORDER HERE IS LOAD-BEARING, twice over. `setFocus` is the only thing that writes
+        // the button, and it decides what to write by reading the stop STATES the loop above
+        // has just finished assigning -- so it has to run after that loop, and `unlocked` has
+        // to be set before it, because a locked aim falls back to it.
         this.setFocus(current - 1);
         // Land there rather than glide there: this runs as the screen appears, and a rail
         // that slides in from level 1 every time would be an animation of loading a save.
@@ -1097,27 +1143,46 @@ export class HomeView {
     }
 
     /**
-     * Which level the button plays: the newest one the save allows, never the scroll focus.
+     * Which level the button plays: the one the rail is aimed at, whenever the save allows it.
      *
-     * THE ONLY LEVEL NUMBER THIS SCREEN HANDS OUT. There used to be a `focusedLevel()` beside
-     * it returning the centred stop, and it went when its last caller did: `GameController`
-     * started a level from the scroll position, which was the defect this pass was opened to
-     * fix. Keeping the accessor "in case" would have left the wrong answer one call away from
-     * anyone reaching for a level number, which is exactly how it got used the first time.
-     * The scroll's `focused` is now private and stays that way.
+     * THE ONLY LEVEL NUMBER THIS SCREEN HANDS OUT, and it is still exactly one. It used to be
+     * called `currentLevel` and to return the newest level the save allowed, because there had
+     * been a `focusedLevel()` beside it returning the raw centred stop and `GameController`
+     * started levels from that -- ungated, so a scroll onto a locked badge started a locked
+     * level. Both accessors collapsing into one was the fix, and the one that survived was the
+     * one that could not return a locked level.
+     *
+     * THIS IS NOT `focusedLevel()` COMING BACK. The gate did not move and did not loosen; it is
+     * still enforced in exactly one place, `setFocus`, which refuses to let a locked stop become
+     * `selected` at all. There is still no scroll position from which this returns a level the
+     * save has not opened -- what changed is that a scroll onto an OPEN one is now honoured.
+     *
+     * WHY IT FOLLOWS THE RAIL AT ALL, having pointedly not: 「现在如果已经玩到第6关了，好像没法选
+     * 之前的5关」. A screen that draws ten levels, lets the player drag any of them to the middle,
+     * centres the one they tapped, and then starts a different one is arguing with itself. The
+     * levels below the newest were never gated -- they are cleared -- so there was nothing to
+     * protect by refusing them, and the refusal read as a bug because it was one.
+     *
+     * `focused` (the scroll) stays private, and so does `unlocked` (the save). Neither is a
+     * level number anyone outside this class gets to reach for.
      */
-    currentLevel(): number {
-        return this.current;
+    selectedLevel(): number {
+        return this.selected;
     }
 
     /**
-     * Set the button to the level the save allows: always green, always live, independent of
-     * wherever the rail happens to be scrolled. Called once from `setProgress`, from the same
-     * capped `unlockedThrough(p)` the rail opens on.
+     * Write the button: which level it plays, and whether it offers that as a first run or a
+     * replay. The only place `selected` is assigned.
+     *
+     * `replay` IS PASSED IN RATHER THAN DERIVED HERE as `level < this.unlocked`, and the
+     * difference shows on a fully cleared save: `unlocked` is capped at `levelCount`, so the
+     * last level is at once "the newest the save allows" and already beaten, and that comparison
+     * would call it a first run forever. The caller passes the stop's OWN STATE, which is the
+     * question actually being asked -- has this level been cleared -- rather than a proxy for it.
      */
-    private setCurrent(level: number): void {
-        this.current = level;
-        this.startLabel.string = `开始 第 ${level} 关`;
+    private setStart(level: number, replay: boolean): void {
+        this.selected = level;
+        this.startLabel.string = `${replay ? '重玩' : '开始'} 第 ${level} 关`;
         // Flush the assembler so the label's UITransform width is the SETTLED width of the
         // string just above, not last frame's -- see START_ICON_D for why this is safe to
         // rely on. Only then can the icon be placed exactly, rather than approximately, for
@@ -1128,19 +1193,42 @@ export class HomeView {
     }
 
     /**
-     * Move the rail's aim to stop `i`. This is ONLY the scroll position now -- see
-     * `setCurrent` for the button, which no longer reads it at all.
+     * Move the rail's aim to stop `i`, AND decide what the button plays. Both, here, because
+     * they are one decision: the button offers the level the rail is showing, when it may.
      *
-     * THE GATE USED TO SHOW AS A REFUSAL HERE: bringing a locked level to the middle turned
-     * the button grey and re-worded it as what would unlock it -- the same defect this file
-     * already fixed for the badges (see `NODE_CUR_HI`'s own docblock, above), left standing in
-     * the one control that matters most. The button is now fixed to `unlockedThrough(progress)`
-     * regardless of where the rail is looking; a tap on a locked badge gets its own answer
-     * instead, from `showLockedToast`.
+     * THE GATE MUST NOT SHOW AS A REFUSAL, and that is the constraint the whole method is
+     * shaped around. It used to: bringing a locked level to the middle turned the button grey
+     * and re-worded it as what would unlock it -- the same defect this file had already fixed
+     * for the badges (see `NODE_CUR_HI`'s own docblock, above) left standing in the one control
+     * that matters most. The cure at the time was to stop the button reading the rail at all,
+     * which fixed the grey button and created a second complaint: a cleared level could be
+     * brought to the middle and still not be played.
+     *
+     * SO THE RULE IS NOT "FOLLOW THE RAIL" AND NOT "IGNORE IT" -- it is follow the rail onto
+     * anything the save has opened, and DO NOT MOVE for anything it has not. A locked aim leaves
+     * the button exactly as it was, still green, still live, still offering `unlocked`; the
+     * locked badge answers for itself through `showLockedToast`. There is no state in which this
+     * screen presents a button the player cannot press.
+     *
+     * TWO LOOKUPS, NOT ONE, and they are different stops. `aimed` is where the rail is pointing
+     * and decides WHICH level the button gets; `played` is the stop for that level and decides
+     * how the button WORDS it. On a locked aim the two are different rows of `stops` -- the aim
+     * is the locked badge, the wording comes from the fallback level's own badge -- and reading
+     * the wording off `aimed` would label a replay of level 6 with the state of the locked level
+     * 8 the player happened to be looking at.
+     *
+     * A MISSING STOP COUNTS AS LOCKED. `setFocus` can run before `setProgress` has assigned a
+     * single state (an early drag, in principle) and `stops[i]` can be undefined on a rail that
+     * is not built yet; falling back to `unlocked` is the safe answer in both cases, and it is
+     * the answer the screen opens on anyway.
      */
     private setFocus(i: number): void {
         this.focused = Math.max(0, Math.min(Math.max(0, this.levelCount - 1), i));
         this.target = railOffset(this.focused);
+        const aimed = this.stops[this.focused];
+        const level = !aimed || aimed.state === 'locked' ? this.unlocked : this.focused + 1;
+        const played = this.stops[level - 1];
+        this.setStart(level, played !== undefined && played.state === 'done');
     }
 
     /**
@@ -1437,11 +1525,11 @@ export class HomeView {
     private buildCheckinIcon(): Node {
         const holder = new Node('CheckinIcon');
         holder.layer = Layers.Enum.UI_2D;
-        holder.addComponent(UITransform).setContentSize(CHECKIN_ICON_D, CHECKIN_ICON_D);
-        const base = dotSprite('base', CHECKIN_ICON_D, CONTROL_BASE);
+        holder.addComponent(UITransform).setContentSize(CHECKIN_D, CHECKIN_D);
+        const base = dotSprite('base', CHECKIN_D, CONTROL_BASE);
         holder.addChild(base);
         base.setPosition(0, -CHECKIN_ICON_LIFT, 0);
-        const face = dotSprite('face', CHECKIN_ICON_D, CONTROL_FACE);
+        const face = dotSprite('face', CHECKIN_D, CONTROL_FACE);
         holder.addChild(face);
         const page = roundedSprite('page', CAL_W, CAL_H, Color.WHITE, 6);
         face.addChild(page);
@@ -1480,7 +1568,7 @@ export class HomeView {
      *
      * NOTHING ABOVE `barBottom` ANSWERS, and that bound is not tidiness. `layout()` culls a stop
      * at 0.75 of the screen height, which is far ABOVE the bar -- deliberately, because a stop
-     * has to be drawn while it is dissolving into the ramp -- and `RailCap` is opaque `GROUND`
+     * has to be drawn while it is dissolving into the ramp -- and `RailCap` is opaque `LAWN`
      * from `barBottom` to the top of the screen. Between those two lines there are badges that
      * are fully invisible and were still taking taps. Worked on a 19.5:9 phone (h = 2770) with
      * a typical capsule (bottom 80 of 812) and at offset 0: `barBottom` lands at about 978, the

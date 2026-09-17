@@ -1,18 +1,27 @@
 import { Color, Label, Layers, Node, UITransform, Vec3 } from 'cc';
 import { dotSprite, gearSprite, liftedPill, PILL_INK, PILL_LIFT } from './ui-shapes';
-import { BAR_H, BAR_MARGIN_F, makeLabel, rimLabel } from './ui-layout';
+import { BAR_MARGIN_F, makeLabel } from './ui-layout';
 import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE } from './palette';
 
 /**
- * The lobby's standing top bar: a COLUMN down the left edge now, settings above check-in above
- * the coin readout, and the level count centred above all three.
+ * The lobby's standing top bar: a COLUMN down the left edge, settings above check-in above the
+ * coin readout. Three controls, and nothing else on the bar at all.
  *
  * IT USED TO BE A ROW -- settings and two reserved places on the right, the coin plate on the
- * left, the caption squeezed into what was left between them. Moved to a column, larger, because
- * a thumb reaching for three controls in the corner of a tall phone reads better as one column it
- * can walk down than as three targets spread across the top edge. The free-coins entry that used
- * to be the second reserved place is GONE as a separate control: it drew the same coin the
- * readout already drew, so the two are now one pill -- see `buildCoins` and `coinTap` below.
+ * left, a 「共 N 关」 caption squeezed into what was left between them. Moved to a column, larger,
+ * because a thumb reaching for three controls in the corner of a tall phone reads better as one
+ * column it can walk down than as three targets spread across the top edge. The free-coins entry
+ * that used to be the second reserved place is GONE as a separate control: it drew the same coin
+ * the readout already drew, so the two are now one pill -- see `buildCoins` and `coinTap` below.
+ *
+ * THE CAPTION IS GONE TOO, ON INSTRUCTION -- the requirement is to drop the title. Worth saying
+ * what went with it, because it is nothing the screen does not already say: the rail IS the level
+ * count, drawn, and a player who wants the total scrolls to the end of it. What it cost was a
+ * whole band of the bar reserved for one fact, and the only line of type on this screen that
+ * needed a rim to be legible at all. That band is empty now and stays empty -- the column hangs
+ * DOWN from `barBottom` and nothing is centred above it.
+ *
+ * AND THE COLUMN IS A FIFTH LARGER THAN IT SHIPPED -- see `COL_SCALE`.
  *
  * A COLUMN, NOT BESIDE THE CAPSULE. The wx capsule owns the top-right corner, and the reasoning
  * for going under it rather than around it is written out in full on `ui-layout.capsuleInset` --
@@ -31,68 +40,81 @@ import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE } from './palette';
  * rail on the free band UNDER the bar and has to measure that band with the same numbers. A
  * copy here would be two layouts agreeing until the first time one of them is retuned -- and the
  * failure mode is silent: the rail would simply be centred on a band the bar is not actually in.
- * This class imports the two constants and takes the band's position as an ARGUMENT, so there
- * is exactly one call to `barBottomY` on the whole screen; the constructor says why.
+ * This class takes the band's position as an ARGUMENT, so there is exactly one call to
+ * `barBottomY` on the whole screen; the constructor says why. `BAR_H` is no longer imported at
+ * all: the caption was the only thing here that ever measured the band rather than hanging off
+ * its edge, and everything left hangs off `barBottom`.
  *
  * NO BACKGROUND PLATE. Every control here stands on its own two-plate face; a slab behind the
  * column would be a panel down the side of a screen whose whole subject is a street running off
- * the top of it. What holds the one bare label up is its rim -- see `CAPTION_INK`.
+ * the top of it. With the caption gone there is no bare type left on this bar to hold up.
  */
 
-/** The coin plate. 240 wide, same measure the HUD's readouts use; tall now like the two above it. */
-const COIN_W = 240;
-/** In step with `GEAR_D` / `CHECKIN_D` below, up from the row's 88. */
-const COIN_H = 96;
-/** The coin itself, at the plate's left end, scaled up from 52 with the plate's own height. */
-const COIN_D = 56;
-const COIN_PAD = 12;
 /**
- * How much of the coin the bright face covers: `COIN_RIM` at the full 56 with `COIN_FACE` at
- * 0.74 of it leaves the darker colour showing as a ring, same proportion the row wore at 52.
+ * THE COLUMN'S SIZE STEP. Every diameter, plate measure, glyph size and gap below is the number
+ * this bar shipped with, multiplied by this and rounded -- the requirement asks for the three
+ * controls to grow by a fifth in BOTH size and spacing, after the column read as small on a real
+ * phone.
+ *
+ * ONE STEP, WRITTEN ONCE, rather than nine hand-scaled literals. Three controls that are each
+ * supposed to be a fifth larger are three chances to fat-finger one of them, and the symptom --
+ * a column where one disc is 114 and its neighbour 115 -- is invisible in a diff and obvious on
+ * a screen.
+ *
+ * ROUNDED PER CONSTANT, not carried through the arithmetic as a fraction. These are pixel sizes
+ * on a 1280-wide design canvas: a plate 115.2 units tall lands its edges on a different
+ * sub-pixel than the 115.2 disc beside it, and the pass this landed in was opened because
+ * fractional sizes were coming out soft. Every ratio quoted in the docblocks below is stated
+ * against the ROUNDED number, not against the fraction it came from.
+ */
+export const COL_SCALE = 1.2;
+
+/** The coin plate. The HUD readouts' 240 measure, stepped up with the rest of the column. */
+const COIN_W = Math.round(240 * COL_SCALE);
+/** In step with `GEAR_D` / `CHECKIN_D` below: the row's 88, then 96, now this. */
+const COIN_H = Math.round(96 * COL_SCALE);
+/** The coin itself, at the plate's left end, rising with the plate's own height. */
+const COIN_D = Math.round(56 * COL_SCALE);
+const COIN_PAD = Math.round(12 * COL_SCALE);
+/**
+ * How much of the coin the bright face covers: `COIN_RIM` at the full `COIN_D` (67) with
+ * `COIN_FACE` at 0.74 of it leaves the darker colour showing as a ring -- the same proportion
+ * the bar has worn at every diameter it has had (52 in the row, then 56, now 67).
  *
  * The two colours and the reason the darker one goes down FIRST now live in `palette`, where
  * the check-in card's seven coins read them too.
  */
 const COIN_FACE_F = 0.74;
-const COIN_SIZE = 46;
+const COIN_SIZE = Math.round(46 * COL_SCALE);
 
-/** The gear and the check-in disc: the same size, up from the row's 76. */
-const GEAR_D = 96;
-const CHECKIN_D = 96;
-/** The vertical gap between stacked controls -- the row's `SLOT_GAP`, turned sideways. */
-const COL_GAP = 16;
+/** The gear and the check-in disc: the same size as each other, always. 76, then 96, now 115. */
+const GEAR_D = Math.round(96 * COL_SCALE);
+/**
+ * EXPORTED, because this bar does not draw the check-in control -- it holds a place for one.
+ *
+ * `buildCheckin` makes an empty node and `setCheckin` adopts whatever icon the caller hands it,
+ * and that icon brings its own two plates: what the player sees as the check-in button is drawn
+ * in `home-view`, at whatever diameter that file picks. So this constant sets the HIT BOX and
+ * the column's arithmetic while a number in another file sets the PICTURE, and when they
+ * disagree nothing fails -- the button is simply the wrong size, sitting in a slot that is
+ * still reserving the right one.
+ *
+ * They disagreed the moment `COL_SCALE` landed: `home-view` had its own `96` written down, so
+ * the gear grew and the check-in disc beside it did not. Exporting this is the fix, and it is
+ * the right shape rather than the convenient one -- the icon has to FILL the place, so the
+ * place's diameter is not a number the icon should be choosing for itself.
+ */
+export const CHECKIN_D = Math.round(96 * COL_SCALE);
+/**
+ * The vertical gap between stacked controls -- the row's `SLOT_GAP`, turned sideways.
+ *
+ * IT SCALES WITH THE DISCS, AND THAT IS THE REQUIREMENT rather than an accident of writing the
+ * file this way: the ask names size AND spacing. A column whose buttons grew while its gaps did
+ * not would read as tighter, not as larger.
+ */
+const COL_GAP = Math.round(16 * COL_SCALE);
 /** The cogwheel inside its disc, as a fraction of it -- the HUD's gear wears the same ratio. */
 const GEAR_GLYPH = 0.62;
-
-/**
- * 「共 N 关」, and the one line of type on this screen with nothing under it.
- *
- * IT USED TO SHARE A ROW WITH THE COIN PLATE AND THE RESERVED PLACES, boxed in by both, which is
- * the paragraph that used to have to prove `683.2` design units of clearance survived the widest
- * populated bar. That proof is gone because the row is: the column stands to the side of this
- * label now, not beside it, so the caption has the FULL WIDTH of the canvas to itself and no
- * clearance arithmetic is needed at all. What survives is only its own y: the same band the row
- * used to occupy, `barBottom + BAR_H / 2` -- the free strip directly above where the column's
- * topmost control (the gear) begins. See the constructor for that number.
- *
- * THE RIM STAYS, FOR A DIFFERENT REASON THAN IT WAS ADDED FOR, and the change is worth writing
- * down because the old reason is the one a reader would guess. It used to be that the road ran
- * behind this label -- `HomeScene` culls its legs at 0.75 of the screen height, well above this
- * bar -- so the surface behind these glyphs was pale pavement at one scroll position and dark
- * asphalt at another, and no single ink survives both. That is no longer true. `HomeView` now
- * lays an OPAQUE `GROUND` cap over the bar's whole band and draws this bar on top of it (see
- * RAIL_FADE_H there), so the background here is `GROUND` (189,200,218), always, everywhere.
- *
- * ONE KNOWN BACKGROUND IS NOT THE SAME AS A LEGIBLE ONE. White on 189,200,218 is about 1.7:1,
- * which is a pale line on pale pavement rather than a caption. The rim is what carries it: a
- * near-opaque navy outline puts a dark edge around every stroke, so what the eye reads is the
- * outline's contrast against the pavement (about 12:1) rather than the white's. Turning the rim
- * off and darkening the ink instead would work too -- and would cost this row the toy-UI
- * treatment every other fixed label in the project wears. See `rimLabel`.
- */
-const CAPTION_SIZE = 36;
-const CAPTION_INK = new Color(255, 255, 255, 255);
-const CAPTION_RIM = new Color(30, 40, 66, 235);
 
 /** Slack around a tap, in design units: the same padding every other hit test here uses. */
 const TAP_PAD = 10;
@@ -100,11 +122,12 @@ const TAP_PAD = 10;
 /**
  * The unread-marker on the check-in disc: a small disc on its top-right corner.
  *
- * 28 against the disc's 96 -- the same ~0.29 ratio the row wore at 22-against-76 -- sitting on
- * the corner rather than inside it, the way the card's close button hangs off its own: a dot
- * drawn inside the disc would read as part of the icon.
+ * 34 against the disc's 115 -- about 0.30, the ratio this marker has held at every size the bar
+ * has had (22-against-76 in the row, 28-against-96 before `COL_SCALE`) -- sitting on the corner
+ * rather than inside it, the way the card's close button hangs off its own: a dot drawn inside
+ * the disc would read as part of the icon.
  */
-const DOT_D = 28;
+const DOT_D = Math.round(28 * COL_SCALE);
 const DOT_INK = new Color(232, 68, 62, 255);
 
 /** The one reserved place left: check-in, populated from outside with an icon and a handler. */
@@ -118,7 +141,6 @@ export class TopBar {
     /** Everything the bar draws, under one node. */
     private root: Node;
     private coinLabel: Label;
-    private caption: Label;
     private gear: Node;
     private checkin: Checkin;
     /** The merged coin/free-coins pill's own node, for hit-testing. See `coinTap`. */
@@ -170,22 +192,26 @@ export class TopBar {
      * On a 1280-wide canvas with `margin = 1280 * 0.03 = 38.4`:
      *
      *     left          = -w/2 + margin                    = -601.6
-     *     gear   centre = (left + GEAR_D/2,     barBottom - GEAR_D/2)                = (-553.6, barBottom - 48)
-     *     checkin centre= (left + CHECKIN_D/2,  gearY - GEAR_D/2 - COL_GAP - CHECKIN_D/2) = (-553.6, barBottom - 160)
-     *     coin   centre = (left + COIN_W/2,     checkinY - CHECKIN_D/2 - COL_GAP - COIN_H/2) = (-481.6, barBottom - 272)
+     *     gear   centre = (left + GEAR_D/2,    barBottom - GEAR_D/2)                     = (-544.1, barBottom -  57.5)
+     *     checkin centre= (left + CHECKIN_D/2, gearY - GEAR_D/2 - COL_GAP - CHECKIN_D/2) = (-544.1, barBottom - 191.5)
+     *     coin   centre = (left + COIN_W/2,    checkinY - CHECKIN_D/2 - COL_GAP - COIN_H/2) = (-457.6, barBottom - 325.5)
      *
      * THE TOP OF THE COLUMN IS `barBottom` ITSELF -- the gear's own top edge, not its centre --
      * which is the same y the old row's BOTTOM edge sat at. That is deliberate, not a coincidence
      * of the arithmetic: the column runs down the left margin from that line, alongside the rail
-     * rather than above it, because the rail's stops never reach this far left (`ZIG_X` keeps
-     * them within +-210 of centre, and the column's widest control -- the coin pill -- reaches
-     * only to -481.6 + 120 = -361.6, well short of that). Nothing here needed to move
-     * `railCenterY`, the cap or the ramp for that reason -- see their own files.
+     * rather than above it.
      *
-     * THE CAPTION IS NOT PART OF THIS ARITHMETIC ANY MORE. It used to be squeezed into what the
-     * row's four controls left between them; with the controls in a column beside it rather than
-     * a row around it, the caption owns the full width and sits at `barBottom + BAR_H / 2` -- the
-     * same y the row used to occupy, now empty except for it. See its own docblock above.
+     * HOW CLOSE THE COLUMN NOW COMES TO THE RAIL, because `COL_SCALE` spent most of the clearance
+     * this arithmetic used to have and another step would spend the rest. The widest control is
+     * the coin pill, and its right edge is `-457.6 + COIN_W / 2` = -313.6. The furthest LEFT a
+     * badge ever draws is `ZIG_X` plus the widest thing a badge wears -- the current badge's
+     * bright highlight at its breathing scale, `70 * 1.26` = 88.2 -- so -210 - 88.2 = -298.2.
+     * That leaves 15.4 units between them. They do not touch, and they did not before either
+     * (63.4 units at the pre-`COL_SCALE` sizes), but a fifth of the gap is roughly all that is
+     * left. A further step up wants this line RE-DERIVED rather than scaled: the badge side of
+     * it comes from `home-view`, not from here, and it does not move when `COL_SCALE` does.
+     *
+     * Nothing here needed to move `railCenterY`, the cap or the ramp -- see their own files.
      */
     constructor(parent: Node, w: number, barBottom: number) {
         const margin = w * BAR_MARGIN_F;
@@ -196,12 +222,6 @@ export class TopBar {
         this.root.addComponent(UITransform);
         parent.addChild(this.root);
         this.root.setPosition(0, 0, 0);
-
-        this.caption = makeLabel(this.root, 'TopBarCaption', CAPTION_SIZE, barBottom + BAR_H / 2);
-        this.caption.color = CAPTION_INK;
-        // A tenth of the type, the width `rimLabel` documents as holding a rim visible without
-        // closing up the counters of a Chinese glyph.
-        rimLabel(this.caption, CAPTION_RIM, Math.round(CAPTION_SIZE / 10));
 
         const gearY = barBottom - GEAR_D / 2;
         this.gear = this.buildGear(left + GEAR_D / 2, gearY);
@@ -331,11 +351,6 @@ export class TopBar {
     /** The coin count. Formatting is the caller's: this draws whatever number it is given. */
     setCoins(n: number): void {
         this.coinLabel.string = `${Math.max(0, Math.round(n))}`;
-    }
-
-    /** 「共 N 关」. Written by `HomeView.setLevels`, which is what knows the count. */
-    setCaption(text: string): void {
-        this.caption.string = text;
     }
 
     /**

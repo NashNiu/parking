@@ -176,42 +176,129 @@ test('the guard catches an indexed lookup, and is not fooled by prose about one'
 });
 
 /**
- * The lobby's one fixed label is held up by a RIM, because its plate is gone.
+ * The lobby has NO fixed label at all now, and neither of the two things it used to need.
  *
- * WHAT IT USED TO GUARD, kept because the hazard survived the fix and only the answer changed.
- * This screen was a photograph, which puts arbitrary colour behind arbitrary text -- the title
- * landed on bright sky on one phone and on a white cloud on the next. The answer then was an
- * outline on every fixed label; when the street became code the colour behind a point became
- * knowable, and an OPAQUE PLATE took the outlines' place, guarding against the second hazard: a
- * scrolling stop passing through fixed type on a route that fills the screen.
+ * WHAT THIS GUARD HAS OUTLIVED, in order, because the hazard kept moving and the answer kept
+ * changing with it. This screen was once a photograph, which puts arbitrary colour behind
+ * arbitrary text -- the title landed on bright sky on one phone and on a white cloud on the
+ * next -- so every fixed label wore an outline. When the street became code the colour behind a
+ * point became knowable, and an OPAQUE PLATE took the outline's place, guarding a second hazard:
+ * a scrolling stop passing through fixed type on a route that fills the screen. The plate was
+ * itself the bug -- 320x88, with a badge about 285 tall scrolling behind it, so the badge stuck
+ * out top and bottom and the pair read as clipping -- and 「共 N 关」 moved to the standing top
+ * bar, where a RIM held it up against known-but-pale pavement.
  *
- * THE PLATE IS NOW GONE TOO, and it went because it was the bug. It was 320x88 with a 205-wide
- * badge scrolling behind it whose full extent, star row included, is about 285 tall -- so the
- * badge stuck out above and below the plate and the pair read as clipping. 「共 N 关」 lives in
- * the standing top bar now, above the rail entirely, which settles the scrolling-stop hazard by
- * moving the label out of the rail's way rather than by covering the rail.
- *
- * THE SECOND HAZARD IS GONE TOO, and this docblock used to claim otherwise. It said the road
- * still runs behind this label -- `HomeScene` culls its legs at 0.75 of the screen height, well
- * above the bar -- so the surface behind the glyphs was pale pavement at one scroll position and
- * dark asphalt at another. That stopped being true when the rail's top edge became an OPAQUE
- * `GROUND` cap over the bar's whole band with the bar drawn on top of it: the background behind
- * this label is `GROUND` (189,200,218), always.
- *
- * WHAT IS LEFT IS PLAIN CONTRAST, and it is why this test still exists. White on 189,200,218 is
- * about 1.7:1 -- a knowable background is not a legible one, and a pale line on pale pavement is
- * what the caption would be without help. A near-opaque navy rim puts a dark edge around every
- * stroke and the row reads off that (about 12:1) rather than off the white. So the assertion is
- * the rim, and the rim being OPAQUE, which is the property that actually does the work -- a rim
- * faded to a low alpha is a rim that has stopped doing it while still being present.
+ * AND NOW THE LABEL IS GONE, on instruction, which retires the whole chain: there is no fixed
+ * type on this screen, so there is nothing for a plate or a rim to protect. What is worth
+ * guarding is that none of the three retired answers comes back by accident, since each one was
+ * reasonable when it was written and would look reasonable again. The caption itself is the
+ * first assertion; the plate is the second.
  */
-test('the lobby caption is rimmed, and the rim is opaque', () => {
-  const src = readSrc('top-bar.ts');
-  expect(src).toContain('rimLabel(this.caption, CAPTION_RIM,');
-  expect(src).toMatch(/const CAPTION_RIM = new Color\(\d+, \d+, \d+, (2[0-4]\d|25[0-5])\)/);
-  // And the plate it replaced has not quietly come back on the home screen.
+test('the lobby has no fixed caption, and no plate behind where one was', () => {
+  const bar = readSrc('top-bar.ts');
+  expect(bar).not.toContain('TopBarCaption');
+  expect(bar).not.toContain('setCaption');
+  expect(bar).not.toContain('rimLabel');
+  // And the home screen no longer asks for one either.
   const home = readSrc('home-view.ts');
+  expect(home).not.toContain('setCaption');
+  // Nor has the floating plate the caption used to sit on come back.
   expect(home).not.toContain("roundedSprite('HomePlate'");
+});
+
+/**
+ * The top band is the SAME COLOUR as the ground, and it is still opaque.
+ *
+ * 「顶部的背景色改成一样的」. The cap over the top bar's band and the ramp that dissolves its edge
+ * were painted in `GROUND`, the board's pavement blue-grey, which drew a flat grey header across
+ * the top sixth of a screen that has no header -- grass everywhere else, a road running up into
+ * a band of nothing. Both are `LAWN` now, so the grass continues to the top of the screen.
+ *
+ * THE SECOND HALF OF THIS TEST IS THE HALF THAT MATTERS. Recolouring the cap to match what is
+ * under it makes the cap invisible, and an invisible thing is exactly what a later reader
+ * deletes as dead. It is not dead: it is what stops a badge hard-cutting across the full 1280
+ * the moment it passes `barBottomY`, because `layout()` deliberately keeps stops alive well
+ * above that line. So this asserts both sprites still exist, by name, and that neither has
+ * quietly gone back to `GROUND`.
+ */
+test('the rail cap and its ramp are painted in the ground colour', () => {
+  const src = stripComments(readSrc('home-view.ts'));
+  expect(src).toMatch(/roundedSprite\('RailCap',[^;]*, LAWN, \d+\);/);
+  expect(src).toMatch(/rampSprite\('RailFade',[^;]*, LAWN\);/);
+  // Not "these two are not GROUND" but "this screen has no GROUND left on it at all": the
+  // import went with the recolour, and a stray reference could only mean one came back.
+  expect(src).not.toContain('GROUND');
+});
+
+/**
+ * The lobby's left-hand column grows as ONE step, sizes and gaps together.
+ *
+ * 「左上角的三个按钮 尺寸 和 间距都 增加 20%」 -- both halves of that, which is why the gap is
+ * asserted alongside the diameters. A column whose controls grew while its gaps stayed put reads
+ * as tighter rather than larger, and it is the easiest half of the requirement to miss, because
+ * nothing looks wrong in a diff that scales three discs and leaves one number alone.
+ *
+ * ASSERTED AS THE EXPRESSION, NOT THE RESULT. Pinning `115` would pass just as well if someone
+ * typed the literal in and left `COL_SCALE` unused, which is the state this guard exists to
+ * prevent: the point is that one step governs all of them, so the check is that each constant is
+ * still DERIVED. The rounding is asserted too -- a fractional plate size is what the pass this
+ * landed in was opened to get rid of.
+ *
+ * IT REACHES INTO `home-view` TOO, because the column is drawn from two files and that is
+ * exactly where the step was first missed. The bar holds an empty PLACE for the check-in
+ * control; the control itself -- its disc and the calendar leaf on it -- is built in
+ * `home-view`, which had its own `96` written down. Scaling the bar alone grew the gear and
+ * left the button beside it at its old size, in a slot now reserving room for a larger one. So
+ * the disc is asserted to be the bar's own exported constant (no second copy of the number) and
+ * the leaf to be derived from the same step.
+ */
+test('the lobby column is sized from one scale step, gaps included', () => {
+  const src = stripComments(readSrc('top-bar.ts'));
+  expect(src).toMatch(/^export const COL_SCALE = 1\.2;$/m);
+  for (const c of ['COIN_W', 'COIN_H', 'COIN_D', 'COIN_PAD', 'COIN_SIZE',
+                   'GEAR_D', 'COL_GAP', 'DOT_D']) {
+    expect(src).toMatch(new RegExp(`^const ${c} = Math\\.round\\(\\d+ \\* COL_SCALE\\);$`, 'm'));
+  }
+  expect(src).toMatch(/^export const CHECKIN_D = Math\.round\(\d+ \* COL_SCALE\);$/m);
+
+  // The control that lives in the other file scales with the same step, and takes its diameter
+  // from the place it has to fill rather than writing that number down a second time.
+  const home = stripComments(readSrc('home-view.ts'));
+  expect(home).toMatch(/^import \{ CHECKIN_D, COL_SCALE, TopBar \} from '\.\/top-bar';$/m);
+  expect(home).not.toMatch(/^const CHECKIN_ICON_D/m);
+  for (const c of ['CAL_W', 'CAL_H', 'CAL_HEAD_H', 'CAL_RING_D']) {
+    expect(home).toMatch(new RegExp(`^const ${c} = Math\\.round\\(\\d+ \\* COL_SCALE\\);$`, 'm'));
+  }
+});
+
+/**
+ * The button follows the rail, but a LOCKED stop never becomes the level it plays.
+ *
+ * THIS SCREEN HAS NOW BEEN WRONG IN BOTH DIRECTIONS, which is why the rule gets a guard rather
+ * than a comment. First the button read the scroll position with no gate on it, so scrolling to
+ * a locked badge offered to start a locked level. The cure was to stop the button reading the
+ * rail at all -- which produced the opposite complaint, 「已经玩到第6关了，好像没法选之前的5关」:
+ * a cleared level could be dragged to the middle and still not be played.
+ *
+ * THE RULE THAT SATISFIES BOTH is a fallback, not a refusal: follow the rail onto any stop the
+ * save has opened, and on a locked one leave the button alone, still offering `unlocked`. So
+ * what is pinned here is the fallback line itself -- the `state === 'locked'` test and the
+ * `this.unlocked` it falls back to -- because deleting either half is what restores one of the
+ * two bugs, and both halves live on one line.
+ *
+ * THE WORDING IS PINNED SEPARATELY, for a different failure: `replay` has to come from the
+ * PLAYED stop's own state, not from comparing the level against `unlocked`. On a fully cleared
+ * save `unlocked` is capped at `levelCount`, so that comparison would call the last level a
+ * first run forever.
+ */
+test('the lobby button falls back to the save when the rail aims at a locked stop', () => {
+  const src = stripComments(readSrc('home-view.ts'));
+  expect(src).toContain(
+    "const level = !aimed || aimed.state === 'locked' ? this.unlocked : this.focused + 1;");
+  expect(src).toContain('const played = this.stops[level - 1];');
+  expect(src).toContain("this.setStart(level, played !== undefined && played.state === 'done');");
+  // The wording is the stop's state, never an arithmetic stand-in for it.
+  expect(src).not.toMatch(/replay = level < this\.unlocked/);
 });
 
 /**
@@ -242,6 +329,12 @@ test('the lobby caption is rimmed, and the rim is opaque', () => {
  * them agree BY CONSTRUCTION, and pinning the argument list here stops the call being helpfully
  * "simplified" back into a second call to `barBottomY`.
  *
+ * THE CAP AND THE RAMP ARE FOUND BY NAME, NOT BY THEIR WHOLE CONSTRUCTION LINE, and that is a
+ * deliberate retreat from how this test used to find them. It matched each line in full, colour
+ * argument included -- so recolouring the cap (which happened, from `GROUND` to `LAWN`) failed a
+ * test about ORDER, with a message about an index being -1 that says nothing at all about what
+ * actually changed. The colour is a fact with its own guard; this one owns only the sequence.
+ *
  * THAT IS A STRUCTURAL RULE, NOT A CLAIM ABOUT TIMING, and the difference matters because the
  * timing claim is what this paragraph used to make. `capsuleInset()` spent a while deliberately
  * NOT caching an unanswered read so that a later caller could retry, which made `barBottomY`
@@ -254,8 +347,8 @@ test('the home screen builds street, then rail, then cap and ramp, then bar', ()
   const src = readSrc('home-view.ts');
   const street = src.indexOf('this.scene = new HomeScene(this.root, w, h, BADGE_MAX_R);');
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
-  const cap = src.indexOf("const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);");
-  const fade = src.indexOf("const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);");
+  const cap = src.indexOf("const cap = roundedSprite('RailCap',");
+  const fade = src.indexOf("const fade = rampSprite('RailFade',");
   const bar = src.indexOf('this.topBar = new TopBar(this.root, w, this.barBottom);');
   expect(street).toBeGreaterThan(0);
   expect(rail).toBeGreaterThan(street);
@@ -695,9 +788,16 @@ function within(src: string, a: string, b: string, window: number): boolean {
  * WHAT THIS GUARDS. `setFocus` used to write `this.startLabel.string` to either the playable
  * string or `` `通过第 ${this.focused} 关解锁` `` depending on `focusOpen` -- so scrolling the
  * rail to a locked badge re-labelled the ONE button in the game as a refusal, even though the
- * save still allowed a different, playable level. The button now reads
- * `unlockedThrough(progress)` alone, via `setCurrent`, and the locked wording lives only in the
- * toast (`showLockedToast`), nowhere near `startLabel`.
+ * save still allowed a different, playable level.
+ *
+ * `setFocus` WRITES THE BUTTON AGAIN NOW, so this guard is load-bearing in a way it briefly was
+ * not. For one pass the button ignored the rail entirely and the refusal wording had nowhere to
+ * come from; today the button follows the rail again (see the fallback guard above), which puts
+ * the original defect back within one edit -- a locked aim is once more a branch in the method
+ * that writes `startLabel`, and the wrong thing to do in that branch is to say so on the button.
+ * The right thing, which is what ships, is to leave the button offering `unlocked` and let
+ * `showLockedToast` answer. The locked wording therefore still lives only in the toast, nowhere
+ * near `startLabel`.
  *
  * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
  * engine, so it cannot render the button and read what it says. 200 characters is not a precise
