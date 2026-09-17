@@ -8,7 +8,7 @@ import {
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
     bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
     unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
-    addCoins, coinsForClear, emptyWallet, parseWallet, serializeWallet, Wallet,
+    addCoins, coinsForClear, coinsFromProgress, emptyWallet, parseWallet, serializeWallet, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -884,9 +884,46 @@ export class GameController extends Component {
     private finishLoading(): void {
         const count = this.countLevels();
         this.home?.setLevels(count);
+        this.backfillWallet(count);
         this.home?.setProgress(this.progress);
         this.home?.setLoading(false);
         console.log(`[Game] home screen ready: ${count} levels`);
+    }
+
+    /**
+     * Catch the wallet up to a save whose stars predate it: a player who cleared levels
+     * before the wallet subsystem existed has a balance stuck at 0 (or wherever it was when
+     * the subsystem landed) even though `this.progress` already earned more than that.
+     * `coinsForClear` cannot pay that out itself -- it pays the difference at the moment of a
+     * clear, and there is no clear happening here to attach a payout to -- so this derives the
+     * total with `coinsFromProgress` and raises the stored balance to meet it directly.
+     *
+     * NEVER LOWERS the balance: raised only when it falls short of the derived figure, and
+     * only up to that figure. A wallet already at or above it holds coins from somewhere
+     * `coinsFromProgress` cannot see -- a check-in, a purchase, some future source that isn't
+     * progress -- and clamping down to the derived total on every single load would claw those
+     * back before the player ever got to spend them.
+     *
+     * This does not reopen the "clear -> wipe -> clear again" farm that kept coins out of
+     * `Progress` in the first place: `wipeProgress` clears the wallet and the progress
+     * TOGETHER (see `clearWalletText`'s call site), so the next load derives 0 from an empty
+     * save, not the balance the player wiped away. Nothing here runs a second time on the same
+     * clear either -- once raised, the stored balance is no longer below its own derived
+     * figure, so a later load is a no-op.
+     *
+     * Runs from `finishLoading`, not from `start`'s load path alongside `parseWallet`: it
+     * needs `countLevels()`, which needs the resources bundle index, and that index is not
+     * ready any earlier than this (see `finishLoading`'s own docblock). `showHome` already
+     * painted the pre-backfill balance on the very first frame, so a change here has to
+     * repaint the pill again, not just persist it.
+     */
+    private backfillWallet(levelCount: number): void {
+        const derived = coinsFromProgress(this.progress, levelCount);
+        if (derived <= this.wallet.coins) return;
+        this.wallet = { ...this.wallet, coins: derived };
+        saveWalletText(serializeWallet(this.wallet));
+        this.home?.setCoins(this.wallet.coins);
+        console.log(`[Game] wallet backfilled to ${derived} coins`);
     }
 
     /** Leave the home screen for `name`. The inverse of `showHome`. */

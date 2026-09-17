@@ -1,3 +1,4 @@
+import { bestStars, Progress } from './progress';
 import { STAR_MAX } from './types';
 
 /**
@@ -86,4 +87,38 @@ function tier(stars: number): number {
     if (!Number.isFinite(stars)) return COIN_FOR_STARS[0];
     const i = Math.max(0, Math.min(STAR_MAX, Math.floor(stars)));
     return COIN_FOR_STARS[i];
+}
+
+/**
+ * The total a player WOULD have been paid, across levels 1..`levelCount`, had the wallet
+ * existed for every clear that is now sitting in `p`.
+ *
+ * This is the backfill's derivation, for a save whose stars predate the wallet subsystem: the
+ * balance such a save shows is stuck at whatever it happened to be when the wallet was
+ * introduced (often 0), even though the stars already earned it more. `coinsForClear` cannot
+ * retroactively pay that out -- it pays the DIFFERENCE between an old best and a new one at
+ * the moment of a clear, and there is no "moment" left to attach a past clear to.
+ *
+ * Reads `COIN_FOR_STARS` (via `tier`) directly per level rather than replaying `coinsForClear`
+ * level by level: `tier` already IS the cumulative figure for a rating, so the per-level
+ * clear history that `coinsForClear` would need to walk is not required, and is not even
+ * available here -- `Progress` keeps only each level's best rating, not how it was reached.
+ * Getting this backwards -- treating `COIN_FOR_STARS` as a per-star increment and multiplying
+ * it up -- is the one way to make this silently wrong, since the table is cumulative already.
+ *
+ * `levelCount` is a parameter rather than a constant this module reads, so the function stays
+ * pure and does not need to know how many levels the game ships with; the caller (`Progress`
+ * has no idea either) is the one place that counts the bundle.
+ *
+ * This function only computes a figure -- it does not read or write a `Wallet`, so it cannot
+ * itself lower a balance or reopen the "clear -> wipe -> clear again" farm the wallet's own
+ * docblock describes. Both of those are properties of how the CALLER uses the result (see
+ * `GameController`'s load-path wiring), not of this derivation.
+ */
+export function coinsFromProgress(p: Progress, levelCount: number): number {
+    let total = 0;
+    for (let level = 1; level <= levelCount; level++) {
+        total += tier(bestStars(p, level));
+    }
+    return total;
 }

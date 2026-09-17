@@ -1,6 +1,8 @@
 import {
-  addCoins, coinsForClear, emptyWallet, parseWallet, serializeWallet, WALLET_VERSION,
+  addCoins, coinsForClear, coinsFromProgress, emptyWallet, parseWallet, serializeWallet,
+  WALLET_VERSION,
 } from '../../game/assets/scripts/core/wallet';
+import { emptyProgress, recordClear } from '../../game/assets/scripts/core/progress';
 
 /**
  * Same as `progress`: this reads off the device on the boot path, so any unexpected input has
@@ -66,4 +68,33 @@ test.each([
 ])('out-of-range star counts (%p, %p) do not throw, and the result is never negative', (prev, now) => {
   expect(() => coinsForClear(prev, now)).not.toThrow();
   expect(coinsForClear(prev, now)).toBeGreaterThanOrEqual(0);
+});
+
+/**
+ * `coinsFromProgress` is the backfill's derivation: the total a player would have been paid,
+ * across every level, had the wallet always existed. It reads the CUMULATIVE table directly
+ * (one lookup per level's best rating), not `coinsForClear` per level, because there is no
+ * clear history left to replay -- only the final ratings.
+ */
+test('an empty save derives 0 coins', () => {
+  expect(coinsFromProgress(emptyProgress(), 10)).toBe(0);
+});
+
+test('a single 3-star level derives its cumulative payout, not a per-star rate', () => {
+  const { progress } = recordClear(emptyProgress(), 1, 3);
+  expect(coinsFromProgress(progress, 10)).toBe(60);
+});
+
+test('mixed ratings sum the cumulative payout of every level, including unrated ones', () => {
+  let p = emptyProgress();
+  p = recordClear(p, 1, 3).progress; // 60
+  p = recordClear(p, 2, 1).progress; // 25
+  p = recordClear(p, 3, 2).progress; // 40
+  // level 4 was never cleared -- worth 0, not skipped
+  expect(coinsFromProgress(p, 4)).toBe(60 + 25 + 40);
+});
+
+test('levels beyond levelCount are not counted', () => {
+  const { progress } = recordClear(emptyProgress(), 5, 3);
+  expect(coinsFromProgress(progress, 4)).toBe(0);
 });
