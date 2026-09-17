@@ -252,7 +252,7 @@ test('the lobby caption is rimmed, and the rim is opaque', () => {
  */
 test('the home screen builds street, then rail, then cap and ramp, then bar', () => {
   const src = readSrc('home-view.ts');
-  const street = src.indexOf('this.scene = new HomeScene(this.root, w, h);');
+  const street = src.indexOf('this.scene = new HomeScene(this.root, w, h, BADGE_MAX_R);');
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
   const cap = src.indexOf("const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, GROUND, 2);");
   const fade = src.indexOf("const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);");

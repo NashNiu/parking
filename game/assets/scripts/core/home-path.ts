@@ -17,61 +17,88 @@
 /**
  * Centre-to-centre distance between adjacent stops.
  *
- * DERIVED FROM THE USABLE BAND, not chosen by eye. On a 19.5:9 phone (h ~ 2770):
+ * RE-DERIVED FROM SCRATCH FOR THE 128 BADGE, not scaled from the number this constant held
+ * against the 170 one. That distinction matters here specifically: five earlier versions of
+ * this docblock (three against 170, and one more written after the badge had already shrunk to
+ * 128 without this constant being revisited -- see `home-view.ts`'s own note on `STAR_Y`) all
+ * got the clearance table wrong, every time in the same place. So this re-reads what the badge
+ * currently draws (`home-view.ts`) and what the save can currently produce
+ * (`core/level-state.ts`) before writing a single number down.
+ *
+ * DERIVED FROM THE USABLE BAND FIRST, because that is what actually decides the pitch -- the
+ * collision check below only has to CONFIRM the band's answer does not collide, and at these
+ * sizes it does so with room to spare. On a 19.5:9 phone (h ~ 2770, w pinned at 1280):
  *
  *     barBottom       = h/2 - top*h - w*0.03 - BAR_H     ~ +1099
  *     button top      = -h/2 + bottom*h + 90 + 116       ~ -1124
  *     usable band                                         ~ 2223
  *     2223 / 7.5 badges                                  ~ 296
  *
- * 290, close to that 296 and rounder, giving 7.7 badges on the band above -- the seven-or-eight
- * a screen the requirement asks for. Badge diameter is now 170 (see `NODE_D` in `home-view`),
- * radius 85, and the stars sit BELOW the badge, bottoming out at -136 (star centre at
- * -(85 + 8 + 21.5) = -114.5, star radius 21.5). The old 340/205 pair, and the 272/148-tall pill
- * before that, are both gone.
+ * 290, close to that 296 and rounder, gives 7.7 badges on the band above -- the seven-or-eight a
+ * screen the requirement asks for. This is exactly the reasoning the 170-badge version of this
+ * docblock used, and it lands on the same number for a reason worth stating rather than hiding:
+ * the usable band is a fact about `barBottomY`, `START_MARGIN` and `START_H`, none of which moved
+ * when the badge shrank, so nothing here forces the target pitch to move either. It is the
+ * COLLISION side of the derivation that changes, not the band side.
  *
- * CHECK WHICH ADJACENCIES ARE REACHABLE BEFORE SIZING AGAINST THEM. This is the trap, and
- * three revisions of this paragraph have now fallen into it -- twice by arithmetic, once by
- * sizing the pitch against a pair of badges no save can produce. `levelState` is MONOTONIC up
- * the rail: `unlockedThrough` is the first level with no stars, so the states always read
+ * CHECK WHICH ADJACENCIES ARE REACHABLE BEFORE SIZING AGAINST THEM. This is the trap, and every
+ * wrong revision of this paragraph has fallen into it. `levelState` is MONOTONIC up the rail:
+ * `unlockedThrough` is the first level with no stars, so the states always read
  * done...done, current, locked...locked, and the only adjacent pairs that exist are
  * (done, done), (done, current), (current, locked) and (locked, locked). A `done` badge
  * directly ABOVE a `current` one is not one of them -- a `done` at i+1 forces i <= k-2, which
- * makes i `done` as well -- so the breathing badge's 1.26x top edge never has to clear a star
- * row at all. Enumerated over all 1024 reachable ten-level saves: eleven distinct state
- * strings, none of them with that pair in it.
+ * makes i `done` as well. Read straight off `level-state.ts`: lock is checked first and wins
+ * (`!(level <= unlockedThrough(p))`), so nothing above the unlocked frontier is ever `done` and
+ * nothing at or below it is ever `locked`. Enumerated over all 1024 reachable ten-level saves:
+ * eleven distinct state strings, none of them with a `done` directly above a `current`.
  *
- * THE BINDING CASE is therefore a CLEARED badge's star row hanging over the CLEARED badge below
- * it -- (done, done) is the only reachable pair whose UPPER badge is `done` at all, since stars
- * only ever hang off a `done` badge's own row:
+ * A BADGE IS NOT SYMMETRIC ABOUT ITS CENTRE. `NODE_D` is 128 (radius 64), and the badge reaches
+ * `64 x scale` UP but `(64 + NODE_EDGE + NODE_LIFT) x scale` = `83 x scale` DOWN. That extra
+ * reach is the EDGE DISC, not the base -- the base alone (radius 64, offset `NODE_LIFT` (15)
+ * down) only reaches 79, but the edge disc drawn behind it is `NODE_D + 2 x NODE_EDGE` = 136
+ * wide (radius 68) at that SAME offset, reaching `68 + 15` = 83, two units past the base's own
+ * thickness. That is exactly the trap the heading names: the edge, not the base, is the badge's
+ * true lower reach. The current badge also wears the bright outline (`NODE_HI_D`, radius 66,
+ * concentric at the node's own centre -- no offset), reaching 66 in EVERY direction: past the
+ * plain face's 64 on the way up, still short of the edge's 83 on the way down. Every one of
+ * those discs -- face, base, edge, outline -- is a child of the same node `layout()` scales, so
+ * EVERY LAYER OF THE CURRENT BADGE SCALES WITH THE BREATHE TWEEN, up to `BREATHE_TO` (1.26), not
+ * merely the face.
  *
- *     290 - 136 (star row reaches -136) - 85 (badge below, scale 1.0, no glow -- `done` never
- *     wears the glow either) = 69
+ * THE STAR ROW HANGS BELOW A `done` BADGE ONLY -- `starsFor` returns 0 for `current` and
+ * `locked`, so a breathing or locked badge never has to clear a star row, and a `done` badge
+ * never breathes or shrinks (its scale is fixed at 1.0). Three stars at `STAR_PITCH` (37) either
+ * side of centre, radius `STAR_D / 2` (16), centred at `STAR_Y` = -95: the row's lowest point is
+ * `-(95 + 16)` = -111, ten units past the plain badge's own -83.
  *
- * A BADGE IS NOT SYMMETRIC ABOUT ITS CENTRE, which is the term two earlier versions of this
- * table dropped. It reaches `85 x scale` UP and `(85 + BTN_LIFT) x scale` DOWN, because the base
- * plate sits `BTN_LIFT` (8) below the face -- the lip every pressable thing in this project
- * wears. The current badge is the exception, and for a different reason: its glow reaches
- * `(85 + CUR_GLOW_PAD) x 1.26` = 126, which is larger than its own 117 lip extent, and a glow is
- * a concentric DISC -- so 126 is its reach in every direction, above and below alike. Writing
- * 107 for its top and 126 for its bottom, as a version of this paragraph did, is exactly the
- * slip the heading above warns about.
+ * THE BINDING CASE is therefore a `done` badge's star row hanging over the `done` badge below
+ * it -- (done, done) is the only reachable pair whose UPPER badge is `done` at all, since a star
+ * row only ever hangs off a `done` badge's own row:
  *
- *     pair (lower, upper)                        upper reaches down   lower reaches up
- *     (done, done)    290 - 136 - 85  =  69      star row, -136       85
- *     (done, current) 290 - 126 - 85  =  79      glow, 126            85
- *     (current, lock) 290 - 74.4 - 126 = 89.6    93 x 0.8             glow, 126
- *     (lock, lock)    290 - 74.4 - 68 = 147.6    93 x 0.8             85 x 0.8
+ *     290 - 111 (star row reaches -111) - 64 (badge below, scale 1.0 -- the face's own 64 beats
+ *     the edge's 53 on the way up) = 115
  *
- * 69 is the tightest of the four, and 290 is not stretched to chase a bigger margin: a pitch that
- * is too large only shows fewer levels, while one that is too small collides.
+ *     pair (lower, upper)                          upper reaches down       lower reaches up
+ *     (done, done)     290 - 111 - 64    = 115     star row, -111           64
+ *     (done, current)  290 - 104.6 - 64  = 121.4   edge x 1.26, 104.6       64
+ *     (current, lock)  290 - 66.4 - 83.2 = 140.4   edge x 0.8, 66.4         outline x 1.26, 83.2
+ *     (lock, lock)     290 - 66.4 - 51.2 = 172.4   edge x 0.8, 66.4         edge x 0.8, 51.2
+ *
+ * 115 is the tightest of the four -- comfortably positive, and far larger than the 170 badge's
+ * own tightest figure (69) was against ITS pitch, because a smaller badge asks less of the same
+ * 290. That is why this re-derivation lands on the pitch the earlier one did: the band target
+ * (296, rounded to 290) was always the tighter of the two constraints, and shrinking the badge
+ * only slackened the one that used to run second. 290 is not being kept because it used to be
+ * the answer; it is being kept because re-solving both halves of the problem again, against the
+ * smaller badge, still gives the same number.
  *
  * ALL OF THAT IS A VERTICAL PROJECTION, and therefore a conservative bound rather than the real
  * gap. Adjacent stops are `2 x ZIG_X` = 420 apart across the screen as well as 290 up it, so the
- * true centre-to-centre distance is about 510 and the closest the binding pair's shapes actually
- * come is near 305. The bound is the right one to size against -- it stays correct however the
- * badges move horizontally -- but a reader straightening the rail toward a smaller `ZIG_X` should
- * know that 69 is the number that would start to bite, and that it is not biting today.
+ * true centre-to-centre distance is about 510 (`sqrt(290^2 + 420^2)`), and the closest the
+ * binding pair's shapes actually come is well past the 115 the vertical bound alone suggests.
+ * The bound is still the right one to size against -- it stays correct however the badges move
+ * horizontally -- but a reader straightening the rail toward a smaller `ZIG_X` should know that
+ * 115 is the number that would start to bite, and that it is nowhere near biting today.
  *
  * The cost: about 7.7 levels visible on a tall phone (h ~ 2770), a little under 4 on a 4:3
  * tablet (h ~ 1707). That is an accepted cost of a vertical rail, not something a second layout

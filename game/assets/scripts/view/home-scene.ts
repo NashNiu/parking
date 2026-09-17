@@ -46,8 +46,9 @@ import { SHADOW_INK } from './shadow';
  * TREES AND LAMPS CAME BACK AS A FIFTH LAYER, `scenery`, for the reason given above: every one
  * now carries `shade(colour, -0.2)` as a darker, slightly larger disc behind it (`OUTLINE_PAD`)
  * and the SAME hard shadow the road casts -- `ROAD_SHADOW`, `SHADOW_OFFSET_X/Y`, imported once
- * and not redefined. They stand on `LAWN`, clear of `PAVING`'s own band, by a bound derived from
- * `PAVING_W` and `ZIG_X` rather than typed -- see `vergeIn`.
+ * and not redefined. They stand on `LAWN`, clear of both `PAVING`'s own band and every badge on
+ * the rail, by a bound derived from `PAVING_W`, `ZIG_X` and the badge's own maximum drawn
+ * radius rather than typed -- see `vergeIn`.
  *
  * THE COLOURS ARE MOSTLY THE BOARD'S OWN. `ROAD` comes from `palette.ts`, which is the same
  * file the parking board reads, so the road cannot drift away from the game the way the
@@ -177,18 +178,14 @@ const LAMP_EVERY = 2;
 const OUTLINE_PAD = 8;
 
 /**
- * Where the verge starts: the nearest a tree or lamp's own outline may stand to the centreline.
- *
- * Derived rather than typed, so it survives a change to either width. A leg is a Bezier whose
- * four control points all have x of +-`ZIG_X` (`legSamples`'s own docblock), and a Bezier stays
- * inside its control points' convex hull, so no `PAVING` sample is ever further out than
- * `ZIG_X + PAVING_W / 2` -- `PAVING_W`'s own worst-case reach from the canvas centre. One more
- * `radius` of clearance -- the object's OWN outline radius, not just its centre -- keeps the
- * whole disc off the paving, not merely the point it is anchored at.
+ * A flat safety margin added on top of the exact PAVING/badge bound `vergeIn` computes, so the
+ * clearance it leaves is comfortably positive rather than a number that only just clears by
+ * construction. 20, in the same spirit as `OUTLINE_PAD` (8) and `TAP_PAD` (10) elsewhere in this
+ * project's UI -- a deliberate constant, not the residue of however the other two terms happen
+ * to round.
  */
-function vergeIn(radius: number): number {
-    return ZIG_X + PAVING_W / 2 + radius;
-}
+const BADGE_CLEARANCE = 20;
+
 /** The narrowest the verge band may collapse to, for a viewport narrower than the design one. */
 const VERGE_MIN_BAND = 60;
 
@@ -392,7 +389,9 @@ export class HomeScene {
      * `paving` the way an early draft of this file had it. The trees and lamps stand on `LAWN`
      * clear of `PAVING`'s own band BY CONSTRUCTION (`vergeIn`), so nothing here ever overlaps a
      * ground layer and the ordering risk the other four containers guard against does not apply
-     * to it -- appending it last only has to be true once, not re-argued per layer.
+     * to it -- appending it last only has to be true once, not re-argued per layer. `vergeIn`
+     * ALSO keeps scenery clear of the badges drawn in `RailStops`, a sibling tree entirely, so
+     * there is no draw-order relationship to argue there either -- see `vergeIn`'s own docblock.
      */
     private paving: Node;
     private shadows: Node;
@@ -430,6 +429,15 @@ export class HomeScene {
      */
     /** The canvas width, kept because `vergeX` measures the outer verge against it. */
     private w: number;
+    /**
+     * The largest distance any pixel of a badge can ever land from that badge's own centre, in
+     * whichever state and breathing phase draws it furthest -- `home-view`'s `BADGE_MAX_R`,
+     * HANDED IN rather than imported. `home-view.ts` already imports `HomeScene`, so importing
+     * a value the other way would be a straight cycle; passing it down the way `setRailCenter`
+     * already hands this class a y it did not compute keeps the two files' actual dependency
+     * (view depends on scene, not the other way round) honest. See `vergeIn`, the only reader.
+     */
+    private badgeMaxR: number;
 
     /**
      * Builds the ground and nothing else.
@@ -438,11 +446,12 @@ export class HomeScene {
      * the `resources/levels` folder which nothing has read at the time this screen is
      * constructed. See `build`.
      */
-    constructor(parent: Node, w: number, h: number) {
+    constructor(parent: Node, w: number, h: number, badgeMaxR: number) {
         // `h` is a constructor parameter and NOT a field: the oversized ground plate is the
         // only thing on this layer sized by the screen's height, and it is built right here.
         // A field nothing reads is an invitation to measure something new off it.
         this.w = w;
+        this.badgeMaxR = badgeMaxR;
         this.root = container('HomeStreet', parent);
 
         // TWICE THE CANVAS, which is the one thing kept from the backdrop this replaces: a
@@ -550,6 +559,40 @@ export class HomeScene {
     }
 
     /**
+     * Where the verge starts: the nearest a tree or lamp's own outline may stand to the
+     * centreline.
+     *
+     * TWO SEPARATE THINGS HAVE TO BE CLEARED, and this used to know about only one of them.
+     * `ZIG_X + PAVING_W / 2 + radius` keeps a `radius`-radius object off `PAVING`: a leg is a
+     * Bezier whose four control points all have x of +-`ZIG_X` (`legSamples`'s own docblock),
+     * and a Bezier stays inside its control points' convex hull, so no `PAVING` sample is ever
+     * further out than `ZIG_X + PAVING_W / 2` -- `PAVING_W`'s own worst-case reach from the
+     * canvas centre. That term alone says nothing about a BADGE, which stands at the same
+     * `ZIG_X` columns and is not part of `PAVING` at all -- worked at today's numbers, a tree
+     * could sit 120 units from a badge with only 58 units of vertical separation between them
+     * (0.2 of a leg, the closest a tree ever comes to a stop), for an actual gap of about 133,
+     * while the badge's own drawn edge already reached past that. A tree grew out of a badge,
+     * and it was not a fluke: every leg's tree shares its verge with one of the leg's own two
+     * endpoint stops (see `dressLeg`), so this happened on every other leg, not on an unlucky
+     * one.
+     *
+     * `this.badgeMaxR + BADGE_CLEARANCE` is the second term this now clears: `badgeMaxR` is the
+     * farthest any pixel of ANY badge, in ANY state, ever lands from that badge's own centre
+     * (see `home-view.ts`'s `BADGE_MAX_R`, the only place that number is derived), and
+     * `BADGE_CLEARANCE` is a flat safety margin on top of it, so the bound does not merely touch.
+     * `Math.max` picks whichever of the two terms is actually larger -- at today's sizes that is
+     * the badge, by a wide margin, but a future retune of either width should not have to
+     * remember which one used to win.
+     *
+     * One more `radius` of clearance past the LARGER of the two -- the object's OWN outline
+     * radius, not just its centre -- keeps the whole disc clear, not merely the point it is
+     * anchored at.
+     */
+    private vergeIn(radius: number): number {
+        return ZIG_X + Math.max(PAVING_W / 2, this.badgeMaxR + BADGE_CLEARANCE) + radius;
+    }
+
+    /**
      * How far out on the verge a `radius`-radius object stands, given a draw in [0, 1).
      *
      * The band runs from `vergeIn(radius)` out to wherever the canvas edge leaves room for the
@@ -557,7 +600,7 @@ export class HomeScene {
      * cramped street rather than an inverted one.
      */
     private vergeX(t: number, radius: number): number {
-        const inner = vergeIn(radius);
+        const inner = this.vergeIn(radius);
         const out = Math.max(inner + VERGE_MIN_BAND, this.w / 2 - radius);
         return lerp(inner, out, t);
     }

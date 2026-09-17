@@ -240,10 +240,10 @@ const STAR_PITCH = STAR_D + 5;
  * Three at this pitch span 2 * 37 + 32 = 106, narrower than the 128 badge, so the row reads as
  * belonging to the badge above it rather than as a bar of its own. The row bottoms out at
  * -(95 + 16) = -111 -- narrower than the -136 this row bottomed out at when the badge was 170
- * and lifted by `BTN_LIFT`. `RAIL_PITCH` (290, in `core/home-path`) was derived against that
- * older -136 and has NOT been re-derived for this smaller badge yet -- that is a later task's
- * job, not this one's, so `RAIL_PITCH` itself is untouched here even though the figure it was
- * sized against has moved.
+ * and lifted by `BTN_LIFT`. `RAIL_PITCH` (290, in `core/home-path`) has now been re-derived
+ * against this smaller badge -- see that constant's own docblock for the table -- and the
+ * re-derivation lands on the same 290, because the usable band (not this row) was always the
+ * tighter of its two constraints.
  *
  * The gap is `NODE_LIFT` itself, not a separate constant that happens to match it: the base sits
  * `NODE_LIFT` lower than the face, so at the centreline the base's lowest point and the middle
@@ -251,6 +251,32 @@ const STAR_PITCH = STAR_D + 5;
  * tight on purpose -- the stars have to read as attached.
  */
 const STAR_Y = -(NODE_D / 2 + NODE_LIFT + STAR_D / 2);
+
+/**
+ * The single largest distance any pixel of a badge -- in ANY state, at ANY point in the breathe
+ * tween -- can ever land from that badge's own node centre. Shared with `home-scene`, which has
+ * to keep trees and lamps clear of every badge on the rail and has no other way to know how big
+ * one gets (see `HomeScene`'s constructor, which takes this as a parameter rather than importing
+ * it: `home-view` already imports `HomeScene`, so the reverse import would be a cycle).
+ *
+ * THE STAR ROW WINS, not the breathing edge, and that is the one counter-intuitive result worth
+ * writing down. The current badge's edge disc is the biggest THING that scales -- radius
+ * `(NODE_D / 2 + NODE_EDGE) x BREATHE_TO` = 68 x 1.26 = 85.68 -- but a `done` badge's star row
+ * never scales at all and sits further out to begin with: the outer star is offset
+ * (`STAR_PITCH`, `STAR_Y`) = (37, -95) from the node's own centre, radius `STAR_D / 2` = 16, so
+ * the farthest point on it is `sqrt(37^2 + 95^2) + 16` ~ 117.95 from the centre a tree's distance
+ * is actually measured against. `done` badges are also the COMMON case along the rail -- unlike
+ * the one `current` badge, which only exists at all when the star row does not (`starsFor`
+ * returns 0 for it) -- so this is the bound that has to hold, not the more dramatic-looking one.
+ *
+ * A SINGLE RADIUS AROUND THE NODE'S CENTRE is a real over-approximation for any one direction --
+ * the star's own reach is not radially symmetric, and neither is the edge disc's (it sits
+ * `NODE_LIFT` below the node's centre, not on it). Bounding by the single largest distance in
+ * ANY direction is deliberately conservative rather than exact: `home-scene` only has a scalar
+ * radius to compare against a tree's own outline radius, so the bound has to be a circle that
+ * contains the whole badge, not a badge-shaped budget.
+ */
+export const BADGE_MAX_R = Math.sqrt(STAR_PITCH ** 2 + STAR_Y ** 2) + STAR_D / 2;
 /**
  * The current level's scale, which is also the FLOOR of its breath -- see `breath`.
  *
@@ -590,7 +616,14 @@ export class HomeView {
         // it -- the stops, the cap over them, the top bar, the button -- draws over it. It
         // builds only its ground here; the road itself needs the level count, so it is
         // finished in `setLevels`.
-        this.scene = new HomeScene(this.root, w, h);
+        //
+        // `BADGE_MAX_R` IS PASSED IN, NOT IMPORTED, the same way `setRailCenter` hands the
+        // street a y it did not compute itself: `HomeScene` needs to know how far a badge's
+        // outline can reach so its own `vergeIn` can keep scenery clear of one, but the number
+        // is defined by how a badge is DRAWN, which is this file's business, not the street's.
+        // Importing it the other way round would also be a straight import cycle -- this file
+        // already imports `HomeScene` below.
+        this.scene = new HomeScene(this.root, w, h, BADGE_MAX_R);
 
         // NO TITLE. The route fills the screen top to bottom now, and the game's name is
         // already the largest thing on the first screen this hands over from -- a second
