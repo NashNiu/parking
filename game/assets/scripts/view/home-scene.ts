@@ -428,8 +428,8 @@ export class HomeScene {
      * every leg `build()` constructs. Nothing else here reads `h`, but the pair travels together
      * rather than one being a field and the other a constructor-only local.
      */
+    /** The canvas width, kept because `vergeX` measures the outer verge against it. */
     private w: number;
-    private h: number;
 
     /**
      * Builds the ground and nothing else.
@@ -439,8 +439,10 @@ export class HomeScene {
      * constructed. See `build`.
      */
     constructor(parent: Node, w: number, h: number) {
+        // `h` is a constructor parameter and NOT a field: the oversized ground plate is the
+        // only thing on this layer sized by the screen's height, and it is built right here.
+        // A field nothing reads is an invitation to measure something new off it.
         this.w = w;
-        this.h = h;
         this.root = container('HomeStreet', parent);
 
         // TWICE THE CANVAS, which is the one thing kept from the backdrop this replaces: a
@@ -652,24 +654,28 @@ export class HomeScene {
         // the post and the head OVERLAP (post radius 10 at y 0, head radius 20 at y 26, so
         // they meet), and a head drawn before the post's outline would wear a dark crescent
         // across its lower edge.
-        for (const [d, dy] of [[LAMP_POST_D, 0], [LAMP_HEAD_D, headY]] as const) {
-            const shadow = dotSprite('shadow', d, ROAD_SHADOW);
+        // ONE descriptor, read three times. Written out per pass it was the same two tuples
+        // copied three times, which is two chances for the passes to disagree about where the
+        // head is on a later edit -- and a shadow under a head that has moved reads as a
+        // rendering fault rather than as the typo it would be.
+        const parts = [
+            { name: 'post', d: LAMP_POST_D, dy: 0, colour: ROAD },
+            { name: 'head', d: LAMP_HEAD_D, dy: headY, colour: yellow },
+        ] as const;
+        for (const p of parts) {
+            const shadow = dotSprite('shadow', p.d, ROAD_SHADOW);
             lamp.addChild(shadow);
-            shadow.setPosition(SHADOW_OFFSET_X, dy + SHADOW_OFFSET_Y, 0);
+            shadow.setPosition(SHADOW_OFFSET_X, p.dy + SHADOW_OFFSET_Y, 0);
         }
-        for (const [d, dy, c] of [
-            [LAMP_POST_D, 0, ROAD], [LAMP_HEAD_D, headY, yellow],
-        ] as const) {
-            const outline = dotSprite('outline', d + OUTLINE_PAD, shade(c, -0.2));
+        for (const p of parts) {
+            const outline = dotSprite('outline', p.d + OUTLINE_PAD, shade(p.colour, -0.2));
             lamp.addChild(outline);
-            outline.setPosition(0, dy, 0);
+            outline.setPosition(0, p.dy, 0);
         }
-        for (const [name, d, dy, c] of [
-            ['post', LAMP_POST_D, 0, ROAD], ['head', LAMP_HEAD_D, headY, yellow],
-        ] as const) {
-            const face = dotSprite(name, d, c);
+        for (const p of parts) {
+            const face = dotSprite(p.name, p.d, p.colour);
             lamp.addChild(face);
-            face.setPosition(0, dy, 0);
+            face.setPosition(0, p.dy, 0);
         }
     }
 }
