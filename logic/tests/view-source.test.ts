@@ -288,6 +288,48 @@ test('the lobby column is sized from one scale step', () => {
 });
 
 /**
+ * 清除进度 is a ROW ON THE SETTINGS PAGE, and its target is the button rather than the row.
+ *
+ * 「这个清除进度的设置能否放到设置里面，作为设置的一项」. It used to be a red button on a row of
+ * its own BELOW the card, under the three answers. Those answers are about the LEVEL -- go home,
+ * replay, carry on -- and clearing the save is not one of those; as a row it sits with 音效 and
+ * 震动, which is what it always was.
+ *
+ * THE HIT BOX IS THE HALF THAT CAN GO WRONG SILENTLY. A switch's WHOLE ROW answers, icon and
+ * label included, because widening the target of a two-state control costs nothing: a mis-tap
+ * toggles the sound and the player toggles it back. This row holds the one action on this HUD
+ * that cannot be undone, so only the button answers -- and the obvious "tidy-up" is to make the
+ * three rows consistent by giving this one the row-wide target its neighbours have, which would
+ * put an irreversible action under a 588-wide strip of card. The asymmetry is deliberate and is
+ * asserted here so that deleting it fails.
+ *
+ * THE CARD GREW BY EXACTLY ONE ROW PITCH for the third row, and the two-row case is placed by
+ * the same `rowY` rather than by a second pair of constants -- a page that centres two rows and
+ * a page that centres three are one piece of arithmetic, and the version with constants for
+ * each is the version where one of them is retuned and the other is not.
+ */
+test('clear-save is a row on the settings page, and only its button answers', () => {
+  const src = stripComments(readSrc('hud-view.ts'));
+  // A row with an icon and a label, built the same way the two switches are.
+  expect(src).toContain("this.buildRow(page, 'Wipe', WIPE_ROW_TEXT, binSprite)");
+  // Its control sits in the same slot the switch tracks do, and only it is tappable.
+  expect(src).toContain("this.inBox(ui, this.setWipe!, SET_SW_W, SET_SW_H)) return 'wipe'");
+  expect(src).not.toContain('SET_WIPE_W');
+  expect(src).not.toContain('SET_WIPE_Y');
+  // One page height, one raise, one row-placing rule.
+  expect(src).toMatch(/^const SET_H = 1060;$/m);
+  expect(src).toMatch(/^const SET_ROW_PITCH = 232;$/m);
+  expect(src).not.toContain('SET_RAISE_WIPE');
+  expect(src).toContain('panel.setPosition(0, SET_RAISE, 0);');
+  expect(src).toContain('const rows = lobby ? 3 : 2;');
+  expect(src).toContain('this.sfxSwitch!.row.setPosition(0, rowY(0, rows), 0);');
+  expect(src).toContain('this.setWipeRow!.setPosition(0, rowY(2, 3), 0);');
+  // The row is what hides on the in-game card -- hiding the button alone would leave an icon
+  // and a label naming an action with nothing to press.
+  expect(src).toContain('this.setWipeRow!.active = lobby;');
+});
+
+/**
  * Every control in the lobby's column wears the SAME three plates, and the gap clears them.
  *
  * 「样式能否做的更卡通一些」. What makes the rail's badges read as toys is a visible SIDE and a

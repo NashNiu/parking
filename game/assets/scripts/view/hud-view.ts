@@ -1,6 +1,7 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import {
     roundedSprite, dotSprite, starSprite, burstSprite, gearSprite, speakerSprite, buzzSprite,
+    binSprite,
     liftedPill, PILL_INK, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
@@ -317,21 +318,41 @@ const PROMPT_REPLAY_Y = -240;
  * it is. The panel node is raised by SET_RAISE so that the card and the button row TOGETHER
  * centre on the screen; without it the composition hangs low by half a button.
  *
- *   card    y  536 .. 122    (SET_H 828: CARD_HEAD 210 + a 576-tall page + CARD_RIM 42)
- *   buttons y -336 .. -536   (SET_BTN_GAP_Y 42 below the card, so the whole thing is
- *                            symmetric about the middle of the screen)
- */
-const SET_H = 828;
-/**
- * The two switch rows, in page coordinates: 196 tall each, 232 apart, on a 576-tall page.
+ *   card    y  651 .. -409  (SET_H 1060: CARD_HEAD 210 + an 808-tall page + CARD_RIM 42,
+ *                            centred on SET_RAISE 121)
+ *   buttons y -451 .. -651   (SET_BTN_GAP_Y 42 below the card, so the composition spans
+ *                            651 .. -651 and is symmetric about the middle of the screen)
  *
- * That leaves 74 clear above the first and below the second and 36 between them. The two
- * rows are the only things on this page, and rows crammed against a frame read as a list
- * that has been cut off.
+ * THE PREVIOUS VERSION OF THOSE TWO LINES READ `536 .. 122` for the card, which is not a span
+ * this arithmetic produces from any frame -- the card's own half was 414 and the panel's raise
+ * 121, so it ran 535 .. -293. The buttons' line was right. Recomputed rather than adjusted.
+ *
+ * IT GREW BY EXACTLY ONE ROW PITCH, from 828, when 清除进度 became a row on this page instead
+ * of a button under it -- 「这个清除进度的设置能否放到设置里面，作为设置的一项」. 232 is the
+ * pitch and 232 is what the card gained, which is why the clearances below are unchanged
+ * rather than merely close.
+ */
+const SET_H = 1060;
+/**
+ * The rows, in page coordinates: 196 tall each, 232 apart, on an 808-tall page.
+ *
+ * THE PAGE HOLDS THREE ROWS OR TWO, depending on which screen raised the card, and `rowY`
+ * centres whichever it is. Three (the lobby: sound, buzz, clear) sit at 232 / 0 / -232, leaving
+ * 74 clear above the first and below the last and 36 between them -- the same three numbers the
+ * two-row page had at 576 tall, which is what "grew by exactly one pitch" buys. Two (in play:
+ * sound, buzz) sit at 116 / -116 with 190 clear top and bottom, a roomier card rather than a
+ * card with a hole in it where the third row would have been.
+ *
+ * A SHORTER CARD IN PLAY WAS THE OTHER OPTION AND IS NOT AVAILABLE: `buildCard` takes its
+ * height once, at build time, and this panel is built once and raised from both screens.
  */
 const SET_ROW_H = 196;
-const SET_ROW1_Y = 116;
-const SET_ROW2_Y = -116;
+const SET_ROW_PITCH = 232;
+
+/** Where row `i` of `n` sits on the page. See `SET_ROW_H`. */
+function rowY(i: number, n: number): number {
+    return ((n - 1) / 2 - i) * SET_ROW_PITCH;
+}
 /** Icon, then label, then track, measured in from the page's own edges. */
 const SET_ICON_D = 116;
 const SET_ICON_X = -CARD_PAGE_W / 2 + 104;
@@ -416,23 +437,21 @@ const SET_BTN_GAP_Y = 42;
 const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
 const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
 /**
- * The clear-save button: a second row under the answers, RED, and only ever on the card the
- * lobby opens. See `buildSettings` for why it is red and `confirmWipe` for the two taps.
+ * The clear-save control: a RED button in the third row's control slot, and only on the card
+ * the lobby opens. See `buildWipeRow` for why it is red and `confirmWipe` for the two taps.
  *
- * Narrower than the wide green one (320 against 560) because it is not the answer anyone came
- * for -- the same reason the 主页/重玩 pair is narrower than 继续游戏. It is the LONGER string
- * that sets the type size, and the longer string is the second one: 「确定清除?」 is four CJK
- * glyphs plus a question mark, about 306 wide at the side buttons' 68, which leaves 7 units
- * either side inside 320 -- type against the rounded corners. At 56 it comes to about 252,
- * which leaves 34.
+ * IT USED TO BE A BUTTON UNDER THE CARD, on a row of its own below the three answers, and it
+ * moved on instruction: 「这个清除进度的设置能否放到设置里面，作为设置的一项」. What it is now is
+ * a settings ROW -- icon, label, control -- exactly like 音效 and 震动 above it, which is also
+ * the honest description of what it always was. The answers below the card are about the LEVEL
+ * (go home, replay, carry on); clearing the save is not one of those and never sat well among
+ * them.
  *
- * ITS OWN GAP, 28 rather than SET_BTN_GAP_Y's 42: the answers are separated from the CARD, and
- * this is separated from the answers. A row that sits as far from its neighbours as the block
- * sits from the card reads as a third unrelated thing rather than as the bottom of this one.
+ * IT TAKES THE SWITCHES' SLOT EXACTLY, `SET_SW_W` x `SET_SW_H` at `SET_SW_X`, because every row
+ * on this page puts its control in the same box and a third row that put its control somewhere
+ * else would stop the three reading as a list. Type at 56: the longer of the two strings is
+ * 「确定?」 at three glyphs, about 168 wide inside 268.
  */
-const SET_WIPE_W = 320;
-const SET_WIPE_GAP_Y = 28;
-const SET_WIPE_Y = SET_BTN_Y - PROMPT_BTN_H - SET_WIPE_GAP_Y;
 const SET_WIPE_SIZE = 56;
 /**
  * Red, and the only red on this HUD. Nothing else in the game is destructive, so the colour
@@ -446,24 +465,18 @@ const SET_WIPE_SIZE = 56;
 const WIPE_FACE = new Color(230, 82, 78, 255);
 const WIPE_BASE = new Color(168, 52, 49, 255);
 /**
- * What the button says before and after its first tap.
+ * The row's label, then what the button on it says before and after its first tap.
  *
- * The armed label ASKS rather than warns: a button that has changed from naming an action to
- * asking about it is the whole of the confirmation, and it stays in the same place, in the same
- * colour, so the second tap is a deliberate answer to a question the player can still read.
+ * THE ROW NAMES THE ACTION AND THE BUTTON ANSWERS FOR IT, which is what moving into the card
+ * bought: the button no longer has to carry the whole sentence, so 「清除进度 / 确定清除?」 became
+ * 「清除 / 确定?」 with the subject standing to the left of it permanently. The armed label still
+ * ASKS rather than warns -- a control that has changed from naming an action to asking about it
+ * is the whole of the confirmation, and it stays in the same place, in the same colour, so the
+ * second tap is a deliberate answer to a question the player can still read.
  */
-const WIPE_TEXT = '清除进度';
-const WIPE_ASK = '确定清除?';
-/**
- * How much further the lobby's panel is raised, so the card and BOTH rows under it centre on
- * the screen the way the card and one row do in play.
- *
- * SET_RAISE's own note says what this is for: without it "the composition hangs low by half a
- * button". The lobby's card hangs a whole extra button below the same card in play, so it needs
- * half of that back -- the identical argument, applied to the taller of the two panels rather
- * than restated as a second constant with a different derivation.
- */
-const SET_RAISE_WIPE = SET_RAISE + (SET_WIPE_GAP_Y + PROMPT_BTN_H) / 2;
+const WIPE_ROW_TEXT = '清除进度';
+const WIPE_TEXT = '清除';
+const WIPE_ASK = '确定?';
 /**
  * The cost line, smaller than the sub and directly under the button it applies to.
  *
@@ -998,6 +1011,15 @@ export class HudView {
     private setHome: Node | null = null;
     private setReplay: Node | null = null;
     private setWipe: Node | null = null;
+    /**
+     * The whole 清除进度 ROW, which is what gets switched off on the in-game card.
+     *
+     * Separate from `setWipe` (the button on it) because the two answer different questions:
+     * the row is what is SHOWN or not, the button is what is TAPPED. Switching the button off
+     * and leaving the row would leave an icon and a label naming an action with nothing to
+     * press.
+     */
+    private setWipeRow: Node | null = null;
     private sfxSwitch: SwitchParts | null = null;
     private hapticSwitch: SwitchParts | null = null;
     /**
@@ -1851,23 +1873,31 @@ export class HudView {
     }
 
     /**
-     * The settings panel: two switches and the three things a player wants from a level they
-     * are in the middle of.
+     * The settings panel: the rows that are settings, and below the card the answers that are
+     * about the level.
      *
      * IT REPLACED A BARE HOME BUTTON, and the reason is worth keeping: that button sat under
      * WeChat's capsule (see GEAR_D), and a single exit in a corner is also a mis-tap that
      * throws a level away. A panel asks, and it has room for the switches the corner had
      * nowhere to put.
      *
-     * Laid out from the top edge down, plate spanning y -240..240, each line's box being 1.2x
-     * its font size (`makeLabel`):
+     * WHAT IS ON THE PAGE, in page coordinates, for the lobby's three-row case. In play the
+     * third row is switched off and `rowY` centres the other two instead -- see SET_ROW_H.
      *
-     *   title  y  176 +/- 29   ->  147..205   (35 off the top edge)
-     *   rule   y  126          ->  125..127   (20 clear of the title)
-     *   sound  y   76 +/- 28   ->   48..104   (21 clear of the rule, switch height)
-     *   buzz   y   -4 +/- 28   ->  -32..24    (16 clear of the row above: one block)
-     *   rule   y  -62          ->  -63..-61   (29 clear)
-     *   answers y -140 +/- 48  -> -188..-92   (29 clear, 52 off the bottom)
+     *   page spans      404 .. -404   (808 tall: SET_H 1060 less CARD_HEAD 210 and CARD_RIM 42)
+     *   音效     row y   232 +/- 98   ->  330..134    (74 clear of the page's top edge)
+     *   震动     row y     0 +/- 98   ->   98..-98    (36 clear of the row above)
+     *   清除进度 row y  -232 +/- 98   -> -134..-330   (36 clear above, 74 below)
+     *
+     * The title is not on this page at all -- it sits on the card's RIM, in the band `CARD_HEAD`
+     * leaves above the page -- and neither are the answers, which sit below the whole card (see
+     * SET_BTN_Y). The page holds rows and nothing else.
+     *
+     * THE TABLE THAT USED TO BE HERE DESCRIBED A CARD THAT NO LONGER EXISTS: a 480-tall plate,
+     * horizontal rules between the rows, the answers ON the page, and type about a third of
+     * today's size. It stopped being true when the cards were scaled to the real canvas width
+     * and nothing brought it along; the rules it lists were never drawn at all. Recomputed from
+     * the constants rather than adjusted from those numbers.
      *
      * NO MUSIC ROW: nothing in this project plays a track, and a switch that toggles nothing
      * is worse than no switch.
@@ -1890,8 +1920,15 @@ export class HudView {
         const { page, close } = this.buildCard(panel, 'SetCard', SET_H, '设置');
         this.setClose = close;
 
-        this.sfxSwitch = this.buildSwitch(page, 'Sfx', '音效', SET_ROW1_Y, speakerSprite);
-        this.hapticSwitch = this.buildSwitch(page, 'Buzz', '震动', SET_ROW2_Y, buzzSprite);
+        this.sfxSwitch = this.buildSwitch(page, 'Sfx', '音效', speakerSprite);
+        this.hapticSwitch = this.buildSwitch(page, 'Buzz', '震动', buzzSprite);
+        // The third row, built with the card rather than on demand so the page has one shape
+        // for its whole life. `showSettings` only ever switches it on or off and places the
+        // rows for whichever count is showing.
+        const wipe = this.buildWipeRow(page);
+        this.setWipeRow = wipe.row;
+        this.setWipe = wipe.btn;
+        this.setWipeLabel = wipe.label;
 
         // Three answers in one row, the middle one wide and green: carrying on is what nearly
         // every visit to this panel ends in, so it is the one that looks like a button.
@@ -1909,24 +1946,6 @@ export class HudView {
             face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
 
-        // The clear-save button, on a row of its own under the answers -- see SET_WIPE_W. It
-        // is built with the card rather than on demand, so the panel has one shape for its
-        // whole life and `showSettings` only ever switches this row on or off.
-        //
-        // IT REPLACES A THREE-SECOND HOLD on the home screen's caption plate. The plate is
-        // gone (it clipped the badges scrolling behind it), and a hidden destructive gesture
-        // is the worse half of that trade anyway: nobody found it, and nothing on screen said
-        // it was there. A labelled red button that asks once is the honest version.
-        this.setWipe = this.buildCardBtn(panel, {
-            x: 0, y: SET_WIPE_Y, w: SET_WIPE_W, text: WIPE_TEXT,
-            face: WIPE_FACE, base: WIPE_BASE, rim: WIPE_BASE, size: SET_WIPE_SIZE,
-        });
-        // Down through the two nodes `buildCardBtn` draws, BY NAME. This label is the only
-        // part of any button on this card that ever changes, which is not worth a sixth
-        // member on a helper the other five are happy with.
-        this.setWipeLabel = this.setWipe.getChildByName('face')!
-            .getChildByName('l')!.getComponent(Label)!;
-
         scrim.active = false;
         this.settings = scrim;
     }
@@ -1941,15 +1960,14 @@ export class HudView {
      * `icon` is passed in rather than chosen from `text`, so this function has no table of
      * strings to keep in step with `ui-shapes`; the caller names both.
      */
-    private buildSwitch(
-        page: Node, name: string, text: string, y: number,
+    private buildRow(
+        page: Node, name: string, text: string,
         icon: (name: string, d: number, color: Color) => Node,
-    ): SwitchParts {
+    ): Node {
         const row = new Node(`Row${name}`);
         row.layer = Layers.Enum.UI_2D;
         row.addComponent(UITransform).setContentSize(CARD_PAGE_W, SET_ROW_H);
         page.addChild(row);
-        row.setPosition(0, y, 0);
 
         const glyph = icon('icon', SET_ICON_D, CONTROL_FACE);
         row.addChild(glyph);
@@ -1959,10 +1977,23 @@ export class HudView {
         rimLabel(label, CONTROL_BASE, 6);
         label.string = text;
         // Anchored at its LEFT edge, so SET_LABEL_X is where the text starts rather than
-        // where its middle happens to land. Both rows say two characters today and centring
-        // them would look identical -- and would quietly misalign the moment one of them
-        // says three.
+        // where its middle happens to land. Two of these rows say two characters and the
+        // third says four; centring them would have looked identical until the third arrived.
         label.node.getComponent(UITransform)!.setAnchorPoint(0, 0.5);
+        return row;
+    }
+
+    /**
+     * One switch row: `buildRow`'s icon and label, with a track and a knob in the control slot.
+     *
+     * NO `y`. Rows are positioned by `showSettings`, not at build time, because how many rows
+     * this page has depends on which screen raised it -- see `rowY`.
+     */
+    private buildSwitch(
+        page: Node, name: string, text: string,
+        icon: (name: string, d: number, color: Color) => Node,
+    ): SwitchParts {
+        const row = this.buildRow(page, name, text, icon);
 
         const track = roundedSprite('track', SET_SW_W, SET_SW_H, SET_SW_TRACK, SET_SW_H / 2);
         row.addChild(track);
@@ -1989,6 +2020,42 @@ export class HudView {
     }
 
     /**
+     * The 清除进度 row: `buildRow`'s icon and label, with a RED BUTTON in the control slot.
+     *
+     * RED, AND THE ONLY RED ON THIS HUD. Nothing else in the game is destructive, so the colour
+     * has no second meaning to be confused with -- which is most of what it is buying: it has to
+     * look unlike the switches above it before it is read, not after. It keeps the two-plate
+     * treatment and the same darker-base ratio as the family blue, so it reads as the same KIND
+     * of control in a different colour; a red that also broke the drawing convention would read
+     * as a warning graphic rather than as a button.
+     *
+     * A BUTTON AND NOT A SWITCH, because this is not a setting with two states -- it is an
+     * action, and an action that cannot be undone. A third knob on this page would have said
+     * the save could be cleared and un-cleared.
+     *
+     * THE CAPSULE'S RADIUS IS THE TRACK'S, `SET_SW_H / 2`, rather than the cards' `PROMPT_BTN_R`.
+     * It sits in the slot two switch tracks also sit in, directly under one of them, and a
+     * different corner radius in that column reads as a mistake at a glance.
+     */
+    private buildWipeRow(page: Node): { row: Node; btn: Node; label: Label } {
+        const row = this.buildRow(page, 'Wipe', WIPE_ROW_TEXT, binSprite);
+        const btn = new Node('wipe');
+        btn.layer = Layers.Enum.UI_2D;
+        btn.addComponent(UITransform).setContentSize(SET_SW_W, SET_SW_H);
+        row.addChild(btn);
+        btn.setPosition(SET_SW_X, 0, 0);
+        const base = roundedSprite('base', SET_SW_W, SET_SW_H, WIPE_BASE, SET_SW_H / 2);
+        btn.addChild(base);
+        base.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const face = roundedSprite('face', SET_SW_W, SET_SW_H, WIPE_FACE, SET_SW_H / 2);
+        btn.addChild(face);
+        const label = makeLabel(face, 'l', SET_WIPE_SIZE, 0);
+        rimLabel(label, WIPE_BASE, Math.round(SET_WIPE_SIZE / 10));
+        label.string = WIPE_TEXT;
+        return { row, btn, label };
+    }
+
+    /**
      * Raise the settings panel. `sfx` and `haptics` are the caller's current values -- the
      * panel draws them and reports taps; it does not remember them, because the thing that
      * has to be right is what the game is actually doing, not what a panel thinks.
@@ -2008,16 +2075,24 @@ export class HudView {
         // the other half is the gate in `hitsSettings`, which is where the trap is.
         this.setHome!.active = !lobby;
         this.setReplay!.active = !lobby;
-        this.setWipe!.active = lobby;
+        this.setWipeRow!.active = lobby;
+        // WHERE THE ROWS SIT DEPENDS ON HOW MANY THERE ARE. Three on the lobby's card, two in
+        // play, centred either way -- see `rowY`. Written on every raise for the same reason
+        // the three controls above are: one panel serves both screens.
+        const rows = lobby ? 3 : 2;
+        this.sfxSwitch!.row.setPosition(0, rowY(0, rows), 0);
+        this.hapticSwitch!.row.setPosition(0, rowY(1, rows), 0);
+        this.setWipeRow!.setPosition(0, rowY(2, 3), 0);
         // A raise is a fresh card: whatever the red button was asking last time, it is not
         // asking now. `hideSettings` does this too -- both ends, because a panel can be taken
         // down by `setPlayVisible` without either being called.
         this.disarmWipe();
-        // The taller composition needs the bigger raise, or the lobby's card hangs low by
-        // half a button -- SET_RAISE_WIPE has the arithmetic. Set on every raise because the
-        // same panel node serves both shapes.
+        // ONE RAISE FOR BOTH SCREENS NOW. The lobby's panel used to hang a whole extra button
+        // lower than the in-game one, because the clear-save button was a fourth row beneath the
+        // answers, and it needed half of that back to stay centred. With that button inside the
+        // card the two compositions are the same height and `SET_RAISE` is the only raise.
         const panel = scrim.getChildByName('SetPanel')!;
-        panel.setPosition(0, lobby ? SET_RAISE_WIPE : SET_RAISE, 0);
+        panel.setPosition(0, SET_RAISE, 0);
         if (scrim.active) return;
         scrim.active = true;
         scrim.setSiblingIndex(this.canvas.children.length - 1);
@@ -2116,8 +2191,14 @@ export class HudView {
             && this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
         if (!this.setLobby
             && this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
+        // THE BUTTON, NOT THE ROW, and that asymmetry with the two switches below is the point.
+        // A switch's whole row answers because widening the target of a two-state control costs
+        // nothing -- a mis-tap toggles the sound and the player toggles it back. This row holds
+        // the one action on this HUD that cannot be undone, so its target is the thing that
+        // looks like a button and nothing else: the icon and the label beside it are not
+        // tappable, and a thumb landing anywhere else in the row does nothing at all.
         if (this.setLobby
-            && this.inBox(ui, this.setWipe!, SET_WIPE_W, PROMPT_BTN_H)) return 'wipe';
+            && this.inBox(ui, this.setWipe!, SET_SW_W, SET_SW_H)) return 'wipe';
         // The whole ROW is the switch's target, icon and label included: a 150-wide track is
         // a small thing to ask of a thumb when the row it sits in is 588 wide and holds
         // nothing else. The row is a node with that size on it, so this is the same `inBox`

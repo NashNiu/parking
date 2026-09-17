@@ -574,6 +574,35 @@ function iconSprite(
 /** A cogwheel `d` units across, tinted `color`. */
 export const gearSprite = iconSprite('gear', gearCoverage);
 /** A speaker with sound coming off it, `d` units across, tinted `color`. */
+/**
+ * A waste bin: body, lid, grip. The icon for the settings card's 清除进度 row.
+ *
+ * COMPOSED FROM THREE ROUNDED PLATES, not painted from a coverage function like the speaker and
+ * the buzzer below it. Those two are single silhouettes with curves and notches that are easier
+ * to describe per-pixel than to build; a bin is three rectangles with rounded corners, which is
+ * how this project draws everything else that is three rectangles (see the lobby's calendar
+ * leaf). Writing a `binCoverage` would have been per-pixel arithmetic in aid of a shape the
+ * existing primitives already make exactly.
+ *
+ * Proportions are of `d`, so it scales with whatever row it lands in. At the card's 116 the
+ * grip's top reaches 47 and the body's bottom -47.5, inside the 58 the box allows on each side.
+ */
+export function binSprite(name: string, d: number, color: Color): Node {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(d, d);
+    const body = roundedSprite('body', d * 0.56, d * 0.58, color, Math.round(d * 0.1));
+    holder.addChild(body);
+    body.setPosition(0, -d * 0.12, 0);
+    const lid = roundedSprite('lid', d * 0.76, d * 0.13, color, Math.round(d * 0.06));
+    holder.addChild(lid);
+    lid.setPosition(0, d * 0.24, 0);
+    const grip = roundedSprite('grip', d * 0.3, d * 0.1, color, Math.round(d * 0.05));
+    holder.addChild(grip);
+    grip.setPosition(0, d * 0.35, 0);
+    return holder;
+}
+
 export const speakerSprite = iconSprite('speaker', speakerCoverage);
 /** A shaking phone `d` units across, tinted `color`. */
 export const buzzSprite = iconSprite('buzz', buzzCoverage);
