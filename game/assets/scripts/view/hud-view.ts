@@ -1641,8 +1641,13 @@ export class HudView {
      * cell still showing as a day to come. It stayed wrong until the next midnight, because
      * nothing between now and then changes what `nextDay` answers.
      *
-     * `c.day` is 1..7 whenever `live` is false, because `live` is false only after a claim has
-     * been recorded, and a recorded claim always writes a day in that range.
+     * `c.day` is 1..7 whenever `live` is false FOR ANY SAVE `claim` PRODUCED, because `live` is
+     * false only once a claim has been recorded and a recorded claim always writes a day in that
+     * range. It is not a property `parseCheckin` enforces: it bounds `day` to 0..7 and `last` to
+     * a string, but does not correlate them, so a hand-edited save can present `day: 0` with
+     * today's `last`. That draws a row with nothing ticked and a spent button, which is wrong and
+     * harmless -- no crash, no payout -- and it is not worth a branch here. A save that has been
+     * edited by hand is not a state this card owes a correct picture of.
      */
     paintCheckin(c: Checkin, today: string): void {
         if (!this.checkin) return;

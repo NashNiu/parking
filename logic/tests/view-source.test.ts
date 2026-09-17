@@ -683,3 +683,24 @@ test('claim, nextReward and the card all read the landing day from nextDay', () 
   }
   expect(readSrc('hud-view.ts')).toContain('const landing = nextDay(c, today);');
 });
+
+/**
+ * The check-in card reads `c.day` for the day already claimed, NOT `nextDay`.
+ *
+ * THIS IS THE BRANCH'S ONE PLAYER-VISIBLE DEFECT, guarded because nothing else can see it. The
+ * card ticked day 1 and nothing else after every claim, whatever day the streak had reached --
+ * `nextDay` continues a streak only when `last` is yesterday, and after a claim `last` is today,
+ * so it fell through to "start again" and answered 1. Six days in seven the card contradicted
+ * the payout; on the seventh it showed a day that had just paid 100 as still to come.
+ *
+ * `logic/tests/checkin.test.ts` pins the core half -- that `nextDay` really does answer 1 in
+ * that state -- but the defect was in the VIEW, in the expression wrapped around the call, and
+ * `hud-view.ts` imports `cc` so no test in this repo can execute it. Reverting the fix would
+ * leave every other check-in assertion green.
+ */
+test('the check-in card reads c.day, not nextDay, for the day already claimed', () => {
+  const src = stripComments(readSrc('hud-view.ts'));
+  expect(src).toContain('const claimedThrough = live ? landing - 1 : c.day;');
+  // And the trap itself must not come back under any spelling.
+  expect(src).not.toContain('live ? landing - 1 : landing');
+});
