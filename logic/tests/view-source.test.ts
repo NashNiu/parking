@@ -950,13 +950,18 @@ test('the guard catches a reverted dotFrame, and dotBucket really buckets 22..20
  * fix for (see `HALO_COLOUR`).
  */
 function badgeLayerOrder(src: string): boolean {
+  // `hi` IS IN THE LIST, and it was left out of the first version of this helper -- which is how
+  // a highlight measured off the wrong disc shipped: the guard pinned three layers, the report
+  // said four, and nothing noticed. It is the outermost ring, so it has to be created FIRST.
+  const hiAt = src.indexOf("const hi = dotSprite('hi'");
   const outlineAt = src.indexOf("const outline = dotSprite('outline'");
   const baseAt = src.indexOf("const base = dotSprite('base'");
   const faceAt = src.indexOf("const face = dotSprite('face'");
   const numAt = src.indexOf("const num = makeLabel(face, 'n'");
   const lockAt = src.indexOf('const lock = this.buildLock(face);');
-  if ([outlineAt, baseAt, faceAt, numAt, lockAt].some((at) => at < 0)) return false;
-  return outlineAt < baseAt && baseAt < faceAt && faceAt < numAt && faceAt < lockAt;
+  if ([hiAt, outlineAt, baseAt, faceAt, numAt, lockAt].some((at) => at < 0)) return false;
+  return hiAt < outlineAt && outlineAt < baseAt && baseAt < faceAt
+    && faceAt < numAt && faceAt < lockAt;
 }
 
 /**
@@ -992,6 +997,7 @@ test('CUR_GLOW stays gone, and the badge layers are added outline, base, face, t
  */
 test('the badge-layer guard is not fooled by a reordered, missing, or renamed layer', () => {
   const inOrder = `
+    const hi = dotSprite('hi', NODE_HI_D, NODE_CUR_HI);
     const outline = dotSprite('outline', NODE_EDGE_D, NODE_CUR_EDGE);
     const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
     const face = dotSprite('face', NODE_D, NODE_CUR);
@@ -1002,6 +1008,7 @@ test('the badge-layer guard is not fooled by a reordered, missing, or renamed la
 
   // The base ahead of the outline: exactly the regression the guard exists to catch.
   const baseBeforeOutline = `
+    const hi = dotSprite('hi', NODE_HI_D, NODE_CUR_HI);
     const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
     const outline = dotSprite('outline', NODE_EDGE_D, NODE_CUR_EDGE);
     const face = dotSprite('face', NODE_D, NODE_CUR);
@@ -1010,8 +1017,22 @@ test('the badge-layer guard is not fooled by a reordered, missing, or renamed la
   `;
   expect(badgeLayerOrder(baseBeforeOutline)).toBe(false);
 
+  // The highlight drawn AFTER the dark edge: the regression that actually shipped once. It is
+  // the outermost ring, so behind everything means first -- created second it is covered by the
+  // edge it is meant to sit outside of, and the badge loses its current-level mark entirely.
+  const hiAfterOutline = `
+    const outline = dotSprite('outline', NODE_EDGE_D, NODE_CUR_EDGE);
+    const hi = dotSprite('hi', NODE_HI_D, NODE_CUR_HI);
+    const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
+    const face = dotSprite('face', NODE_D, NODE_CUR);
+    const num = makeLabel(face, 'n', 62, 0);
+    const lock = this.buildLock(face);
+  `;
+  expect(badgeLayerOrder(hiAfterOutline)).toBe(false);
+
   // A layer missing entirely -- the outline deleted rather than reordered.
   const missingOutline = `
+    const hi = dotSprite('hi', NODE_HI_D, NODE_CUR_HI);
     const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
     const face = dotSprite('face', NODE_D, NODE_CUR);
     const num = makeLabel(face, 'n', 62, 0);

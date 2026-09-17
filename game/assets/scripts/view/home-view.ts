@@ -259,9 +259,11 @@ const STAR_Y = -(NODE_D / 2 + NODE_LIFT + STAR_D / 2);
  * one gets (see `HomeScene`'s constructor, which takes this as a parameter rather than importing
  * it: `home-view` already imports `HomeScene`, so the reverse import would be a cycle).
  *
- * THE STAR ROW WINS, not the breathing edge, and that is the one counter-intuitive result worth
- * writing down. The current badge's edge disc is the biggest THING that scales -- radius
- * `(NODE_D / 2 + NODE_EDGE) x BREATHE_TO` = 68 x 1.26 = 85.68 -- but a `done` badge's star row
+ * THE STAR ROW WINS, not the breathing rings, and that is the one counter-intuitive result
+ * worth writing down. The current badge's bright highlight is the outermost thing that
+ * scales -- radius `(NODE_EDGE_D / 2 + NODE_HI_PAD) x BREATHE_TO` = 70 x 1.26 = 88.2, and it
+ * sits `NODE_LIFT` low, so its farthest point is 103.2 from the node's centre -- but a
+ * `done` badge's star row
  * never scales at all and sits further out to begin with: the outer star is offset
  * (`STAR_PITCH`, `STAR_Y`) = (37, -95) from the node's own centre, radius `STAR_D / 2` = 16, so
  * the farthest point on it is `sqrt(37^2 + 95^2) + 16` ~ 117.95 from the centre a tree's distance
@@ -341,8 +343,20 @@ const NODE_LOCK_EDGE = shade(NODE_LOCK, -0.2);
  * `NODE_CUR` rather than the soft glow that used to sit here.
  *
  * 「改为细描边高亮（2px 亮色描边 + 呼吸缩放），不要用模糊光晕」 -- the requirement is explicit that a
- * blur reads as a smudge, not as emphasis, so this is a plain disc 2 units larger than the face
- * on every side (`NODE_D + 4`) rather than a soft-alpha halo many times the badge's own size.
+ * blur reads as a smudge, not as emphasis, so this is a plain disc rather than a soft-alpha halo
+ * many times the badge's own size.
+ *
+ * IT IS MEASURED OFF THE DARK EDGE, NOT OFF THE FACE, and the first version was measured off the
+ * face -- `NODE_D + 4` = 132 against a dark edge of `NODE_EDGE_D` = 136. A 132 disc behind a 136
+ * one does not show as a thin ring; it shows as nothing at all where the two are concentric, and
+ * here they are NOT concentric (the edge carries the base's `NODE_LIFT` offset and the highlight
+ * did not), so what it actually drew was a bright crescent across the TOP half and nothing on the
+ * bottom. Working it out: a point on the highlight's rim sits `sqrt(4581 + 1980 sin(theta))` from
+ * the edge disc's centre, which is inside the edge's 68 for every theta below about 1 degree and
+ * above about 179 -- the whole lower half.
+ *
+ * So the highlight is the OUTERMOST layer, `NODE_HI_PAD` beyond the dark edge on every side, and
+ * it shares the edge's offset so the ring it leaves is the same 2 units the whole way round.
  *
  * IT REPLACES THE HALO THAT USED TO FOLLOW THE SCROLL, painted in `NODE_DONE`'s green -- drag a
  * locked level to the middle under the old code and a success-coloured ring landed on a padlock,
@@ -355,7 +369,7 @@ const NODE_LOCK_EDGE = shade(NODE_LOCK, -0.2);
  * for free; nothing here tweens the highlight's own size in step with `breath`.
  */
 const NODE_HI_PAD = 2;
-const NODE_HI_D = NODE_D + NODE_HI_PAD * 2;
+const NODE_HI_D = NODE_EDGE_D + NODE_HI_PAD * 2;
 const NODE_CUR_HI = shade(NODE_CUR, 0.3);
 
 const STAR_ON = new Color(255, 201, 52, 255);
@@ -885,6 +899,9 @@ export class HomeView {
         // with the state -- see `NODE_CUR_HI`.
         const hi = dotSprite('hi', NODE_HI_D, NODE_CUR_HI);
         node.addChild(hi);
+        // Concentric with the EDGE, not with the face: the two rings have to share a centre or
+        // the bright one comes out thicker at the top than at the bottom. See `NODE_HI_PAD`.
+        hi.setPosition(0, -NODE_LIFT, 0);
         hi.active = false;
 
         // The edge, second: it must be added BEFORE the base or the base would paint over it
