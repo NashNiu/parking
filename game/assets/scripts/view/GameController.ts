@@ -2307,7 +2307,7 @@ export class GameController extends Component {
      * tap on this screen and for the same reason: it is the topmost thing here, and a scrim
      * over the lobby means the lobby is not being touched. Without this line a drag across the
      * card scrolled the rail behind it -- `endDrag` runs `setFocus(railFlick(...))` on release,
-     * so closing the panel revealed a different level under a re-labelled button -- and a press
+     * so closing the panel revealed a different level centred under the button -- and a press
      * over where the start button sits behind the scrim visibly depressed it. Same defect class
      * the tap side closed: a control answering input it should not be able to hear.
      */
@@ -2319,9 +2319,10 @@ export class GameController extends Component {
         this.slidHome = false;
         // ui.y, because the home rail runs up the screen now.
         this.home.beginDrag(ui.y, nowMs() / 1000);
-        // A press landing on the start button also depresses it. `hitsStart` already returns
-        // false when the focused level is locked (it reads `focusOpen`), so a press on a shut
-        // button leaves it flat -- the button visibly refusing rather than staying silent.
+        // A press landing on the start button also depresses it. The button is always live
+        // now -- it plays whatever level the save allows, never the (possibly locked) rail
+        // focus -- so there is no "shut" state left for `hitsStart` to special-case; it only
+        // refuses while the screen itself is not up.
         if (this.home.hitsStart(ui)) this.home.setStartPressed(true);
     }
 
@@ -2484,13 +2485,13 @@ export class GameController extends Component {
             // -- while a tap that lands on the rail after a drag is precisely what this guard
             // is for.
             if (this.slidHome) return;
-            // THE BUTTON IS THE ONLY WAY IN, and it opens whatever is in the middle of the
-            // rail (`focusedLevel`, which is also what labelled it). Tapping a stop only
-            // brings it to the middle. Two jobs on one control is how a stray tap starts a
-            // level nobody asked for -- and on a rail, a stray tap is what a
-            // slightly-too-still drag looks like.
+            // THE BUTTON IS THE ONLY WAY IN, and it opens the level the save allows
+            // (`currentLevel()`), independent of wherever the rail happens to be scrolled.
+            // Tapping a stop only brings it to the middle. Two jobs on one control is how a
+            // stray tap starts a level nobody asked for -- and on a rail, a stray tap is what
+            // a slightly-too-still drag looks like.
             if (this.home.hitsStart(ui)) {
-                this.enterLevel(`level-${this.home.focusedLevel()}`);
+                this.enterLevel(`level-${this.home.currentLevel()}`);
                 return;
             }
             const stop = this.home.hitsStop(ui);

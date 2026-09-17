@@ -1,7 +1,9 @@
 import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
-import { dotSprite, rampSprite, roundedSprite, starSprite, triSprite } from './ui-shapes';
+import {
+    dotSprite, liftedPill, PILL_INK, rampSprite, roundedSprite, starSprite, triSprite,
+} from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
 import { GROUND } from './palette';
 import { TopBar } from './top-bar';
@@ -37,8 +39,9 @@ import { HomeScene } from './home-scene';
  * drag looks like.
  *
  * It draws the save, and it is the only place the level gate is enforced: a locked level can
- * be brought to the middle and read, but the button goes quiet and says what would unlock
- * it. One place, because this screen owns what the player can see.
+ * be brought to the middle and read, and tapping it explains itself with a toast rather than
+ * by touching the button -- the button always plays the level the save allows, wherever the
+ * rail is scrolled. One place, because this screen owns what the player can see.
  */
 
 /**
@@ -91,9 +94,6 @@ const START_H = 116;
 const START_R = 40;
 const START = new Color(86, 199, 104, 255);
 const START_BASE = new Color(56, 156, 76, 255);
-/** The button with nothing to play: the same slab, drained, and it answers no taps. */
-const START_SHUT = new Color(60, 71, 102, 255);
-const START_SHUT_BASE = new Color(45, 54, 78, 255);
 /** How far the base peeks out below the face. Same lip the HUD's buttons wear. */
 const BTN_LIFT = 8;
 
@@ -111,26 +111,38 @@ const BTN_LIFT = 8;
  *   label centre = (START_ICON_D + START_ICON_GAP) / 2         -- independent of L
  *   icon centre  = -(START_ICON_GAP + L) / 2                    -- depends on L
  * The label's centre is therefore a plain constant, `START_LABEL_X`, good for every string it
- * ever carries. The icon's is NOT, because L changes between the playable string
- * ("开始 第 N 关") and the longer locked one ("通过第 N 关解锁") -- so the icon is
- * repositioned every time the label's string changes, in `setFocus`, using `L` read back from
- * the label itself via `Label.updateRenderData(true)`. That call is what makes `L` available
- * synchronously: a plain `.string` assignment leaves the node's `UITransform` width stale
- * until the renderer's next pass, but `updateRenderData(true)` flushes the assembler
+ * ever carries. The icon's is NOT: the button always reads "开始 第 N 关" now, one SHAPE, but
+ * N is not one WIDTH -- "第 9 关" and "第 10 关" measure differently -- so the icon is still
+ * repositioned every time the label's string changes, in `setCurrent`, using `L` read back
+ * from the label itself via `Label.updateRenderData(true)`. That call is what makes `L`
+ * available synchronously: a plain `.string` assignment leaves the node's `UITransform` width
+ * stale until the renderer's next pass, but `updateRenderData(true)` flushes the assembler
  * immediately -- the same mechanism `RichText` uses to measure a label right after changing
  * it (see `updateRenderData` in the engine's `cocos/2d/components/label.ts`). It is not in
  * this project's own `.d.ts` stub, only in the engine's, which is what `tsconfig.view.json`
  * actually type-checks against (see its own comment on `game/temp/declarations/cc.d.ts`).
  *
  * `START_ICON_X` is used once, in `buildStart`, before the button has ever shown a real
- * string -- `setFocus` (reached through `setProgress`) always runs before the button is first
- * revealed, so this placeholder is never actually seen; it exists so the icon has SOME
- * position between construction and that first `setFocus` rather than sitting on the origin.
+ * string -- `setCurrent` (reached through `setProgress`) always runs before the button is
+ * first revealed, so this placeholder is never actually seen; it exists so the icon has SOME
+ * position between construction and that first `setCurrent` rather than sitting on the origin.
  */
 const START_ICON_D = 40;
 const START_ICON_GAP = 14;
 const START_LABEL_X = (START_ICON_D + START_ICON_GAP) / 2;
 const START_ICON_X = -START_W / 2 + START_R + START_ICON_D / 2 + 8;
+
+/**
+ * The toast a locked tap gets, over the button: how big, how far above it, and how long it
+ * stays. See `showLockedToast`.
+ */
+const TOAST_W = 460;
+const TOAST_H = 84;
+const TOAST_GAP = 24;
+const TOAST_TEXT = 34;
+/** Held fully visible, then eased out -- together "about 1.6s". */
+const TOAST_HOLD = 1.2;
+const TOAST_FADE = 0.4;
 
 /**
  * A ROUND BADGE, and its size is decided by the SAVE rather than by the scroll.
@@ -153,8 +165,10 @@ const START_ICON_X = -START_W / 2 + START_R + START_ICON_D / 2 + 8;
  * that changes while a finger drags is a size that cannot mean anything about the save. The
  * per-distance opacity fade went with it for the same reason -- "bright means cleared" is not a
  * sentence you can say while brightness is also saying "near the middle". The rail's focus
- * keeps the halo alone, which is the one signal that is genuinely about the scroll: it means
- * "the button opens this one".
+ * keeps the halo alone, which is the one signal that is genuinely about the scroll: it USED TO
+ * mean "the button opens this one", and that stopped being true the day the button moved onto
+ * the save (see `setCurrent`) -- the halo is now honestly just the rail's own cursor, saying
+ * no more than "a tap lands here next".
  */
 const NODE_D = Math.round(1280 * 0.16);
 /** Stars at a quarter of the badge, the proportion the requirement names. */
@@ -196,9 +210,11 @@ const NODE_LOCK_BASE = new Color(38, 46, 70, 255);
 const STOP_INK = new Color(255, 255, 255, 240);
 /**
  * The halo on the middle stop. It fades out as that stop leaves the middle, and it is now the
- * ONLY thing the scroll position draws -- see NODE_D. It says "the button opens this one",
- * which is a fact about the rail and not about the save, so it is painted in the button's own
- * green rather than in any of the three state colours.
+ * ONLY thing the scroll position draws -- see NODE_D. It says "a tap lands here next", which is
+ * a fact about the rail and not about the save -- it used to also be what the button would open,
+ * back when the button read the focus; now the button reads `unlockedThrough(progress)`
+ * instead (see `setCurrent`), and the halo is painted in the button's own green because that is
+ * this screen's established colour for "the live control", not because it still describes one.
  */
 const STOP_RING = new Color(86, 199, 104, 90);
 const STOP_RING_PAD = 15;
@@ -292,12 +308,8 @@ interface Stop {
     num: Label;
     lock: Node;
     stars: Node[];
-    /**
-     * What the save says about this level, and the ONLY thing that decides how it is drawn.
-     * `open` is derived from it rather than computed alongside it -- see `setProgress`.
-     */
+    /** What the save says about this level, and the ONLY thing that decides how it is drawn. */
     state: LevelState;
-    open: boolean;
 }
 
 export class HomeView {
@@ -313,6 +325,10 @@ export class HomeView {
     private startBase: Node;
     private startLabel: Label;
     private startIcon: Node;
+    /** The toast a locked tap gets: `HomeToast`'s holder, its fade, and its label. */
+    private toastNode: Node;
+    private toastFade: UIOpacity;
+    private toastLabel: Label;
     /** The street the rail runs up. See `home-scene`. */
     private scene: HomeScene;
     /** The stops' parent, parked on the lane. Stops are positioned within it. */
@@ -355,8 +371,8 @@ export class HomeView {
     private offset = 0;
     private target = 0;
     private focused = 0;
-    /** Whether the level in the middle can be played -- what the button reflects. */
-    private focusOpen = false;
+    /** The level the button plays: the newest one the save allows. Set by `setCurrent`. */
+    private current = 1;
 
     private dragging = false;
     private dragFromY = 0;
@@ -473,6 +489,11 @@ export class HomeView {
         this.startLabel = start.label;
         this.startIcon = start.icon;
 
+        const toast = this.buildToast(startY + START_H / 2 + TOAST_GAP + TOAST_H / 2);
+        this.toastNode = toast.node;
+        this.toastFade = toast.fade;
+        this.toastLabel = toast.label;
+
         this.loadingLayer = new Node('Loading');
         this.loadingLayer.layer = Layers.Enum.UI_2D;
         this.loadingLayer.addComponent(UITransform);
@@ -485,9 +506,9 @@ export class HomeView {
     }
 
     /**
-     * The primary button. Its LABEL says which level it opens, and `setFocus` keeps that in
-     * step with whatever is in the middle of the rail -- the two cannot disagree, because
-     * one function writes both.
+     * The primary button. Its LABEL says which level it opens, and it is driven from the SAVE
+     * alone, by `setCurrent` -- see `setFocus` for the scroll-driven state this button used to
+     * share with the rail and no longer does.
      */
     private buildStart(
         y: number,
@@ -510,6 +531,31 @@ export class HomeView {
         label.isBold = true;
         label.string = '开始游戏';
         return { node: btn, face, base, label, icon };
+    }
+
+    /**
+     * The toast a locked tap gets instead of a mute button: `通过第 N 关解锁`, shown for about
+     * 1.6s and then gone on its own -- not a dialog, and it never blocks a tap on anything
+     * else. See `showLockedToast`.
+     *
+     * BUILT FROM `liftedPill`, THE SAME FACE-OVER-BASE EVERY PRESSABLE THING ON THIS SCREEN
+     * WEARS, because a fourth panel idiom for one line of text would be a new thing to keep in
+     * step with the project's own rule that a raised plate is what a panel here looks like. It
+     * never gets pressed, so it borrows the shape and not `BTN_LIFT`'s press animation.
+     *
+     * PARKED ABOVE THE BUTTON rather than over the rail, so it can never cover the badge whose
+     * lock it is explaining.
+     */
+    private buildToast(y: number): { node: Node; fade: UIOpacity; label: Label } {
+        const { holder, face } = liftedPill('HomeToast', TOAST_W, TOAST_H);
+        this.root.addChild(holder);
+        holder.setPosition(0, y, 0);
+        const fade = holder.addComponent(UIOpacity);
+        const label = makeLabel(face, 'HomeToastLabel', TOAST_TEXT, 0);
+        label.color = PILL_INK;
+        label.isBold = true;
+        holder.active = false;
+        return { node: holder, fade, label };
     }
 
     /** See GATE_POST_W for what this is and why its arm does not report a fraction. */
@@ -660,7 +706,7 @@ export class HomeView {
             star.active = false;
             stars.push(star);
         }
-        return { node, ringFade, face, base, num, lock, stars, state: 'locked', open: false };
+        return { node, ringFade, face, base, num, lock, stars, state: 'locked' };
     }
 
     /** See LOCK_INK: a padlock out of three sprites, the middle one a hole. */
@@ -690,7 +736,9 @@ export class HomeView {
      * Draw the save: every stop's state and rating, and which level the rail opens on.
      *
      * Opening on the furthest unlocked level is what makes the rail land where the player
-     * left off, and it is the same number the button offers -- `setFocus` writes both.
+     * left off, and it is the same number the button offers -- `setCurrent` and `setFocus`
+     * each take it from this one local, so the two agree by construction rather than by one
+     * of them writing both.
      */
     setProgress(p: Progress): void {
         if (this.stops.length === 0) return;
@@ -711,9 +759,6 @@ export class HomeView {
             const state = levelState(p, level);
             const best = starsFor(p, level);
             stop.state = state;
-            // Derived, not computed in parallel: what `setFocus` and `hitsStart` need is "may
-            // this be played", which is exactly "not locked".
-            stop.open = state !== 'locked';
             if (state === 'current') hasCurrent = true;
             stop.face.getComponent(Sprite)!.color =
                 state === 'done' ? NODE_DONE : (state === 'current' ? NODE_CUR : NODE_LOCK);
@@ -737,7 +782,9 @@ export class HomeView {
             }
         }
         this.setBreathing(hasCurrent);
-        this.setFocus(Math.max(1, Math.min(this.levelCount, unlockedThrough(p))) - 1);
+        const current = Math.max(1, Math.min(this.levelCount, unlockedThrough(p)));
+        this.setCurrent(current);
+        this.setFocus(current - 1);
         // Land there rather than glide there: this runs as the screen appears, and a rail
         // that slides in from level 1 every time would be an animation of loading a save.
         this.offset = this.target;
@@ -802,46 +849,83 @@ export class HomeView {
         return (top + bottom) / 2;
     }
 
-    /** Which level the button plays, 1-based. */
+    /** Which level the button plays: the newest one the save allows, never the scroll focus. */
+    currentLevel(): number {
+        return this.current;
+    }
+
+    /** Which stop is centred on the rail, 1-based -- the scroll focus, not what the button plays. */
     focusedLevel(): number {
         return this.focused + 1;
     }
 
     /**
-     * Move the rail's aim to stop `i`, and write the button to match.
-     *
-     * The button is the ONLY place the gate shows as a refusal: a locked level can be brought
-     * to the middle and looked at, and then the button says what would open it and
-     * `hitsStart` stops answering. Friendlier than a rail that refuses to travel, and one
-     * predicate rather than two.
+     * Set the button to the level the save allows: always green, always live, independent of
+     * wherever the rail happens to be scrolled. Called once from `setProgress`, from the same
+     * capped `unlockedThrough(p)` the rail opens on.
      */
-    private setFocus(i: number): void {
-        this.focused = Math.max(0, Math.min(Math.max(0, this.levelCount - 1), i));
-        this.target = railOffset(this.focused);
-        const stop = this.stops[this.focused];
-        this.focusOpen = !!stop && stop.open;
-        this.startFace.getComponent(Sprite)!.color = this.focusOpen ? START : START_SHUT;
-        this.startBase.getComponent(Sprite)!.color =
-            this.focusOpen ? START_BASE : START_SHUT_BASE;
-        // Drained in step with the face and base, right here rather than in a second place
-        // that could fall out of step with them -- STAR_OFF is this file's own colour for
-        // "not lit", already worn by a star that has not been earned.
-        this.startIcon.getComponent(Sprite)!.color = this.focusOpen ? Color.WHITE : STAR_OFF;
-        this.startLabel.string = this.focusOpen
-            ? `开始 第 ${this.focused + 1} 关`
-            : `通过第 ${this.focused} 关解锁`;
+    private setCurrent(level: number): void {
+        this.current = level;
+        this.startLabel.string = `开始 第 ${level} 关`;
         // Flush the assembler so the label's UITransform width is the SETTLED width of the
         // string just above, not last frame's -- see START_ICON_D for why this is safe to
         // rely on. Only then can the icon be placed exactly, rather than approximately, for
-        // whichever of the two strings just went up.
+        // whichever width this level's number just gave it.
         this.startLabel.updateRenderData(true);
         const labelW = this.startLabel.node.getComponent(UITransform)!.width;
         this.startIcon.setPosition(-(START_ICON_GAP + labelW) / 2, 0, 0);
     }
 
-    /** Bring stop `i` to the middle, on a tap. */
+    /**
+     * Move the rail's aim to stop `i`. This is ONLY the scroll position now -- see
+     * `setCurrent` for the button, which no longer reads it at all.
+     *
+     * THE GATE USED TO SHOW AS A REFUSAL HERE: bringing a locked level to the middle turned
+     * the button grey and re-worded it as what would unlock it -- the same defect this file
+     * already fixed for the badges (see the halo's own docblock, above), left standing in the
+     * one control that matters most. The button is now fixed to `unlockedThrough(progress)`
+     * regardless of where the rail is looking; a tap on a locked badge gets its own answer
+     * instead, from `showLockedToast`.
+     */
+    private setFocus(i: number): void {
+        this.focused = Math.max(0, Math.min(Math.max(0, this.levelCount - 1), i));
+        this.target = railOffset(this.focused);
+    }
+
+    /**
+     * Bring stop `i` to the middle, on a tap. A locked stop also raises the toast that says
+     * what would unlock it -- the button itself no longer reads the focus, so a tap on a
+     * locked badge would otherwise land on a screen that says nothing about why it is grey.
+     */
     focusStop(i: number): void {
         this.setFocus(i);
+        const stop = this.stops[i];
+        // `i` IS the level just before the tapped one (the tapped level is `i + 1`), so no
+        // further arithmetic is needed to name what the toast should say unlocks it.
+        if (stop && stop.state === 'locked') this.showLockedToast(i);
+    }
+
+    /**
+     * Say what would unlock stop `n + 1`, over the button, and fade it out on its own.
+     *
+     * `stopAllByTarget` FIRST, the same discipline `setBreathing` argues for: a second locked
+     * tap before the first toast finished fading would otherwise stack a second tween on the
+     * same opacity, and the two would fight over it for the rest of the fade.
+     *
+     * TOAST_HOLD then TOAST_FADE is "about 1.6s" -- held fully visible, then eased out, with
+     * no dismissal for the player to reach for: it is explaining a badge, not asking a
+     * question, so it does not need to block anything to be seen.
+     */
+    private showLockedToast(n: number): void {
+        this.toastLabel.string = `通过第 ${n} 关解锁`;
+        this.toastNode.active = true;
+        Tween.stopAllByTarget(this.toastFade);
+        this.toastFade.opacity = 255;
+        tween(this.toastFade)
+            .delay(TOAST_HOLD)
+            .to(TOAST_FADE, { opacity: 0 })
+            .call(() => { this.toastNode.active = false; })
+            .start();
     }
 
     /**
@@ -935,10 +1019,14 @@ export class HomeView {
     hide(): void {
         this.root.active = false;
         // Stop what this screen started. The rest of the file already does this for the gate
-        // arm and the loading fade; the breath was the one tween left ticking off screen.
-        // `breathing` is deliberately NOT cleared -- it is what the save says, not what is
-        // currently running, and `show` reads it back.
+        // arm and the loading fade; the breath and the toast are the tweens left ticking off
+        // screen otherwise. `breathing` is deliberately NOT cleared -- it is what the save
+        // says, not what is currently running, and `show` reads it back. The toast has no
+        // such memory to preserve: it is a one-shot reaction to a tap, not a fact about the
+        // save, so it is simply stopped and hidden.
         Tween.stopAllByTarget(this.breath);
+        Tween.stopAllByTarget(this.toastFade);
+        this.toastNode.active = false;
     }
 
     open(): boolean {
@@ -1042,9 +1130,12 @@ export class HomeView {
         this.topBar.tapSlot(i);
     }
 
-    /** Whether `ui` (UI-space) landed on the start button, and there is a level to start. */
+    /**
+     * Whether `ui` (UI-space) landed on the start button. The button is always live once the
+     * screen is up -- see `setCurrent` -- so this only guards the screen's own state.
+     */
     hitsStart(ui: Vec3): boolean {
-        if (!this.open() || this.waiting || !this.focusOpen) return false;
+        if (!this.open() || this.waiting) return false;
         const p = this.startBtn.worldPosition;
         return Math.abs(ui.x - p.x) <= START_W / 2 + TAP_PAD
             && Math.abs(ui.y - p.y) <= START_H / 2 + TAP_PAD;

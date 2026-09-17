@@ -448,3 +448,55 @@ test('home-scene draws the shadow pass before the road pass', () => {
   expect(shadows).toBeGreaterThan(0);
   expect(roads).toBeGreaterThan(shadows);
 });
+
+/**
+ * Whether two substrings ever occur within `window` characters of one another, anywhere in
+ * `src`. Every occurrence of `a` is checked against every occurrence of `b`, so it does not
+ * matter which one comes first or how many times either appears.
+ */
+function within(src: string, a: string, b: string, window: number): boolean {
+  const idxA: number[] = [];
+  for (let i = src.indexOf(a); i !== -1; i = src.indexOf(a, i + 1)) idxA.push(i);
+  for (let j = src.indexOf(b); j !== -1; j = src.indexOf(b, j + 1)) {
+    if (idxA.some((k) => Math.abs(k - j) <= window)) return true;
+  }
+  return false;
+}
+
+/**
+ * The start button's label never carries the "locked" wording.
+ *
+ * WHAT THIS GUARDS. `setFocus` used to write `this.startLabel.string` to either the playable
+ * string or `` `通过第 ${this.focused} 关解锁` `` depending on `focusOpen` -- so scrolling the
+ * rail to a locked badge re-labelled the ONE button in the game as a refusal, even though the
+ * save still allowed a different, playable level. The button now reads
+ * `unlockedThrough(progress)` alone, via `setCurrent`, and the locked wording lives only in the
+ * toast (`showLockedToast`), nowhere near `startLabel`.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot render the button and read what it says. 200 characters is not a precise
+ * boundary -- it is wide enough to catch the phrase sitting right next to a `startLabel` write
+ * (as it did) and it does not need to be any tighter than that.
+ */
+test('the start button never carries the locked wording near its label', () => {
+  const src = readSrc('home-view.ts');
+  expect(within(src, 'startLabel', '通过第', 200)).toBe(false);
+});
+
+/**
+ * The guard above can still see the defect it is written for.
+ *
+ * Without this, "not found" is indistinguishable from "the check stopped running" -- the same
+ * discipline the sibling-index guard's own self-test applies. The first case is the actual bug
+ * this project shipped (`startLabel` and `通过第` a few characters apart); the second confirms
+ * 200 characters is actually being enforced as a WINDOW and not treated as "anywhere in the
+ * file" -- the toast's own `通过第 ${n} 关解锁` line is far from every `startLabel` write, and a
+ * guard that could not tell the difference would fail on this file forever.
+ */
+test('the locked-wording guard is not fooled by distance or absence', () => {
+  const near = "this.startLabel.string = ok ? 'a' : ('通过第' + n + '关解锁');";
+  expect(within(near, 'startLabel', '通过第', 200)).toBe(true);
+  const far = `this.startLabel.string = 'ok';\n${' '.repeat(250)}const t = '通过第' + n;`;
+  expect(within(far, 'startLabel', '通过第', 200)).toBe(false);
+  expect(within('no occurrences of either token here', 'startLabel', '通过第', 200)).toBe(false);
+});
