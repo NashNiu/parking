@@ -48,12 +48,17 @@
  *     290 - 136 (star row reaches -136) - 85 (badge below, scale 1.0, no glow -- `done` never
  *     wears the glow either) = 69
  *
- * Every other reachable pair has more room, and none of them is this one: current's breathing
- * top (85 x 1.26 = 107) under a locked badge (85 x 0.8 = 68) leaves 115 -- pair
- * (current, locked); the current badge's own glow, which reaches (85 + CUR_GLOW_PAD) x 1.26 =
- * 126 at full breath, over the done badge below it leaves 79 -- pair (done, current); two locked
- * badges (85 x 0.8 each) leave 154 -- pair (locked, locked). 69 is the tightest of the four and
- * is comfortably clear of the two shapes ever touching. 290 is not stretched to chase a bigger
+ * Every other reachable pair has more room. THE CURRENT BADGE'S EXTENT IS ITS GLOW, 126 at full
+ * breath -- `(85 + CUR_GLOW_PAD) x 1.26`, and the glow is a concentric disc, so that is its
+ * reach in EVERY direction, above as well as below. Writing 107 for its top edge and 126 for
+ * its bottom in the same paragraph is the arithmetic slip this docblock has already been
+ * rewritten four times to avoid, and it was in here once more:
+ *
+ *     (current, locked)  290 - 126 (glow, above) - 68 (locked, 85 x 0.8) =  96
+ *     (done, current)    290 - 126 (glow, below) - 85 (done below it)    =  79
+ *     (locked, locked)   290 -  68 -  68                                 = 154
+ *
+ * 69 is the tightest of the four and is comfortably clear of the two shapes ever touching. 290 is not stretched to chase a bigger
  * margin here -- a pitch that is too large only shows fewer levels, while one that is too small
  * collides.
  *
