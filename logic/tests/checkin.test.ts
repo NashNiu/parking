@@ -181,3 +181,26 @@ test('nextDay and nextReward cannot disagree', () => {
   expect(nextReward(c, '2026-03-07')).toBe(CHECKIN_REWARDS[nextDay(c, '2026-03-07') - 1]);
   expect(nextReward(c, '2026-03-09')).toBe(CHECKIN_REWARDS[nextDay(c, '2026-03-09') - 1]);
 });
+
+/**
+ * `nextDay` ON THE DAY OF A CLAIM ANSWERS 1, NOT THE DAY JUST CLAIMED.
+ *
+ * It is the natural reading of the name that is wrong, and a view believed it: after a claim,
+ * `last` is TODAY, which is not yesterday-of-today, so the streak-continues branch does not fire
+ * and the function falls through to "start again". That is correct for what `nextDay` is FOR --
+ * it answers "what would a claim made now land on", and a second claim today is not possible, so
+ * the value is unreachable rather than meaningful.
+ *
+ * Pinned because the check-in card read it in exactly that state and drew day 1 as the only
+ * claimed cell, whatever day had just been paid. Anything wanting "the day just claimed" reads
+ * `c.day`; this documents why it cannot read this instead.
+ */
+test('nextDay is meaningless, and answers 1, on a day already claimed', () => {
+  for (let day = 1; day <= 7; day++) {
+    const c = { version: CHECKIN_VERSION, day, last: '2026-04-10' };
+    expect(canClaim(c, '2026-04-10')).toBe(false);
+    expect(nextDay(c, '2026-04-10')).toBe(1);
+    // What a caller in that state actually wants is on the save already.
+    expect(c.day).toBe(day);
+  }
+});

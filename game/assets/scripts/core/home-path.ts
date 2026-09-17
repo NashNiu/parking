@@ -48,19 +48,30 @@
  *     290 - 136 (star row reaches -136) - 85 (badge below, scale 1.0, no glow -- `done` never
  *     wears the glow either) = 69
  *
- * Every other reachable pair has more room. THE CURRENT BADGE'S EXTENT IS ITS GLOW, 126 at full
- * breath -- `(85 + CUR_GLOW_PAD) x 1.26`, and the glow is a concentric disc, so that is its
- * reach in EVERY direction, above as well as below. Writing 107 for its top edge and 126 for
- * its bottom in the same paragraph is the arithmetic slip this docblock has already been
- * rewritten four times to avoid, and it was in here once more:
+ * A BADGE IS NOT SYMMETRIC ABOUT ITS CENTRE, which is the term two earlier versions of this
+ * table dropped. It reaches `85 x scale` UP and `(85 + BTN_LIFT) x scale` DOWN, because the base
+ * plate sits `BTN_LIFT` (8) below the face -- the lip every pressable thing in this project
+ * wears. The current badge is the exception, and for a different reason: its glow reaches
+ * `(85 + CUR_GLOW_PAD) x 1.26` = 126, which is larger than its own 117 lip extent, and a glow is
+ * a concentric DISC -- so 126 is its reach in every direction, above and below alike. Writing
+ * 107 for its top and 126 for its bottom, as a version of this paragraph did, is exactly the
+ * slip the heading above warns about.
  *
- *     (current, locked)  290 - 126 (glow, above) - 68 (locked, 85 x 0.8) =  96
- *     (done, current)    290 - 126 (glow, below) - 85 (done below it)    =  79
- *     (locked, locked)   290 -  68 -  68                                 = 154
+ *     pair (lower, upper)                        upper reaches down   lower reaches up
+ *     (done, done)    290 - 136 - 85  =  69      star row, -136       85
+ *     (done, current) 290 - 126 - 85  =  79      glow, 126            85
+ *     (current, lock) 290 - 74.4 - 126 = 89.6    93 x 0.8             glow, 126
+ *     (lock, lock)    290 - 74.4 - 68 = 147.6    93 x 0.8             85 x 0.8
  *
- * 69 is the tightest of the four and is comfortably clear of the two shapes ever touching. 290 is not stretched to chase a bigger
- * margin here -- a pitch that is too large only shows fewer levels, while one that is too small
- * collides.
+ * 69 is the tightest of the four, and 290 is not stretched to chase a bigger margin: a pitch that
+ * is too large only shows fewer levels, while one that is too small collides.
+ *
+ * ALL OF THAT IS A VERTICAL PROJECTION, and therefore a conservative bound rather than the real
+ * gap. Adjacent stops are `2 x ZIG_X` = 420 apart across the screen as well as 290 up it, so the
+ * true centre-to-centre distance is about 510 and the closest the binding pair's shapes actually
+ * come is near 305. The bound is the right one to size against -- it stays correct however the
+ * badges move horizontally -- but a reader straightening the rail toward a smaller `ZIG_X` should
+ * know that 69 is the number that would start to bite, and that it is not biting today.
  *
  * The cost: about 7.7 levels visible on a tall phone (h ~ 2770), a little under 4 on a 4:3
  * tablet (h ~ 1707). That is an accepted cost of a vertical rail, not something a second layout
@@ -84,7 +95,9 @@ export const ZIG_X = 210;
  * How many segments a leg is cut into.
  *
  * 6: the curve is shallow, so 6 segments keep the polyline's error under a pixel, and each
- * segment costs exactly two sprites in the view layer -- one of road surface, one of kerb.
+ * segment costs exactly two sprites in the view layer -- one of road surface, one of the hard
+ * shadow under it. It used to be road and KERB; the kerb went (it read as a blurred ring, not
+ * as a lip) and the shadow took its place, which leaves the count where it was.
  * There used to be a joint dot at every sample as well, and there is not any more: `home-scene`
  * strokes each chord as a capsule (corner radius exactly half the stroke width), which already
  * contains the whole disc at either end, so the dots were 126 sprites drawn inside shapes that

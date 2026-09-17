@@ -1628,16 +1628,27 @@ export class HudView {
      * tell day 1 from day 2 because both pay 20. The cell that lights up is the cell `claim` will
      * pay, by construction rather than by two rules agreeing.
      *
-     * A cell is CLAIMED when it is at or below `claimedThrough`, and that bound moves with
-     * `canClaim`: while today is still unclaimed the landing day is the one in FRONT of the
-     * player, so the claimed run stops one short of it; once today has been taken the landing day
-     * IS the day just taken, so the run reaches it.
+     * A cell is CLAIMED when it is at or below `claimedThrough`, and THE TWO BRANCHES READ
+     * DIFFERENT FIELDS, which is the whole of what this line gets right and got wrong once.
+     *
+     * While today is still unclaimed, `nextDay` is the day in FRONT of the player, so the claimed
+     * run stops one short of it. Once today HAS been claimed, the answer is `c.day` -- the day the
+     * claim recorded -- and NOT `nextDay`, which is a trap here: `nextDay` continues a streak only
+     * when `last` is literally yesterday, and after a claim `last` is TODAY, so it falls through
+     * to its "streak broken, start again" branch and returns 1. Reading it in that branch ticked
+     * day 1 and nothing else, whatever day had actually just been paid -- so on six days of the
+     * seven the card contradicted the payout, the seventh worst of all: 100 coins paid and the
+     * cell still showing as a day to come. It stayed wrong until the next midnight, because
+     * nothing between now and then changes what `nextDay` answers.
+     *
+     * `c.day` is 1..7 whenever `live` is false, because `live` is false only after a claim has
+     * been recorded, and a recorded claim always writes a day in that range.
      */
     paintCheckin(c: Checkin, today: string): void {
         if (!this.checkin) return;
         const live = canClaim(c, today);
         const landing = nextDay(c, today);
-        const claimedThrough = live ? landing - 1 : landing;
+        const claimedThrough = live ? landing - 1 : c.day;
         this.chkClaimable = live;
         for (let d = 0; d < 7; d++) {
             const cell = this.chkCells[d];

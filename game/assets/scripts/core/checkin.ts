@@ -2,10 +2,17 @@
  * The daily check-in streak: a save that tracks which day of a 7-day reward cycle the player
  * last claimed, and when.
  *
- * A SEPARATE save from `Progress` and `Wallet`, under its own key, because its lifetime
- * matches neither of theirs. It must not be wiped by a progress reset (a streak is not a level
- * result), and it must not be wiped by anything that clears the wallet either -- a coin reset
- * should not also hand the player a free re-roll of day 1's reward.
+ * A SEPARATE KEY from `Progress` and `Wallet`, sharing the WALLET'S LIFETIME. Its own key
+ * because a streak is not a level result and has no business inside a save about levels; the
+ * wallet's lifetime because a streak is a record of turning up to play and it pays out in
+ * coins, and coins go in the wipe. `storage.clearCheckinText` argues that end of it and is
+ * where the rule is enforced.
+ *
+ * AN EARLIER VERSION OF THIS PARAGRAPH SAID THE OPPOSITE -- that the streak survives a wipe --
+ * and it was wrong in a way worth recording, because the reasoning sounds right: a player who
+ * clears their progress has not asked to lose six days of turning up. What settles it is the
+ * seventh day. Keep the streak and "clear the save, claim 100" is two taps apart, and the one
+ * figure in the table meant to take a week to reach is the one a wipe hands out for free.
  *
  * Same failure policy as `wallet.ts` and for the same reason: this is read off the device on
  * the boot path, so anything unexpected comes back as `emptyCheckin()` and nothing throws.

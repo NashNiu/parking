@@ -189,9 +189,6 @@ export class HomeScene {
      */
     private centreY = 0;
 
-    private w: number;
-    private h: number;
-
     /**
      * Builds the ground and nothing else.
      *
@@ -200,8 +197,11 @@ export class HomeScene {
      * constructed. See `build`.
      */
     constructor(parent: Node, w: number, h: number) {
-        this.w = w;
-        this.h = h;
+        // `w` and `h` are used HERE and nowhere else, so they are not kept as fields. They
+        // were, until the scenery went: `dress()` measured the verge against the canvas
+        // width and the edge fades spanned its height. Both are gone, and a field nothing
+        // reads is an invitation to measure something new off a number this class has no
+        // business still holding -- the ground is the only thing here sized by the screen.
         this.root = container('HomeStreet', parent);
 
         // TWICE THE CANVAS, which is the one thing kept from the backdrop this replaces: a
@@ -244,7 +244,7 @@ export class HomeScene {
      * Place the street for the current scroll, and switch off the legs nobody can see.
      *
      * BOTH ARGUMENTS COME FROM `HomeView.layout()`, which calls this as
-     * `scene.layout(this.offset, this.h * 0.75)` once it has settled `this.offset` for the
+     * `scene.layout(this.offset, h * 0.75)` once it has settled `this.offset` for the
      * frame -- the same offset it is about to place the stops with, and the same 0.75 of the
      * height it culls the stops against. That is not tidiness. `home-path` exists so the road
      * passes exactly through the stop centres; if the road and the stops scrolled on two

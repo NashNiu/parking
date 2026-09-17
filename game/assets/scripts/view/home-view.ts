@@ -336,7 +336,6 @@ const LOADING_SIZE = 34;
  */
 const LOADING_INK = new Color(64, 76, 108, 255);
 
-/** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 /**
  * The two entries in the top bar's reserved places, by index.
  *
@@ -364,6 +363,7 @@ const FREE_COIN_FACE_F = 0.74;
 const PLUS_L = 22;
 const PLUS_W = 6;
 
+/** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 const TAP_PAD = 10;
 
 /**
@@ -409,7 +409,6 @@ export class HomeView {
     private topBar: TopBar;
     private startBtn: Node;
     private startFace: Node;
-    private startBase: Node;
     private startLabel: Label;
     private startIcon: Node;
     /** The toast a locked tap gets: `HomeToast`'s holder, its fade, and its label. */
@@ -584,8 +583,10 @@ export class HomeView {
         const startY = -h / 2 + safeInsets().bottom * h + START_H / 2 + START_MARGIN;
         const start = this.buildStart(startY);
         this.startBtn = start.node;
+        // `start.base` is deliberately not kept. It was, to repaint the button's plate
+        // when the button went grey for a locked level -- and the button has no grey
+        // state any more (see `setCurrent`). The base is drawn once, never written again.
         this.startFace = start.face;
-        this.startBase = start.base;
         this.startLabel = start.label;
         this.startIcon = start.icon;
 

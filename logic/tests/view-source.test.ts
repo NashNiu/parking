@@ -24,6 +24,44 @@ function readSrc(file: string): string {
 }
 
 /**
+ * The same, for a file under `core/`.
+ *
+ * A sibling rather than a `readSrc('../core/x.ts')` call, so that "every read in this file is
+ * normalised" stays true by CONSTRUCTION rather than by everyone remembering. One guard here
+ * already reached for a bare `readFileSync` to get at `core/checkin.ts`, three commits after
+ * the bare-read bug above was fixed; it survived by luck, and luck is not what a guard is for.
+ */
+function readCore(file: string): string {
+  return fs.readFileSync(path.join(VIEW, '../core', file), 'utf8').replace(/\r\n/g, '\n');
+}
+
+/**
+ * Source with its comment lines removed.
+ *
+ * Several guards here assert that a name is ABSENT from a file whose docblocks are required to
+ * discuss that very name -- `rail-math.ts` has to say in prose that `railStopT` used to live
+ * there. Stripping prose is what lets the guard be about the code.
+ */
+function stripComments(src: string): string {
+  return src
+    .split('\n')
+    .filter((l) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+}
+
+/**
+ * The deleted halo's two names, as SHARED constants.
+ *
+ * Module-level so the guard and its self-test use the same objects. Written out twice they
+ * drift, and the self-test silently stops protecting the guard -- which is what happened.
+ */
+const HALO_COLOUR = /\bSTOP_RING\b/;
+const HALO_FN = /\brailStopT\b/;
+
+/**
  * Every view file that builds a panel by appending children, which is all of them that hold
  * one. A file added here needs no other change: the first test walks the list.
  */
@@ -542,20 +580,14 @@ test('the locked-wording guard is not fooled by distance or absence', () => {
  * engine, so it cannot drag the rail and photograph what lands on a padlock.
  */
 test('the padlock halo is gone: no STOP_RING, and railStopT is gone from rail-math', () => {
-  // Comments stripped -- `rail-math.ts`'s header docblock is required to say IN PROSE that
-  // `railStopT` used to live here and does not any more, so the code is what this checks,
-  // not the prose that explains its absence.
-  const strip = (src: string) => src
-    .split('\n')
-    .filter((l) => {
-      const t = l.trim();
-      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
-    })
-    .join('\n');
-  const home = strip(readSrc('home-view.ts'));
-  const railMath = strip(readSrc('rail-math.ts'));
-  expect(home).not.toMatch(/\bSTOP_RING\b/);
-  expect(railMath).not.toMatch(/\brailStopT\b/);
+  const home = stripComments(readSrc('home-view.ts'));
+  const railMath = stripComments(readSrc('rail-math.ts'));
+  expect(home).not.toMatch(HALO_COLOUR);
+  expect(railMath).not.toMatch(HALO_FN);
+  // `stripComments` must still be leaving CODE behind. Without this, a strip that removed
+  // everything would make both assertions above pass on any input at all -- the exact failure
+  // an absence guard is defenceless against.
+  expect(railMath).toContain('export function railOffset');
 });
 
 /**
@@ -566,9 +598,15 @@ test('the padlock halo is gone: no STOP_RING, and railStopT is gone from rail-ma
  * declarations this file used to carry, before either was deleted.
  */
 test('the halo guard is not fooled into passing on an empty pattern', () => {
-  expect(/\bSTOP_RING\b/.test('const STOP_RING = new Color(86, 199, 104, 90);')).toBe(true);
-  expect(/\brailStopT\b/.test('export function railStopT(offset: number, i: number): number {'))
+  // THE SAME REGEXES THE GUARD USES, by reference. An earlier version of this test wrote its
+  // own copies of them, which made it decorative: breaking the guard's patterns could not fail
+  // it, so it protected nothing while looking exactly like the self-tests that do.
+  expect(HALO_COLOUR.test('const STOP_RING = new Color(86, 199, 104, 90);')).toBe(true);
+  expect(HALO_FN.test('export function railStopT(offset: number, i: number): number {'))
     .toBe(true);
+  // And `stripComments` must not eat code, which is the other half of the guard above.
+  expect(stripComments('const STOP_RING = 1;\n// const STOP_RING = 2;'))
+    .toBe('const STOP_RING = 1;');
 });
 
 /**
@@ -634,7 +672,7 @@ test('the check-in claim button is gated on being claimable, not just repainted'
  * 1 and 2 both pay 20.
  */
 test('claim, nextReward and the card all read the landing day from nextDay', () => {
-  const core = fs.readFileSync(path.join(VIEW, '../core/checkin.ts'), 'utf8');
+  const core = readCore('checkin.ts');
   for (const fn of ['claim', 'nextReward']) {
     const at = core.indexOf('export function ' + fn + '(');
     expect(at).toBeGreaterThan(0);

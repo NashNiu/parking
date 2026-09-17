@@ -2411,36 +2411,25 @@ export class GameController extends Component {
     }
 
     /**
-     * Throw the save away.
-     *
-     * ITS ONE CALLER IS THE RED BUTTON on the lobby's settings card, which asks once before it
-     * gets here (`HudView.confirmWipe`). It used to be a three-second press-and-hold on the
-     * home screen's floating caption plate, and the plate has gone: a 320x88 slab with a
-     * 285-tall badge scrolling behind it read as a clipping fault, which is what the lobby's
-     * top bar is for. The gesture could not follow the caption into the bar -- an unlabelled
-     * destructive hold needs a target a player has been TOLD about, and a bar of live controls
-     * is the worst place to hide one. Nobody ever found the hold; a labelled button that asks
-     * is the honest version of the same action.
-     *
-     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why the replacement is a
-     * confirmed button rather than a bare one.
-     *
-     * THE WALLET GOES WITH IT, and `clearWalletText` is where that reasoning lives: coins are
-     * derived from the progress, so a wipe that spared them would make "clear -> wipe -> clear
-     * again" an unlimited mint. Both saves, both in-memory copies, and the readout.
-     *
-     * THE PANEL COMES DOWN FIRST, because the confirmation is two things the panel is standing
-     * in front of: the rail repaints fully locked, which is evidence rather than a claim, and a
-     * toast says so in words. Leaving the card up would put both behind its scrim, so the one
-     * irreversible action in the game would look like it had done nothing.
-     */
-    /**
      * Raise the check-in card. The bar's live entry does exactly this and nothing else.
      *
-     * `todayKey(new Date())` IS READ HERE AND NOWHERE ELSE ON THIS PATH, then handed down. The
-     * card draws a row and the claim pays for a day, and if each asked the clock itself they
-     * could straddle midnight -- the player taps at 23:59:59 and claims at 00:00:00, and the
-     * cell that lit up is not the cell that pays. One read per interaction cannot do that.
+     * `todayKey(new Date())` is read here and handed down, so the card and the row it draws
+     * agree with each other. THAT IS NOT A GUARANTEE ABOUT THE PAYOUT, and an earlier version
+     * of this comment claimed it was. `claimCheckinToday` reads the clock again, so a card
+     * opened at 23:59:58 and claimed at 00:00:01 is TWO reads: the streak `last` was
+     * continuing is now the day before yesterday, the claim restarts at day 1, and the cell
+     * that lit up said 40 while the player is paid 20.
+     *
+     * That is left as it is, deliberately. The PAYOUT is always right for the day it happens
+     * on -- the clock the wallet is written from is the last one read -- and `paintCheckin`
+     * repaints the row immediately after, so what the player is looking at a second later
+     * agrees with what they were paid. The alternative is a card that re-raises itself
+     * under the player's thumb at midnight, which trades a one-second-per-day discrepancy
+     * for a control that moves while being pressed.
+     *
+     * The dot has a milder version of the same: nothing repaints it while the lobby sits
+     * open, so a player who crosses midnight without leaving the screen does not see it
+     * light up until the next `showHome`. See `paintCheckinDot`.
      */
     private openCheckin(): void {
         this.hud?.showCheckin(this.checkin, todayKey(new Date()));
@@ -2475,6 +2464,33 @@ export class GameController extends Component {
         this.home?.setCheckinDot(canClaim(this.checkin, todayKey(new Date())));
     }
 
+    /**
+     * Throw the save away.
+     *
+     * ITS ONE CALLER IS THE RED BUTTON on the lobby's settings card, which asks once before it
+     * gets here (`HudView.confirmWipe`). It used to be a three-second press-and-hold on the
+     * home screen's floating caption plate, and the plate has gone: a 320x88 slab with a
+     * 285-tall badge scrolling behind it read as a clipping fault, which is what the lobby's
+     * top bar is for. The gesture could not follow the caption into the bar -- an unlabelled
+     * destructive hold needs a target a player has been TOLD about, and a bar of live controls
+     * is the worst place to hide one. Nobody ever found the hold; a labelled button that asks
+     * is the honest version of the same action.
+     *
+     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why the replacement is a
+     * confirmed button rather than a bare one.
+     *
+     * THE WALLET GOES WITH IT, and `clearWalletText` is where that reasoning lives: coins are
+     * derived from the progress, so a wipe that spared them would make "clear -> wipe -> clear
+     * again" an unlimited mint. THE CHECK-IN STREAK GOES WITH IT for the same reason and
+     * one of its own: it pays in coins, and its seventh day pays 100, so a streak that
+     * survived a wipe would put the table's one week-long figure two taps away. All three
+     * saves, all three in-memory copies, the readout and the bar's dot.
+     *
+     * THE PANEL COMES DOWN FIRST, because the confirmation is two things the panel is standing
+     * in front of: the rail repaints fully locked, which is evidence rather than a claim, and a
+     * toast says so in words. Leaving the card up would put both behind its scrim, so the one
+     * irreversible action in the game would look like it had done nothing.
+     */
     private wipeProgress(): void {
         this.hud?.hideSettings();
         clearProgressText();

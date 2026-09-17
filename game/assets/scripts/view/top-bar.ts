@@ -59,10 +59,11 @@ const GEAR_GLYPH = 0.62;
  * 「共 N 关」, and the one line of type on this screen with nothing under it.
  *
  * IT USED TO HAVE A PLATE, a 320x88 slab floating over the road, and the plate is the half of
- * the complaint this bar is here to answer. The badge that scrolls behind it is 205 across but
- * about 285 tall once its star row is counted, so the badge's top and bottom stuck out past the
- * plate's ends and the pair read as a clipping fault rather than as a caption. In the bar the
- * label is above the rail entirely and nothing scrolls through it.
+ * the complaint this bar is here to answer. The badge that scrolled behind it was 205 across and
+ * about 285 tall once its star row was counted, so its top and bottom stuck out past the plate's
+ * ends and the pair read as a clipping fault rather than as a caption. (The badge is 170 by 221
+ * now, and would still not have fitted.) In the bar the label is above the rail entirely and
+ * nothing scrolls through it.
  *
  * THE RIM STAYS, FOR A DIFFERENT REASON THAN IT WAS ADDED FOR, and the change is worth
  * writing down because the old reason is the one a reader would guess. It used to be that the
