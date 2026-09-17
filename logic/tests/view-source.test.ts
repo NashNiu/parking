@@ -524,3 +524,47 @@ test('the locked-wording guard is not fooled by distance or absence', () => {
   expect(within(far, 'startLabel', '通过第', 200)).toBe(false);
   expect(within('no occurrences of either token here', 'startLabel', '通过第', 200)).toBe(false);
 });
+
+/**
+ * The scroll-bound halo does not come back: no `STOP_RING` anywhere in the home screen, and
+ * `railStopT` -- its only reader's only reason to exist -- gone from `rail-math.ts` too.
+ *
+ * WHAT THIS GUARDS. `STOP_RING` was a success-green ring painted in `NODE_DONE`'s own colour
+ * and bound to the SCROLL rather than the save: drag a locked level to the middle and the halo
+ * landed on its padlock. The fix moved the glow onto the badge the save calls current
+ * (`CUR_GLOW`, toggled by `state` alone) and deleted the scroll-driven one along with the
+ * function that measured distance from the centre for it. Either name reappearing -- the colour
+ * under a new spelling, or the function with a new caller -- is the same defect coming back.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot drag the rail and photograph what lands on a padlock.
+ */
+test('the padlock halo is gone: no STOP_RING, and railStopT is gone from rail-math', () => {
+  // Comments stripped -- `rail-math.ts`'s header docblock is required to say IN PROSE that
+  // `railStopT` used to live here and does not any more, so the code is what this checks,
+  // not the prose that explains its absence.
+  const strip = (src: string) => src
+    .split('\n')
+    .filter((l) => {
+      const t = l.trim();
+      return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+    })
+    .join('\n');
+  const home = strip(readSrc('home-view.ts'));
+  const railMath = strip(readSrc('rail-math.ts'));
+  expect(home).not.toMatch(/\bSTOP_RING\b/);
+  expect(railMath).not.toMatch(/\brailStopT\b/);
+});
+
+/**
+ * The guard above can still see the defects it is written for.
+ *
+ * Without this, "absent" is indistinguishable from "the pattern stopped matching" -- the same
+ * discipline every self-test in this file applies. Both patterns are checked against the exact
+ * declarations this file used to carry, before either was deleted.
+ */
+test('the halo guard is not fooled into passing on an empty pattern', () => {
+  expect(/\bSTOP_RING\b/.test('const STOP_RING = new Color(86, 199, 104, 90);')).toBe(true);
+  expect(/\brailStopT\b/.test('export function railStopT(offset: number, i: number): number {'))
+    .toBe(true);
+});

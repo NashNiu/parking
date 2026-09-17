@@ -23,6 +23,13 @@
  * screen. Positive velocity means "later levels are travelling toward the centre", which is
  * what a leftward drag produces -- so the view negates the finger's dx once, here at the
  * boundary, and nothing downstream has to think about it again.
+ *
+ * THE SCROLL NOW DRIVES NO APPEARANCE AT ALL. This file used to also export `railStopT`, the
+ * distance from the centre in pitches that the view faded a halo by -- the one appearance in
+ * `home-view` that was still a function of `offset` rather than of the save. That halo was the
+ * bug (a success-green ring that rode the drag onto whatever badge, locked or not, was last
+ * pulled to the middle) and it is gone along with its only reader; `railStopT` went with it.
+ * Every function left here answers "where" and "which stop", never "how it should look".
  */
 
 import { RAIL_PITCH } from '../core/home-path';
@@ -90,21 +97,3 @@ export function railRubber(offset: number, count: number): number {
     return offset;
 }
 
-/**
- * How far stop `i` is from the centre, in PITCHES -- 0 for the focused one, 1 for its
- * neighbour, and fractional while a finger is moving.
- *
- * Continuous on purpose, and it now has exactly ONE consumer: the halo's alpha on the middle
- * stop, which fades out over half a pitch so two badges are never wearing it at once. A stepped
- * value would make that halo blink from stop to stop instead of handing over as the finger
- * moves.
- *
- * IT USED TO DRIVE SIZE AND OPACITY TOO -- a stop shrank and dimmed with its distance from the
- * middle -- and both were deliberately removed: a badge's size and brightness say what the SAVE
- * says about that level, and a size that changes under a dragging finger cannot also mean that.
- * See `home-view`'s NODE_D. The halo is what is genuinely about the scroll, so the halo is what
- * is left reading this.
- */
-export function railStopT(offset: number, i: number): number {
-    return Math.abs(railOffset(i) - offset) / RAIL_PITCH;
-}

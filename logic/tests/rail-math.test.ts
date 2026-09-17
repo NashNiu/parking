@@ -1,6 +1,5 @@
 import {
   RAIL_FLICK_MAX, RAIL_FLICK_UNIT, railFlick, railNearest, railOffset, railRubber,
-  railStopT,
 } from '../../game/assets/scripts/view/rail-math';
 import { RAIL_PITCH } from '../../game/assets/scripts/core/home-path';
 
@@ -79,18 +78,4 @@ test('past either end the rail follows at a fraction, and never runs away', () =
   const past = railRubber(RAIL_PITCH * 10, 10);
   expect(past).toBeGreaterThan(RAIL_PITCH * 9);
   expect(past).toBeLessThan(RAIL_PITCH * 10);
-});
-
-/**
- * `railStopT` is the distance from the centre in PITCHES, and it is what the view turns into
- * scale and opacity -- so it has to be continuous while a finger is moving, not stepped.
- */
-test('the focused stop reads zero and its neighbours read one', () => {
-  expect(railStopT(RAIL_PITCH * 3, 3)).toBe(0);
-  expect(railStopT(RAIL_PITCH * 3, 4)).toBe(1);
-  expect(railStopT(RAIL_PITCH * 3, 2)).toBe(1);
-  expect(railStopT(RAIL_PITCH * 3, 6)).toBe(3);
-  // Mid-drag, halfway between two stops, both read half.
-  expect(railStopT(RAIL_PITCH * 3.5, 3)).toBeCloseTo(0.5, 6);
-  expect(railStopT(RAIL_PITCH * 3.5, 4)).toBeCloseTo(0.5, 6);
 });

@@ -10,7 +10,7 @@ import { TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
 } from '../core/index';
-import { railFlick, railNearest, railOffset, railRubber, railStopT } from './rail-math';
+import { railFlick, railNearest, railOffset, railRubber } from './rail-math';
 import { nodeCenter } from '../core/home-path';
 import { HomeScene } from './home-scene';
 
@@ -158,18 +158,23 @@ const TOAST_FADE = 0.4;
  * for progress.
  *
  * So the three states now differ in FORM, not in shade: a cleared badge is green and carries a
- * row of stars, the current one is blue, a fifth larger, and breathing, a locked one is grey
- * and wears a padlock. Every one of those reads without scrolling, which is the whole test.
+ * row of stars, the current one is blue, a fifth larger, breathing, and glowing, a locked one is
+ * grey, faded to 60% and shrunk to 0.8, and wears a padlock. current 1.2 > done 1.0 > locked 0.8
+ * is a ladder now, not two sizes and a shrug. Every one of those reads without scrolling, which
+ * is the whole test.
  *
  * AND THE SCROLL-DRIVEN SIZING IS GONE. `STOP_REST` used to shrink a stop continuously with its
  * distance from the middle, which was a nice piece of depth on a rail and is fatal here: a size
  * that changes while a finger drags is a size that cannot mean anything about the save. The
  * per-distance opacity fade went with it for the same reason -- "bright means cleared" is not a
- * sentence you can say while brightness is also saying "near the middle". The rail's focus
- * keeps the halo alone, which is the one signal that is genuinely about the scroll: it USED TO
- * mean "the button opens this one", and that stopped being true the day the button moved onto
- * the save (see `setCurrent`) -- the halo is now honestly just the rail's own cursor, saying
- * no more than "a tap lands here next".
+ * sentence you can say while brightness is also saying "near the middle".
+ *
+ * THE HALO WAS THE LAST THING STILL BOUND TO THE SCROLL, and it was the exact bug this whole
+ * rewrite was for: it followed the rail's focus, painted in `NODE_DONE`'s own green, so dragging
+ * a locked level to the middle put a success-coloured glow on a padlock. It is gone. What is
+ * there instead is `CUR_GLOW`, a soft disc in `NODE_CUR`'s own hue that belongs to the current
+ * badge PERMANENTLY -- see `setProgress`, which toggles it with the state and never with the
+ * scroll -- so it does not fade between badges and needs no per-frame alpha of its own.
  */
 const NODE_D = Math.round(1280 * 0.16);
 /** Stars at a quarter of the badge, the proportion the requirement names. */
@@ -205,20 +210,41 @@ const NODE_DONE_BASE = new Color(56, 156, 76, 255);
 /** The current level: the one thing on this screen that moves, in the primary blue. */
 const NODE_CUR = new Color(74, 144, 226, 255);
 const NODE_CUR_BASE = new Color(44, 96, 165, 255);
-/** Not yet reached: grey, and wearing a padlock instead of its number. */
+/**
+ * Not yet reached: grey, wearing a padlock instead of its number, faded and shrunk so it reads
+ * as weaker than either of the other two states rather than merely different.
+ *
+ * `LOCK_OPACITY` (153, 60%) sits on the whole badge node -- base, face, lock, everything -- via
+ * `UIOpacity`, and `NODE_LOCK_SCALE` (0.8) is read against a NORMAL badge, not against the
+ * current one's breathing 1.2.
+ *
+ * THE REQUIREMENT'S OWN WORDS SAY 80% OF THE CURRENT BADGE, and read that literally the figure
+ * is 1.2 * 0.8 = 0.96 -- indistinguishable from a cleared badge's 1.0, which does the opposite of
+ * what a "make the states more different" item is for. Taken instead as 0.8 of a NORMAL badge,
+ * the ladder is current 1.2 > done 1.0 > locked 0.8, which is what the requirement is actually
+ * asking the screen to say.
+ */
 const NODE_LOCK = new Color(52, 62, 90, 255);
 const NODE_LOCK_BASE = new Color(38, 46, 70, 255);
+const LOCK_OPACITY = 153;
+const NODE_LOCK_SCALE = 0.8;
 const STOP_INK = new Color(255, 255, 255, 240);
 /**
- * The halo on the middle stop. It fades out as that stop leaves the middle, and it is now the
- * ONLY thing the scroll position draws -- see NODE_D. It says "a tap lands here next", which is
- * a fact about the rail and not about the save -- it used to also be what the button would open,
- * back when the button read the focus; now the button reads `unlockedThrough(progress)`
- * instead (see `setCurrent`), and the halo is painted in the button's own green because that is
- * this screen's established colour for "the live control", not because it still describes one.
+ * The current badge's own glow: a soft disc behind it, in `NODE_CUR`'s own hue rather than the
+ * green that used to sit here.
+ *
+ * IT REPLACES THE HALO THAT USED TO FOLLOW THE SCROLL, painted in `NODE_DONE`'s green -- drag a
+ * locked level to the middle under the old code and a success-coloured ring landed on a padlock,
+ * which is the bug this whole file was rewritten to stop. This glow belongs to whichever badge
+ * the SAVE calls current, permanently, so it never rides the rail: `setProgress` toggles its
+ * `active` flag with `state`, once, and there is nothing per-frame about it at all -- see
+ * `layout`, which does not touch it.
+ *
+ * IT LIVES INSIDE THE SAME NODE THE BREATHE TWEEN SCALES, so it grows and shrinks with the badge
+ * for free; nothing here tweens the glow's own size in step with `breath`.
  */
-const STOP_RING = new Color(86, 199, 104, 90);
-const STOP_RING_PAD = 15;
+const CUR_GLOW = new Color(NODE_CUR.r, NODE_CUR.g, NODE_CUR.b, 90);
+const CUR_GLOW_PAD = 15;
 
 const STAR_ON = new Color(255, 201, 52, 255);
 const STAR_OFF = new Color(70, 82, 116, 255);
@@ -303,7 +329,10 @@ const RAIL_EASE = 12;
 /** Everything drawn for one level. Kept so `setProgress` can repaint without rebuilding. */
 interface Stop {
     node: Node;
-    ringFade: UIOpacity;
+    /** Whole-badge fade: 255 normally, `LOCK_OPACITY` while locked. See `NODE_LOCK`. */
+    opacity: UIOpacity;
+    /** The current badge's own glow, toggled with `state` alone. See `CUR_GLOW`. */
+    glow: Node;
     face: Node;
     base: Node;
     num: Label;
@@ -677,13 +706,17 @@ export class HomeView {
         node.layer = Layers.Enum.UI_2D;
         node.addComponent(UITransform).setContentSize(NODE_D, NODE_D);
         this.railRoot.addChild(node);
+        // The whole-badge fade for the locked state. See `LOCK_OPACITY`.
+        const opacity = node.addComponent(UIOpacity);
 
-        // The halo first, so it sits behind the badge and reads as a glow rather than a frame.
+        // The glow first, so it sits behind the badge and reads as a glow rather than a frame.
         // A DOT, like everything else here: a rounded square around a circle shows its four
-        // corners as green ears.
-        const ring = dotSprite('ring', NODE_D + STOP_RING_PAD * 2, STOP_RING);
-        node.addChild(ring);
-        const ringFade = ring.addComponent(UIOpacity);
+        // corners as coloured ears. Parented under `node`, the same node `layout()` scales for
+        // the breathe tween, so it grows and shrinks with the badge without a tween of its own.
+        // Its visibility is a plain flag `setProgress` sets with the state -- see `CUR_GLOW`.
+        const glow = dotSprite('glow', NODE_D + CUR_GLOW_PAD * 2, CUR_GLOW);
+        node.addChild(glow);
+        glow.active = false;
         const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
         node.addChild(base);
         // The base peeks out below the face, the lip every pressable thing in this project
@@ -707,7 +740,7 @@ export class HomeView {
             star.active = false;
             stars.push(star);
         }
-        return { node, ringFade, face, base, num, lock, stars, state: 'locked' };
+        return { node, opacity, glow, face, base, num, lock, stars, state: 'locked' };
     }
 
     /** See LOCK_INK: a padlock out of three sprites, the middle one a hole. */
@@ -775,6 +808,12 @@ export class HomeView {
             // to know which one they are looking at.
             stop.num.node.active = state !== 'locked';
             stop.lock.active = state === 'locked';
+            // The glow belongs to the current badge alone, and belongs to it permanently: no
+            // fade, no distance -- just this one flag, set once here and left alone by `layout`.
+            stop.glow.active = state === 'current';
+            // Locked reads weaker than either state it sits between: faded (see `LOCK_OPACITY`)
+            // and shrunk (`NODE_LOCK_SCALE`, applied in `layout` against the state, not here).
+            stop.opacity.opacity = state === 'locked' ? LOCK_OPACITY : 255;
             for (let s = 0; s < stop.stars.length; s++) {
                 // Absent, not empty, on a level never cleared: three grey stars would say it
                 // was cleared with none, which cannot happen (the rating floors at one).
@@ -796,9 +835,9 @@ export class HomeView {
      * Start or stop the current level's breath.
      *
      * IT IS BOUND TO THE SAVE, NOT TO THE SCROLL, and that is the entire point of it. The badge
-     * that breathes is the one the progress says you are up to; the badge in the middle of the
-     * screen wears a halo instead. Two facts, two marks -- the screen this replaces had one
-     * mark for both, so dragging the rail moved the only thing that looked like "you are here".
+     * that breathes is the same one that wears the glow (`CUR_GLOW`) -- one badge, one state,
+     * both marks -- rather than the old split where the breath followed the save and a halo
+     * followed wherever the rail had been dragged.
      *
      * Driven from `setProgress` rather than from `layout()` for the same reason: `layout()` only
      * knows where the rail is.
@@ -883,7 +922,7 @@ export class HomeView {
      *
      * THE GATE USED TO SHOW AS A REFUSAL HERE: bringing a locked level to the middle turned
      * the button grey and re-worded it as what would unlock it -- the same defect this file
-     * already fixed for the badges (see the halo's own docblock, above), left standing in the
+     * already fixed for the badges (see `CUR_GLOW`'s own docblock, above), left standing in the
      * one control that matters most. The button is now fixed to `unlockedThrough(progress)`
      * regardless of where the rail is looking; a tap on a locked badge gets its own answer
      * instead, from `showLockedToast`.
@@ -965,10 +1004,12 @@ export class HomeView {
      * rather than two pieces of arithmetic that happen to agree today -- the old lobby's dashed
      * line and its column of pills were computed separately, and looked it.
      *
-     * SCALE COMES FROM THE STATE, NOT FROM THE DISTANCE. Only the halo is continuous in
-     * `offset` now; see NODE_D for what that costs and why it is worth it. The current level's
+     * SCALE COMES FROM THE STATE, NOT FROM THE DISTANCE -- nothing here reads `offset` at all
+     * any more; see NODE_D for what that costs and why it is worth it. The current level's
      * scale is read out of `breath`, which a tween is driving -- writing it here and tweening
-     * the node would be the two of them fighting over the same property every frame.
+     * the node would be the two of them fighting over the same property every frame. A locked
+     * badge gets the plain constant `NODE_LOCK_SCALE` instead, and the glow rides along with
+     * whichever of the two the badge gets, because it is parented under the same node.
      *
      * Stops fully off screen are deactivated; ones at the edge are left to be clipped by the
      * screen itself, because a half-visible badge is what says there is more rail.
@@ -994,13 +1035,11 @@ export class HomeView {
                 continue;
             }
             stop.node.active = true;
-            const scale = stop.state === 'current' ? this.breath.v : 1;
+            const scale = stop.state === 'current'
+                ? this.breath.v
+                : (stop.state === 'locked' ? NODE_LOCK_SCALE : 1);
             stop.node.setPosition(c.x, y, 0);
             stop.node.setScale(scale, scale, 1);
-            // The halo belongs to the middle alone, and is gone by half a pitch out, so two
-            // badges are never wearing it at once.
-            const t = Math.min(1, railStopT(this.offset, i));
-            stop.ringFade.opacity = Math.round(255 * Math.max(0, 1 - t * 2));
         }
     }
 
