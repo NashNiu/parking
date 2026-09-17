@@ -942,6 +942,89 @@ test('the guard catches a reverted dotFrame, and dotBucket really buckets 22..20
 });
 
 /**
+ * The four badge layers' own creation lines, and whether they appear in the order the badge
+ * needs: the dark edge outline, then the base, then the face, then the number and the padlock
+ * (both children of the face). A plain function rather than inline `indexOf` calls in each of
+ * the two tests below, so the real guard and its self-test check the identical thing -- written
+ * out twice they drift, which is what happened to the halo guard this file already carries a
+ * fix for (see `HALO_COLOUR`).
+ */
+function badgeLayerOrder(src: string): boolean {
+  const outlineAt = src.indexOf("const outline = dotSprite('outline'");
+  const baseAt = src.indexOf("const base = dotSprite('base'");
+  const faceAt = src.indexOf("const face = dotSprite('face'");
+  const numAt = src.indexOf("const num = makeLabel(face, 'n'");
+  const lockAt = src.indexOf('const lock = this.buildLock(face);');
+  if ([outlineAt, baseAt, faceAt, numAt, lockAt].some((at) => at < 0)) return false;
+  return outlineAt < baseAt && baseAt < faceAt && faceAt < numAt && faceAt < lockAt;
+}
+
+/**
+ * The badge's blurred glow does not come back, and its four layers are still appended outline,
+ * base, face, then number-and-padlock.
+ *
+ * WHAT THIS GUARDS. `CUR_GLOW` was a soft-alpha disc many times the badge's own size, painted
+ * behind the current badge permanently; the requirement (「不要用模糊光晕」) replaced it with a thin
+ * bright outline (`NODE_CUR_HI`) instead, so the old name must not reappear under any spelling.
+ * Separately, the NEW dark-edge outline (`NODE_EDGE`) has to be added BEFORE the base or the base
+ * paints over it, hiding the badge's edge exactly where the thickness is meant to show it (see
+ * `NODE_EDGE`'s own docblock in `home-view.ts`, and `buildStop`'s draw-order comment). Either
+ * regression -- the glow returning, or the edge sliding behind the base -- is worth catching on
+ * its own, but they are checked together because both guard the same four-layer badge this task
+ * built.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot render a badge and photograph whether its edge or its glow came back.
+ */
+test('CUR_GLOW stays gone, and the badge layers are added outline, base, face, then number/lock', () => {
+  const src = readSrc('home-view.ts');
+  expect(src).not.toMatch(/\bCUR_GLOW\b/);
+  expect(badgeLayerOrder(src)).toBe(true);
+});
+
+/**
+ * The guard above can still see the defects it is written for.
+ *
+ * Without this, "the layers are in order" is indistinguishable from "the check stopped running"
+ * -- the same discipline every self-test in this file applies. `badgeLayerOrder` is exercised
+ * directly, not reimplemented, so a change to its own logic (not just to the source it reads)
+ * can fail this test too.
+ */
+test('the badge-layer guard is not fooled by a reordered, missing, or renamed layer', () => {
+  const inOrder = `
+    const outline = dotSprite('outline', NODE_EDGE_D, NODE_CUR_EDGE);
+    const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
+    const face = dotSprite('face', NODE_D, NODE_CUR);
+    const num = makeLabel(face, 'n', 62, 0);
+    const lock = this.buildLock(face);
+  `;
+  expect(badgeLayerOrder(inOrder)).toBe(true);
+
+  // The base ahead of the outline: exactly the regression the guard exists to catch.
+  const baseBeforeOutline = `
+    const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
+    const outline = dotSprite('outline', NODE_EDGE_D, NODE_CUR_EDGE);
+    const face = dotSprite('face', NODE_D, NODE_CUR);
+    const num = makeLabel(face, 'n', 62, 0);
+    const lock = this.buildLock(face);
+  `;
+  expect(badgeLayerOrder(baseBeforeOutline)).toBe(false);
+
+  // A layer missing entirely -- the outline deleted rather than reordered.
+  const missingOutline = `
+    const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
+    const face = dotSprite('face', NODE_D, NODE_CUR);
+    const num = makeLabel(face, 'n', 62, 0);
+    const lock = this.buildLock(face);
+  `;
+  expect(badgeLayerOrder(missingOutline)).toBe(false);
+
+  // And the deleted glow constant must still be visible to the OTHER half of the guard above,
+  // under a plain re-declaration -- the exact shape a revert would take.
+  expect(/\bCUR_GLOW\b/.test('const CUR_GLOW = new Color(74, 144, 226, 90);')).toBe(true);
+});
+
+/**
  * `shade`'s HSL round-trip is really HSL, not RGB scaling wearing an HSL docblock.
  *
  * `palette.ts` imports `cc` (for `Color`), which this suite does not load, so `shade` itself

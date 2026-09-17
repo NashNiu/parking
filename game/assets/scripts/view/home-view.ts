@@ -5,7 +5,7 @@ import {
     dotSprite, liftedPill, PILL_INK, rampSprite, roundedSprite, starSprite, triSprite,
 } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE, GROUND } from './palette';
+import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE, GROUND, shade } from './palette';
 import { TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
@@ -49,7 +49,7 @@ import { HomeScene } from './home-scene';
  *
  * A BADGE MUST NOT HARD-CUT ANYWHERE. The rail scrolls up past the top bar and `layout()` only
  * culls a stop at 0.75 of the screen height, which is far above the bar -- so without something
- * over it a 170 badge and its star row simply stop existing along a straight line. That line is
+ * over it a 128 badge and its star row simply stop existing along a straight line. That line is
  * the artefact the floating plate was reported for (see where `TopBar`'s caption is built): an
  * edge that cuts a moving object reads as a clipping fault, not as a frame.
  *
@@ -77,7 +77,7 @@ import { HomeScene } from './home-scene';
  * wider or taller than the design box otherwise shows a strip of bare clear colour past its
  * edge. It reaches to `h` rather than to `h / 2`.
  *
- * 110 for the ramp, well over half the 170 badge: enough for a disc that size to be visibly
+ * 110 for the ramp, well over half the 128 badge: enough for a disc that size to be visibly
  * dissolving before its top edge reaches the cap, and not so much that the road looks washed
  * out for a whole screen.
  */
@@ -180,10 +180,10 @@ const TOAST_FADE = 0.4;
  * for progress.
  *
  * So the three states now differ in FORM, not in shade: a cleared badge is green and carries a
- * row of stars, the current one is blue, a fifth larger, breathing, and glowing, a locked one is
- * grey, faded to 60% and shrunk to 0.8, and wears a padlock. current 1.2 > done 1.0 > locked 0.8
- * is a ladder now, not two sizes and a shrug. Every one of those reads without scrolling, which
- * is the whole test.
+ * row of stars, the current one is blue, a fifth larger, breathing, and rimmed with a bright
+ * outline, a locked one is grey, faded to 60% and shrunk to 0.8, and wears a padlock. current
+ * 1.2 > done 1.0 > locked 0.8 is a ladder now, not two sizes and a shrug. Every one of those
+ * reads without scrolling, which is the whole test.
  *
  * AND THE SCROLL-DRIVEN SIZING IS GONE. `STOP_REST` used to shrink a stop continuously with its
  * distance from the middle, which was a nice piece of depth on a rail and is fatal here: a size
@@ -194,11 +194,35 @@ const TOAST_FADE = 0.4;
  * THE HALO WAS THE LAST THING STILL BOUND TO THE SCROLL, and it was the exact bug this whole
  * rewrite was for: it followed the rail's focus, painted in `NODE_DONE`'s own green, so dragging
  * a locked level to the middle put a success-coloured glow on a padlock. It is gone. What is
- * there instead is `CUR_GLOW`, a soft disc in `NODE_CUR`'s own hue that belongs to the current
- * badge PERMANENTLY -- see `setProgress`, which toggles it with the state and never with the
- * scroll -- so it does not fade between badges and needs no per-frame alpha of its own.
+ * there instead belongs to the current badge PERMANENTLY -- see `setProgress`, which toggles it
+ * with the state and never with the scroll -- so it does not fade between badges and needs no
+ * per-frame alpha of its own. See the current badge's own highlight, below, for what replaced
+ * the halo a second time: a soft glow was reported as blur rather than emphasis, so it is now a
+ * thin bright outline instead.
  */
-const NODE_D = Math.round(1280 * 0.133);
+const NODE_D = Math.round(1280 * 0.1);
+/**
+ * How far the base peeks out below the face: the badge's own THICKNESS, at 12% of `NODE_D`
+ * (128 * 0.12 = 15.36, rounded to 15).
+ *
+ * DELIBERATELY NOT `BTN_LIFT` (8), and the two are not the same idea any more even though they
+ * used to be the same number. `BTN_LIFT` is the lip every PRESSABLE control in this project
+ * wears -- a hint that there is a face to push down. A badge is never pressed; its base peeking
+ * out is instead standing in for the SIDE of a solid disc, the thing the requirement asks a
+ * badge to look like it has. A button's lip and a badge's side stopped being the same number the
+ * moment one of them started meaning thickness rather than travel.
+ *
+ * THE REQUIREMENT ASKS FOR "THE SAME THICKNESS/EDGE/LIGHT CONSTANTS THE IN-GAME CARS USE", AND
+ * THERE ARE NO SUCH CONSTANTS TO SHARE. Cars are `MeshRenderer` meshes (`car-mesh.ts`) lit by a
+ * scene key light, and `car-builder.ts` derives their shadow throw from the board's own tilt
+ * (`shadowThrow(LIFT.contact)`) -- none of that exists here. This lobby is a flat orthographic UI
+ * canvas: no light, no mesh, no board to tilt against. What this badge borrows from a car is its
+ * APPEARANCE ONLY -- a darker side below the top face, plus a dark edge -- built from the same
+ * two 2D primitives (`dotSprite`, `shade`) every other flat shape on this screen is drawn from.
+ * A reader who goes looking for a shared `car-builder` import here will not find one, and should
+ * not: the resemblance is a deliberate visual choice, not a shared constant.
+ */
+const NODE_LIFT = Math.round(NODE_D * 0.12);
 /** Stars at a quarter of the badge, the proportion the requirement names. */
 const STAR_D = Math.round(NODE_D * 0.25);
 /**
@@ -213,16 +237,20 @@ const STAR_PITCH = STAR_D + 5;
 /**
  * The star row's centre, BELOW the badge rather than inside it.
  *
- * Three at this pitch span 2 * 48 + 43 = 139, narrower than the 170 badge, so the row reads as
+ * Three at this pitch span 2 * 37 + 32 = 106, narrower than the 128 badge, so the row reads as
  * belonging to the badge above it rather than as a bar of its own. The row bottoms out at
- * -(114.5 + 21.5) = -136, which is one of the two terms `RAIL_PITCH` (290) is derived from --
- * see `core/home-path`. Do not move it without re-reading that derivation.
+ * -(95 + 16) = -111 -- narrower than the -136 this row bottomed out at when the badge was 170
+ * and lifted by `BTN_LIFT`. `RAIL_PITCH` (290, in `core/home-path`) was derived against that
+ * older -136 and has NOT been re-derived for this smaller badge yet -- that is a later task's
+ * job, not this one's, so `RAIL_PITCH` itself is untouched here even though the figure it was
+ * sized against has moved.
  *
- * The 8 of gap is measured off the FACE. The base sits `BTN_LIFT` lower, so at the centreline
- * the base's lowest point and the middle star's highest point are the same y: they touch at one
- * point and overlap nowhere. That is tight on purpose -- the stars have to read as attached.
+ * The gap is `NODE_LIFT` itself, not a separate constant that happens to match it: the base sits
+ * `NODE_LIFT` lower than the face, so at the centreline the base's lowest point and the middle
+ * star's highest point are the same y -- they touch at one point and overlap nowhere. That is
+ * tight on purpose -- the stars have to read as attached.
  */
-const STAR_Y = -(NODE_D / 2 + 8 + STAR_D / 2);
+const STAR_Y = -(NODE_D / 2 + NODE_LIFT + STAR_D / 2);
 /**
  * The current level's scale, which is also the FLOOR of its breath -- see `breath`.
  *
@@ -259,22 +287,50 @@ const NODE_LOCK_BASE = new Color(38, 46, 70, 255);
 const LOCK_OPACITY = 153;
 const NODE_LOCK_SCALE = 0.8;
 const STOP_INK = new Color(255, 255, 255, 240);
+
 /**
- * The current badge's own glow: a soft disc behind it, in `NODE_CUR`'s own hue rather than the
- * green that used to sit here.
+ * The badge's EDGE: a disc behind both the base and the face, in each state's own face colour
+ * darkened by `shade(..., -0.2)` -- the same HSL lightness shift `palette.ts` already uses for
+ * every other outline on this screen's scenery (see `shade`'s own docblock there). Not a fourth
+ * hand-picked colour per state; deriving it from the face it rims is what keeps a cleared, a
+ * current and a locked badge looking like the SAME kind of object.
+ *
+ * SIZED AND POSITIONED TO RIM THE BASE, not the face: it shares the base's own `NODE_LIFT`
+ * offset, so it is concentric with the base rather than with the face above it. Centred on the
+ * face instead would need a stroke wider than `NODE_LIFT` (15) just to reach past the base's own
+ * lowest point -- `NODE_EDGE` (4) is not that wide, on purpose, because a stroke that has to
+ * outrun the base's own offset is not a thin edge any more. Concentric with the base, a modest
+ * 4-unit stroke shows all the way around the base's exposed crescent -- the badge's SIDE -- which
+ * is exactly where an edge is needed and exactly what is lost if this disc is only added after
+ * the base (see `buildStop`'s draw order).
+ */
+const NODE_EDGE = 4;
+const NODE_EDGE_D = NODE_D + NODE_EDGE * 2;
+const NODE_DONE_EDGE = shade(NODE_DONE, -0.2);
+const NODE_CUR_EDGE = shade(NODE_CUR, -0.2);
+const NODE_LOCK_EDGE = shade(NODE_LOCK, -0.2);
+
+/**
+ * The current badge's own highlight: a thin bright outline behind it, in a light tint of
+ * `NODE_CUR` rather than the soft glow that used to sit here.
+ *
+ * 「改为细描边高亮（2px 亮色描边 + 呼吸缩放），不要用模糊光晕」 -- the requirement is explicit that a
+ * blur reads as a smudge, not as emphasis, so this is a plain disc 2 units larger than the face
+ * on every side (`NODE_D + 4`) rather than a soft-alpha halo many times the badge's own size.
  *
  * IT REPLACES THE HALO THAT USED TO FOLLOW THE SCROLL, painted in `NODE_DONE`'s green -- drag a
  * locked level to the middle under the old code and a success-coloured ring landed on a padlock,
- * which is the bug this whole file was rewritten to stop. This glow belongs to whichever badge
- * the SAVE calls current, permanently, so it never rides the rail: `setProgress` toggles its
- * `active` flag with `state`, once, and there is nothing per-frame about it at all -- see
+ * which is the bug this whole file was rewritten to stop. This highlight belongs to whichever
+ * badge the SAVE calls current, permanently, so it never rides the rail: `setProgress` toggles
+ * its `active` flag with `state`, once, and there is nothing per-frame about it at all -- see
  * `layout`, which does not touch it.
  *
  * IT LIVES INSIDE THE SAME NODE THE BREATHE TWEEN SCALES, so it grows and shrinks with the badge
- * for free; nothing here tweens the glow's own size in step with `breath`.
+ * for free; nothing here tweens the highlight's own size in step with `breath`.
  */
-const CUR_GLOW = new Color(NODE_CUR.r, NODE_CUR.g, NODE_CUR.b, 90);
-const CUR_GLOW_PAD = 15;
+const NODE_HI_PAD = 2;
+const NODE_HI_D = NODE_D + NODE_HI_PAD * 2;
+const NODE_CUR_HI = shade(NODE_CUR, 0.3);
 
 const STAR_ON = new Color(255, 201, 52, 255);
 const STAR_OFF = new Color(70, 82, 116, 255);
@@ -388,8 +444,10 @@ interface Stop {
     node: Node;
     /** Whole-badge fade: 255 normally, `LOCK_OPACITY` while locked. See `NODE_LOCK`. */
     opacity: UIOpacity;
-    /** The current badge's own glow, toggled with `state` alone. See `CUR_GLOW`. */
-    glow: Node;
+    /** The current badge's own bright outline, toggled with `state` alone. See `NODE_CUR_HI`. */
+    hi: Node;
+    /** The dark edge behind the base and the face, recoloured with `state`. See `NODE_EDGE`. */
+    outline: Node;
     face: Node;
     base: Node;
     num: Label;
@@ -781,19 +839,33 @@ export class HomeView {
         // The whole-badge fade for the locked state. See `LOCK_OPACITY`.
         const opacity = node.addComponent(UIOpacity);
 
-        // The glow first, so it sits behind the badge and reads as a glow rather than a frame.
-        // A DOT, like everything else here: a rounded square around a circle shows its four
-        // corners as coloured ears. Parented under `node`, the same node `layout()` scales for
-        // the breathe tween, so it grows and shrinks with the badge without a tween of its own.
-        // Its visibility is a plain flag `setProgress` sets with the state -- see `CUR_GLOW`.
-        const glow = dotSprite('glow', NODE_D + CUR_GLOW_PAD * 2, CUR_GLOW);
-        node.addChild(glow);
-        glow.active = false;
+        // FOUR LAYERS, IN THIS ORDER, and getting the order wrong loses either the side or the
+        // edge: the current badge's own highlight first (furthest back, so it is the one thing
+        // visible past everything else when it is active), then the dark edge, then the base
+        // (offset down -- see NODE_LIFT), then the face, with the number and the padlock drawn
+        // as children of the face on top of all of it.
+        //
+        // The highlight, first and furthest back. A DOT, like everything else here: a rounded
+        // square around a circle shows its four corners as coloured ears. Parented under `node`,
+        // the same node `layout()` scales for the breathe tween, so it grows and shrinks with the
+        // badge without a tween of its own. Its visibility is a plain flag `setProgress` sets
+        // with the state -- see `NODE_CUR_HI`.
+        const hi = dotSprite('hi', NODE_HI_D, NODE_CUR_HI);
+        node.addChild(hi);
+        hi.active = false;
+
+        // The edge, second: it must be added BEFORE the base or the base would paint over it
+        // and the side would lose its edge exactly where it matters -- see `NODE_EDGE`. It
+        // shares the base's own `NODE_LIFT` offset so the two are concentric.
+        const outline = dotSprite('outline', NODE_EDGE_D, NODE_CUR_EDGE);
+        node.addChild(outline);
+        outline.setPosition(0, -NODE_LIFT, 0);
+
         const base = dotSprite('base', NODE_D, NODE_CUR_BASE);
         node.addChild(base);
-        // The base peeks out below the face, the lip every pressable thing in this project
-        // wears -- see BTN_LIFT. On a circle it shows as a crescent along the bottom edge.
-        base.setPosition(0, -BTN_LIFT, 0);
+        // The base peeks out below the face -- the badge's own SIDE, at `NODE_LIFT`, not the
+        // button's lip (`BTN_LIFT`). On a circle it shows as a crescent along the bottom edge.
+        base.setPosition(0, -NODE_LIFT, 0);
         const face = dotSprite('face', NODE_D, NODE_CUR);
         node.addChild(face);
         const num = makeLabel(face, 'n', 62, 0);
@@ -812,7 +884,7 @@ export class HomeView {
             star.active = false;
             stars.push(star);
         }
-        return { node, opacity, glow, face, base, num, lock, stars, state: 'locked' };
+        return { node, opacity, hi, outline, face, base, num, lock, stars, state: 'locked' };
     }
 
     /** See LOCK_INK: a padlock out of three sprites, the middle one a hole. */
@@ -871,18 +943,24 @@ export class HomeView {
             stop.base.getComponent(Sprite)!.color = state === 'done'
                 ? NODE_DONE_BASE
                 : (state === 'current' ? NODE_CUR_BASE : NODE_LOCK_BASE);
+            // The edge is derived from the same state, via `shade`, so it always rims whichever
+            // face colour is showing -- see `NODE_EDGE`.
+            stop.outline.getComponent(Sprite)!.color = state === 'done'
+                ? NODE_DONE_EDGE
+                : (state === 'current' ? NODE_CUR_EDGE : NODE_LOCK_EDGE);
             // THE NUMBER GOES OFF WHEN IT IS LOCKED, and that reverses the decision the old
             // comment here argued for. It is the SHAPE that changed, not the argument: the old
             // stop was a 236-wide pill, so a padlock could sit left of centre with the number
-            // beside it and both could be read. A 170 circle has room for one of the two. The
+            // beside it and both could be read. A 128 circle has room for one of the two. The
             // padlock wins, because "you have not got here yet" is what a locked stop is for
             // saying, and the road itself counts the levels off in order for anyone who wants
             // to know which one they are looking at.
             stop.num.node.active = state !== 'locked';
             stop.lock.active = state === 'locked';
-            // The glow belongs to the current badge alone, and belongs to it permanently: no
-            // fade, no distance -- just this one flag, set once here and left alone by `layout`.
-            stop.glow.active = state === 'current';
+            // The highlight belongs to the current badge alone, and belongs to it permanently:
+            // no fade, no distance -- just this one flag, set once here and left alone by
+            // `layout`.
+            stop.hi.active = state === 'current';
             // Locked reads weaker than either state it sits between: faded (see `LOCK_OPACITY`)
             // and shrunk (`NODE_LOCK_SCALE`, applied in `layout` against the state, not here).
             stop.opacity.opacity = state === 'locked' ? LOCK_OPACITY : 255;
@@ -907,9 +985,9 @@ export class HomeView {
      * Start or stop the current level's breath.
      *
      * IT IS BOUND TO THE SAVE, NOT TO THE SCROLL, and that is the entire point of it. The badge
-     * that breathes is the same one that wears the glow (`CUR_GLOW`) -- one badge, one state,
-     * both marks -- rather than the old split where the breath followed the save and a halo
-     * followed wherever the rail had been dragged.
+     * that breathes is the same one that wears the highlight (`NODE_CUR_HI`) -- one badge, one
+     * state, both marks -- rather than the old split where the breath followed the save and a
+     * halo followed wherever the rail had been dragged.
      *
      * Driven from `setProgress` rather than from `layout()` for the same reason: `layout()` only
      * knows where the rail is.
@@ -998,8 +1076,8 @@ export class HomeView {
      *
      * THE GATE USED TO SHOW AS A REFUSAL HERE: bringing a locked level to the middle turned
      * the button grey and re-worded it as what would unlock it -- the same defect this file
-     * already fixed for the badges (see `CUR_GLOW`'s own docblock, above), left standing in the
-     * one control that matters most. The button is now fixed to `unlockedThrough(progress)`
+     * already fixed for the badges (see `NODE_CUR_HI`'s own docblock, above), left standing in
+     * the one control that matters most. The button is now fixed to `unlockedThrough(progress)`
      * regardless of where the rail is looking; a tap on a locked badge gets its own answer
      * instead, from `showLockedToast`.
      */
@@ -1084,8 +1162,9 @@ export class HomeView {
      * any more; see NODE_D for what that costs and why it is worth it. The current level's
      * scale is read out of `breath`, which a tween is driving -- writing it here and tweening
      * the node would be the two of them fighting over the same property every frame. A locked
-     * badge gets the plain constant `NODE_LOCK_SCALE` instead, and the glow rides along with
-     * whichever of the two the badge gets, because it is parented under the same node.
+     * badge gets the plain constant `NODE_LOCK_SCALE` instead, and the highlight and the edge
+     * ride along with whichever of the two the badge gets, because both are parented under the
+     * same node.
      *
      * Stops fully off screen are deactivated; ones at the edge are left to be clipped by the
      * screen itself, because a half-visible badge is what says there is more rail.
@@ -1402,9 +1481,9 @@ export class HomeView {
             // again, which they were not while it was a pill. Squared off rather than tested
             // radially, which makes the corners of the box slightly generous -- and a hit box
             // that is a touch forgiving at the corners is the right side to err on for a target
-            // a thumb is aiming at. The widest it ever gets is the breathing badge's 117, against
-            // the 145 that is half of `RAIL_PITCH`, so no two boxes can ever meet in the middle
-            // and claim the same tap.
+            // a thumb is aiming at. The widest it ever gets is the breathing badge's 90.6,
+            // against the 145 that is half of `RAIL_PITCH`, so no two boxes can ever meet in the
+            // middle and claim the same tap.
             const half = (NODE_D * stop.node.scale.x) / 2 + TAP_PAD;
             if (Math.abs(ui.x - p.x) <= half && Math.abs(ui.y - p.y) <= half) return i;
         }
