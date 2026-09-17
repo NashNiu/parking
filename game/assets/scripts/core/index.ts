@@ -12,6 +12,7 @@ export * from './progress';
 export * from './level-state';
 export * from './settings';
 export * from './wallet';
+export * from './checkin';
 export * from './game-core';
 export * from './solvability';
 export * from './home-path';
