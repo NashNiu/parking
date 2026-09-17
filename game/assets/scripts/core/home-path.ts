@@ -17,10 +17,18 @@
 /**
  * Centre-to-centre distance between adjacent stops.
  *
- * 340, up from 272, and that rise is a consequence of the round badges, not of taste: badge
- * diameter is 205 (16% of the 1280 design width), radius 102.5, and the stars sit BELOW the
- * badge, bottoming out at -161.5 (star centre at -(102.5 + 8 + 25.5) = -136, star radius 25.5).
- * The old pill was only 148 tall, which is why 272 was enough for it.
+ * DERIVED FROM THE USABLE BAND, not chosen by eye. On a 19.5:9 phone (h ~ 2770):
+ *
+ *     barBottom       = h/2 - top*h - w*0.03 - BAR_H     ~ +1099
+ *     button top      = -h/2 + bottom*h + 90 + 116       ~ -1124
+ *     usable band                                         ~ 2223
+ *     2223 / 7.5 badges                                  ~ 296
+ *
+ * 290, close to that 296 and rounder, giving 7.7 badges on the band above -- the seven-or-eight
+ * a screen the requirement asks for. Badge diameter is now 170 (see `NODE_D` in `home-view`),
+ * radius 85, and the stars sit BELOW the badge, bottoming out at -136 (star centre at
+ * -(85 + 8 + 21.5) = -114.5, star radius 21.5). The old 340/205 pair, and the 272/148-tall pill
+ * before that, are both gone.
  *
  * CHECK WHICH ADJACENCIES ARE REACHABLE BEFORE SIZING AGAINST THEM. This is the trap, and
  * three revisions of this paragraph have now fallen into it -- twice by arithmetic, once by
@@ -33,31 +41,36 @@
  * row at all. Enumerated over all 1024 reachable ten-level saves: eleven distinct state
  * strings, none of them with that pair in it.
  *
- * THE BINDING CASE is therefore a cleared badge's star row hanging over the badge below it,
- * and the badge below is at worst the one the rail is CENTRED on -- wearing its halo, which
- * reaches `102.5 + 15` = 117.5, and not scaled, because only the `current` badge breathes and
- * the `current` badge is never underneath a `done` one:
+ * THE BINDING CASE is therefore a CLEARED badge's star row hanging over the CLEARED badge below
+ * it -- (done, done) is the only reachable pair whose UPPER badge is `done` at all, since stars
+ * only ever hang off a `done` badge's own row:
  *
- *     340 - 161.5 (star row) - 117.5 (halo) = 61.0
+ *     290 - 136 (star row reaches -136) - 85 (badge below, scale 1.0, no glow -- `done` never
+ *     wears the glow either) = 69
  *
- * against a 30 gap, so about 31 units of headroom. Every other reachable pair has more: the
- * loosest, two locked badges, has 112. 340 is pinned and generous, which costs nothing here --
- * a pitch that is too large only shows fewer levels, while one that is too small collides.
+ * Every other reachable pair has more room, and none of them is this one: current's breathing
+ * top (85 x 1.26 = 107) under a locked badge (85 x 0.8 = 68) leaves 115 -- pair
+ * (current, locked); the current badge's own glow, which reaches (85 + CUR_GLOW_PAD) x 1.26 =
+ * 126 at full breath, over the done badge below it leaves 79 -- pair (done, current); two locked
+ * badges (85 x 0.8 each) leave 154 -- pair (locked, locked). 69 is the tightest of the four and
+ * is comfortably clear of the two shapes ever touching. 290 is not stretched to chase a bigger
+ * margin here -- a pitch that is too large only shows fewer levels, while one that is too small
+ * collides.
  *
- * The cost: about 7 levels visible on a tall phone (h ~ 2770), only a little over 3 on a 4:3
+ * The cost: about 7.7 levels visible on a tall phone (h ~ 2770), a little under 4 on a 4:3
  * tablet (h ~ 1707). That is an accepted cost of a vertical rail, not something a second layout
  * is meant to fix.
  *
  * Both `home-path` (stop geometry) and `rail-math` (scroll arithmetic) need this value, so it
  * lives here, on the floor they share.
  */
-export const RAIL_PITCH = 340;
+export const RAIL_PITCH = 290;
 
 /**
  * How far a stop sits from the centreline, alternating left and right.
  *
- * 210: two columns 420 apart, leaving the badge's outer edge 1280/2 - 210 - 102 = 328 from the
- * screen edge. A leg of dx=420 / dy=340 works out to about 51 degrees of slope -- enough to
+ * 210: two columns 420 apart, leaving the badge's outer edge 1280/2 - 210 - 85 = 345 from the
+ * screen edge. A leg of dx=420 / dy=290 works out to about 55 degrees of slope -- enough to
  * read as winding, rather than as a line that wobbled twice.
  */
 export const ZIG_X = 210;

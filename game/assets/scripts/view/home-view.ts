@@ -49,7 +49,7 @@ import { HomeScene } from './home-scene';
  *
  * A BADGE MUST NOT HARD-CUT ANYWHERE. The rail scrolls up past the top bar and `layout()` only
  * culls a stop at 0.75 of the screen height, which is far above the bar -- so without something
- * over it a 205 badge and its star row simply stop existing along a straight line. That line is
+ * over it a 170 badge and its star row simply stop existing along a straight line. That line is
  * the artefact the floating plate was reported for (see where `TopBar`'s caption is built): an
  * edge that cuts a moving object reads as a clipping fault, not as a frame.
  *
@@ -77,11 +77,33 @@ import { HomeScene } from './home-scene';
  * wider or taller than the design box otherwise shows a strip of bare clear colour past its
  * edge. It reaches to `h` rather than to `h / 2`.
  *
- * 110 for the ramp, a little over half a badge: enough for a 205 disc to be visibly dissolving
- * before its top edge reaches the cap, and not so much that the road looks washed out for a
- * whole screen.
+ * 110 for the ramp, well over half the 170 badge: enough for a disc that size to be visibly
+ * dissolving before its top edge reaches the cap, and not so much that the road looks washed
+ * out for a whole screen.
  */
 const RAIL_FADE_H = 110;
+
+/**
+ * The scroll hint: a small triangle under the fade, turned to point up, saying there is more
+ * rail above without asking to be looked at.
+ *
+ * QUIET ON PURPOSE -- it is a hint, not a control. It borrows `triSprite`, the same shape the
+ * start button's play-head icon is drawn from (see `START_ICON_D`), turned 90 degrees so its
+ * tip -- drawn pointing right -- points up instead: Cocos rotates `Node.angle` positive
+ * counter-clockwise, the same sense the barrier arm swings open in (see `GATE_OPEN_ANGLE`), so
+ * +90 carries (1, 0) to (0, 1).
+ *
+ * IT FADES WITH THE SAME RAMP `RailFade` ALREADY USES, not a second animation invented for it:
+ * `layout()` drives its `UIOpacity` with the identical smoothstep ease `rampSprite` paints into
+ * `RailFade`'s own texture (`t*t*(3-2*t)`), over the same `RAIL_FADE_H` span of scroll -- so the
+ * hint dissolves in the same visual language as the badges it sits under, rather than snapping
+ * on and off. See `updateScrollHint`.
+ */
+const CHEVRON_D = 26;
+/** How far below the fade's own bottom edge the hint sits. */
+const CHEVRON_GAP = 16;
+/** The same quiet grey the padlock's ink wears -- see `LOCK_INK`. Not a control, so no chrome. */
+const CHEVRON_INK = new Color(150, 163, 196, 220);
 
 /**
  * How much clear space the button keeps under it, past the home indicator's own reservation.
@@ -176,16 +198,24 @@ const TOAST_FADE = 0.4;
  * badge PERMANENTLY -- see `setProgress`, which toggles it with the state and never with the
  * scroll -- so it does not fade between badges and needs no per-frame alpha of its own.
  */
-const NODE_D = Math.round(1280 * 0.16);
+const NODE_D = Math.round(1280 * 0.133);
 /** Stars at a quarter of the badge, the proportion the requirement names. */
 const STAR_D = Math.round(NODE_D * 0.25);
-const STAR_PITCH = 56;
+/**
+ * Gap between star centres: `STAR_D` plus a fixed 5-unit gap between adjacent stars' edges.
+ *
+ * DERIVED, not a second literal. It used to be a plain 56 against a `STAR_D` of 51 -- a
+ * 5-unit gap between stars that nothing tied together. Shrinking `STAR_D` to 43 and leaving
+ * the pitch at 56 would have opened that gap to 13 and scattered the three stars under the
+ * smaller badge; deriving it instead keeps today's 5-unit gap at whatever size `STAR_D` is.
+ */
+const STAR_PITCH = STAR_D + 5;
 /**
  * The star row's centre, BELOW the badge rather than inside it.
  *
- * Three at this pitch span 2 * 56 + 51 = 163, narrower than the 205 badge, so the row reads as
+ * Three at this pitch span 2 * 48 + 43 = 139, narrower than the 170 badge, so the row reads as
  * belonging to the badge above it rather than as a bar of its own. The row bottoms out at
- * -(136 + 25.5) = -161.5, which is one of the two terms `RAIL_PITCH` (340) is derived from --
+ * -(114.5 + 21.5) = -136, which is one of the two terms `RAIL_PITCH` (290) is derived from --
  * see `core/home-path`. Do not move it without re-reading that derivation.
  *
  * The 8 of gap is measured off the FACE. The base sits `BTN_LIFT` lower, so at the centreline
@@ -359,6 +389,9 @@ export class HomeView {
     private toastNode: Node;
     private toastFade: UIOpacity;
     private toastLabel: Label;
+    /** The scroll hint under the fade: `ScrollHint`'s node and the opacity `layout()` ramps. */
+    private scrollHint: Node;
+    private scrollHintOpacity: UIOpacity;
     /** The street the rail runs up. See `home-scene`. */
     private scene: HomeScene;
     /** The stops' parent, parked on the lane. Stops are positioned within it. */
@@ -498,6 +531,16 @@ export class HomeView {
         const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, GROUND);
         this.root.addChild(fade);
         fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);
+
+        // THE SCROLL HINT, just under the fade -- see CHEVRON_D. Built inactive by default
+        // (see `revealMenu`) and its opacity is driven every frame from `layout()`.
+        const chevron = triSprite('ScrollHint', CHEVRON_D, CHEVRON_INK);
+        chevron.angle = 90;
+        this.root.addChild(chevron);
+        chevron.setPosition(0, this.barBottom - RAIL_FADE_H - CHEVRON_GAP, 0);
+        this.scrollHint = chevron;
+        this.scrollHintOpacity = chevron.addComponent(UIOpacity);
+        this.scrollHintOpacity.opacity = 0;
 
         // THE FLOATING PLATE IS GONE and the count it carried is in the bar. The plate was a
         // 320x88 slab over the road with a 205-wide badge scrolling behind it; the badge is
@@ -675,6 +718,7 @@ export class HomeView {
     private revealMenu(on: boolean): void {
         this.startBtn.active = on;
         this.railRoot.active = on;
+        this.scrollHint.active = on;
     }
 
     /**
@@ -802,7 +846,7 @@ export class HomeView {
             // THE NUMBER GOES OFF WHEN IT IS LOCKED, and that reverses the decision the old
             // comment here argued for. It is the SHAPE that changed, not the argument: the old
             // stop was a 236-wide pill, so a padlock could sit left of centre with the number
-            // beside it and both could be read. A 205 circle has room for one of the two. The
+            // beside it and both could be read. A 170 circle has room for one of the two. The
             // padlock wins, because "you have not got here yet" is what a locked stop is for
             // saying, and the road itself counts the levels off in order for anyone who wants
             // to know which one they are looking at.
@@ -1045,6 +1089,27 @@ export class HomeView {
             stop.node.setPosition(c.x, y, 0);
             stop.node.setScale(scale, scale, 1);
         }
+        this.updateScrollHint();
+    }
+
+    /**
+     * Fade the scroll hint by how much rail is left ABOVE it -- see `CHEVRON_D`.
+     *
+     * `remaining` is the offset still between here and the LAST stop, `railOffset(levelCount -
+     * 1)` being the offset that centres it: at 0 the rail has scrolled all the way to the final
+     * level and there is genuinely nothing left above to hint at. Ramped over the last
+     * `RAIL_FADE_H` of that with the exact smoothstep `rampSprite` bakes into `RailFade`'s own
+     * texture, so the hint eases out in step with the fade rather than switching off underneath
+     * it. Above `RAIL_FADE_H` of rail left, `t` clamps to 1 and the hint sits fully in.
+     */
+    private updateScrollHint(): void {
+        if (this.levelCount === 0) {
+            this.scrollHintOpacity.opacity = 0;
+            return;
+        }
+        const remaining = Math.max(0, railOffset(this.levelCount - 1) - this.offset);
+        const t = Math.min(1, remaining / RAIL_FADE_H);
+        this.scrollHintOpacity.opacity = Math.round(t * t * (3 - 2 * t) * 255);
     }
 
     show(): void {
@@ -1201,7 +1266,7 @@ export class HomeView {
      * from `barBottom` to the top of the screen. Between those two lines there are badges that
      * are fully invisible and were still taking taps. Worked on a 19.5:9 phone (h = 2770) with
      * a typical capsule (bottom 80 of 812) and at offset 0: `barBottom` lands at about 978, the
-     * rail centres on about -43, and stop 5 sits at 4 * 340 - 43 = about y 1317 -- some 340
+     * rail centres on about -43, and stop 5 sits at 4 * 290 - 43 = about y 1117 -- some 139
      * units up inside an opaque cap, well short of the 2078 `layout()` culls at, and taking
      * taps. A tap on the empty middle of the top bar scrolled the rail to a level nobody could
      * see, and the button under it re-labelled itself to match. Same rule as
@@ -1219,8 +1284,8 @@ export class HomeView {
             // again, which they were not while it was a pill. Squared off rather than tested
             // radially, which makes the corners of the box slightly generous -- and a hit box
             // that is a touch forgiving at the corners is the right side to err on for a target
-            // a thumb is aiming at. The widest it ever gets is the breathing badge's 139, against
-            // the 170 that is half of `RAIL_PITCH`, so no two boxes can ever meet in the middle
+            // a thumb is aiming at. The widest it ever gets is the breathing badge's 117, against
+            // the 145 that is half of `RAIL_PITCH`, so no two boxes can ever meet in the middle
             // and claim the same tap.
             const half = (NODE_D * stop.node.scale.x) / 2 + TAP_PAD;
             if (Math.abs(ui.x - p.x) <= half && Math.abs(ui.y - p.y) <= half) return i;

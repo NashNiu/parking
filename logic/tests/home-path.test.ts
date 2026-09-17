@@ -33,6 +33,16 @@ test('nodes are exactly RAIL_PITCH apart, climbing as i grows', () => {
   }
 });
 
+/**
+ * The pitch itself, pinned as a literal. The test above is deliberately pitch-independent --
+ * it would pass at 340 just as it passed before this retune -- so it cannot catch a docblock
+ * whose derivation drifts from the constant it describes, or a future edit that changes one
+ * without the other. This is the one place that fails if `RAIL_PITCH` moves without a reason.
+ */
+test('RAIL_PITCH is tuned for seven-to-eight badges a screen', () => {
+  expect(RAIL_PITCH).toBe(290);
+});
+
 test('sampled y is strictly increasing -- the road never doubles back', () => {
   for (let i = 0; i < 9; i++) {
     const pts = legSamples(i);

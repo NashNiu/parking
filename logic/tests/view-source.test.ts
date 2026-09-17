@@ -568,3 +568,20 @@ test('the halo guard is not fooled into passing on an empty pattern', () => {
   expect(/\brailStopT\b/.test('export function railStopT(offset: number, i: number): number {'))
     .toBe(true);
 });
+
+/**
+ * The scroll hint exists, hides with the rest of the menu, and fades with the SAME ramp
+ * `RailFade` already dissolves into the bar -- not a second easing invented for it.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot scroll the rail and photograph what the hint does near the bar. What it
+ * can pin is that `updateScrollHint` drives the hint's opacity from the identical smoothstep
+ * `rampSprite` bakes into `RailFade`'s own texture, and that `revealMenu` hides the hint along
+ * with the rail and the button while the barrier is down.
+ */
+test('the scroll hint fades with the same ramp as RailFade, and hides with the menu', () => {
+  const src = readSrc('home-view.ts');
+  expect(src).toContain("triSprite('ScrollHint'");
+  expect(src).toMatch(/t \* t \* \(3 - 2 \* t\)/);
+  expect(src).toContain('this.scrollHint.active = on;');
+});

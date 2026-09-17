@@ -45,11 +45,12 @@ import { SHADOW_INK } from './shadow';
 /**
  * The road surface's width.
  *
- * Wide enough to read as a road rather than as a line: 96 is a little under half the 205 badge
- * that stands on it, so the badge reads as sitting ON the road and the road still reads as a
- * road where it runs between two of them. It is deliberately much
- * narrower than the strip it replaces (620) -- that one was a lane the whole rail sat inside,
- * this one is a road the rail's stops sit ON.
+ * Wide enough to read as a road rather than as a line, and narrow enough that the badges
+ * standing on it read as sitting ON a road rather than as filling a lane: 96 is what that takes
+ * in absolute terms, not a fraction of the badge -- the badge has been retuned more than once
+ * since this number was chosen, and the road has to keep reading as a road at any of its sizes.
+ * It is deliberately much narrower than the strip it replaces (620) -- that one was a lane the
+ * whole rail sat inside, this one is a road the rail's stops sit ON.
  */
 const ROAD_W = 96;
 
