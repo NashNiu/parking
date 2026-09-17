@@ -6,9 +6,11 @@ const VIEW = path.join(__dirname, '../../game/assets/scripts/view');
 /**
  * Read a source file with its line endings NORMALISED to `\n`.
  *
- * EVERY READ IN THIS FILE GOES THROUGH HERE, and that is a bug fix rather than tidiness. The
- * repo stores these files with CRLF, and `core.autocrlf` is on, so a working tree on Windows
- * has CRLF too. A guard that matches within one line never notices; one that spans a line
+ * EVERY READ IN THIS FILE GOES THROUGH HERE, and that is a bug fix rather than tidiness. Git
+ * stores these files with LF -- `core.autocrlf` is on, so they are normalised on the way IN --
+ * and hands them back with CRLF on the way OUT, which is what a Windows working tree holds and
+ * therefore what this suite actually reads. Checking the blob tells you nothing about it; only
+ * the file on disk does. A guard that matches within one line never notices; one that spans a
  * break sees `;\r\n` where its pattern says `;\n` and silently matches nothing -- which reads
  * as "the pattern is absent from the source", the exact thing these guards are built to
  * report. The pairing guard below shipped in that state and never once ran green.
@@ -584,4 +586,62 @@ test('the scroll hint fades with the same ramp as RailFade, and hides with the m
   expect(src).toContain("triSprite('ScrollHint'");
   expect(src).toMatch(/t \* t \* \(3 - 2 \* t\)/);
   expect(src).toContain('this.scrollHint.active = on;');
+});
+
+
+/**
+ * The free-coins entry is drawn and has NO handler, and that is on instruction.
+ *
+ * 「免费金币暂时只能看，点击无反应」 -- it fronts a rewarded video and there is no ad unit to point
+ * it at yet. The risk this guards is not that someone deletes the entry; it is that someone
+ * reads `onTap: null` as an oversight and "fixes" it with a toast, a disabled state, or an empty
+ * function. Any of those changes what the player gets, and none of them would fail anything else
+ * in this suite.
+ *
+ * It pins the NULL rather than the absence of a handler, because those differ in what they say:
+ * an omitted key would also mean inert, and would read as forgotten.
+ */
+test('the lobby fills the free-coins slot with a null handler, deliberately', () => {
+  const src = readSrc('home-view.ts');
+  expect(src).toContain('this.setSlot(SLOT_FREE_COINS, { icon: this.buildFreeCoinsIcon(), onTap: null });');
+  // And the bar's signature must keep allowing it: a non-nullable handler would force the empty
+  // function this guard exists to prevent.
+  expect(readSrc('top-bar.ts')).toContain('onTap: (() => void) | null');
+});
+
+/**
+ * 领取 stops ANSWERING when it stops being claimable, not merely stops looking claimable.
+ *
+ * `inBox` measures a `worldPosition`, so a button repainted grey still occupies its box. This is
+ * the trap the settings card's `setLobby` gate exists for, and it has shipped on this project
+ * once already: hiding a control is not the same as disarming it. Without the `chkClaimable &&`
+ * here, a second tap on a spent button would reach the controller, and only the controller's own
+ * `canClaim` guard would stop it paying twice -- a rule load-bearing in exactly one place is a
+ * rule waiting to be deleted as redundant.
+ */
+test('the check-in claim button is gated on being claimable, not just repainted', () => {
+  expect(readSrc('hud-view.ts'))
+    .toContain('if (this.chkClaimable && this.inBox(ui, this.chkClaim!');
+});
+
+/**
+ * The card and the payout read the landing day from the SAME function.
+ *
+ * `claim` records it, `nextReward` prices it, and `paintCheckin` highlights it; all three go
+ * through `nextDay`. The failure this prevents is silent and slow: a card that computed the cell
+ * as `day + 1` would be right until the first broken streak and would then highlight a day the
+ * payout does not pay. Inferring it from `nextReward` fails sooner and even more quietly -- days
+ * 1 and 2 both pay 20.
+ */
+test('claim, nextReward and the card all read the landing day from nextDay', () => {
+  const core = fs.readFileSync(path.join(VIEW, '../core/checkin.ts'), 'utf8');
+  for (const fn of ['claim', 'nextReward']) {
+    const at = core.indexOf('export function ' + fn + '(');
+    expect(at).toBeGreaterThan(0);
+    // The function's own body, up to the next top-level export.
+    const next = core.indexOf('\nexport ', at + 1);
+    const body = next === -1 ? core.slice(at) : core.slice(at, next);
+    expect(body).toContain('nextDay(c, today)');
+  }
+  expect(readSrc('hud-view.ts')).toContain('const landing = nextDay(c, today);');
 });

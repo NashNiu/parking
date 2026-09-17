@@ -276,3 +276,20 @@ export const AREA_SHADOW_ALPHA = 30;
  */
 export const CONTROL_FACE = new Color(42, 138, 208, 255);
 export const CONTROL_BASE = new Color(20, 92, 150, 255);
+
+/**
+ * The coin, as two concentric discs: the darker edge first, the bright face on it.
+ *
+ * MOVED HERE FROM `top-bar.ts` when a second caller appeared -- the check-in card draws a coin
+ * in each of its seven day cells. That is the same resolution `CONTROL_FACE` got two paragraphs
+ * up, and for the same reason: the alternative is a second gold, one shade off, on a screen that
+ * shows both at once.
+ *
+ * THE ORDER IS PART OF THE PAIR. Darker disc down first at the full diameter, brighter face over
+ * it at about three quarters, which leaves the edge showing as a ring. Drawn the other way round
+ * it is a washer, not a coin -- that was the first version, and it also inverted the layering
+ * every other object in this project uses (`liftedPill`, the gear, the rail's badges all put the
+ * darker plate down first).
+ */
+export const COIN_FACE = new Color(255, 196, 46, 255);
+export const COIN_RIM = new Color(214, 152, 20, 255);

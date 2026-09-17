@@ -5,7 +5,7 @@ import {
     dotSprite, liftedPill, PILL_INK, rampSprite, roundedSprite, starSprite, triSprite,
 } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { GROUND } from './palette';
+import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE, GROUND } from './palette';
 import { TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
@@ -337,6 +337,33 @@ const LOADING_SIZE = 34;
 const LOADING_INK = new Color(64, 76, 108, 255);
 
 /** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
+/**
+ * The two entries in the top bar's reserved places, by index.
+ *
+ * NAMED, because `setSlot(0, ...)` and `setSlot(1, ...)` are the same call with the meaning
+ * carried entirely by a digit -- and the two are not interchangeable: one opens a card and one
+ * is deliberately inert. `TopBar`'s own arithmetic puts slot 1 nearer the gear, so the live
+ * entry is the one closer to the thumb that is already reaching for that corner.
+ */
+const SLOT_FREE_COINS = 0;
+const SLOT_CHECKIN = 1;
+
+/** The disc a bar entry stands on: the gear's diameter and the project's standard lip. */
+const SLOT_ICON_D = 76;
+const SLOT_ICON_LIFT = 6;
+
+/** The calendar leaf on the check-in entry: a page, a head band, and two rings on it. */
+const CAL_W = 42;
+const CAL_H = 40;
+const CAL_HEAD_H = 13;
+const CAL_RING_D = 9;
+
+/** The coin and the plus on the free-coins entry. */
+const FREE_COIN_D = 46;
+const FREE_COIN_FACE_F = 0.74;
+const PLUS_L = 22;
+const PLUS_W = 6;
+
 const TAP_PAD = 10;
 
 /**
@@ -1231,12 +1258,102 @@ export class HomeView {
         return this.topBar.hitsSlot(ui);
     }
 
-    setSlot(i: 0 | 1, slot: { icon: Node; onTap: () => void } | null): void {
+    setSlot(i: 0 | 1, slot: { icon: Node; onTap: (() => void) | null } | null): void {
         this.topBar.setSlot(i, slot);
     }
 
     tapSlot(i: 0 | 1): void {
         this.topBar.tapSlot(i);
+    }
+
+    /** Show or hide the check-in slot's unread dot. See `fillBarSlots` for which slot that is. */
+    setCheckinDot(on: boolean): void {
+        this.topBar.setSlotDot(SLOT_CHECKIN, on);
+    }
+
+    /**
+     * Put the two entries in the bar's reserved places. Called once, from the controller.
+     *
+     * WHAT GOES WHERE IS DECIDED HERE, not at the call site, so the bar's composition is one
+     * thing to read rather than two calls to correlate. The controller supplies BEHAVIOUR --
+     * one handler -- and the drawing stays on this side of the line.
+     *
+     * SLOT 0 GETS NO HANDLER, and the `null` is the point rather than an omission: 「免费金币暂时
+     * 只能看，点击无反应」. It fronts a rewarded video, there is no ad unit to point it at yet, and
+     * the alternatives were both worse -- an empty place leaves the bar reading as two controls
+     * and a gap, and a greyed-out button claims the entry is unavailable rather than unbuilt.
+     * `TopBar.setSlot` takes a nullable handler precisely so this can be stated instead of faked
+     * with an empty function. When an ad unit exists, this line grows a handler and nothing else
+     * changes.
+     */
+    fillBarSlots(onCheckin: () => void): void {
+        this.setSlot(SLOT_CHECKIN, { icon: this.buildCheckinIcon(), onTap: onCheckin });
+        this.setSlot(SLOT_FREE_COINS, { icon: this.buildFreeCoinsIcon(), onTap: null });
+    }
+
+    /**
+     * The disc every bar entry stands on: the gear's own two plates, at the gear's own size.
+     *
+     * A local helper rather than one exported from `top-bar`, because what is shared here is the
+     * TREATMENT (darker plate down, brighter face over it, glyph on the face) and that treatment
+     * is stated in `palette`'s `CONTROL_FACE`/`CONTROL_BASE` pair, which both files already read.
+     * Exporting the six lines that assemble them would put a fourth name in the way of a rule
+     * that is already written down.
+     */
+    private slotDisc(name: string): { holder: Node; face: Node } {
+        const holder = new Node(name);
+        holder.layer = Layers.Enum.UI_2D;
+        holder.addComponent(UITransform).setContentSize(SLOT_ICON_D, SLOT_ICON_D);
+        const base = dotSprite('base', SLOT_ICON_D, CONTROL_BASE);
+        holder.addChild(base);
+        base.setPosition(0, -SLOT_ICON_LIFT, 0);
+        const face = dotSprite('face', SLOT_ICON_D, CONTROL_FACE);
+        holder.addChild(face);
+        return { holder, face };
+    }
+
+    /**
+     * 签到: a calendar leaf -- a pale page under a darker head, with two rings on the head.
+     *
+     * DRAWN, not typed, the same rule the padlock and the gear follow: a glyph one font
+     * substitution away from a hollow box is not an icon. At this size the calendar is three
+     * rectangles and two dots, which is as much detail as 47 units carries.
+     */
+    private buildCheckinIcon(): Node {
+        const { holder, face } = this.slotDisc('CheckinIcon');
+        const page = roundedSprite('page', CAL_W, CAL_H, Color.WHITE, 6);
+        face.addChild(page);
+        page.setPosition(0, -CAL_RING_D / 2, 0);
+        const head = roundedSprite('head', CAL_W, CAL_HEAD_H, CONTROL_BASE, 6);
+        page.addChild(head);
+        head.setPosition(0, CAL_H / 2 - CAL_HEAD_H / 2, 0);
+        for (const side of [-1, 1]) {
+            const ring = dotSprite('ring', CAL_RING_D, Color.WHITE);
+            page.addChild(ring);
+            ring.setPosition(side * CAL_W / 4, CAL_H / 2, 0);
+        }
+        return holder;
+    }
+
+    /**
+     * 免费金币: a coin with a plus over it, in the same gold `palette` gives the bar's own coin.
+     *
+     * The plus is two bars rather than a typed `+` for the reason above, and it is drawn in the
+     * disc's BASE colour rather than in white so it reads as struck into the coin instead of
+     * floating over it.
+     */
+    private buildFreeCoinsIcon(): Node {
+        const { holder, face } = this.slotDisc('FreeCoinsIcon');
+        const coin = dotSprite('coin', FREE_COIN_D, COIN_RIM);
+        face.addChild(coin);
+        coin.addChild(dotSprite('face', FREE_COIN_D * FREE_COIN_FACE_F, COIN_FACE));
+        const bar = () => roundedSprite('bar', PLUS_L, PLUS_W, CONTROL_BASE, PLUS_W / 2);
+        const across = bar();
+        coin.addChild(across);
+        const down = bar();
+        coin.addChild(down);
+        down.angle = 90;
+        return holder;
     }
 
     /**

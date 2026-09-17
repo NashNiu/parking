@@ -96,13 +96,18 @@ export function canClaim(c: Checkin, today: string): boolean {
 /**
  * The day of the cycle a claim made `today` would land on, WITHOUT recording it.
  *
- * `claim` and `nextReward` both need this, and they need to agree, so it is computed once here
- * rather than duplicated: a streak continues (day + 1, wrapping 7 back to 1) only when `last`
+ * `claim`, `nextReward` and the card that draws the seven cells all need this, and they need to
+ * agree, so it is computed once here rather than duplicated. THE CARD IS WHY IT IS EXPORTED: the
+ * cell it highlights has to be the cell `claim` will actually pay, and a view that worked that
+ * out for itself -- or inferred it from `nextReward`, which cannot tell day 1 from day 2 because
+ * both pay 20 -- would be a second copy of this rule free to drift from the one that pays out.
+ *
+ * A streak continues (day + 1, wrapping 7 back to 1) only when `last`
  * is literally the calendar day before `today`; anything else -- never claimed, or a gap of any
  * size -- restarts at day 1. A missed day is not a partial streak; the cycle does not have a
  * notion of "day 3, but late," so there is nothing to preserve.
  */
-function landingDay(c: Checkin, today: string): number {
+export function nextDay(c: Checkin, today: string): number {
     if (c.last === yesterdayOf(today)) {
         return c.day === 7 ? 1 : c.day + 1;
     }
@@ -134,7 +139,7 @@ function yesterdayOf(today: string): string {
  * just be a second place that rule could drift out of sync with the first.
  */
 export function claim(c: Checkin, today: string): { checkin: Checkin; coins: number } {
-    const day = landingDay(c, today);
+    const day = nextDay(c, today);
     return {
         checkin: { version: CHECKIN_VERSION, day, last: today },
         coins: CHECKIN_REWARDS[day - 1],
@@ -143,5 +148,5 @@ export function claim(c: Checkin, today: string): { checkin: Checkin; coins: num
 
 /** What `claim(c, today)` would pay right now, for showing the reward before it is claimed. */
 export function nextReward(c: Checkin, today: string): number {
-    return CHECKIN_REWARDS[landingDay(c, today) - 1];
+    return CHECKIN_REWARDS[nextDay(c, today) - 1];
 }

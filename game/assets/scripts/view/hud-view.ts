@@ -4,8 +4,10 @@ import {
     liftedPill, PILL_INK, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
-import { CONTROL_BASE, CONTROL_FACE } from './palette';
-import { STAR_MAX } from '../core/index';
+import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE } from './palette';
+import {
+    canClaim, CHECKIN_REWARDS, Checkin, nextDay, STAR_MAX,
+} from '../core/index';
 
 /**
  * What the win card reports. Assembled by the caller, because every one of these is a fact
@@ -482,6 +484,90 @@ const PROMPT_COST_SIZE = 50;
  */
 const PROMPT_SHADOW = new Color(8, 12, 24, 90);
 const PROMPT_SHADOW_DROP = 10;
+/**
+ * THE DAILY CHECK-IN CARD, seven day cells and one button, on the settings card's own idiom.
+ *
+ * IT LIVES IN THIS FILE RATHER THAN A LOBBY ONE, and that is worth defending because the card
+ * is only ever raised from the lobby. `buildCard` and `buildCardBtn` are private here, and the
+ * SETTINGS card -- which the lobby also raises, through `showSettings(.., lobby)` -- already
+ * established that a shared card lives beside its helpers rather than exporting them. A new file
+ * would have had to either copy those two helpers or trigger an extraction refactor of the HUD,
+ * and neither is what this round was opened to do.
+ *
+ * FOUR CELLS THEN THREE, not seven across. Seven across a 1036-wide page is 148 a cell, and a
+ * cell has to hold a caption, a coin and a figure; 4+3 gives 232, which holds them at the type
+ * sizes the rest of the project uses. The second row is centred rather than left-aligned, so the
+ * odd one out reads as the end of a week rather than as a column that failed to fill.
+ *
+ *     page             1036 x 504   (CHK_H - CARD_HEAD - CARD_RIM)
+ *     row 1            4 x 232 + 3 x 24 = 1000, 18 clear either side
+ *     row 2            3 x 232 + 2 x 24 =  744, centred
+ *     rows at +/-112   2 x 200 + 24 = 424 in 504, 40 clear top and bottom
+ */
+const CHK_H = 756;
+const CHK_CELL_W = 232;
+const CHK_CELL_H = 200;
+const CHK_GAP = 24;
+const CHK_CELL_R = 28;
+const CHK_ROW_DY = (CHK_CELL_H + CHK_GAP) / 2;
+const CHK_COIN_D = 56;
+const CHK_DAY_Y = 68;
+const CHK_COIN_Y = 4;
+const CHK_FIG_Y = -62;
+const CHK_DAY_SIZE = 30;
+const CHK_FIG_SIZE = 40;
+
+/**
+ * The three states a cell can be in, as three faces on the card's cream page.
+ *
+ * They are separated by VALUE and not only by hue, because the row has to be readable at a
+ * glance and two of the three are always adjacent: claimed days are the coolest and darkest,
+ * the claimable one is the warmest and lightest, and the days still to come sit between them
+ * as plain unmarked page. The claimable cell is the only one that also gets a rim.
+ */
+const CHK_DONE_FACE = new Color(214, 228, 212, 255);
+const CHK_NEXT_FACE = new Color(255, 240, 200, 255);
+const CHK_SOON_FACE = new Color(238, 231, 216, 255);
+const CHK_NEXT_RIM = new Color(214, 152, 20, 255);
+const CHK_NEXT_RIM_W = 5;
+const CHK_DAY_INK = new Color(122, 112, 92, 255);
+const CHK_FIG_INK = new Color(150, 106, 18, 255);
+
+/**
+ * The tick on a claimed cell: two rounded bars, DRAWN rather than typed.
+ *
+ * `ui-shapes` has no tick and this does not need one: a check mark is two strokes, and a rounded
+ * rectangle at `radius = height / 2` is a stroke (the same capsule identity `home-scene`'s
+ * `strokePath` leans on). Drawn rather than set as a glyph for the reason the padlock and the
+ * gear are drawn -- a font substitution turns a typed tick into a hollow box, and this one would
+ * be the only thing distinguishing a claimed day from a missed one.
+ *
+ * The vertex sits at (-4, -14); the short arm runs up-left to (-22, 4) and the long one up-right
+ * to (20, 14). Lengths and angles follow from those three points and are written out as
+ * literals below rather than derived, because the shape is a drawing and not a calculation.
+ */
+const CHK_TICK_W = 12;
+const CHK_TICK_INK = new Color(72, 150, 76, 255);
+
+/** The 领取 button, hung under the card exactly as the settings card hangs 继续游戏. */
+const CHK_BTN_W = 460;
+const CHK_BTN_SIZE = 72;
+const CHK_BTN_Y = -(CHK_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
+const CHK_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
+/** The bright face's share of a cell's coin -- the same 0.74 the top bar's coin wears. */
+const CHK_COIN_FACE_F = 0.74;
+/**
+ * What 领取 says, and what it looks like, once today's coins are in the wallet.
+ *
+ * The button STAYS ON THE CARD rather than disappearing, because its absence would leave the
+ * player looking for it. Greyed and saying 明天再来 it answers the question the player came with.
+ * It stops ANSWERING in `hitsCheckin`, which is the half that matters -- see the gate there.
+ */
+const CHK_CLAIM_TEXT = '领取';
+const CHK_CLAIMED_TEXT = '明天再来';
+const CHK_BTN_DONE = new Color(150, 158, 172, 255);
+const CHK_BTN_DONE_BASE = new Color(110, 118, 132, 255);
+
 const SCRIM = new Color(10, 14, 26, 178);
 
 /**
@@ -932,6 +1018,16 @@ export class HudView {
      * panel. `hideSettings` stands it back down.
      */
     private wipeArmed = false;
+    /** The check-in card's scrim, its cells and its two hit targets. Built on first use. */
+    private checkin: Node | null = null;
+    private chkClose: Node | null = null;
+    private chkClaim: Node | null = null;
+    private chkClaimLabel: Label | null = null;
+    /** One per day of the cycle, index 0 = day 1. `paintCheckin` writes all seven every raise. */
+    private chkCells: { face: Node; rim: Node; tick: Node }[] = [];
+    /** Whether 领取 is live. `hitsCheckin` reads it; see `paintCheckin` for why it is a field. */
+    private chkClaimable = false;
+
     /** The wipe button's own label, which is the only thing that shows its armed state. */
     private setWipeLabel: Label | null = null;
     private pickNodes: Node[] = [];
@@ -1141,7 +1237,7 @@ export class HudView {
      */
     private syncGear(): void {
         const modal = !!(this.win?.active) || !!(this.prompt?.active)
-            || !!(this.settings?.active) || !!(this.lose?.active);
+            || !!(this.settings?.active) || !!(this.lose?.active) || !!(this.checkin?.active);
         this.gearBtn.active = this.play && !modal;
     }
 
@@ -1397,6 +1493,195 @@ export class HudView {
         const p = this.promptReplay!.worldPosition;
         if (Math.abs(ui.x - p.x) <= TEXT_BTN_W / 2
             && Math.abs(ui.y - p.y) <= TEXT_BTN_H / 2) return 'replay';
+        return null;
+    }
+
+    /**
+     * Build the check-in card once. Seven cells, a close button, and 领取 hung underneath.
+     *
+     * Nothing about the SAVE is read here -- the cells are drawn blank and `paintCheckin` writes
+     * every one of them on every raise. That split is the same one `buildSettings` /
+     * `paintSwitches` keeps, and it is what stops a reused card showing yesterday's row: there is
+     * no cell state that survives a raise, because there is no cell state a raise does not
+     * overwrite.
+     */
+    private buildCheckin(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('ChkScrim', w * 2, h * 2, SCRIM, 2);
+        this.canvas.addChild(scrim);
+        scrim.setPosition(0, 0, 0);
+
+        const panel = new Node('ChkPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
+        scrim.addChild(panel);
+        panel.setPosition(0, CHK_RAISE, 0);
+
+        const { page, close } = this.buildCard(panel, 'ChkCard', CHK_H, '签到');
+        this.chkClose = close;
+
+        // Four then three. The row's own width is what centres it, so the second row needs no
+        // special case beyond the count -- see CHK_H's docblock for the arithmetic.
+        this.chkCells = [];
+        for (let d = 0; d < 7; d++) {
+            const row = d < 4 ? 0 : 1;
+            const inRow = row === 0 ? 4 : 3;
+            const idx = row === 0 ? d : d - 4;
+            const rowW = inRow * CHK_CELL_W + (inRow - 1) * CHK_GAP;
+            const x = -rowW / 2 + CHK_CELL_W / 2 + idx * (CHK_CELL_W + CHK_GAP);
+            const y = row === 0 ? CHK_ROW_DY : -CHK_ROW_DY;
+            this.chkCells.push(this.buildCheckinCell(page, d, x, y));
+        }
+
+        this.chkClaim = this.buildCardBtn(panel, {
+            x: 0, y: CHK_BTN_Y, w: CHK_BTN_W, text: '领取',
+            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: CHK_BTN_SIZE,
+        });
+        this.chkClaimLabel = this.chkClaim.getChildByName('face')!
+            .getChildByName('l')!.getComponent(Label)!;
+
+        scrim.active = false;
+        this.checkin = scrim;
+    }
+
+    /** One day cell: a rim under a face, a caption, a coin, its figure, and a tick over it. */
+    private buildCheckinCell(
+        page: Node, d: number, x: number, y: number,
+    ): { face: Node; rim: Node; tick: Node } {
+        const cell = new Node(`day${d + 1}`);
+        cell.layer = Layers.Enum.UI_2D;
+        cell.addComponent(UITransform).setContentSize(CHK_CELL_W, CHK_CELL_H);
+        page.addChild(cell);
+        cell.setPosition(x, y, 0);
+
+        // The rim is a slightly larger plate BEHIND the face, which is how every raised thing in
+        // this project gets an edge -- there is no stroke primitive and this needs none.
+        const rim = roundedSprite(
+            'rim', CHK_CELL_W + CHK_NEXT_RIM_W * 2, CHK_CELL_H + CHK_NEXT_RIM_W * 2,
+            CHK_NEXT_RIM, CHK_CELL_R + CHK_NEXT_RIM_W,
+        );
+        cell.addChild(rim);
+        const face = roundedSprite('face', CHK_CELL_W, CHK_CELL_H, CHK_SOON_FACE, CHK_CELL_R);
+        cell.addChild(face);
+
+        const day = makeLabel(face, 'day', CHK_DAY_SIZE, CHK_DAY_Y);
+        day.color = CHK_DAY_INK;
+        day.string = `第 ${d + 1} 天`;
+
+        const coin = dotSprite('coin', CHK_COIN_D, COIN_RIM);
+        face.addChild(coin);
+        coin.setPosition(0, CHK_COIN_Y, 0);
+        coin.addChild(dotSprite('face', CHK_COIN_D * CHK_COIN_FACE_F, COIN_FACE));
+
+        const fig = makeLabel(face, 'fig', CHK_FIG_SIZE, CHK_FIG_Y);
+        fig.color = CHK_FIG_INK;
+        fig.isBold = true;
+        fig.string = `${CHECKIN_REWARDS[d]}`;
+
+        // Last, so it draws over the coin it marks off. See CHK_TICK_W for the three points.
+        const tick = new Node('tick');
+        tick.layer = Layers.Enum.UI_2D;
+        tick.addComponent(UITransform);
+        cell.addChild(tick);
+        tick.setPosition(0, CHK_COIN_Y, 0);
+        const short = roundedSprite('a', 26, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
+        tick.addChild(short);
+        short.setPosition(-13, -5, 0);
+        short.angle = -45;
+        const long = roundedSprite('b', 37, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
+        tick.addChild(long);
+        long.setPosition(8, 0, 0);
+        long.angle = 49;
+
+        return { face, rim, tick };
+    }
+
+    /**
+     * Raise the check-in card and write today's row into it.
+     *
+     * `today` is handed in rather than read from a clock here, for the reason every other date in
+     * this feature is handed in: `core/checkin` owns what a day is, and a view calling
+     * `new Date()` would be a second clock, free to disagree with the one the payout used.
+     */
+    showCheckin(c: Checkin, today: string): void {
+        if (!this.checkin) this.buildCheckin();
+        const scrim = this.checkin!;
+        this.paintCheckin(c, today);
+        if (scrim.active) return;
+        scrim.active = true;
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncGear();
+        const panel = scrim.getChildByName('ChkPanel')!;
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.86, 0.86, 1);
+        tween(panel)
+            .to(0.14, { scale: new Vec3(1.03, 1.03, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: Vec3.ONE })
+            .start();
+    }
+
+    /**
+     * Write all seven cells and the button from the save.
+     *
+     * WHICH CELL IS CLAIMABLE COMES FROM `core`, via `nextDay` -- not from `c.day + 1`, which is
+     * wrong on every day a streak has broken, and not inferred from `nextReward`, which cannot
+     * tell day 1 from day 2 because both pay 20. The cell that lights up is the cell `claim` will
+     * pay, by construction rather than by two rules agreeing.
+     *
+     * A cell is CLAIMED when it is at or below `claimedThrough`, and that bound moves with
+     * `canClaim`: while today is still unclaimed the landing day is the one in FRONT of the
+     * player, so the claimed run stops one short of it; once today has been taken the landing day
+     * IS the day just taken, so the run reaches it.
+     */
+    paintCheckin(c: Checkin, today: string): void {
+        if (!this.checkin) return;
+        const live = canClaim(c, today);
+        const landing = nextDay(c, today);
+        const claimedThrough = live ? landing - 1 : landing;
+        this.chkClaimable = live;
+        for (let d = 0; d < 7; d++) {
+            const cell = this.chkCells[d];
+            const done = d + 1 <= claimedThrough;
+            const next = live && d + 1 === landing;
+            cell.face.getComponent(Sprite)!.color =
+                done ? CHK_DONE_FACE : next ? CHK_NEXT_FACE : CHK_SOON_FACE;
+            cell.rim.active = next;
+            cell.tick.active = done;
+        }
+        const claim = this.chkClaim!;
+        this.chkClaimLabel!.string = live ? CHK_CLAIM_TEXT : CHK_CLAIMED_TEXT;
+        claim.getChildByName('face')!.getComponent(Sprite)!.color =
+            live ? PROMPT_BTN : CHK_BTN_DONE;
+        claim.getChildByName('base')!.getComponent(Sprite)!.color =
+            live ? PROMPT_BTN_BASE : CHK_BTN_DONE_BASE;
+    }
+
+    hideCheckin(): void {
+        if (this.checkin) this.checkin.active = false;
+        this.syncGear();
+    }
+
+    /** Whether the check-in card is up. Same shape, and same reasoning, as `settingsOpen`. */
+    checkinOpen(): boolean {
+        return !!this.checkin && this.checkin.activeInHierarchy;
+    }
+
+    /**
+     * Where a tap on the check-in card landed.
+     *
+     * `chkClaimable` GATES 'claim' the same way `setLobby` gates the settings card's three
+     * conditional answers, and for the identical reason: `inBox` measures a `worldPosition`, so a
+     * button that has merely been repainted grey still occupies its box and would still answer.
+     * Repainting it is what the player sees; this gate is what makes it true.
+     */
+    hitsCheckin(ui: Vec3): 'close' | 'claim' | null {
+        if (!this.checkinOpen()) return null;
+        const c = this.chkClose!.worldPosition;
+        const r = CARD_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
+        if (this.chkClaimable && this.inBox(ui, this.chkClaim!, CHK_BTN_W, PROMPT_BTN_H)) {
+            return 'claim';
+        }
         return null;
     }
 

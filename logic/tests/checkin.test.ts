@@ -1,6 +1,6 @@
 import {
   CHECKIN_REWARDS, CHECKIN_VERSION, Checkin, canClaim, claim, emptyCheckin,
-  nextReward, parseCheckin, serializeCheckin, todayKey,
+  nextDay, nextReward, parseCheckin, serializeCheckin, todayKey,
 } from '../../game/assets/scripts/core/checkin';
 
 /**
@@ -144,4 +144,40 @@ describe('todayKey', () => {
     expect(todayKey(new Date(2025, 11, 31))).toBe('2025-12-31');
     expect(todayKey(new Date(2026, 0, 1))).toBe('2026-01-01');
   });
+});
+
+/**
+ * `nextDay` is exported for the CARD, and these pin the property that makes exporting it better
+ * than letting the card work it out: the cell the card highlights is the day `claim` records.
+ *
+ * The day-1/day-2 case is the one that matters. Both pay 20, so a card that inferred the cell
+ * from `nextReward` would light the wrong one on the second day of every streak and nothing
+ * would look wrong until the seventh.
+ */
+test('nextDay is the day claim actually records, including where rewards repeat', () => {
+  let c = emptyCheckin();
+  for (const [today, expected] of [
+    ['2026-03-01', 1], ['2026-03-02', 2], ['2026-03-03', 3], ['2026-03-04', 4],
+    ['2026-03-05', 5], ['2026-03-06', 6], ['2026-03-07', 7], ['2026-03-08', 1],
+  ] as [string, number][]) {
+    expect(nextDay(c, today)).toBe(expected);
+    const result = claim(c, today);
+    expect(result.checkin.day).toBe(expected);
+    c = result.checkin;
+  }
+});
+
+test('nextDay restarts at 1 after a gap, whatever day the streak had reached', () => {
+  const c = { version: CHECKIN_VERSION, day: 5, last: '2026-03-05' };
+  // One missed day is a break, and so is a week of them.
+  expect(nextDay(c, '2026-03-07')).toBe(1);
+  expect(nextDay(c, '2026-03-14')).toBe(1);
+  // The day after is still a continuation.
+  expect(nextDay(c, '2026-03-06')).toBe(6);
+});
+
+test('nextDay and nextReward cannot disagree', () => {
+  const c = { version: CHECKIN_VERSION, day: 6, last: '2026-03-06' };
+  expect(nextReward(c, '2026-03-07')).toBe(CHECKIN_REWARDS[nextDay(c, '2026-03-07') - 1]);
+  expect(nextReward(c, '2026-03-09')).toBe(CHECKIN_REWARDS[nextDay(c, '2026-03-09') - 1]);
 });

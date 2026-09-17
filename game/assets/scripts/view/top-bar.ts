@@ -1,7 +1,7 @@
 import { Color, Label, Layers, Node, UITransform, Vec3 } from 'cc';
 import { dotSprite, gearSprite, liftedPill, PILL_INK, PILL_LIFT } from './ui-shapes';
 import { BAR_H, BAR_MARGIN_F, makeLabel, rimLabel } from './ui-layout';
-import { CONTROL_BASE, CONTROL_FACE } from './palette';
+import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE } from './palette';
 
 /**
  * The lobby's standing top bar: the coin readout on the left, the settings gear on the right,
@@ -40,18 +40,12 @@ const COIN_H = 88;
 const COIN_D = 52;
 const COIN_PAD = 12;
 /**
- * TWO DISCS, DARKER FIRST: the rim is the full 52 and the bright face is drawn on top at
- * `COIN_FACE_F` of it, which leaves the darker colour showing as a ring about 7 units wide.
+ * How much of the coin the bright face covers: `COIN_RIM` at the full 52 with `COIN_FACE` at
+ * 0.74 of it leaves the darker colour showing as a ring about 7 units wide.
  *
- * THE ORDER IS THE WHOLE OF IT, and the first version had it backwards -- gold underneath, the
- * darker disc on top -- which draws a dark 38-unit centre with gold surviving only as a thin
- * outer ring. That is a washer, not a coin, and it inverts the layering every other object in
- * this project uses: `liftedPill`, `buildGear` and the rail's own badges all put the darker
- * plate down first and the brighter face over it. Same rule here, so the name and the picture
- * agree.
+ * The two colours and the reason the darker one goes down FIRST now live in `palette`, where
+ * the check-in card's seven coins read them too.
  */
-const COIN_GOLD = new Color(255, 196, 46, 255);
-const COIN_RIM = new Color(214, 152, 20, 255);
 const COIN_FACE_F = 0.74;
 const COIN_SIZE = 44;
 
@@ -93,10 +87,24 @@ const CAPTION_RIM = new Color(30, 40, 66, 235);
 /** Slack around a tap, in design units: the same padding every other hit test here uses. */
 const TAP_PAD = 10;
 
+/**
+ * The unread-marker on a slot: a small disc on its top-right corner.
+ *
+ * 22 against the slot's 76, sitting on the corner rather than inside it, the way the card's
+ * close button hangs off its own -- a dot drawn inside the disc would read as part of the icon.
+ */
+const DOT_D = 22;
+const DOT_INK = new Color(232, 68, 62, 255);
+
 /** One reserved place: the holder that is positioned, and what is currently in it. */
 interface Slot {
     node: Node;
+    /**
+     * `null` means DRAWN BUT INERT, which is a real state here and not a missing handler --
+     * see `setSlot`, where the one slot that uses it is named.
+     */
     onTap: (() => void) | null;
+    dot: Node | null;
 }
 
 export class TopBar {
@@ -189,11 +197,11 @@ export class TopBar {
 
         // A concentric pair rather than a struck glyph: at 52 units a minted face would be
         // three pixels of detail, and this project's rule for a small icon is the silhouette
-        // (see the padlock, the passenger). Darker disc, brighter face on it -- see COIN_GOLD.
+        // (see the padlock, the passenger). Darker disc, brighter face on it -- see COIN_FACE.
         const coin = dotSprite('coin', COIN_D, COIN_RIM);
         face.addChild(coin);
         coin.setPosition(-COIN_W / 2 + COIN_PAD + COIN_D / 2, 0, 0);
-        coin.addChild(dotSprite('face', COIN_D * COIN_FACE_F, COIN_GOLD));
+        coin.addChild(dotSprite('face', COIN_D * COIN_FACE_F, COIN_FACE));
 
         // Centred in what the coin leaves, not nudged off the plate's middle -- the same
         // arithmetic the HUD's passenger count uses for the same reason.
@@ -243,8 +251,17 @@ export class TopBar {
      * places are held open in the ARITHMETIC (the gear and the coin plate already sit where
      * they will sit once both are filled) and nowhere else.
      *
-     * The two that are coming are the daily check-in and the free-coins entry (a rewarded
-     * video). Neither exists yet, and `setSlot` is how either arrives.
+     * BOTH ARE FILLED NOW -- the daily check-in in slot 1 and the free-coins entry in slot 0 --
+     * so the paragraph above describes a state the bar no longer ships in. It stays because the
+     * rule it states still binds: an EMPTY place draws nothing and answers nothing, and that is
+     * still what `setSlot(i, null)` gives you.
+     *
+     * AND THE FREE-COINS SLOT IS THE EXCEPTION TO IT, deliberately and on instruction. It is
+     * drawn at full weight and has no handler at all: 「免费金币暂时只能看，点击无反应」. That is
+     * exactly the visible-does-nothing control the paragraph above argues costs trust, and the
+     * argument has not stopped being true -- it is outweighed here by the bar reading as three
+     * equal controls rather than two-and-a-gap while the rewarded video it fronts has no ad unit
+     * to point at. When one exists, `setSlot` takes a handler and the exception closes.
      */
     private buildSlot(i: 0 | 1, x: number): Slot {
         const node = new Node(`TopBarSlot${i}`);
@@ -253,7 +270,7 @@ export class TopBar {
         this.root.addChild(node);
         node.setPosition(x, 0, 0);
         node.active = false;
-        return { node, onTap: null };
+        return { node, onTap: null, dot: null };
     }
 
     /**
@@ -263,10 +280,16 @@ export class TopBar {
      * it back off and empties it. The caller keeps no reference it has to remember to detach --
      * a half-populated slot (switched on, nothing in it) is a hole in the bar, and the only way
      * to make one is to hand this a node that draws nothing.
+     *
+     * `onTap` IS NULLABLE, and the null is load-bearing rather than a convenience. The free-coins
+     * slot is drawn and does nothing on purpose (see `buildSlot`), and the honest way to say that
+     * is a handler that is absent -- not a `() => {}` that reads, to everyone who meets it later,
+     * as a handler somebody forgot to fill in. `tapSlot`'s `?.` already handles it.
      */
-    setSlot(i: 0 | 1, slot: { icon: Node; onTap: () => void } | null): void {
+    setSlot(i: 0 | 1, slot: { icon: Node; onTap: (() => void) | null } | null): void {
         const s = this.slots[i];
         s.node.removeAllChildren();
+        s.dot = null;
         if (!slot) {
             s.onTap = null;
             s.node.active = false;
@@ -276,6 +299,26 @@ export class TopBar {
         slot.icon.setPosition(0, 0, 0);
         s.onTap = slot.onTap;
         s.node.active = true;
+    }
+
+    /**
+     * Show or hide a slot's unread dot.
+     *
+     * Built on FIRST use rather than with the slot, because only one of the two ever wears one
+     * and a dot node switched off in the other is a thing to explain. It is added last so it
+     * draws over the icon, and it is a child of the slot's own node, so `setSlot` clearing that
+     * node's children takes the dot with it -- which is why `dot` is cleared there too rather
+     * than being left pointing at a detached node.
+     */
+    setSlotDot(i: 0 | 1, on: boolean): void {
+        const s = this.slots[i];
+        if (!s.dot) {
+            if (!on) return;
+            s.dot = dotSprite('dot', DOT_D, DOT_INK);
+            s.node.addChild(s.dot);
+            s.dot.setPosition(SLOT_D / 2 - DOT_D / 4, SLOT_D / 2 - DOT_D / 4, 0);
+        }
+        s.dot.active = on;
     }
 
     /** The coin count. Formatting is the caller's: this draws whatever number it is given. */

@@ -8,7 +8,9 @@ import {
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
     bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
     unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
-    addCoins, backfilledWallet, coinsForClear, emptyWallet, parseWallet, serializeWallet, Wallet,
+    addCoins, backfilledWallet, canClaim, Checkin, claim as claimCheckin, coinsForClear,
+    emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin, serializeWallet,
+    todayKey, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -21,8 +23,9 @@ import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { HomeView } from './home-view';
 import {
-    clearProgressText, clearWalletText, loadProgressText, loadSettingsText, loadWalletText,
-    saveProgressText, saveSettingsText, saveWalletText,
+    clearCheckinText, clearProgressText, clearWalletText, loadCheckinText, loadProgressText,
+    loadSettingsText, loadWalletText, saveCheckinText, saveProgressText, saveSettingsText,
+    saveWalletText,
 } from './storage';
 import { setHaptics } from './haptics';
 import { setupEnvironment, setupAntiAliasing } from './environment';
@@ -493,6 +496,15 @@ export class GameController extends Component {
      * Nothing spends coins yet; the lobby's top bar is the only thing that reads the number.
      */
     private wallet: Wallet = emptyWallet();
+
+    /**
+     * The daily check-in streak, read once on the boot path beside the wallet.
+     *
+     * A SAVE OF ITS OWN rather than a field on the wallet, for the reason `core/checkin`
+     * gives: coins are what it pays out, not what it is. It goes in the wipe with the
+     * progress -- `storage.clearCheckinText` argues that end of it.
+     */
+    private checkin: Checkin = emptyCheckin();
     /**
      * Whether the release about to arrive was a rail DRAG rather than a tap. Set by
      * `onPressEnd`, read once by `handleTap`; see there for why the order matters.
@@ -724,6 +736,9 @@ export class GameController extends Component {
         // Beside the progress, and on the same terms: `parseWallet` cannot throw either, so a
         // corrupt balance costs the player their coins and not their game.
         this.wallet = parseWallet(loadWalletText());
+        // Same contract and the same reason: `parseCheckin` cannot throw either, so a
+        // corrupt streak costs the player a day rather than the boot.
+        this.checkin = parseCheckin(loadCheckinText());
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
@@ -864,13 +879,21 @@ export class GameController extends Component {
      */
     private showHome(): void {
         this.unloadLevel();
-        if (!this.home && this.canvasNode) this.home = new HomeView(this.canvasNode);
+        if (!this.home && this.canvasNode) {
+            this.home = new HomeView(this.canvasNode);
+            // Once, with the view -- the bar is standing furniture and its two entries do
+            // not change. The dot on top of one of them does, so it is repainted below.
+            this.home.fillBarSlots(() => this.openCheckin());
+        }
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
         this.home?.setProgress(this.progress);
         // Every return to the lobby repaints the balance, which is what makes a clear's payout
         // show up: the bar is standing and was drawn long before the coins were earned.
         this.home?.setCoins(this.wallet.coins);
+        // On every return, not only on the first build: a player who came back after
+        // midnight has a claim waiting that was not there when the bar was drawn.
+        this.paintCheckinDot();
         this.home?.show();
     }
 
@@ -2411,14 +2434,58 @@ export class GameController extends Component {
      * toast says so in words. Leaving the card up would put both behind its scrim, so the one
      * irreversible action in the game would look like it had done nothing.
      */
+    /**
+     * Raise the check-in card. The bar's live entry does exactly this and nothing else.
+     *
+     * `todayKey(new Date())` IS READ HERE AND NOWHERE ELSE ON THIS PATH, then handed down. The
+     * card draws a row and the claim pays for a day, and if each asked the clock itself they
+     * could straddle midnight -- the player taps at 23:59:59 and claims at 00:00:00, and the
+     * cell that lit up is not the cell that pays. One read per interaction cannot do that.
+     */
+    private openCheckin(): void {
+        this.hud?.showCheckin(this.checkin, todayKey(new Date()));
+    }
+
+    /**
+     * Take today's coins.
+     *
+     * The guard is not defensive duplication: `hitsCheckin` already refuses to return 'claim'
+     * when the button is not live, so this can only be reached on a claimable day -- but that is
+     * a fact about a VIEW, and the wallet is not something to write on a view's say-so. A second
+     * call in the same tick, or a future caller that is not the card, stops here.
+     */
+    private claimCheckinToday(): void {
+        const today = todayKey(new Date());
+        if (!canClaim(this.checkin, today)) return;
+        const { checkin, coins } = claimCheckin(this.checkin, today);
+        this.checkin = checkin;
+        this.wallet = addCoins(this.wallet, coins);
+        saveCheckinText(serializeCheckin(this.checkin));
+        saveWalletText(serializeWallet(this.wallet));
+        this.home?.setCoins(this.wallet.coins);
+        this.hud?.paintCheckin(this.checkin, today);
+        this.paintCheckinDot();
+        this.sfx?.play('tap');
+        vibrate('light');
+        console.log(`[Game] check-in day ${this.checkin.day} paid ${coins} coins`);
+    }
+
+    /** The unread dot on the bar's check-in entry: on exactly while a claim is waiting. */
+    private paintCheckinDot(): void {
+        this.home?.setCheckinDot(canClaim(this.checkin, todayKey(new Date())));
+    }
+
     private wipeProgress(): void {
         this.hud?.hideSettings();
         clearProgressText();
         clearWalletText();
+        clearCheckinText();
         this.progress = emptyProgress();
         this.wallet = emptyWallet();
+        this.checkin = emptyCheckin();
         this.home?.setProgress(this.progress);
         this.home?.setCoins(0);
+        this.paintCheckinDot();
         this.hud?.showToast('进度已清除');
         this.sfx?.play('tap');
         vibrate('light');
@@ -2457,18 +2524,25 @@ export class GameController extends Component {
                 else if (hit === 'wipe' && this.hud.confirmWipe()) this.wipeProgress();
                 return;   // anything else on this screen is swallowed
             }
+            // The check-in card is asked on the same terms as the settings card above, and
+            // for the same reason: while it is up it is the topmost thing on this screen.
+            if (this.hud?.checkinOpen()) {
+                const hit = this.hud.hitsCheckin(ui);
+                if (hit === 'close') this.hud.hideCheckin();
+                else if (hit === 'claim') this.claimCheckinToday();
+                return;   // anything else on this screen is swallowed
+            }
             if (this.home.hitsGear(ui)) {
                 this.sfx?.play('tap');
                 this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
                 return;
             }
             // The bar's two reserved places, beside the gear and answering on the same terms.
-            // BOTH EMPTY TODAY -- `hitsSlot` cannot return anything but -1 until `setSlot` has
-            // populated one -- so this line does nothing until the daily check-in or the
-            // free-coins entry arrives. It is here anyway, because the alternative is a
-            // three-part protocol (`setSlot`, `hitsSlot`, `tapSlot`) with its middle wired up
-            // and its end missing: whoever ships the check-in button would find the icon drawn,
-            // the hit test answering and the tap doing nothing, with nothing to say why.
+            // BOTH ARE FILLED NOW (`HomeView.fillBarSlots`), and one of them deliberately has
+            // no handler: the free-coins entry is drawn and inert until there is an ad unit to
+            // point it at. `tapSlot` is a no-op on that one, which is the whole of what
+            // 「点击无反应」 asks for -- so this branch does not need to know which slot it is,
+            // and must not learn, or the rule would be written down in two places.
             // `!== -1` rather than `>= 0`, because that is what narrows `0 | 1 | -1` to `0 | 1`.
             const slot = this.home.hitsSlot(ui);
             if (slot !== -1) {

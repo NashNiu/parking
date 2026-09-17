@@ -122,3 +122,40 @@ export function clearWalletText(): void {
         console.warn('[Game] wallet could not be cleared:', e);
     }
 }
+
+/**
+ * The check-in streak's key, and its lifetime is the WALLET's, not the settings'.
+ *
+ * `clearWalletText` above draws the line: a save outlives a wipe when its lifetime has nothing
+ * to do with the player's progress, and does not when it is produced BY playing. Settings pass
+ * that test -- clearing a save is not a request to turn the sound back on. A streak fails it
+ * the same way coins do: it is a record of turning up to play, it pays out in coins, and coins
+ * are wiped. Keeping a seven-day streak across a wipe would also hand a fresh save the 100-coin
+ * day, which is the one figure in the table that is meant to take a week to reach.
+ */
+const CHECKIN_KEY = 'parking.checkin';
+
+export function loadCheckinText(): string | null {
+    try {
+        return sys.localStorage.getItem(CHECKIN_KEY);
+    } catch (e) {
+        console.warn('[Game] check-in could not be read:', e);
+        return null;
+    }
+}
+
+export function saveCheckinText(text: string): void {
+    try {
+        sys.localStorage.setItem(CHECKIN_KEY, text);
+    } catch (e) {
+        console.warn('[Game] check-in could not be saved:', e);
+    }
+}
+
+export function clearCheckinText(): void {
+    try {
+        sys.localStorage.removeItem(CHECKIN_KEY);
+    } catch (e) {
+        console.warn('[Game] check-in could not be cleared:', e);
+    }
+}
