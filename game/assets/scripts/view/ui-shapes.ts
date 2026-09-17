@@ -12,13 +12,32 @@ import {
  * texture, white so it can be tinted, and shared by every node that asks for it.
  */
 
+/**
+ * The floor of the dot's bucketed frame sizes, in pixels -- see `dotBucket` below.
+ *
+ * A dot used to share ONE 32px frame across every circle in the project, from a 22-unit
+ * unread indicator up to a 200-unit glow. STAR_SIZE's docblock, just below, used to cite that
+ * as the shape that "gets away with" a single small texture, "being a circle at 40". THAT
+ * CLAIM IS NOW FALSE, and it is worth saying so rather than quietly fixing it: a level badge
+ * is drawn at NODE_D, 170 design units, which on a 1170-wide phone against a 720-unit canvas
+ * is about 275 device pixels -- a 32px frame stretched that far is exactly the softness and
+ * halo a player photographed and reported. The dot stopped getting away with 32 the moment a
+ * badge became a circle that large; it just took a while for anyone to look at one that big.
+ *
+ * `dotBucket` picks a texture size per diameter now instead of one frame for all of them.
+ * DOT_SIZE is only the smallest bucket, kept so the cheap circles -- the unread dot, the coin
+ * -- still pay for a 32-square texture rather than every dot paying for the badge's worst
+ * case.
+ */
 const DOT_SIZE = 32;
+/** The largest bucket `dotBucket` will hand out, in pixels -- see it below for why. */
+const DOT_SIZE_MAX = 256;
 
 /**
  * The star, painted at 128 so its points survive being drawn large: a win panel's star is
  * about 130 design units, which on a 1170-wide phone against a 720-unit canvas is roughly
- * 210 device pixels. A 32px frame -- the size the dot gets away with, being a circle at 40 --
- * would be visibly soft at that magnification, and a soft point is not a star.
+ * 210 device pixels. A 32px frame -- the size a small dot needs, and used to be the ONLY size
+ * any dot got -- would be visibly soft at that magnification, and a soft point is not a star.
  */
 const STAR_SIZE = 128;
 /** Inner radius over outer: 0.475 is the proportion a five-pointed star is normally drawn at. */
@@ -66,7 +85,8 @@ const TRI_SIZE = 64;
  * one radius cannot suit both a 88-tall pill and a 420-tall panel.
  */
 const roundFrames = new Map<number, SpriteFrame>();
-let dotFrame: SpriteFrame | null = null;
+/** One frame per size BUCKET -- see `dotBucket` -- rather than the single frame this used to be. */
+const dotFrames = new Map<number, SpriteFrame>();
 let rampFrame: SpriteFrame | null = null;
 let starFrame: SpriteFrame | null = null;
 let burstFrame: SpriteFrame | null = null;
@@ -128,9 +148,33 @@ function roundedCoverage(r: number, size: number): (x: number, y: number) => num
     };
 }
 
-function dotCoverage(x: number, y: number): number {
-    const r = DOT_SIZE / 2;
-    return r - Math.hypot(x - r, y - r);
+function dotCoverage(size: number): (x: number, y: number) => number {
+    const r = size / 2;
+    return (x, y) => r - Math.hypot(x - r, y - r);
+}
+
+/**
+ * The texture size to paint a `d`-unit dot into: the smallest power of two at least `d`,
+ * clamped to DOT_SIZE..DOT_SIZE_MAX.
+ *
+ * Mirrors `roundedSprite`'s one-frame-per-radius cache, except the key is a bucket rather than
+ * the exact size, because a dot is asked for at whatever diameter its caller happens to need --
+ * unlike a corner radius, which a designer picks from a short list -- and a fresh bucket per
+ * exact diameter would cache one frame per distinct dot on the whole screen instead of five or
+ * six shared ones.
+ *
+ * THE FLOOR keeps the cheap circles cheap: an unread dot at 22 units or a coin at 52 still
+ * gets a 32 or 64-square frame, not the largest bucket a badge needs.
+ *
+ * THE CEILING is not decoration. 256x256 RGBA is 256 KB, and the largest circle the lobby
+ * draws -- the current-level glow -- is about 200 design units, comfortably inside it. Without
+ * a ceiling, a future caller passing a much larger diameter would silently allocate a texture
+ * many times that size for one frame.
+ */
+function dotBucket(d: number): number {
+    let size = DOT_SIZE;
+    while (size < d) size *= 2;
+    return Math.min(size, DOT_SIZE_MAX);
 }
 
 /**
@@ -318,10 +362,18 @@ export function rampSprite(name: string, w: number, h: number, color: Color): No
     return spriteNode(name, w, h, color, rampFrame, Sprite.Type.SIMPLE);
 }
 
-/** A filled circle of diameter `d`, tinted `color`. */
+/**
+ * A filled circle of diameter `d`, tinted `color`, from a frame cached per `dotBucket(d)` --
+ * see it above for why one bucket cannot serve every dot in the project any more.
+ */
 export function dotSprite(name: string, d: number, color: Color): Node {
-    if (!dotFrame) dotFrame = frameFrom(paint(DOT_SIZE, dotCoverage), DOT_SIZE);
-    return spriteNode(name, d, d, color, dotFrame, Sprite.Type.SIMPLE);
+    const size = dotBucket(d);
+    let frame = dotFrames.get(size);
+    if (!frame) {
+        frame = frameFrom(paint(size, dotCoverage(size)), size);
+        dotFrames.set(size, frame);
+    }
+    return spriteNode(name, d, d, color, frame, Sprite.Type.SIMPLE);
 }
 
 /**

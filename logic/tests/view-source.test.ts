@@ -704,3 +704,77 @@ test('the check-in card reads c.day, not nextDay, for the day already claimed', 
   // And the trap itself must not come back under any spelling.
   expect(src).not.toContain('live ? landing - 1 : landing');
 });
+
+/**
+ * Every circle in the project no longer shares one 32px frame.
+ *
+ * WHAT THIS GUARDS. `ui-shapes.ts` used to paint ONE `dotFrame` at `DOT_SIZE` (32) and hand
+ * it, stretched, to every caller of `dotSprite` -- a 22-unit unread dot on the top bar, a
+ * 52-unit coin, a 170-unit level badge, a 200-unit glow, all the same texture. A badge at 170
+ * design units is roughly 275 device pixels on a 1170-wide phone: a soft antialiased 32px edge
+ * blown up that far is the blur and halo a player photographed and reported. The fix caches a
+ * frame per size BUCKET in `dotFrames`, the same shape `roundFrames` already uses per corner
+ * radius, so `dotFrame` (singular, a nullable single frame) has no reason to exist any more.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot paint a texture and measure how soft its edge is. What it can pin is
+ * that the single shared frame is gone and that the two constants bounding the bucket --
+ * `DOT_SIZE` as the floor, `DOT_SIZE_MAX` as the ceiling -- are the literals the brief asked
+ * for, with the ceiling actually enforced in the clamp rather than merely declared.
+ */
+test('ui-shapes has no single shared dotFrame, and dotBucket is clamped at both ends', () => {
+  const src = stripComments(readSrc('ui-shapes.ts'));
+  // `dotFrames` (the Map) is fine; a bare singleton `dotFrame` is the defect.
+  expect(src).not.toMatch(/\bdotFrame\b/);
+  expect(src).toContain('const dotFrames = new Map<number, SpriteFrame>();');
+  expect(src).toMatch(/^const DOT_SIZE = 32;$/m);
+  expect(src).toMatch(/^const DOT_SIZE_MAX = 256;$/m);
+  expect(src).toContain('return Math.min(size, DOT_SIZE_MAX);');
+});
+
+/**
+ * The guard above can still see the defect it is written for, and the bucket function it pins
+ * actually behaves the way the brief specifies.
+ *
+ * RATHER THAN RE-IMPLEMENTING `dotBucket` here, which would drift from the real one and end up
+ * testing a copy instead of the code, this extracts the function's own body out of the source
+ * text and executes it -- so a future change to the clamping LOGIC, not just to the two
+ * constants, can fail this test too. `DOT_SIZE` and `DOT_SIZE_MAX` are likewise read out of the
+ * source rather than hard-coded, so a deliberate retune of either number does not make this
+ * test lie about what the current file does.
+ */
+test('the guard catches a reverted dotFrame, and dotBucket really buckets 22..200', () => {
+  expect(/\bdotFrame\b/.test('let dotFrame: SpriteFrame | null = null;')).toBe(true);
+  // The Map that replaced it must not itself trip the same guard.
+  expect(/\bdotFrame\b/.test('const dotFrames = new Map<number, SpriteFrame>();')).toBe(false);
+
+  const src = readSrc('ui-shapes.ts');
+  const numConst = (name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*(\\d+);`).exec(src);
+    if (!m) throw new Error(`${name} not found in ui-shapes.ts -- renamed?`);
+    return Number(m[1]);
+  };
+  const dotSize = numConst('DOT_SIZE');
+  const dotSizeMax = numConst('DOT_SIZE_MAX');
+  const fnMatch = /function dotBucket\(d: number\): number \{([\s\S]*?)\n\}/.exec(src);
+  if (!fnMatch) throw new Error('dotBucket not found in ui-shapes.ts -- renamed or removed?');
+  const rawBucket = new Function('d', 'DOT_SIZE', 'DOT_SIZE_MAX', fnMatch[1]) as
+    (d: number, floor: number, ceil: number) => number;
+  const bucket = (d: number): number => rawBucket(d, dotSize, dotSizeMax);
+
+  // The five diameters this project actually draws a dot at: the top bar's unread dot, the
+  // coin, the level badge's base/face, and its padded glow.
+  expect(bucket(22)).toBe(32);
+  expect(bucket(52)).toBe(64);
+  expect(bucket(128)).toBe(128);
+  expect(bucket(170)).toBe(256);
+  expect(bucket(200)).toBe(256);
+
+  // THE FLOOR: nothing smaller than DOT_SIZE is ever handed out.
+  expect(bucket(1)).toBe(dotSize);
+  expect(bucket(0)).toBe(dotSize);
+
+  // THE CEILING: a diameter far past anything the lobby draws does not escape DOT_SIZE_MAX --
+  // the guard against a future caller silently allocating a multi-megabyte texture.
+  expect(bucket(10000)).toBe(dotSizeMax);
+});
