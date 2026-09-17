@@ -65,7 +65,8 @@ import { HomeScene } from './home-scene';
  * So the CAP is what makes the bar's band opaque and the RAMP is what dissolves the edge of the
  * cap. Both are painted in `GROUND` -- the pavement they are lying on -- and they meet at
  * `barBottomY`, where both are fully opaque, so the join is invisible and there is no hard edge
- * anywhere on the screen. Same tool and same argument as `HomeScene`'s side fades.
+ * anywhere on the screen. `HomeScene` used to carry a matching pair down the screen's left and
+ * right; they went when the scenery they dissolved did, so this is the only ramp left.
  *
  * WHAT IT COSTS, and it is more than the ramp alone cost: under the bar the road is now paled
  * ALL the way rather than partly, so the route reads as running out from under a band of

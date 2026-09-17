@@ -450,6 +450,30 @@ test('home-scene draws the shadow pass before the road pass', () => {
 });
 
 /**
+ * The road shadow's three numbers, pinned as literals.
+ *
+ * THE SIGN IS THE ONE THAT MATTERS. Canvas +y is UP, so a shadow falling DOWN-right is
+ * `(+2, -3)` -- and `-3` reads as wrong to anyone who has not stopped to work out which way
+ * the axis points, which makes it a standing invitation to be "corrected" to `+3`. That edit
+ * would compile, typecheck, pass every other guard in this file, and put the street's shadow
+ * on the wrong side of the road, where it reads as a second faint road rather than as depth.
+ *
+ * The alpha is here for a different reason: 64 is a DEPARTURE from `shadow.ts`'s `SHADOW_ALPHA`
+ * (44) and `CONTACT_ALPHA` (112), settled by a product decision. `home-scene`'s docblock argues
+ * it; this makes the argument load-bearing, so a later unification pass that sweeps the file
+ * toward the shared constants has to come through here and read that argument first.
+ *
+ * Source-level rather than behavioural because these files import `cc` and this suite does not
+ * load the engine -- the same honest limit every guard in this file works under.
+ */
+test('the road shadow falls down-right, at the alpha that was chosen over shadow.ts', () => {
+  const src = readSrc('home-scene.ts');
+  expect(src).toMatch(/^const SHADOW_OFFSET_X = 2;$/m);
+  expect(src).toMatch(/^const SHADOW_OFFSET_Y = -3;$/m);
+  expect(src).toMatch(/^const ROAD_SHADOW = new Color\(SHADOW_INK\.r, SHADOW_INK\.g, SHADOW_INK\.b, 64\);$/m);
+});
+
+/**
  * Whether two substrings ever occur within `window` characters of one another, anywhere in
  * `src`. Every occurrence of `a` is checked against every occurrence of `b`, so it does not
  * matter which one comes first or how many times either appears.
