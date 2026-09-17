@@ -1000,9 +1000,12 @@ test('the guard catches a reverted dotFrame, and dotBucket really buckets 22..20
  * fix for (see `HALO_COLOUR`).
  */
 function badgeLayerOrder(src: string): boolean {
-  // `hi` IS IN THE LIST, and it was left out of the first version of this helper -- which is how
-  // a highlight measured off the wrong disc shipped: the guard pinned three layers, the report
-  // said four, and nothing noticed. It is the outermost ring, so it has to be created FIRST.
+  // `hi` is in the list because it is the outermost ring and has to be created FIRST.
+  //
+  // WHAT THIS DOES NOT CATCH, said plainly because an earlier comment here claimed it did:
+  // the highlight defect that shipped was a wrong DIAMETER and a missing OFFSET, with the
+  // creation order already correct. Order is not the property that was broken, so adding
+  // `hi` here would not have caught it. The geometry is pinned separately, below.
   const hiAt = src.indexOf("const hi = dotSprite('hi'");
   const outlineAt = src.indexOf("const outline = dotSprite('outline'");
   const baseAt = src.indexOf("const base = dotSprite('base'");
@@ -1182,4 +1185,25 @@ test('the docblock\'s rejected RGB scaling really does miss the lightness it cla
   // docblock is not "corrected" back to blaming saturation.
   const [, s0] = rgbToHsl(42, 138, 208);
   expect(sScaled * 100).toBeCloseTo(s0 * 100, 0);
+});
+
+/**
+ * The current badge's highlight is measured off the EDGE and shares its offset.
+ *
+ * THE TWO FACTS THAT ACTUALLY BROKE, and neither is an ordering. The highlight shipped as
+ * `NODE_D + NODE_HI_PAD * 2` — measured off the FACE — behind a dark edge measured off the
+ * BASE, and drawn at the node's own centre while that edge sat `NODE_LIFT` lower. It was not
+ * hidden and it was not a ring: it drew a bright crescent across the top half and nothing below.
+ *
+ * The layer-order guard above could not have caught either one; the order was right the whole
+ * time. These two lines are the ones that were wrong, so these two lines are what is pinned.
+ */
+test('the badge highlight is sized off the edge and shares its offset', () => {
+  const src = stripComments(readSrc('home-view.ts'));
+  // Off the EDGE, not the face. `NODE_D + ...` here is the exact regression.
+  expect(src).toMatch(/^const NODE_HI_D = NODE_EDGE_D \+ NODE_HI_PAD \* 2;$/m);
+  expect(src).not.toMatch(/^const NODE_HI_D = NODE_D \+/m);
+  // Concentric with the edge: both carry the base's lift, or the ring comes out lopsided.
+  expect(src).toContain('hi.setPosition(0, -NODE_LIFT, 0);');
+  expect(src).toContain('outline.setPosition(0, -NODE_LIFT, 0);');
 });

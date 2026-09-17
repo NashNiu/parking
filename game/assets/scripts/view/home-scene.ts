@@ -310,10 +310,22 @@ function strokePath(
  * such pieces is not visible.
  *
  * Each whole or partial dash is a `roundedSprite` at `radius = thickness / 2` -- the same
- * capsule identity `strokePath`'s own docblock sets out, applied to a short, isolated run
- * instead of a continuous stroke, so there is no overhang to add: the sprite's own length IS
- * the visible length of that piece, unlike `strokePath`'s segments, which overhang on purpose
- * to bridge a shared stop.
+ * capsule identity `strokePath`'s own docblock sets out.
+ *
+ * A CUT END OVERHANGS; A REAL END DOES NOT. That distinction is the whole of `cutStart`/`cutEnd`
+ * below, and leaving it out is a defect that shipped here once. At `radius = thickness / 2` a
+ * capsule's extreme ends are single POINTS at mid-height, not flat edges -- so where a dash was
+ * cut across a chord joint, piece A tapered to a point on the joint and piece B tapered away
+ * from it, and the dash necked from its full thickness to nothing and back. Worse for a short
+ * remainder: `roundedSprite` clamps its corner radius to `min(len, thick) / 2`, so a 2.8-long
+ * fragment of a 9-thick dash came out as a 2.8 x 9 blob -- WIDER ACROSS the road than along it,
+ * a tick at right angles to the line it belongs to.
+ *
+ * So a piece extends half a thickness past each end that was CUT, and not past an end that is
+ * the dash's own -- which makes the two halves overlap exactly the way `strokePath`'s segments
+ * do at a shared stop, and leaves whole dashes at exactly `dash` long. The docblock above argues
+ * the seam is invisible because the chords barely bend, and that was true and beside the point:
+ * the angle was never the problem, the cap geometry was.
  */
 function strokeDashes(
     parent: Node, pts: PathPoint[], dash: number, gap: number, thick: number, color: Color,
@@ -340,11 +352,17 @@ function strokeDashes(
             const phaseLeft = Math.max((inDash ? dash : cycle) - phase, 1e-6);
             const step = Math.min(phaseLeft, len - segStart);
             if (inDash) {
-                const s0 = segStart;
-                const s1 = segStart + step;
-                const seg = roundedSprite(`dash${n++}`, step, thick, color, thick / 2);
+                // A start at a non-zero phase can only mean the previous chord ran out mid-dash;
+                // within one chord the loop always steps exactly onto a phase boundary. An end
+                // short of `phaseLeft` means this chord ran out before the dash did.
+                const cutStart = phase > 0 ? thick / 2 : 0;
+                const cutEnd = step < phaseLeft ? thick / 2 : 0;
+                const mid = segStart + step / 2 + (cutEnd - cutStart) / 2;
+                const seg = roundedSprite(
+                    `dash${n++}`, step + cutStart + cutEnd, thick, color, thick / 2,
+                );
                 parent.addChild(seg);
-                seg.setPosition(a.x + ux * (s0 + s1) / 2, a.y + uy * (s0 + s1) / 2, 0);
+                seg.setPosition(a.x + ux * mid, a.y + uy * mid, 0);
                 seg.angle = angle;
             }
             segStart += step;
@@ -422,12 +440,12 @@ export class HomeScene {
      */
     private centreY = 0;
     /**
-     * The canvas size, kept as fields again now that the scenery is back: `vergeX` measures a
-     * tree or lamp's outer bound against `w` the same way the deleted `dress()` used to, on
-     * every leg `build()` constructs. Nothing else here reads `h`, but the pair travels together
-     * rather than one being a field and the other a constructor-only local.
+     * The canvas width, kept as a field because `vergeX` measures a tree or lamp's outer
+     * bound against it on every leg `build()` constructs -- the same way the deleted
+     * `dress()` used to. `h` is NOT a field: the oversized ground plate is the only thing
+     * on this layer sized by the screen's height, and it is built in the constructor that
+     * receives it.
      */
-    /** The canvas width, kept because `vergeX` measures the outer verge against it. */
     private w: number;
     /**
      * The largest distance any pixel of a badge can ever land from that badge's own centre, in

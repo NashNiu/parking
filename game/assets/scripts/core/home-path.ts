@@ -56,12 +56,25 @@
  * `64 x scale` UP but `(64 + NODE_EDGE + NODE_LIFT) x scale` = `83 x scale` DOWN. That extra
  * reach is the EDGE DISC, not the base -- the base alone (radius 64, offset `NODE_LIFT` (15)
  * down) only reaches 79, but the edge disc drawn behind it is `NODE_D + 2 x NODE_EDGE` = 136
- * wide (radius 68) at that SAME offset, reaching `68 + 15` = 83, two units past the base's own
- * thickness. That is exactly the trap the heading names: the edge, not the base, is the badge's
- * true lower reach. The current badge also wears the bright outline (`NODE_HI_D`, radius 66,
- * concentric at the node's own centre -- no offset), reaching 66 in EVERY direction: past the
- * plain face's 64 on the way up, still short of the edge's 83 on the way down. Every one of
- * those discs -- face, base, edge, outline -- is a child of the same node `layout()` scales, so
+ * wide (radius 68) at that SAME offset, reaching `68 + 15` = 83 -- one `NODE_EDGE` past the
+ * base's own thickness. That is exactly the trap the heading names: the edge, not the base, is
+ * the badge's true lower reach.
+ *
+ * THE CURRENT BADGE'S BRIGHT OUTLINE GOES FURTHER STILL. `NODE_HI_D` is measured off the EDGE,
+ * not the face -- `NODE_EDGE_D + 2 x NODE_HI_PAD` = 140, radius 70 -- and it carries the same
+ * `-NODE_LIFT` offset the edge does, so it reaches `70 + 15` = 85 down and `70 - 15` = 55 up.
+ * Down it beats the edge's 83; up the plain face's 64 beats it. TWO DIFFERENT DISCS WIN IN THE
+ * TWO DIRECTIONS, which is the whole reason the table below states each state's two reaches
+ * separately instead of quoting one radius.
+ *
+ * (An earlier version of this paragraph described the highlight as radius 66 with no offset,
+ * which was its design for exactly two commits before it was found to draw a bright crescent
+ * across the badge's top half and nothing below. The table was corrected and this paragraph was
+ * not -- the seventh arithmetic error in this docblock, and the second of them to survive its
+ * own fix. Re-read `home-view.ts` before writing a number here.)
+ *
+ * Every one of those discs -- face, base, edge, highlight -- is a child of the same node
+ * `layout()` scales, so
  * EVERY LAYER OF THE CURRENT BADGE SCALES WITH THE BREATHE TWEEN, up to `BREATHE_TO` (1.26), not
  * merely the face.
  *

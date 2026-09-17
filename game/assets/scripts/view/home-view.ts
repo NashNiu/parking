@@ -229,7 +229,7 @@ const STAR_D = Math.round(NODE_D * 0.25);
  * Gap between star centres: `STAR_D` plus a fixed 5-unit gap between adjacent stars' edges.
  *
  * DERIVED, not a second literal. It used to be a plain 56 against a `STAR_D` of 51 -- a
- * 5-unit gap between stars that nothing tied together. Shrinking `STAR_D` to 43 and leaving
+ * 5-unit gap between stars that nothing tied together. Shrinking `STAR_D` and leaving
  * the pitch at 56 would have opened that gap to 13 and scattered the three stars under the
  * smaller badge; deriving it instead keeps today's 5-unit gap at whatever size `STAR_D` is.
  */
@@ -1082,7 +1082,7 @@ export class HomeView {
      *
      * THE COLUMN DID NOT MOVE THIS. `TopBar` went from a 96-tall row across the whole width to a
      * column of three larger controls running down the left margin, which is taller than the old
-     * row -- but the column sits at x from about -721.6 to -361.6 (see `top-bar.ts`'s own
+     * row -- but the column sits at x from -601.6 to -361.6 (see `top-bar.ts`'s own
      * constructor docblock), and a stop never reaches further out than `ZIG_X` (210) plus its own
      * radius, nowhere close. `top` is still `this.barBottom` -- the SAME number the column's own
      * top edge sits at (see `TopBar`'s constructor) -- because the free band this centres on was

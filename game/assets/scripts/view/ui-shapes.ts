@@ -37,9 +37,11 @@ const DOT_SIZE_MAX = 256;
 
 /**
  * The star, painted at 128 so its points survive being drawn large: a win panel's star is
- * about 130 design units, which on a 1170-wide phone against a 720-unit canvas is roughly
- * 210 device pixels. A 32px frame -- the size a small dot needs, and used to be the ONLY size
- * any dot got -- would be visibly soft at that magnification, and a soft point is not a star.
+ * about 130 design units, which on a 1170-wide phone is `130 x 1170 / 1280` = about 119 device
+ * pixels. (THE CANVAS IS 1280 WIDE, not 720 -- `ui-layout.canvasSize` exists to warn about that
+ * exact pair, and three comments in this file quoted the 720 anyway.) A 32px frame -- the size
+ * a small dot needs, and once the ONLY size any dot got -- would be blown up 3.7x there, and a
+ * soft point is not a star.
  */
 const STAR_SIZE = 128;
 /** Inner radius over outer: 0.475 is the proportion a five-pointed star is normally drawn at. */
@@ -169,7 +171,8 @@ function dotCoverage(size: number): (x: number, y: number) => number {
  * gets a 32 or 64-square frame, not the largest bucket a badge needs.
  *
  * THE CEILING is not decoration. 256x256 RGBA is 256 KB, and the largest circle the lobby
- * draws -- the current-level glow -- is about 200 design units, comfortably inside it. Without
+ * draws -- the current badge's bright outline, `NODE_HI_D` = 140 design units -- is comfortably
+ * inside it. Without
  * a ceiling, a future caller passing a much larger diameter would silently allocate a texture
  * many times that size for one frame.
  */
@@ -421,9 +424,10 @@ export function triSprite(name: string, d: number, color: Color): Node {
  * so the numbers below read as fractions of the icon rather than as pixels of whatever size
  * it happens to be painted at.
  *
- * Painted at 96 rather than the dot's 32: these are drawn at 44 to 68 design units, which on
- * a 1170-wide phone against a 720-unit canvas is up to 110 device pixels, and a gear tooth
- * has corners a circle does not.
+ * Painted at 96 rather than the dot's 32: these are drawn at 44 to 68 design units, which on a
+ * 1170-wide phone is up to about 62 device pixels, so 96 is a minification at every size they
+ * are used at -- and a gear tooth has corners a circle does not, so it cannot afford the
+ * magnification a disc shrugs off.
  */
 const ICON_SIZE = 96;
 
