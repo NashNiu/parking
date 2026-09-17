@@ -638,25 +638,38 @@ export class HomeScene {
         const lamp = container(`Lamp${i}`, leg);
         lamp.setPosition(x, y, 0);
 
-        // The post: a small dark disc at the foot, ROAD-coloured -- the darkest ink this
-        // palette has, for a thin structural piece rather than the object the outline/shadow
-        // rule is written for.
-        const post = dotSprite('post', LAMP_POST_D, ROAD);
-        lamp.addChild(post);
-
         const headY = LAMP_ARM_LEN;
-        // SHADOW FIRST, offset the same as the tree's and the road's own.
-        const shadow = dotSprite('shadow', LAMP_HEAD_D, ROAD_SHADOW);
-        lamp.addChild(shadow);
-        shadow.setPosition(SHADOW_OFFSET_X, headY + SHADOW_OFFSET_Y, 0);
-
         const yellow = COLORS.yellow;
-        const outline = dotSprite('outline', outlineD, shade(yellow, -0.2));
-        lamp.addChild(outline);
-        outline.setPosition(0, headY, 0);
 
-        const head = dotSprite('head', LAMP_HEAD_D, yellow);
-        lamp.addChild(head);
-        head.setPosition(0, headY, 0);
+        // A LAMP IS ONE OBJECT, so its two discs are drawn in three passes rather than as two
+        // finished lamps stacked. The first version gave the head an outline and a shadow and
+        // left the post a bare `ROAD` disc, on the argument that a post is structure rather
+        // than an object -- which is the same argument that got the old trees deleted. A bare
+        // disc beside an outlined one does not read as the foot of the thing above it; it
+        // reads as a second, unfinished thing. Both discs get both treatments.
+        //
+        // The passes also have to be in this order for a reason the per-object version hides:
+        // the post and the head OVERLAP (post radius 10 at y 0, head radius 20 at y 26, so
+        // they meet), and a head drawn before the post's outline would wear a dark crescent
+        // across its lower edge.
+        for (const [d, dy] of [[LAMP_POST_D, 0], [LAMP_HEAD_D, headY]] as const) {
+            const shadow = dotSprite('shadow', d, ROAD_SHADOW);
+            lamp.addChild(shadow);
+            shadow.setPosition(SHADOW_OFFSET_X, dy + SHADOW_OFFSET_Y, 0);
+        }
+        for (const [d, dy, c] of [
+            [LAMP_POST_D, 0, ROAD], [LAMP_HEAD_D, headY, yellow],
+        ] as const) {
+            const outline = dotSprite('outline', d + OUTLINE_PAD, shade(c, -0.2));
+            lamp.addChild(outline);
+            outline.setPosition(0, dy, 0);
+        }
+        for (const [name, d, dy, c] of [
+            ['post', LAMP_POST_D, 0, ROAD], ['head', LAMP_HEAD_D, headY, yellow],
+        ] as const) {
+            const face = dotSprite(name, d, c);
+            lamp.addChild(face);
+            face.setPosition(0, dy, 0);
+        }
     }
 }
