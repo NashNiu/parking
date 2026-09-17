@@ -4,6 +4,21 @@ import {
 } from '../../game/assets/scripts/core/checkin';
 
 /**
+ * The reward table, as LITERALS.
+ *
+ * THE ONLY ASSERTION IN THIS FILE THAT DOES NOT READ `CHECKIN_REWARDS`, and it is here because
+ * every other one does. A test that expects `CHECKIN_REWARDS[n]` is asking the implementation
+ * what it pays and then agreeing with the answer: transpose two entries or drop a digit and the
+ * whole suite still passes. That is fine for the cases about STREAK arithmetic, which is what
+ * they are really about -- but it leaves the figures themselves unpinned, and the figures are
+ * the part a product decision fixed ("先按默认值做": 20/20/30/30/40/40/100, seven days, reset on
+ * a miss). Pin them once, here, so changing them is a deliberate edit to this line.
+ */
+test('the seven-day table pays the agreed figures', () => {
+  expect(CHECKIN_REWARDS).toEqual([20, 20, 30, 30, 40, 40, 100]);
+});
+
+/**
  * Same boot-path contract as `parseWallet`: anything that is not exactly a valid, current-
  * version checkin comes back as `emptyCheckin()`, never an exception. `''` is in the list
  * because that is what WeChat's `getStorageSync` returns for a missing key, where a browser's
