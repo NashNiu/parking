@@ -914,28 +914,43 @@ test('rgbToHsl/hslToRgb round-trip exactly, for real colours from this file', ()
 });
 
 /**
- * The guard above can still see the defect it is written for: a scale-the-channels
- * "conversion" must NOT round-trip a saturated colour the way the real HSL one does.
+ * The docblock's rejected alternative, MEASURED with the shipped conversion.
  *
- * Without this, "round-trips exactly" is indistinguishable from "the extraction stopped
- * matching anything and silently ran zero iterations" -- the same discipline every self-test in
- * this file applies. `naiveScale` stands in for the rejected approach `shade`'s own docblock
- * argues against: multiplying channels by a single factor. It is checked against the same
- * `hue2rgb` extracted above so this self-test is exercising the guard's own machinery, not a
- * hand-written HSL implementation living only in the test.
+ * `shade`'s docblock argues that scaling R, G and B by one factor is not "L-20%", and it gives
+ * figures. This runs those figures. It takes `CONTROL_FACE`, applies the naive `*0.8`, and asks
+ * the REAL extracted `rgbToHsl` what lightness came out -- so the claim in the comment and the
+ * behaviour of the code cannot drift apart.
+ *
+ * AN EARLIER VERSION OF THIS TEST WAS A TAUTOLOGY: it scaled a colour and asserted the result
+ * differed from the input, which is true of any factor other than 1 and says nothing about HSL.
+ * It is worth recording, because it looked exactly like the self-tests in this file that do
+ * work -- a test that cannot fail is the failure mode this file is most prone to.
  */
-test('the HSL round-trip guard would catch RGB-channel scaling instead of HSL', () => {
+test('the docblock\'s rejected RGB scaling really does miss the lightness it claims to hit', () => {
   const src = readSrc('palette.ts');
-  const hueBody = extractFn(src, 'function hue2rgb(p: number, q: number, t: number)');
-  const hue2rgb = new Function('p', 'q', 't', hueBody) as
-    (p: number, q: number, t: number) => number;
-  expect(typeof hue2rgb(0.5, 0.8, 0.5)).toBe('number');
+  const hslBody = extractFn(src, 'function rgbToHsl(r: number, g: number, b: number)');
+  const rgbToHsl = new Function('r', 'g', 'b', hslBody) as
+    (r: number, g: number, b: number) => [number, number, number];
 
-  // A channel-scaling "shade by -20%" is not a round trip at all: there is no HSL step to
-  // invert, so asserting it against the real round-trip guard fails as it should.
-  const naiveScale = (c: [number, number, number], f: number): [number, number, number] =>
-    [Math.round(c[0] * f), Math.round(c[1] * f), Math.round(c[2] * f)];
-  const original: [number, number, number] = [42, 138, 208];
-  const scaled = naiveScale(original, 0.8);
-  expect(scaled).not.toEqual(original);
+  // CONTROL_FACE, the worked example in `shade`'s docblock.
+  const [, , l0] = rgbToHsl(42, 138, 208);
+  expect(l0 * 100).toBeCloseTo(49.02, 1);
+
+  // The naive "L-20%": multiply every channel by 0.8.
+  const scaled: [number, number, number] = [
+    Math.round(42 * 0.8), Math.round(138 * 0.8), Math.round(208 * 0.8),
+  ];
+  expect(scaled).toEqual([34, 110, 166]);
+  const [, sScaled, lScaled] = rgbToHsl(...scaled);
+
+  // It lands at 39.22%, not the 29.02% "L-20" asks for -- 9.8 points moved, not 20. That is the
+  // defect, and it is multiplicative: a lighter face would lose more, a darker one less.
+  expect(lScaled * 100).toBeCloseTo(39.22, 1);
+  expect(lScaled * 100).not.toBeCloseTo(l0 * 100 - 20, 1);
+
+  // And the objection the docblock explicitly does NOT make: saturation survives the scale here,
+  // because below l = 0.5 it is `d / (max + min)` and both halves scale together. Pinned so the
+  // docblock is not "corrected" back to blaming saturation.
+  const [, s0] = rgbToHsl(42, 138, 208);
+  expect(sScaled * 100).toBeCloseTo(s0 * 100, 0);
 });

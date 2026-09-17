@@ -405,18 +405,28 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
  * so pass `-0.2` for "L-20%" -- clamped so the result cannot leave [0,1], with hue and saturation
  * held fixed and alpha carried through unchanged.
  *
- * WHY THIS GOES THROUGH HSL AND IS NOT THREE MULTIPLICATIONS. Scaling R, G and B by one factor
- * looks like the same idea and is not: each channel moves toward zero by a different ABSOLUTE
- * amount, so the channels' spread relative to each other -- which is what hue and saturation are
- * made of -- shrinks too, not just lightness. Measured against `CONTROL_FACE` (42,138,208 -- H
- * 205.3°, S 66.4%, L 49.02%): the naive `*0.8` scale for "L-20%" gives (34,110,166), whose own
- * HSL lightness only drops to about 43% (not 29%) while its saturation drops with it -- a
- * different, duller colour, not a darker version of the same one. `shade(CONTROL_FACE, -0.2)`
- * gives (25,82,123): H 205.1°, S 66.2%, L 29.02% -- hue and saturation held within rounding,
- * lightness moved exactly the 20 points asked for. An outline drawn with the scaled figure would
- * read as a different, washed-out colour next to the badge it rims rather than as a darker edge
- * of the same one, which is the whole reason this is a shared function instead of a
- * multiplication at the call site.
+ * WHY THIS GOES THROUGH HSL AND IS NOT THREE MULTIPLICATIONS, stated carefully because the
+ * obvious objection to `*0.8` is the wrong one. Scaling R, G and B by one factor does NOT
+ * generally wreck saturation: in the `l <= 0.5` branch saturation is `d / (max + min)`, and both
+ * halves of that scale together, so it comes out unchanged. What scaling gets wrong is the
+ * LIGHTNESS ITSELF, and it gets it wrong in a way that varies by colour.
+ *
+ * "L-20%" is an ABSOLUTE delta on a [0,1] lightness. A `*0.8` scale is a MULTIPLICATIVE one.
+ * Measured on `CONTROL_FACE` (42,138,208 -- H 205.3°, S 66.4%, L 49.02%): `*0.8` gives
+ * (34,110,166), whose lightness is 39.22% -- it moved 9.8 points where 20 were asked for, and it
+ * moved that far only because this colour happens to start near the middle. A face at L 80%
+ * would lose 16 points to the same scale and one at L 25% would lose 5. So a fleet of outlines
+ * derived by scaling would each stand a different distance from the face they rim, and the
+ * badges would stop looking like one set of objects.
+ *
+ * `shade(CONTROL_FACE, -0.2)` gives (25,82,123): H 205.1°, S 66.2%, L 29.02% -- hue and
+ * saturation held within rounding, lightness down exactly the 20 points asked for, and down the
+ * same 20 whatever colour it is handed. That last property is the whole reason this is a shared
+ * function rather than a multiplication at the call site.
+ *
+ * (Above `l = 0.5` the saturation branch is `d / (2 - max - min)`, where the denominator does not
+ * scale with `d`, so there scaling moves saturation as well. The argument above does not need
+ * that case and does not rest on it.)
  */
 export function shade(c: Color, dl: number): Color {
   const [h, s, l] = rgbToHsl(c.r, c.g, c.b);
