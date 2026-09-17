@@ -881,9 +881,9 @@ export class GameController extends Component {
         this.unloadLevel();
         if (!this.home && this.canvasNode) {
             this.home = new HomeView(this.canvasNode);
-            // Once, with the view -- the bar is standing furniture and its two entries do
-            // not change. The dot on top of one of them does, so it is repainted below.
-            this.home.fillBarSlots(() => this.openCheckin());
+            // Once, with the view -- the bar is standing furniture and its one reserved
+            // entry does not change. The dot on top of it does, so it is repainted below.
+            this.home.fillCheckin(() => this.openCheckin());
         }
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
@@ -2553,17 +2553,18 @@ export class GameController extends Component {
                 this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
                 return;
             }
-            // The bar's two reserved places, beside the gear and answering on the same terms.
-            // BOTH ARE FILLED NOW (`HomeView.fillBarSlots`), and one of them deliberately has
-            // no handler: the free-coins entry is drawn and inert until there is an ad unit to
-            // point it at. `tapSlot` is a no-op on that one, which is the whole of what
-            // 「点击无反应」 asks for -- so this branch does not need to know which slot it is,
-            // and must not learn, or the rule would be written down in two places.
-            // `!== -1` rather than `>= 0`, because that is what narrows `0 | 1 | -1` to `0 | 1`.
-            const slot = this.home.hitsSlot(ui);
-            if (slot !== -1) {
+            // The check-in place, below the gear and answering on the same terms.
+            if (this.home.hitsCheckin(ui)) {
                 this.sfx?.play('tap');
-                this.home.tapSlot(slot);
+                this.home.tapCheckin();
+                return;
+            }
+            // The merged coin pill, below check-in. It is drawn and answers a tap like its two
+            // neighbours -- `tapCoins` is a no-op until there is an ad unit to point it at, which
+            // is the whole of what 「点击无反应」 asks for; see `TopBar.coinTap`.
+            if (this.home.hitsCoins(ui)) {
+                this.sfx?.play('tap');
+                this.home.tapCoins();
                 return;
             }
             // A release that DRAGGED the rail is not also a tap -- otherwise every swipe

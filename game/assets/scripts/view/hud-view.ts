@@ -2137,7 +2137,7 @@ export class HudView {
      * deliberate rather than an oversight. They say at the branch WHY an answer is not
      * available on that card, which is the part a reader needs; this line makes the general
      * rule true for the next button someone hides, who will not have read them. It is the same
-     * discipline `TopBar.hitsSlot` and `hitsGear` already keep -- the one flag that decides
+     * discipline `TopBar.hitsCheckin` and `hitsGear` already keep -- the one flag that decides
      * whether a control is drawn also decides whether it answers.
      *
      * Every other caller passes a node that is active whenever its own panel is up (the win

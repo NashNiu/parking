@@ -790,23 +790,73 @@ test('the scroll hint fades with the same ramp as RailFade, and hides with the m
 
 
 /**
- * The free-coins entry is drawn and has NO handler, and that is on instruction.
+ * The merged coin/free-coins pill is drawn and has NO handler, and that is on instruction.
  *
  * 「免费金币暂时只能看，点击无反应」 -- it fronts a rewarded video and there is no ad unit to point
- * it at yet. The risk this guards is not that someone deletes the entry; it is that someone
- * reads `onTap: null` as an oversight and "fixes" it with a toast, a disabled state, or an empty
- * function. Any of those changes what the player gets, and none of them would fail anything else
- * in this suite.
+ * it at yet. The free-coins entry used to be a separate reserved place with its own `onTap:
+ * null`; it merged into `TopBar`'s own coin pill (see task 7's brief), and the null handler moved
+ * with it into `coinTap`. The risk this guards is not that someone deletes the pill; it is that
+ * someone reads `coinTap`'s `null` as an oversight and "fixes" it with a toast, a disabled state,
+ * or an empty function. Any of those changes what the player gets, and none of them would fail
+ * anything else in this suite.
  *
- * It pins the NULL rather than the absence of a handler, because those differ in what they say:
- * an omitted key would also mean inert, and would read as forgotten.
+ * It pins the NULL FIELD rather than the absence of a handler, because those differ in what they
+ * say: an omitted field would also mean inert, and would read as forgotten. It also pins that
+ * `tapCoins` reaches it through `?.`, not a direct call -- a direct call on a `null` field would
+ * throw the moment anyone tapped the pill.
  */
-test('the lobby fills the free-coins slot with a null handler, deliberately', () => {
-  const src = readSrc('home-view.ts');
-  expect(src).toContain('this.setSlot(SLOT_FREE_COINS, { icon: this.buildFreeCoinsIcon(), onTap: null });');
-  // And the bar's signature must keep allowing it: a non-nullable handler would force the empty
-  // function this guard exists to prevent.
-  expect(readSrc('top-bar.ts')).toContain('onTap: (() => void) | null');
+test('the lobby merges free-coins into the coin pill, with a null handler, deliberately', () => {
+  const src = readSrc('top-bar.ts');
+  expect(src).toContain('private readonly coinTap: (() => void) | null = null;');
+  expect(src).toContain('this.coinTap?.();');
+  // And the old two-slot machinery is actually gone, not merely unused -- a stray `setSlot` or
+  // `SLOT_FREE_COINS` left behind would mean the merge was cosmetic rather than real. Comments
+  // are stripped first: this file's own docblocks are allowed to name what used to be here (the
+  // same allowance `stripComments`'s own header gives the halo guard below), and only CODE
+  // reappearing is the defect this checks for.
+  const home = stripComments(readSrc('home-view.ts'));
+  expect(home).not.toContain('SLOT_FREE_COINS');
+  expect(home).not.toContain('buildFreeCoinsIcon()');
+});
+
+/**
+ * `barBottomY` is called exactly ONCE on the home screen, in `HomeView`'s own constructor.
+ *
+ * WHAT THIS GUARDS. `TopBar`'s constructor docblock (and `HomeView.barBottom`'s own) spend a
+ * long paragraph each arguing that a second call site is how the rail and the bar's idea of the
+ * shared band drift apart -- `capsuleInset()` only caches ONE read, so two calls that happened to
+ * agree today are not guaranteed to agree tomorrow. Turning the bar from a row into a column
+ * changed nothing about that argument, and it would be exactly the kind of change that tempts a
+ * "simplification" back to `barBottomY(w, h)` inside `top-bar.ts` now that it already imports the
+ * two constants the function is built from.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot build both objects and compare the bands they measured. Counting call
+ * sites in the CODE (comments stripped, so a docblock that has to quote `barBottomY(w, h)` to
+ * explain the rule does not trip its own guard) is what is left.
+ */
+test('barBottomY is called exactly once on the home screen', () => {
+  const files = ['home-view.ts', 'top-bar.ts', 'home-scene.ts', 'hud-view.ts'];
+  const calls = files.reduce(
+    (n, f) => n + (stripComments(readSrc(f)).match(/\bbarBottomY\s*\(/g) ?? []).length,
+    0,
+  );
+  expect(calls).toBe(1);
+});
+
+/**
+ * The guard above can still see the defect it is written for.
+ *
+ * Without this, "one call" is indistinguishable from "the regex stopped matching anything at
+ * all" -- the same discipline every self-test in this file applies.
+ */
+test('the barBottomY guard is not fooled by zero calls or by comments', () => {
+  const zero = stripComments("export function f(w: number, h: number) { return w + h; }");
+  expect((zero.match(/\bbarBottomY\s*\(/g) ?? []).length).toBe(0);
+  const commentedOut = stripComments('// this.barBottom = barBottomY(w, h);');
+  expect((commentedOut.match(/\bbarBottomY\s*\(/g) ?? []).length).toBe(0);
+  const twice = stripComments('const a = barBottomY(w, h);\nconst b = barBottomY(w, h);');
+  expect((twice.match(/\bbarBottomY\s*\(/g) ?? []).length).toBe(2);
 });
 
 /**

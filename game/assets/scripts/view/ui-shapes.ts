@@ -468,15 +468,39 @@ function polyIn(px: number, py: number, pts: [number, number][]): number {
  * The teeth are one test rather than eight shapes -- the angle to the NEAREST tooth centre,
  * folded into a single wedge -- and the wedge's angular half-width is turned into a length by
  * multiplying by the radius, so a tooth has parallel sides instead of widening outward.
+ *
+ * THIS USED TO DRAW A BALD PATCH, NOT MERELY TOO FEW TEETH, and the difference matters because
+ * the fix is not "add more teeth" -- it is "stop losing the ones already specified" for half the
+ * circle. `Math.atan2` returns a NEGATIVE angle for the whole lower-left half of the circle
+ * (roughly -pi to 0), and `%` in JavaScript keeps the sign of its LEFT operand rather than
+ * folding into a positive range the way a mathematical modulo does. For any angle where
+ * `atan2(py, px) + span` was itself negative but small in magnitude -- a band about `2 * span`
+ * (45 degrees) wide -- `(atan2 + span) % (2 * span)` returned that same small negative number
+ * completely UNWRAPPED (the quotient truncates to zero, so there is no wraparound at all), and
+ * subtracting `span` again then put `a` as far as `2 * span` outside the intended `[-span, span)`
+ * wedge. `Math.abs(a)` that large makes `span * 0.46 - Math.abs(a)` strongly negative, so the
+ * tooth term never wins there -- the gear had no tooth over that whole band, and the wrap error
+ * compounds around the rest of the negative-angle half, so what actually rendered was drawn teeth
+ * over less than half the circle and a bald arc over the rest of it -- sampled at the tooth radius
+ * on a fresh render, 170 of 360 degrees came back with no tooth at all. It was NOT a matter of too
+ * few teeth spaced too far apart; the spacing (`2 * span` = 45 degrees, eight teeth) was always
+ * right, and a correctly-folded `a` proves it: the fix below is the same formula with a second
+ * `% (2 * span)` added after shifting by a full period, which is the standard way to force a
+ * possibly-negative JavaScript `%` into `[0, 2 * span)` before subtracting `span` back out.
  */
 function gearCoverage(size: number): (x: number, y: number) => number {
     const span = Math.PI / 8;
+    const period = 2 * span;
     return (x, y) => {
         const px = x / size - 0.5, py = y / size - 0.5;
         const d = Math.hypot(px, py);
         // The exact centre has no angle, and it is inside the hole regardless.
         if (d < 1e-6) return -1;
-        const a = ((Math.atan2(py, px) + span) % (2 * span)) - span;
+        // Folded into [0, period) first -- see the docblock above for why the naive
+        // `(angle + span) % period` alone leaves a band unwrapped -- then shifted back to
+        // [-span, span), the wedge every tooth is tested against.
+        const wrapped = (((Math.atan2(py, px) + span) % period) + period) % period;
+        const a = wrapped - span;
         const tooth = Math.min(0.46 - d, (span * 0.46 - Math.abs(a)) * d);
         return (Math.min(Math.max(0.33 - d, tooth), d - 0.13)) * size + 0.5;
     };

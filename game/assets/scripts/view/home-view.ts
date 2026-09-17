@@ -5,7 +5,7 @@ import {
     dotSprite, liftedPill, PILL_INK, rampSprite, roundedSprite, starSprite, triSprite,
 } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE, GROUND, shade } from './palette';
+import { CONTROL_BASE, CONTROL_FACE, GROUND, shade } from './palette';
 import { TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
@@ -433,31 +433,26 @@ const LOADING_SIZE = 34;
 const LOADING_INK = new Color(64, 76, 108, 255);
 
 /**
- * The two entries in the top bar's reserved places, by index.
+ * The check-in disc: the gear's own diameter (see `top-bar.ts`'s `GEAR_D` / `CHECKIN_D`) and the
+ * project's standard lip.
  *
- * NAMED, because `setSlot(0, ...)` and `setSlot(1, ...)` are the same call with the meaning
- * carried entirely by a digit -- and the two are not interchangeable: one opens a card and one
- * is deliberately inert. `TopBar`'s own arithmetic puts slot 1 nearer the gear, so the live
- * entry is the one closer to the thumb that is already reaching for that corner.
+ * THE FREE-COINS ENTRY THAT USED TO SIT BESIDE THIS ONE IS GONE. It drew a second coin -- with a
+ * plus struck into it -- and did nothing when tapped, and the top bar's own coin readout already
+ * drew a coin a few units away. Two coins on one bar reading as one thing twice is what the merge
+ * fixed: `TopBar`'s coin pill is now both the balance readout and the one drawn-but-inert control
+ * that argument used to describe -- see `coinTap` there for the argument itself, moved rather
+ * than copied. `buildFreeCoinsIcon` and the constants it alone used (`FREE_COIN_D`,
+ * `FREE_COIN_FACE_F`, `PLUS_L`, `PLUS_W`) went with it.
  */
-const SLOT_FREE_COINS = 0;
-const SLOT_CHECKIN = 1;
+const CHECKIN_ICON_D = 96;
+const CHECKIN_ICON_LIFT = 6;
 
-/** The disc a bar entry stands on: the gear's diameter and the project's standard lip. */
-const SLOT_ICON_D = 76;
-const SLOT_ICON_LIFT = 6;
-
-/** The calendar leaf on the check-in entry: a page, a head band, and two rings on it. */
-const CAL_W = 42;
-const CAL_H = 40;
-const CAL_HEAD_H = 13;
-const CAL_RING_D = 9;
-
-/** The coin and the plus on the free-coins entry. */
-const FREE_COIN_D = 46;
-const FREE_COIN_FACE_F = 0.74;
-const PLUS_L = 22;
-const PLUS_W = 6;
+/** The calendar leaf on the check-in entry: a page, a head band, and two rings on it, scaled up
+ * with the disc (96/76 against the row's own numbers). */
+const CAL_W = 53;
+const CAL_H = 51;
+const CAL_HEAD_H = 16;
+const CAL_RING_D = 11;
 
 /** Slack around a tap, in design units: the same padding the HUD's own hit tests use. */
 const TAP_PAD = 10;
@@ -1082,6 +1077,16 @@ export class HomeView {
      * complaint was the halo: it was the only loud marker on the screen and it followed the
      * scroll, so the badge a player had dragged to looked like the badge they were up to. What
      * fixes it is the three state badges, not this function.
+     *
+     * THE COLUMN DID NOT MOVE THIS. `TopBar` went from a 96-tall row across the whole width to a
+     * column of three larger controls running down the left margin, which is taller than the old
+     * row -- but the column sits at x from about -721.6 to -361.6 (see `top-bar.ts`'s own
+     * constructor docblock), and a stop never reaches further out than `ZIG_X` (210) plus its own
+     * radius, nowhere close. `top` is still `this.barBottom` -- the SAME number the column's own
+     * top edge sits at (see `TopBar`'s constructor) -- because the free band this centres on was
+     * never about the bar's SHAPE, only about the one y both files agree is the boundary between
+     * chrome and rail. `RailCap` and `RailFade` did not move either, for the same reason: both
+     * are painted from `this.barBottom`, unchanged, and neither reads the bar's width or shape.
      */
     private railCenterY(): number {
         const top = this.barBottom;
@@ -1368,13 +1373,14 @@ export class HomeView {
     /**
      * Forwarded to the bar rather than exposing it, so `GameController` talks to one screen
      * object. The bar is STANDING, so none of these consults `waiting` the way the rail's own
-     * hit tests do -- the gear and the coin count mean the same thing while the barrier is
-     * down as they do after it lifts.
+     * hit tests do -- the gear, the check-in place and the coin pill mean the same thing while
+     * the barrier is down as they do after it lifts.
      *
-     * ALL FIVE OF THEM, and that is not tidiness. `hitsSlot` can only ever return -1 unless
-     * `setSlot` has populated a place, and the handler `setSlot` was given is only reachable
-     * through `tapSlot` -- forwarding a subset would leave a caller holding one end of a
-     * three-part protocol with no way to reach the other two.
+     * ALL SIX OF THEM, and that is not tidiness. `hitsCheckin` can only ever answer true once
+     * `setCheckin` has populated the place, and the handler it was given is only reachable
+     * through `tapCheckin`; `hitsCoins` answers unconditionally but `tapCoins` is a no-op until
+     * an ad unit exists (see `TopBar.coinTap`) -- forwarding a subset would leave a caller
+     * holding one end of a protocol with no way to reach the other end.
      */
     setCoins(n: number): void {
         this.topBar.setCoins(n);
@@ -1384,62 +1390,39 @@ export class HomeView {
         return this.topBar.hitsGear(ui);
     }
 
-    hitsSlot(ui: Vec3): 0 | 1 | -1 {
-        return this.topBar.hitsSlot(ui);
+    hitsCheckin(ui: Vec3): boolean {
+        return this.topBar.hitsCheckin(ui);
     }
 
-    setSlot(i: 0 | 1, slot: { icon: Node; onTap: (() => void) | null } | null): void {
-        this.topBar.setSlot(i, slot);
+    tapCheckin(): void {
+        this.topBar.tapCheckin();
     }
 
-    tapSlot(i: 0 | 1): void {
-        this.topBar.tapSlot(i);
+    /** The merged coin/free-coins pill. See `TopBar.coinTap` for why tapping it does nothing. */
+    hitsCoins(ui: Vec3): boolean {
+        return this.topBar.hitsCoins(ui);
     }
 
-    /** Show or hide the check-in slot's unread dot. See `fillBarSlots` for which slot that is. */
+    tapCoins(): void {
+        this.topBar.tapCoins();
+    }
+
+    /** Show or hide the check-in place's unread dot. */
     setCheckinDot(on: boolean): void {
-        this.topBar.setSlotDot(SLOT_CHECKIN, on);
+        this.topBar.setCheckinDot(on);
     }
 
     /**
-     * Put the two entries in the bar's reserved places. Called once, from the controller.
+     * Put the check-in entry in the bar's one reserved place. Called once, from the controller.
      *
-     * WHAT GOES WHERE IS DECIDED HERE, not at the call site, so the bar's composition is one
-     * thing to read rather than two calls to correlate. The controller supplies BEHAVIOUR --
-     * one handler -- and the drawing stays on this side of the line.
-     *
-     * SLOT 0 GETS NO HANDLER, and the `null` is the point rather than an omission: 「免费金币暂时
-     * 只能看，点击无反应」. It fronts a rewarded video, there is no ad unit to point it at yet, and
-     * the alternatives were both worse -- an empty place leaves the bar reading as two controls
-     * and a gap, and a greyed-out button claims the entry is unavailable rather than unbuilt.
-     * `TopBar.setSlot` takes a nullable handler precisely so this can be stated instead of faked
-     * with an empty function. When an ad unit exists, this line grows a handler and nothing else
-     * changes.
+     * ONLY ONE ENTRY NOW. The bar used to reserve two places -- check-in and free-coins -- and
+     * this method filled both; the free-coins place is gone, merged into `TopBar`'s own coin
+     * pill (see its `coinTap`), so there is only one external icon left to hand over. The
+     * argument that used to live here about the free-coins place drawing without a handler moved
+     * with it -- see `TopBar.coinTap` for the argument, not a second copy of it.
      */
-    fillBarSlots(onCheckin: () => void): void {
-        this.setSlot(SLOT_CHECKIN, { icon: this.buildCheckinIcon(), onTap: onCheckin });
-        this.setSlot(SLOT_FREE_COINS, { icon: this.buildFreeCoinsIcon(), onTap: null });
-    }
-
-    /**
-     * The disc every bar entry stands on: the gear's own two plates, at the gear's own size.
-     *
-     * A local helper rather than one exported from `top-bar`, because what is shared here is the
-     * TREATMENT (darker plate down, brighter face over it, glyph on the face) and that treatment
-     * is stated in `palette`'s `CONTROL_FACE`/`CONTROL_BASE` pair, which both files already read.
-     * Exporting the six lines that assemble them would put a fourth name in the way of a rule
-     * that is already written down.
-     */
-    private slotDisc(name: string): { holder: Node; face: Node } {
-        const holder = new Node(name);
-        holder.layer = Layers.Enum.UI_2D;
-        holder.addComponent(UITransform).setContentSize(SLOT_ICON_D, SLOT_ICON_D);
-        const base = dotSprite('base', SLOT_ICON_D, CONTROL_BASE);
-        holder.addChild(base);
-        base.setPosition(0, -SLOT_ICON_LIFT, 0);
-        const face = dotSprite('face', SLOT_ICON_D, CONTROL_FACE);
-        holder.addChild(face);
-        return { holder, face };
+    fillCheckin(onCheckin: () => void): void {
+        this.topBar.setCheckin({ icon: this.buildCheckinIcon(), onTap: onCheckin });
     }
 
     /**
@@ -1447,10 +1430,17 @@ export class HomeView {
      *
      * DRAWN, not typed, the same rule the padlock and the gear follow: a glyph one font
      * substitution away from a hollow box is not an icon. At this size the calendar is three
-     * rectangles and two dots, which is as much detail as 47 units carries.
+     * rectangles and two dots, which is as much detail as this disc carries.
      */
     private buildCheckinIcon(): Node {
-        const { holder, face } = this.slotDisc('CheckinIcon');
+        const holder = new Node('CheckinIcon');
+        holder.layer = Layers.Enum.UI_2D;
+        holder.addComponent(UITransform).setContentSize(CHECKIN_ICON_D, CHECKIN_ICON_D);
+        const base = dotSprite('base', CHECKIN_ICON_D, CONTROL_BASE);
+        holder.addChild(base);
+        base.setPosition(0, -CHECKIN_ICON_LIFT, 0);
+        const face = dotSprite('face', CHECKIN_ICON_D, CONTROL_FACE);
+        holder.addChild(face);
         const page = roundedSprite('page', CAL_W, CAL_H, Color.WHITE, 6);
         face.addChild(page);
         page.setPosition(0, -CAL_RING_D / 2, 0);
@@ -1462,27 +1452,6 @@ export class HomeView {
             page.addChild(ring);
             ring.setPosition(side * CAL_W / 4, CAL_H / 2, 0);
         }
-        return holder;
-    }
-
-    /**
-     * 免费金币: a coin with a plus over it, in the same gold `palette` gives the bar's own coin.
-     *
-     * The plus is two bars rather than a typed `+` for the reason above, and it is drawn in the
-     * disc's BASE colour rather than in white so it reads as struck into the coin instead of
-     * floating over it.
-     */
-    private buildFreeCoinsIcon(): Node {
-        const { holder, face } = this.slotDisc('FreeCoinsIcon');
-        const coin = dotSprite('coin', FREE_COIN_D, COIN_RIM);
-        face.addChild(coin);
-        coin.addChild(dotSprite('face', FREE_COIN_D * FREE_COIN_FACE_F, COIN_FACE));
-        const bar = () => roundedSprite('bar', PLUS_L, PLUS_W, CONTROL_BASE, PLUS_W / 2);
-        const across = bar();
-        coin.addChild(across);
-        const down = bar();
-        coin.addChild(down);
-        down.angle = 90;
         return holder;
     }
 
@@ -1517,7 +1486,7 @@ export class HomeView {
      * units up inside an opaque cap, well short of the 2078 `layout()` culls at, and taking
      * taps. A tap on the empty middle of the top bar scrolled the rail to a level nobody could
      * see, and the button under it re-labelled itself to match. Same rule as
-     * `TopBar.hitsSlot`, `hitsGear` and the HUD's `inBox`: what cannot be seen does not answer.
+     * `TopBar.hitsCheckin`, `hitsGear` and the HUD's `inBox`: what cannot be seen does not answer.
      * A badge straddling the line keeps the half of it that is showing.
      */
     hitsStop(ui: Vec3): number {
