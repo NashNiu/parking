@@ -2,10 +2,10 @@ import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
 import {
-    dotSprite, liftedPill, PILL_INK, rampSprite, roundedSprite, starSprite, triSprite,
+    dotSprite, liftedPill, PILL_INK, roundedSprite, starSprite, triSprite,
 } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { CONTROL_BASE, CONTROL_FACE, LAWN, shade } from './palette';
+import { CONTROL_BASE, CONTROL_FACE, shade } from './palette';
 import { CHECKIN_D, COL_SCALE, TopBar } from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
@@ -47,56 +47,36 @@ import { HomeScene } from './home-scene';
  */
 
 /**
- * The rail's top edge: an OPAQUE CAP over the bar's whole band, and a ramp under it.
+ * How far below the top bar a badge has finished dissolving.
  *
- * A BADGE MUST NOT HARD-CUT ANYWHERE. The rail scrolls up past the top bar and `layout()` only
- * culls a stop at 0.75 of the screen height, which is far above the bar -- so without something
- * over it a 128 badge and its star row simply stop existing along a straight line. That line is
- * the artefact the floating plate was reported for (see where `TopBar`'s caption is built): an
- * edge that cuts a moving object reads as a clipping fault, not as a frame.
+ * TWO RULES MEET AT THE TOP OF THE RAIL. A badge must not hard-cut anywhere -- `layout()` culls
+ * a stop only at 0.75 of the screen height, which is off the screen entirely, so nothing stops
+ * one climbing the whole way up. And a badge must not come to rest under the wx capsule, where
+ * it can be seen and cannot be tapped, which is worse than not being there.
  *
- * IT TAKES TWO SPRITES, AND THE FIRST VERSION OF IT SHIPPED WITH ONLY ONE -- worth writing down
- * because the one-sprite version looks right and is exactly wrong. `rampSprite` is opaque along
- * its own TOP edge and gone by its bottom, so a lone ramp with its top at `barBottomY` covers a
- * badge completely as the badge climbs to that line and covers NOTHING above it. The badge
- * vanishes into the ramp and then reappears at full opacity one pixel higher, with a razor cut
- * across the full 1280 exactly at `barBottomY` -- the same artefact, moved up one band. The
- * uncovered band is `w * BAR_MARGIN_F + BAR_H` tall, the bar draws no background of its own, and
- * a badge reaches it after about half a pitch of drag. It is not an edge case.
+ * THIS USED TO BE A COVER OVER THE WHOLE BAND, AND A COVER IS THE WRONG INSTRUMENT. It was an
+ * opaque plate from `barBottomY` to the top of the screen with a ramp under it to dissolve its
+ * edge, and it hid every badge that climbed past the bar -- along with the ROAD, because a plate
+ * cannot choose what it covers. Repainting it in `LAWN` so it matched the ground did not fix
+ * that and was not meant to: 「道路到那里就看不见了，要让道路一直延伸到最顶端」. What the player
+ * could still see was not a change of colour, it was the route stopping short of the screen.
  *
- * So the CAP is what makes the bar's band opaque and the RAMP is what dissolves the edge of the
- * cap. Both are painted in `LAWN` and they meet at `barBottomY`, where both are fully opaque, so
- * the join is invisible and there is no hard edge anywhere on the screen. `HomeScene` used to
- * carry a matching pair down the screen's left and right; they went when the scenery they
- * dissolved did, so this is the only ramp left.
+ * SO THE DISSOLVE MOVED ONTO THE BADGES THEMSELVES. `layout()` eases each stop's own `UIOpacity`
+ * down across this band, which reaches exactly the things that had to go and nothing else: the
+ * street underneath is left alone and runs to the top edge of the screen, clipped there by the
+ * screen like everything else on it. There is no plate and no ramp on this screen any more.
  *
- * `LAWN`, NOT `GROUND`, AND THAT IS THE WHOLE OF ONE REQUIREMENT: 「顶部的背景色改成一样的」. They
- * were the board's pavement blue-grey, which made the top sixth of this screen a flat grey band
- * with a road running up into it and grass everywhere else -- a header, drawn, on a screen that
- * has no header. `LAWN` is the colour of the lowest ground layer the street already lays down
- * (see `home-scene`), so the cap is now INVISIBLE where it is opaque: the grass simply continues
- * to the top of the screen and the road fades out into it.
+ * IT IS ALSO THE TAP GATE NOW, and that is a simplification rather than a coincidence. `hitsStop`
+ * used to carry its own `ui.y > barBottom` refusal, because a badge hidden under an opaque plate
+ * was still there to be tapped. A badge is switched OFF the moment this ease reaches zero, which
+ * happens exactly at `barBottom`, so the same rule is enforced by the thing that draws it.
  *
- * THE CAP IS STILL THERE, and it still has to be. It is doing the same job it always did --
- * covering the badges that `layout()` deliberately leaves alive above the bar -- and the fact
- * that it is now the same colour as the ground under it does not make it optional: without it,
- * a badge would still hard-cut across the full 1280 the moment it passed `barBottomY`. What
- * changed is only which colour it hides them in.
- *
- * WHAT IT COSTS, and it is more than the ramp alone cost: under the bar the road is now hidden
- * ALL the way rather than partly, so the route reads as running off into the grass rather than
- * out from under a band of pavement. That is the trade -- the road up there is scenery, and the
- * thing being protected is the moving badge.
- *
- * THE CAP IS OVERSIZED the way `HomeScene`'s ground is, and for the same reason: a viewport
- * wider or taller than the design box otherwise shows a strip of bare clear colour past its
- * edge. It reaches to `h` rather than to `h / 2`.
- *
- * 110 for the ramp, well over half the 128 badge: enough for a disc that size to be visibly
- * dissolving before its top edge reaches the cap, and not so much that the road looks washed
- * out for a whole screen.
+ * 220, against a badge about 190 tall once its star row is counted -- so a stop spends more than
+ * its own height visibly dissolving before it reaches the bar, rather than winking out inside a
+ * band shorter than itself. The old ramp's 110 only had to soften a plate's edge; this number
+ * has to take a whole object away.
  */
-const RAIL_FADE_H = 110;
+const STOP_FADE_H = 220;
 
 /**
  * The scroll hint: a small triangle under the fade, turned to point up, saying there is more
@@ -108,12 +88,23 @@ const RAIL_FADE_H = 110;
  * counter-clockwise, the same sense the barrier arm swings open in (see `GATE_OPEN_ANGLE`), so
  * +90 carries (1, 0) to (0, 1).
  *
- * IT FADES WITH THE SAME RAMP `RailFade` ALREADY USES, not a second animation invented for it:
- * `layout()` drives its `UIOpacity` with the identical smoothstep ease `rampSprite` paints into
- * `RailFade`'s own texture (`t*t*(3-2*t)`), over the same `RAIL_FADE_H` span of scroll -- so the
+ * IT FADES WITH THE SAME SMOOTHSTEP EVERYTHING ELSE ON THIS SCREEN FADES WITH, not a second
+ * animation invented for it: `layout()` drives its `UIOpacity` with `t*t*(3-2*t)`, the ease the
+ * badges dissolve on and the one `rampSprite` bakes into its texture, over `HINT_FADE_H` -- so
  * hint dissolves in the same visual language as the badges it sits under, rather than snapping
  * on and off. See `updateScrollHint`.
  */
+/**
+ * How much rail left above the top still counts as "there is more", for the hint's own fade.
+ *
+ * A SPAN OF SCROLL, NOT A BAND OF SCREEN. It shared a constant with the badge dissolve for no
+ * better reason than that both were 110 and both eased the same way, and they answer different
+ * questions -- this one is a distance the rail has still to travel, that one is a height. The
+ * first time either needed retuning the other would have moved with it, which is how a number
+ * ends up wrong in a place nobody was editing.
+ */
+const HINT_FADE_H = 110;
+
 const CHEVRON_D = 26;
 /** How far below the fade's own bottom edge the hint sits. */
 const CHEVRON_GAP = 16;
@@ -447,8 +438,10 @@ const LOADING_SIZE = 34;
  * rail is not up yet. 64,76,108 is the same cool navy family the rest of this screen's ink
  * comes from, and it measured 5.04:1 there.
  *
- * IT IS READ ON `LAWN` NOW, not on that grey, since the cap over this band became grass -- see
- * RAIL_FADE_H. RE-MEASURED RATHER THAN ASSUMED, and the number is worth stating exactly because
+ * IT IS READ ON `LAWN` NOW, not on that grey. The cap that used to put the board's pavement
+ * colour behind this line is gone entirely (see STOP_FADE_H), so what is behind these glyphs is
+ * the street's own lowest ground layer -- grass, everywhere on this screen, at every scroll
+ * position. RE-MEASURED RATHER THAN ASSUMED, and the number is worth stating exactly because
  * it is close to a line: 64,76,108 on 147,203,128 is 4.49:1. That is a hair UNDER the 4.5 a
  * body-sized line is held to, and comfortably past the 3:1 that actually applies at this size --
  * `LOADING_SIZE` is 34 design units, about 29 device pixels on a 1080-wide phone, which is large
@@ -693,22 +686,15 @@ export class HomeView {
         this.railRoot.setPosition(0, this.railCenterY(), 0);
         this.scene.setRailCenter(this.railCenterY());
 
-        // AFTER THE RAIL AND BEFORE THE BAR, so both of these draw over the scrolling stops and
-        // under the row that stands on them. See RAIL_FADE_H for why it takes two sprites and
-        // what the one-sprite version does instead.
-        const cap = roundedSprite('RailCap', w * 2, h - this.barBottom, LAWN, 2);
-        this.root.addChild(cap);
-        cap.setPosition(0, (this.barBottom + h) / 2, 0);
-        const fade = rampSprite('RailFade', w * 2, RAIL_FADE_H, LAWN);
-        this.root.addChild(fade);
-        fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);
-
-        // THE SCROLL HINT, just under the fade -- see CHEVRON_D. Built inactive by default
+        // THE SCROLL HINT, just under the band the badges dissolve in -- see CHEVRON_D and
+        // STOP_FADE_H. Nothing is drawn over the rail here any more: the street runs to the top
+        // edge of the screen and the badges take themselves out of the bar's band. Built
+        // inactive by default
         // (see `revealMenu`) and its opacity is driven every frame from `layout()`.
         const chevron = triSprite('ScrollHint', CHEVRON_D, CHEVRON_INK);
         chevron.angle = 90;
         this.root.addChild(chevron);
-        chevron.setPosition(0, this.barBottom - RAIL_FADE_H - CHEVRON_GAP, 0);
+        chevron.setPosition(0, this.barBottom - STOP_FADE_H - CHEVRON_GAP, 0);
         this.scrollHint = chevron;
         this.scrollHintOpacity = chevron.addComponent(UIOpacity);
         this.scrollHintOpacity.opacity = 0;
@@ -1051,8 +1037,9 @@ export class HomeView {
             // `layout`.
             stop.hi.active = state === 'current';
             // Locked reads weaker than either state it sits between: faded (see `LOCK_OPACITY`)
-            // and shrunk (`NODE_LOCK_SCALE`, applied in `layout` against the state, not here).
-            stop.opacity.opacity = state === 'locked' ? LOCK_OPACITY : 255;
+            // and shrunk (`NODE_LOCK_SCALE`). BOTH are applied in `layout` against the state,
+            // not here -- the lock fade and the top-of-rail dissolve multiply into one opacity,
+            // and two writers on one property means whichever ran last wins.
             for (let s = 0; s < stop.stars.length; s++) {
                 // Absent, not empty, on a level never cleared: three grey stars would say it
                 // was cleared with none, which cannot happen (the rating floors at one).
@@ -1330,7 +1317,12 @@ export class HomeView {
             // and taking it from `home-path` is what ties the badge to the road it stands on.
             const c = nodeCenter(i);
             const y = c.y - this.offset;
-            if (Math.abs(y) > edge) {
+            // THE DISSOLVE AND THE CULL ARE THE SAME TEST, from opposite ends of the rail. Below
+            // the screen a stop is simply switched off; above the bar it is switched off because
+            // it has finished fading. `shown` reaching zero is what puts a badge out of reach of
+            // `hitsStop`, which no longer carries a bound of its own -- see STOP_FADE_H.
+            const shown = this.topFade(y);
+            if (Math.abs(y) > edge || shown <= 0) {
                 stop.node.active = false;
                 continue;
             }
@@ -1338,10 +1330,35 @@ export class HomeView {
             const scale = stop.state === 'current'
                 ? this.breath.v
                 : (stop.state === 'locked' ? NODE_LOCK_SCALE : 1);
+            // The lock fade times the dissolve: a locked badge dissolving is 60% of what it
+            // would have been, not 60% again from wherever the dissolve had got to.
+            const base = stop.state === 'locked' ? LOCK_OPACITY : 255;
+            stop.opacity.opacity = Math.round(base * shown);
             stop.node.setPosition(c.x, y, 0);
             stop.node.setScale(scale, scale, 1);
         }
         this.updateScrollHint();
+    }
+
+    /**
+     * How much of a stop is left, for a stop at rail-space `y`: 1 well below the bar, 0 at it.
+     *
+     * RAIL SPACE, NOT CANVAS SPACE, which is the one thing to get right here. `y` is measured
+     * from `railRoot`, which sits at `railCenterY()` -- a stop's canvas y is `railRoot.y + y`.
+     * Comparing `y` against `barBottom` directly would be out by the whole rail centre, which on
+     * a tall phone is about 43 units and on a short one several hundred: the badges would
+     * dissolve in the wrong place, in a way that looks like a tuning problem rather than a
+     * coordinate mistake. So the bar is converted INTO rail space once, here, rather than every
+     * stop being converted out of it.
+     *
+     * The ease is `rampSprite`'s own smoothstep, which is what the scroll hint uses too -- see
+     * CHEVRON_D. A linear fade reads as a badge being turned down; this one reads as a badge
+     * going away.
+     */
+    private topFade(y: number): number {
+        const bar = this.barBottom - this.railRoot.position.y;
+        const t = Math.max(0, Math.min(1, (bar - y) / STOP_FADE_H));
+        return t * t * (3 - 2 * t);
     }
 
     /**
@@ -1350,9 +1367,9 @@ export class HomeView {
      * `remaining` is the offset still between here and the LAST stop, `railOffset(levelCount -
      * 1)` being the offset that centres it: at 0 the rail has scrolled all the way to the final
      * level and there is genuinely nothing left above to hint at. Ramped over the last
-     * `RAIL_FADE_H` of that with the exact smoothstep `rampSprite` bakes into `RailFade`'s own
+     * `HINT_FADE_H` of that with the exact smoothstep the badges dissolve on -- `rampSprite`
      * texture, so the hint eases out in step with the fade rather than switching off underneath
-     * it. Above `RAIL_FADE_H` of rail left, `t` clamps to 1 and the hint sits fully in.
+     * it. Above `HINT_FADE_H` of rail left, `t` clamps to 1 and the hint sits fully in.
      */
     private updateScrollHint(): void {
         if (this.levelCount === 0) {
@@ -1360,7 +1377,7 @@ export class HomeView {
             return;
         }
         const remaining = Math.max(0, railOffset(this.levelCount - 1) - this.offset);
-        const t = Math.min(1, remaining / RAIL_FADE_H);
+        const t = Math.min(1, remaining / HINT_FADE_H);
         this.scrollHintOpacity.opacity = Math.round(t * t * (3 - 2 * t) * 255);
     }
 
@@ -1566,22 +1583,27 @@ export class HomeView {
      * from the middle, and that no longer exists -- see NODE_D. See the box itself below for
      * why no two of them can ever meet.
      *
-     * NOTHING ABOVE `barBottom` ANSWERS, and that bound is not tidiness. `layout()` culls a stop
-     * at 0.75 of the screen height, which is far ABOVE the bar -- deliberately, because a stop
-     * has to be drawn while it is dissolving into the ramp -- and `RailCap` is opaque `LAWN`
-     * from `barBottom` to the top of the screen. Between those two lines there are badges that
-     * are fully invisible and were still taking taps. Worked on a 19.5:9 phone (h = 2770) with
-     * a typical capsule (bottom 80 of 812) and at offset 0: `barBottom` lands at about 978, the
-     * rail centres on about -43, and stop 5 sits at 4 * 290 - 43 = about y 1117 -- some 139
-     * units up inside an opaque cap, well short of the 2078 `layout()` culls at, and taking
-     * taps. A tap on the empty middle of the top bar scrolled the rail to a level nobody could
-     * see, and the button under it re-labelled itself to match. Same rule as
-     * `TopBar.hitsCheckin`, `hitsGear` and the HUD's `inBox`: what cannot be seen does not answer.
-     * A badge straddling the line keeps the half of it that is showing.
+     * NOTHING ABOVE `barBottom` ANSWERS, AND THIS METHOD NO LONGER SAYS SO. It used to carry an
+     * explicit `ui.y > this.barBottom` refusal, and that refusal was not tidiness: `layout()`
+     * culls a stop only at 0.75 of the screen height, which is far above the bar -- deliberately,
+     * so a stop can still be drawn while it is on its way out -- and an opaque cap used to cover
+     * everything from `barBottom` upward. Between those two lines sat badges that were completely
+     * invisible and still taking taps. Worked on a 19.5:9 phone (h = 2770) with a typical capsule
+     * (bottom 80 of 812) at offset 0: `barBottom` lands at about 978, the rail centres on about
+     * -43, and stop 5 sits at 4 * 290 - 43 = about y 1117 -- some 139 units up under the cap,
+     * well short of the 2078 `layout()` culls at. A tap on the empty middle of the top bar
+     * scrolled the rail to a level nobody could see, and the button under it re-labelled itself
+     * to match.
+     *
+     * THE CAP IS GONE AND THE RULE IS NOW ENFORCED BY THE THING THAT DRAWS. `layout()` eases each
+     * stop out across `STOP_FADE_H` and switches it OFF the moment that ease reaches zero, which
+     * is exactly at `barBottom` -- so the `active` test below already refuses everything the
+     * explicit bound used to, and a second copy of the rule could only drift away from the first.
+     * Same rule as `TopBar.hitsCheckin`, `hitsGear` and the HUD's `inBox`: what cannot be seen
+     * does not answer. A badge straddling the line keeps the half of it that is showing.
      */
     hitsStop(ui: Vec3): number {
         if (!this.open() || this.waiting) return -1;
-        if (ui.y > this.barBottom) return -1;
         for (let i = 0; i < this.stops.length; i++) {
             const stop = this.stops[i];
             if (!stop.node.active) continue;

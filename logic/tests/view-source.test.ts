@@ -207,27 +207,37 @@ test('the lobby has no fixed caption, and no plate behind where one was', () => 
 });
 
 /**
- * The top band is the SAME COLOUR as the ground, and it is still opaque.
+ * NOTHING IS DRAWN OVER THE RAIL. The badges take themselves out; the road runs to the top edge.
  *
- * 「顶部的背景色改成一样的」. The cap over the top bar's band and the ramp that dissolves its edge
- * were painted in `GROUND`, the board's pavement blue-grey, which drew a flat grey header across
- * the top sixth of a screen that has no header -- grass everywhere else, a road running up into
- * a band of nothing. Both are `LAWN` now, so the grass continues to the top of the screen.
+ * TWO REQUIREMENTS IN A ROW LANDED ON THE SAME PLATE, and the first answer was wrong in a way
+ * worth keeping a guard against. The rail's top end used to be an opaque cap over the top bar's
+ * whole band, with a ramp under it to soften its edge, both painted in `GROUND` -- so the top
+ * sixth of the screen was a flat pavement-grey header on a screen that has no header. Recolouring
+ * them to `LAWN` answered 「顶部的背景色改成一样的」 and did not answer what came next:
+ * 「道路到那里就看不见了，要让道路一直延伸到最顶端」. A plate cannot choose what it covers, so
+ * matching the ground still took the road with it.
  *
- * THE SECOND HALF OF THIS TEST IS THE HALF THAT MATTERS. Recolouring the cap to match what is
- * under it makes the cap invisible, and an invisible thing is exactly what a later reader
- * deletes as dead. It is not dead: it is what stops a badge hard-cutting across the full 1280
- * the moment it passes `barBottomY`, because `layout()` deliberately keeps stops alive well
- * above that line. So this asserts both sprites still exist, by name, and that neither has
- * quietly gone back to `GROUND`.
+ * WHAT SHIPS INSTEAD is a per-badge dissolve in `layout()`, which reaches the things that had to
+ * go and nothing else. So the assertion is the absence of both sprites -- by name, because a
+ * later reader looking at a rail that runs under a top bar would reasonably reinvent exactly that
+ * cap -- plus the presence of the dissolve that replaced them.
+ *
+ * `GROUND` IS ASSERTED GONE FROM THE WHOLE FILE, not just from those two lines: the import left
+ * with the recolour, and a stray reference could only mean the board's pavement colour had come
+ * back onto a screen whose ground is grass.
  */
-test('the rail cap and its ramp are painted in the ground colour', () => {
+test('nothing covers the top of the rail, and the badges dissolve instead', () => {
   const src = stripComments(readSrc('home-view.ts'));
-  expect(src).toMatch(/roundedSprite\('RailCap',[^;]*, LAWN, \d+\);/);
-  expect(src).toMatch(/rampSprite\('RailFade',[^;]*, LAWN\);/);
-  // Not "these two are not GROUND" but "this screen has no GROUND left on it at all": the
-  // import went with the recolour, and a stray reference could only mean one came back.
+  expect(src).not.toContain('RailCap');
+  expect(src).not.toContain('RailFade');
+  expect(src).not.toContain('rampSprite');
   expect(src).not.toContain('GROUND');
+  // The dissolve that took their place, and the fact that it is measured in RAIL space.
+  expect(src).toContain('const bar = this.barBottom - this.railRoot.position.y;');
+  expect(src).toContain('const t = Math.max(0, Math.min(1, (bar - y) / STOP_FADE_H));');
+  expect(src).toContain('stop.opacity.opacity = Math.round(base * shown);');
+  // And `hitsStop` leans on it rather than keeping a second copy of the same bound.
+  expect(src).not.toContain('if (ui.y > this.barBottom) return -1;');
 });
 
 /**
@@ -329,11 +339,11 @@ test('the lobby button falls back to the save when the rail aims at a locked sto
  * them agree BY CONSTRUCTION, and pinning the argument list here stops the call being helpfully
  * "simplified" back into a second call to `barBottomY`.
  *
- * THE CAP AND THE RAMP ARE FOUND BY NAME, NOT BY THEIR WHOLE CONSTRUCTION LINE, and that is a
- * deliberate retreat from how this test used to find them. It matched each line in full, colour
- * argument included -- so recolouring the cap (which happened, from `GROUND` to `LAWN`) failed a
- * test about ORDER, with a message about an index being -1 that says nothing at all about what
- * actually changed. The colour is a fact with its own guard; this one owns only the sequence.
+ * THE CAP AND THE RAMP ARE NO LONGER IN THIS SEQUENCE AT ALL, because they no longer exist --
+ * the rail's top end is a per-badge dissolve now, with its own guard. They are worth a line of
+ * history here because of how they left this test: it used to find each of them by its whole
+ * construction line, colour argument included, so merely RECOLOURING the cap failed a test about
+ * ORDER with a message about an index being -1. A guard should fail for the thing it is about.
  *
  * THAT IS A STRUCTURAL RULE, NOT A CLAIM ABOUT TIMING, and the difference matters because the
  * timing claim is what this paragraph used to make. `capsuleInset()` spent a while deliberately
@@ -343,23 +353,14 @@ test('the lobby button falls back to the save when the rail aims at a locked sto
  * single read answers. So two calls cannot disagree today. Today is not a guarantee, and the
  * one-read shape costs nothing to keep.
  */
-test('the home screen builds street, then rail, then cap and ramp, then bar', () => {
+test('the home screen builds street, then rail, then bar', () => {
   const src = readSrc('home-view.ts');
   const street = src.indexOf('this.scene = new HomeScene(this.root, w, h, BADGE_MAX_R);');
   const rail = src.indexOf("this.railRoot = new Node('RailStops');");
-  const cap = src.indexOf("const cap = roundedSprite('RailCap',");
-  const fade = src.indexOf("const fade = rampSprite('RailFade',");
   const bar = src.indexOf('this.topBar = new TopBar(this.root, w, this.barBottom);');
   expect(street).toBeGreaterThan(0);
   expect(rail).toBeGreaterThan(street);
-  expect(cap).toBeGreaterThan(rail);
-  expect(fade).toBeGreaterThan(rail);
-  expect(bar).toBeGreaterThan(cap);
-  expect(bar).toBeGreaterThan(fade);
-  // The cap's opaque band reaches the screen's top edge, and the ramp hangs BELOW the cap's
-  // lower edge rather than sharing it -- the two numbers that make the join seamless.
-  expect(src).toContain('cap.setPosition(0, (this.barBottom + h) / 2, 0);');
-  expect(src).toContain('fade.setPosition(0, this.barBottom - RAIL_FADE_H / 2, 0);');
+  expect(bar).toBeGreaterThan(rail);
 });
 
 /**
@@ -872,16 +873,20 @@ test('the halo guard is not fooled into passing on an empty pattern', () => {
 });
 
 /**
- * The scroll hint exists, hides with the rest of the menu, and fades with the SAME ramp
- * `RailFade` already dissolves into the bar -- not a second easing invented for it.
+ * The scroll hint exists, hides with the rest of the menu, and fades with the SAME smoothstep
+ * the badges dissolve on -- not a second easing invented for it.
  *
  * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
  * engine, so it cannot scroll the rail and photograph what the hint does near the bar. What it
- * can pin is that `updateScrollHint` drives the hint's opacity from the identical smoothstep
- * `rampSprite` bakes into `RailFade`'s own texture, and that `revealMenu` hides the hint along
- * with the rail and the button while the barrier is down.
+ * can pin is that `updateScrollHint` drives the hint's opacity from `t*t*(3-2*t)`, the ease
+ * `rampSprite` bakes into its texture and the one `topFade` eases the badges out on, and that
+ * `revealMenu` hides the hint along with the rail and the button while the barrier is down.
+ *
+ * IT USED TO NAME `RailFade`, the ramp sprite that dissolved the old cap's edge into the bar.
+ * That sprite is gone; the ease it was named for is what actually mattered and is what is
+ * pinned.
  */
-test('the scroll hint fades with the same ramp as RailFade, and hides with the menu', () => {
+test('the scroll hint fades with the same ramp as the badges, and hides with the menu', () => {
   const src = readSrc('home-view.ts');
   expect(src).toContain("triSprite('ScrollHint'");
   expect(src).toMatch(/t \* t \* \(3 - 2 \* t\)/);
