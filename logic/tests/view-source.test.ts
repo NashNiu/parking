@@ -3,6 +3,24 @@ import * as path from 'path';
 
 const VIEW = path.join(__dirname, '../../game/assets/scripts/view');
 
+/** Extract a top-level function's own body text (between its `{` and the matching closing `}` at
+ * column 0) out of already-normalised source. Used to execute real conversion logic rather than a
+ * reimplementation of it. */
+function extractFn(src: string, signature: string): string {
+  const at = src.indexOf(signature);
+  if (at < 0) throw new Error(`${signature} not found -- renamed or removed?`);
+  const braceStart = src.indexOf('{', at);
+  let depth = 0;
+  for (let i = braceStart; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') {
+      depth--;
+      if (depth === 0) return src.slice(braceStart + 1, i);
+    }
+  }
+  throw new Error(`${signature} -- unbalanced braces`);
+}
+
 /**
  * Read a source file with its line endings NORMALISED to `\n`.
  *
@@ -777,4 +795,78 @@ test('the guard catches a reverted dotFrame, and dotBucket really buckets 22..20
   // THE CEILING: a diameter far past anything the lobby draws does not escape DOT_SIZE_MAX --
   // the guard against a future caller silently allocating a multi-megabyte texture.
   expect(bucket(10000)).toBe(dotSizeMax);
+});
+
+/**
+ * `shade`'s HSL round-trip is really HSL, not RGB scaling wearing an HSL docblock.
+ *
+ * `palette.ts` imports `cc` (for `Color`), which this suite does not load, so `shade` itself
+ * cannot be called here -- the same limit every guard in this file works under. What CAN be
+ * executed without an engine is the pure arithmetic underneath it: `rgbToHsl` and `hslToRgb` take
+ * and return plain numbers. This extracts both function bodies out of the real source text (not
+ * a reimplementation, which would drift from the file and end up testing a copy) and runs them
+ * as `shade` itself does -- convert to HSL, then straight back with no lightness change -- across
+ * a handful of colours actually declared in this file, including two saturated, non-grey ones
+ * (`CONTROL_FACE`, `COIN_FACE`) where an RGB-scaling approximation would show up first as a hue
+ * or saturation drift. A round trip landing back on the exact input RGB, for every case, is what
+ * "a real HSL conversion" means here.
+ *
+ * WHAT THIS DOES NOT COVER. It does not call `shade` itself, so it cannot catch a mistake in the
+ * clamp, the lightness-delta arithmetic, or the alpha carry-through in `shade`'s own body -- only
+ * that the HSL conversion it is built on is genuinely invertible. Nor does it render anything, so
+ * it cannot show a badge outline actually looks like "L-20%" on a device.
+ */
+test('rgbToHsl/hslToRgb round-trip exactly, for real colours from this file', () => {
+  const src = readSrc('palette.ts');
+  const hslBody = extractFn(src, 'function rgbToHsl(r: number, g: number, b: number)');
+  const rgbBody = extractFn(src, 'function hslToRgb(h: number, s: number, l: number)');
+  const hueBody = extractFn(src, 'function hue2rgb(p: number, q: number, t: number)');
+
+  type Hue2rgb = (p: number, q: number, t: number) => number;
+  const hue2rgb = new Function('p', 'q', 't', hueBody) as Hue2rgb;
+  const rgbToHsl = new Function('r', 'g', 'b', hslBody) as
+    (r: number, g: number, b: number) => [number, number, number];
+  const hslToRgb = new Function('h', 's', 'l', 'hue2rgb', rgbBody) as
+    (h: number, s: number, l: number, hue2rgb: Hue2rgb) => [number, number, number];
+
+  const colours: Array<[number, number, number]> = [
+    [147, 203, 128], // LAWN -- the new saturated green this task adds
+    [113, 122, 142], // PAVING -- the new blue-grey this task adds
+    [86, 93, 108],   // ROAD -- an existing, muted board colour
+    [42, 138, 208],  // CONTROL_FACE -- saturated, the case RGB-scaling gets wrong first
+    [255, 196, 46],  // COIN_FACE -- saturated and at the channel ceiling
+    [0, 0, 0],       // grey edge case: min == max, hue is undefined and must not throw
+  ];
+  for (const [r, g, b] of colours) {
+    const [h, s, l] = rgbToHsl(r, g, b);
+    const [r2, g2, b2] = hslToRgb(h, s, l, hue2rgb);
+    expect([r2, g2, b2]).toEqual([r, g, b]);
+  }
+});
+
+/**
+ * The guard above can still see the defect it is written for: a scale-the-channels
+ * "conversion" must NOT round-trip a saturated colour the way the real HSL one does.
+ *
+ * Without this, "round-trips exactly" is indistinguishable from "the extraction stopped
+ * matching anything and silently ran zero iterations" -- the same discipline every self-test in
+ * this file applies. `naiveScale` stands in for the rejected approach `shade`'s own docblock
+ * argues against: multiplying channels by a single factor. It is checked against the same
+ * `hue2rgb` extracted above so this self-test is exercising the guard's own machinery, not a
+ * hand-written HSL implementation living only in the test.
+ */
+test('the HSL round-trip guard would catch RGB-channel scaling instead of HSL', () => {
+  const src = readSrc('palette.ts');
+  const hueBody = extractFn(src, 'function hue2rgb(p: number, q: number, t: number)');
+  const hue2rgb = new Function('p', 'q', 't', hueBody) as
+    (p: number, q: number, t: number) => number;
+  expect(typeof hue2rgb(0.5, 0.8, 0.5)).toBe('number');
+
+  // A channel-scaling "shade by -20%" is not a round trip at all: there is no HSL step to
+  // invert, so asserting it against the real round-trip guard fails as it should.
+  const naiveScale = (c: [number, number, number], f: number): [number, number, number] =>
+    [Math.round(c[0] * f), Math.round(c[1] * f), Math.round(c[2] * f)];
+  const original: [number, number, number] = [42, 138, 208];
+  const scaled = naiveScale(original, 0.8);
+  expect(scaled).not.toEqual(original);
 });

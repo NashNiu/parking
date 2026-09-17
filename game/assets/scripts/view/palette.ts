@@ -293,3 +293,134 @@ export const CONTROL_BASE = new Color(20, 92, 150, 255);
  */
 export const COIN_FACE = new Color(255, 196, 46, 255);
 export const COIN_RIM = new Color(214, 152, 20, 255);
+
+/**
+ * THE LOBBY'S OWN GROUND, and it is worth saying out loud that this section breaks the rule this
+ * file's own header opens with -- "the lobby is being redrawn as a flat street that has to use
+ * the same colours and materials as the board". `LAWN` and `PAVING` below are NOT board colours,
+ * and nothing above this line lost a caller or changed a value to make room for them.
+ *
+ * They exist because the lobby grew a third ground layer (grass, pavement, road in that order)
+ * and the requirement asked for grass "比路面明度高 20%" (20% lighter than the road) under the
+ * street. There is no green anywhere in the board's six-colour table to answer that with, because
+ * no surface a car ever stands on is grass -- `GROUND` down to `ROAD_LINE` are all tuned against
+ * the six car roofs in colors.ts, which is a constraint grass has no part in.
+ *
+ * THE ALTERNATIVE WAS OFFERED AND DECLINED. A blue-grey that stayed inside the board's family
+ * could have carried the three-layer read on hard edges alone -- a lighter band, a darker band,
+ * then `ROAD` -- spending no new hue at all. The user was shown that option and chose a real
+ * green instead, accepting explicitly that the lobby's ground and the board's ground no longer
+ * come from one shared table. That is a DECISION, made on purpose, not a leak: if a later reader
+ * finds a green sitting in an otherwise blue-grey file and "restores consistency" by deleting it,
+ * they are undoing a choice the user made, not fixing one anybody made by accident.
+ */
+
+/**
+ * The grass, under everything -- the lowest of the lobby's three ground layers.
+ *
+ * PICKED AGAINST `ROAD`, because "比路面明度高 20%" is the actual requirement it has to answer,
+ * not a target for the lawn's own look. `ROAD` sits at 38.04% HSL lightness (86,93,108). Treating
+ * that 20-point ask as a FLOOR rather than a number to land on exactly, this is (147,203,128): H
+ * 104.8° (a yellow-green -- the hue real grass leans toward, rather than a pure 120° green, which
+ * reads as a flat-design icon instead of a lawn), S 41.9%, L 64.90%.
+ *
+ * THAT IS 26.86 POINTS ABOVE `ROAD`, NOT 20, and it is left there rather than dimmed down to hit
+ * the number asked for. A grass this light needs the saturation to stay legible as green instead
+ * of washing out toward `GROUND`'s pale blue-grey, and pulling the lightness down to land closer
+ * to +20 would have also closed the gap to `PAVING` (see below) below what a second layer needs
+ * to read as its own band rather than a shadow on the grass.
+ */
+export const LAWN = new Color(147, 203, 128);
+
+/**
+ * The pavement band either side of the road -- the middle of the lobby's three ground layers,
+ * and the one that has to sit visibly BETWEEN the other two or the street reads as two layers
+ * wearing three names.
+ *
+ * THIS SCREEN HAS ALREADY FAILED THIS EXACT WAY ONCE. The old kerb was `KERB(150,161,180)`
+ * painted under a 96-wide `ROAD`, against `GROUND(189,200,218)` -- an 8% lightness step -- and a
+ * player photographed the result and reported the whole street as out of focus (see
+ * `home-scene.ts`'s docblock on the kerb it deleted, and `core/home-path.ts:99`). A band that
+ * faint is not a subtle layer; it is a rendering fault the eye cannot place, and it shipped once
+ * already on this exact screen.
+ *
+ * SO THE SEPARATIONS HERE ARE MEASURED, NOT ASSUMED. `PAVING` is (113,122,142): H 221.4°, S
+ * 11.4% -- the same blue-grey hue and near-identical saturation as `ROAD`'s own 220.9°/11.3%,
+ * because pavement is concrete, not grass, and stays in the board's cool family -- at L 50.00%.
+ * Against `ROAD` (38.04%) that is a 11.96-point gap; against `LAWN` (64.90%) that is 14.90
+ * points. Both are comfortably wider than the 8% step that already failed here once, so neither
+ * neighbour is left to guess where it ends and the next layer begins.
+ */
+export const PAVING = new Color(113, 122, 142);
+
+/**
+ * RGB -> HSL, each component normalised to [0,1] (`h` as a fraction of a full turn, not degrees).
+ * Standard colour-space conversion, named so that `shade` below is not secretly reimplementing
+ * one at the call site.
+ */
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  h /= 6;
+  return [h, s, l];
+}
+
+/** One channel of an HSL -> RGB conversion; `hslToRgb` calls this once per channel. */
+function hue2rgb(p: number, q: number, t: number): number {
+  if (t < 0) t += 1;
+  if (t > 1) t -= 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 1 / 2) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
+}
+
+/** HSL (each of `h`, `s`, `l` in [0,1]) -> RGB, each channel rounded to an integer in [0,255]. */
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  if (s === 0) {
+    const v = Math.round(l * 255);
+    return [v, v, v];
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const r = hue2rgb(p, q, h + 1 / 3);
+  const g = hue2rgb(p, q, h);
+  const b = hue2rgb(p, q, h - 1 / 3);
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+/**
+ * A colour, shifted in HSL LIGHTNESS by `dl` -- a delta on the same [0,1] scale `l` itself uses,
+ * so pass `-0.2` for "L-20%" -- clamped so the result cannot leave [0,1], with hue and saturation
+ * held fixed and alpha carried through unchanged.
+ *
+ * WHY THIS GOES THROUGH HSL AND IS NOT THREE MULTIPLICATIONS. Scaling R, G and B by one factor
+ * looks like the same idea and is not: each channel moves toward zero by a different ABSOLUTE
+ * amount, so the channels' spread relative to each other -- which is what hue and saturation are
+ * made of -- shrinks too, not just lightness. Measured against `CONTROL_FACE` (42,138,208 -- H
+ * 205.3°, S 66.4%, L 49.02%): the naive `*0.8` scale for "L-20%" gives (34,110,166), whose own
+ * HSL lightness only drops to about 43% (not 29%) while its saturation drops with it -- a
+ * different, duller colour, not a darker version of the same one. `shade(CONTROL_FACE, -0.2)`
+ * gives (25,82,123): H 205.1°, S 66.2%, L 29.02% -- hue and saturation held within rounding,
+ * lightness moved exactly the 20 points asked for. An outline drawn with the scaled figure would
+ * read as a different, washed-out colour next to the badge it rims rather than as a darker edge
+ * of the same one, which is the whole reason this is a shared function instead of a
+ * multiplication at the call site.
+ */
+export function shade(c: Color, dl: number): Color {
+  const [h, s, l] = rgbToHsl(c.r, c.g, c.b);
+  const l2 = Math.max(0, Math.min(1, l + dl));
+  const [r, g, b] = hslToRgb(h, s, l2);
+  return new Color(r, g, b, c.a);
+}
