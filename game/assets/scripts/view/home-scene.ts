@@ -355,7 +355,10 @@ function strokeDashes(
                 // A start at a non-zero phase can only mean the previous chord ran out mid-dash;
                 // within one chord the loop always steps exactly onto a phase boundary. An end
                 // short of `phaseLeft` means this chord ran out before the dash did.
-                const cutStart = phase > 0 ? thick / 2 : 0;
+                // The same 1e-6 `phaseLeft` is floored with, and for the mirror reason: a
+                // `dist` that drifts a hair past a cycle boundary would otherwise read as
+                // "resumed mid-dash" and hang a 4.5-unit overhang off a dash nothing cut.
+                const cutStart = phase > 1e-6 ? thick / 2 : 0;
                 const cutEnd = step < phaseLeft ? thick / 2 : 0;
                 const mid = segStart + step / 2 + (cutEnd - cutStart) / 2;
                 const seg = roundedSprite(

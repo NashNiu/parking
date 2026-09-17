@@ -73,10 +73,10 @@
  * not -- the seventh arithmetic error in this docblock, and the second of them to survive its
  * own fix. Re-read `home-view.ts` before writing a number here.)
  *
- * Every one of those discs -- face, base, edge, highlight -- is a child of the same node
- * `layout()` scales, so
- * EVERY LAYER OF THE CURRENT BADGE SCALES WITH THE BREATHE TWEEN, up to `BREATHE_TO` (1.26), not
- * merely the face.
+ * EVERY LAYER SCALES WITH THE BADGE, up to `BREATHE_TO` (1.26) on the current one, and not
+ * merely the face: all four discs are children of the same node `layout()` scales, so each
+ * one's local OFFSET is multiplied too. That is why the highlight reaches `(70 + 15) x 1.26`
+ * and not `70 x 1.26 + 15` -- a slip this docblock has also made once.
  *
  * THE STAR ROW HANGS BELOW A `done` BADGE ONLY -- `starsFor` returns 0 for `current` and
  * `locked`, so a breathing or locked badge never has to clear a star row, and a `done` badge
