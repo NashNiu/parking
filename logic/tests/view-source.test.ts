@@ -241,12 +241,13 @@ test('nothing covers the top of the rail, and the badges dissolve instead', () =
 });
 
 /**
- * The lobby's left-hand column grows as ONE step, sizes and gaps together.
+ * The lobby's left-hand column is SIZED from one step, in both files that draw it.
  *
- * 「左上角的三个按钮 尺寸 和 间距都 增加 20%」 -- both halves of that, which is why the gap is
- * asserted alongside the diameters. A column whose controls grew while its gaps stayed put reads
- * as tighter rather than larger, and it is the easiest half of the requirement to miss, because
- * nothing looks wrong in a diff that scales three discs and leaves one number alone.
+ * 「左上角的三个按钮 尺寸 和 间距都 增加 20%」 -- the SIZE half of that. The spacing half was
+ * asserted here too for exactly one pass, and it is worth saying why it left: scaling the gap by
+ * the same fifth produced 19, the answer to which was 「间距还是太小」. A fifth of a number that
+ * was already too small is still too small, so `COL_GAP` is a flat number now, chosen rather
+ * than derived, and asserting it is derived would be asserting the mistake.
  *
  * ASSERTED AS THE EXPRESSION, NOT THE RESULT. Pinning `115` would pass just as well if someone
  * typed the literal in and left `COL_SCALE` unused, which is the state this guard exists to
@@ -262,23 +263,68 @@ test('nothing covers the top of the rail, and the badges dissolve instead', () =
  * the disc is asserted to be the bar's own exported constant (no second copy of the number) and
  * the leaf to be derived from the same step.
  */
-test('the lobby column is sized from one scale step, gaps included', () => {
+test('the lobby column is sized from one scale step', () => {
   const src = stripComments(readSrc('top-bar.ts'));
   expect(src).toMatch(/^export const COL_SCALE = 1\.2;$/m);
   for (const c of ['COIN_W', 'COIN_H', 'COIN_D', 'COIN_PAD', 'COIN_SIZE',
-                   'GEAR_D', 'COL_GAP', 'DOT_D']) {
+                   'GEAR_D', 'DOT_D']) {
     expect(src).toMatch(new RegExp(`^const ${c} = Math\\.round\\(\\d+ \\* COL_SCALE\\);$`, 'm'));
   }
   expect(src).toMatch(/^export const CHECKIN_D = Math\.round\(\d+ \* COL_SCALE\);$/m);
+  // The gap is NOT one of them, and the lift follows the disc rather than the step.
+  expect(src).toMatch(/^const COL_GAP = \d+;$/m);
+  expect(src).toMatch(/^export const COL_LIFT = Math\.round\(GEAR_D \* 0\.12\);$/m);
 
   // The control that lives in the other file scales with the same step, and takes its diameter
   // from the place it has to fill rather than writing that number down a second time.
   const home = stripComments(readSrc('home-view.ts'));
-  expect(home).toMatch(/^import \{ CHECKIN_D, COL_SCALE, TopBar \} from '\.\/top-bar';$/m);
+  // Not the whole import list -- that pins every neighbouring symbol and fails on an
+  // unrelated addition. What matters is that the diameter is IMPORTED and not declared.
+  expect(home).toMatch(/import \{[^}]*CHECKIN_D,[^}]*\} from '\.\/top-bar';/);
   expect(home).not.toMatch(/^const CHECKIN_ICON_D/m);
   for (const c of ['CAL_W', 'CAL_H', 'CAL_HEAD_H', 'CAL_RING_D']) {
     expect(home).toMatch(new RegExp(`^const ${c} = Math\\.round\\(\\d+ \\* COL_SCALE\\);$`, 'm'));
   }
+});
+
+/**
+ * Every control in the lobby's column wears the SAME three plates, and the gap clears them.
+ *
+ * 「样式能否做的更卡通一些」. What makes the rail's badges read as toys is a visible SIDE and a
+ * dark rim; the column's controls had a 6-unit lip and no rim at all, which reads as a flat chip
+ * with a drop shadow. All three now go through `toonDisc` / `toonPill` with one `Plates` triple
+ * and one pair of metrics.
+ *
+ * THE MIDDLE CONTROL IS THE ONE THIS GUARD IS REALLY FOR. The bar holds an empty place for
+ * check-in and `home-view` draws what goes in it, so a treatment applied in `top-bar` alone
+ * restyles the gear and the coin plate and leaves the button between them flat -- the same
+ * split that had already let a stale `96` sit in `home-view` while the column grew. So the
+ * assertion reaches into both files, and into the ONE call each of them makes.
+ *
+ * AND THE SPACING HAS TO KNOW ABOUT THE SIDE. Each control hangs `COL_LIFT + COL_STROKE` below
+ * its own face, so a gap measured face-to-face is 18 units smaller than it looks; `drop` is
+ * pinned here because dropping that term is invisible in a diff and is most of the gap.
+ */
+test('the lobby column is drawn as toy plates, and its gap clears their sides', () => {
+  const bar = stripComments(readSrc('top-bar.ts'));
+  expect(bar).toMatch(
+    /toonDisc\(\s*'TopBarGear', GEAR_D, CONTROL_PLATES, COL_LIFT, COL_STROKE,/);
+  expect(bar).toMatch(
+    /toonPill\(\s*'TopBarCoins', COIN_W, COIN_H, COIN_PLATES, COL_LIFT, COL_STROKE,/);
+  expect(bar).toContain('const drop = COL_LIFT + COL_STROKE;');
+  expect(bar).toContain('gearY - GEAR_D / 2 - drop - COL_GAP - CHECKIN_D / 2');
+  expect(bar).toContain('checkinY - CHECKIN_D / 2 - drop - COL_GAP - COIN_H / 2');
+  // The control the OTHER file draws, with the same plates and the same two metrics.
+  const home = stripComments(readSrc('home-view.ts'));
+  expect(home).toMatch(
+    /toonDisc\(\s*'CheckinIcon', CHECKIN_D, CONTROL_PLATES, COL_LIFT, COL_STROKE,/);
+  expect(home).not.toContain('CHECKIN_ICON_LIFT');
+  // A rim has to be darker than the plate it rims, and the blue and the near-white derive
+  // theirs from different plates for a reason -- see CONTROL_EDGE and COIN_PLATES. Pinning
+  // both keeps one from being "tidied" into the other.
+  expect(stripComments(readSrc('palette.ts')))
+    .toContain('export const CONTROL_EDGE = shade(CONTROL_BASE, -0.2);');
+  expect(bar).toContain('edge: shade(PILL_BASE, -0.2)');
 });
 
 /**

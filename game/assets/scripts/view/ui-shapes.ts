@@ -641,9 +641,83 @@ export const PILL_BG = new Color(252, 252, 255);
 export const PILL_INK = new Color(48, 60, 92);
 
 /**
+ * The three plates a TOY control is drawn from, outermost first.
+ *
+ * `edge` is a dark ring that rims the base, `base` is the control's SIDE seen from slightly
+ * above, and `face` is its top. It is the stack the rail's level badges already wear -- see
+ * `home-view`'s `NODE_EDGE` -- lifted out of that file so the lobby's own controls can wear it
+ * too, because 「样式能否做的更卡通一些」 and this is what the cartoon reading on this screen
+ * already consists of.
+ *
+ * THE COLOURS COME FROM THE CALLER, all three of them, rather than being derived here from one.
+ * The badges make their edge `shade(face, -0.2)`, which works because a badge's face carries a
+ * hue to darken; the lobby's coin plate has a near-white face, and a fifth off white is a light
+ * grey that reads as nothing. Its edge is derived from its BASE instead. One rule could not have
+ * served both, and a helper that picked for its callers would have been wrong for one of them.
+ */
+export interface Plates { face: Color; base: Color; edge: Color; }
+
+/**
+ * A round toy control: the three plates of `Plates`, the outer two lifted, returning the face
+ * so the caller can hang a glyph on it.
+ *
+ * `stroke` IS ADDED ON EVERY SIDE of the base, not of the face, and the edge carries the base's
+ * own offset so the two stay concentric. Rimming the FACE instead would need a stroke wider than
+ * the lift just to reach past the base's lowest point -- the same trap `home-view`'s `NODE_EDGE`
+ * docblock works through at length for the badges, with the same answer.
+ */
+export function toonDisc(
+    name: string, d: number, c: Plates, lift: number, stroke: number,
+): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(d, d);
+    const edge = dotSprite('edge', d + stroke * 2, c.edge);
+    holder.addChild(edge);
+    edge.setPosition(0, -lift, 0);
+    const base = dotSprite('base', d, c.base);
+    holder.addChild(base);
+    base.setPosition(0, -lift, 0);
+    const face = dotSprite('face', d, c.face);
+    holder.addChild(face);
+    return { holder, face };
+}
+
+/**
+ * The same stack on a capsule instead of a disc.
+ *
+ * NEITHER SPRITE IS GIVEN A RADIUS, and that is what keeps the rim even. `roundedSprite` falls
+ * back to half the short side, so the face gets `h / 2` and the edge `(h + 2 * stroke) / 2` --
+ * exactly `stroke` more, on every side, which is the definition of concentric for two capsules.
+ * Passing a radius to one and not the other, or the same radius to both, is how a rim comes out
+ * thicker at the ends than along the top.
+ */
+export function toonPill(
+    name: string, w: number, h: number, c: Plates, lift: number, stroke: number,
+): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(w, h);
+    const edge = roundedSprite('edge', w + stroke * 2, h + stroke * 2, c.edge);
+    holder.addChild(edge);
+    edge.setPosition(0, -lift, 0);
+    const base = roundedSprite('base', w, h, c.base);
+    holder.addChild(base);
+    base.setPosition(0, -lift, 0);
+    const face = roundedSprite('face', w, h, c.face);
+    holder.addChild(face);
+    return { holder, face };
+}
+
+/**
  * A readout plate: a white face over a base of the same shape, offset down so it shows as a
  * lip. Returns both, because callers hang their contents off the FACE (so the contents move
  * with it) and position the HOLDER.
+ *
+ * THIS IS THE FLAT VERSION AND IT STAYS FLAT. `toonPill` above is the same plate with a rim and
+ * a deeper lip; the lobby's column moved to it and the HUD's readouts and the lobby's toast did
+ * not, because the ask was about three buttons in a corner and restyling every plate in the game
+ * is a different change with a different reviewer.
  */
 export function liftedPill(
     name: string, w: number, h: number,

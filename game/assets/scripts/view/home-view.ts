@@ -2,11 +2,13 @@ import {
     Color, Label, Layers, Node, Sprite, tween, Tween, UIOpacity, UITransform, Vec3,
 } from 'cc';
 import {
-    dotSprite, liftedPill, PILL_INK, roundedSprite, starSprite, triSprite,
+    dotSprite, liftedPill, PILL_INK, roundedSprite, starSprite, toonDisc, triSprite,
 } from './ui-shapes';
 import { barBottomY, canvasSize, makeLabel, safeInsets } from './ui-layout';
-import { CONTROL_BASE, CONTROL_FACE, shade } from './palette';
-import { CHECKIN_D, COL_SCALE, TopBar } from './top-bar';
+import { CONTROL_BASE, shade } from './palette';
+import {
+    CHECKIN_D, COL_LIFT, COL_SCALE, COL_STROKE, CONTROL_PLATES, TopBar,
+} from './top-bar';
 import {
     LevelState, levelState, Progress, STAR_MAX, starsFor, unlockedThrough,
 } from '../core/index';
@@ -457,10 +459,11 @@ const LOADING_INK = new Color(64, 76, 108, 255);
  * file used to write that 96 down itself, and the copy went out of step the first time the
  * column was resized.
  *
- * THE LIP DOES NOT SCALE WITH THE COLUMN, unlike everything else about this control. It is
- * `PILL_LIFT`'s 6, the same lip the gear beside it wears and the same one every raised plate in
- * the project wears; a lip that grew with its button would make this one control's edge thicker
- * than the rest of the game's.
+ * ITS LIP AND ITS RIM ARE NOT HERE EITHER -- `COL_LIFT` and `COL_STROKE`, imported alongside
+ * the diameter, because this control has to be drawn the same way as the two it stands between
+ * and every one of those numbers is decided by the column rather than by the glyph on it. This
+ * file used to carry a 6-unit lip of its own, which was the gear's lip at the time and stopped
+ * being it the moment the column went cartoon.
  *
  * THE FREE-COINS ENTRY THAT USED TO SIT BESIDE THIS ONE IS GONE. It drew a second coin -- with a
  * plus struck into it -- and did nothing when tapped, and the top bar's own coin readout already
@@ -470,8 +473,6 @@ const LOADING_INK = new Color(64, 76, 108, 255);
  * than copied. `buildFreeCoinsIcon` and the constants it alone used (`FREE_COIN_D`,
  * `FREE_COIN_FACE_F`, `PLUS_L`, `PLUS_W`) went with it.
  */
-const CHECKIN_ICON_LIFT = 6;
-
 /**
  * The calendar leaf on the check-in entry: a page, a head band, and two rings on it.
  *
@@ -1540,14 +1541,12 @@ export class HomeView {
      * rectangles and two dots, which is as much detail as this disc carries.
      */
     private buildCheckinIcon(): Node {
-        const holder = new Node('CheckinIcon');
-        holder.layer = Layers.Enum.UI_2D;
-        holder.addComponent(UITransform).setContentSize(CHECKIN_D, CHECKIN_D);
-        const base = dotSprite('base', CHECKIN_D, CONTROL_BASE);
-        holder.addChild(base);
-        base.setPosition(0, -CHECKIN_ICON_LIFT, 0);
-        const face = dotSprite('face', CHECKIN_D, CONTROL_FACE);
-        holder.addChild(face);
+        // The same three plates, the same lift and the same rim as the gear above it -- all
+        // four numbers imported from `top-bar`, which is the file that decides what the column
+        // looks like even though this is the file that draws this one control.
+        const { holder, face } = toonDisc(
+            'CheckinIcon', CHECKIN_D, CONTROL_PLATES, COL_LIFT, COL_STROKE,
+        );
         const page = roundedSprite('page', CAL_W, CAL_H, Color.WHITE, 6);
         face.addChild(page);
         page.setPosition(0, -CAL_RING_D / 2, 0);

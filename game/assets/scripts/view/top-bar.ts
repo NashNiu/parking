@@ -1,7 +1,11 @@
 import { Color, Label, Layers, Node, UITransform, Vec3 } from 'cc';
-import { dotSprite, gearSprite, liftedPill, PILL_INK, PILL_LIFT } from './ui-shapes';
+import {
+    dotSprite, gearSprite, PILL_BASE, PILL_BG, PILL_INK, Plates, toonDisc, toonPill,
+} from './ui-shapes';
 import { BAR_MARGIN_F, makeLabel } from './ui-layout';
-import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE } from './palette';
+import {
+    COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_EDGE, CONTROL_FACE, shade,
+} from './palette';
 
 /**
  * The lobby's standing top bar: a COLUMN down the left edge, settings above check-in above the
@@ -106,13 +110,54 @@ const GEAR_D = Math.round(96 * COL_SCALE);
  */
 export const CHECKIN_D = Math.round(96 * COL_SCALE);
 /**
- * The vertical gap between stacked controls -- the row's `SLOT_GAP`, turned sideways.
+ * The gap between one control's LOWEST DRAWN EDGE and the next one's top.
  *
- * IT SCALES WITH THE DISCS, AND THAT IS THE REQUIREMENT rather than an accident of writing the
- * file this way: the ask names size AND spacing. A column whose buttons grew while its gaps did
- * not would read as tighter, not as larger.
+ * MEASURED ON WHAT IS DRAWN, NOT ON THE FACES. Each control hangs `COL_LIFT + COL_STROKE` of
+ * side and rim below its face, so a gap measured face-to-face is 18 units smaller than it looks
+ * on the arithmetic -- and that is not a rounding error, it is most of what the gap was. See the
+ * constructor for where those two terms enter the spacing.
+ *
+ * A FLAT NUMBER, NOT A MULTIPLE OF `COL_SCALE`, because scaling it is what failed. It was 16 in
+ * the old row and 19 after the column grew by a fifth, and the answer to that was 「间距还是太
+ * 小」: a fifth of a number that was already too small is still too small. 40 is about a third
+ * of a disc, and it is set directly so the next retune is a number somebody chose rather than a
+ * number that fell out of a different decision.
  */
-const COL_GAP = Math.round(16 * COL_SCALE);
+const COL_GAP = 40;
+
+/**
+ * How thick a control's side is, and how wide the dark line around it.
+ *
+ * 「样式能否做的更卡通一些」. What makes the rail's badges read as toys and made these read as
+ * flat chips was never the colour: it was that a badge is a disc with a visible SIDE and a dark
+ * rim, and these were a disc with a 6-unit lip and nothing around it. `NODE_LIFT` is 12% of a
+ * badge's diameter; the same fraction of 115 is 14, against the 6 these wore -- a lip that was
+ * 5% of the control and read as a drop shadow rather than as thickness. The stroke is
+ * `NODE_EDGE`'s 4 unchanged, because a rim is a line and a line does not scale with its object.
+ *
+ * NOT DERIVED FROM `COL_SCALE`. These are not the column getting bigger, they are the column
+ * being drawn differently, and the two happened in the same file for different reasons -- if the
+ * column is ever resized again the lift should follow the DIAMETER (12% of it) and the stroke
+ * should not move at all.
+ *
+ * EXPORTED FOR THE SAME REASON `CHECKIN_D` IS: the check-in control is drawn in `home-view` and
+ * only HELD here, so a treatment that lived privately in this file would have restyled two of
+ * the column's three controls and left the middle one flat.
+ */
+export const COL_LIFT = Math.round(GEAR_D * 0.12);
+export const COL_STROKE = 4;
+
+/**
+ * The plates for the two blue discs and for the coin plate -- see `ui-shapes.Plates`.
+ *
+ * THE COIN PLATE'S RIM IS DERIVED FROM ITS BASE and the discs' from `palette`, and the reason
+ * is the same in both cases: a rim has to be darker than the plate it rims. `PILL_BG` is
+ * near-white, so a fifth off IT is a pale grey that disappears against the plate; a fifth off
+ * `PILL_BASE` is a grey-blue that reads as a line. `CONTROL_EDGE`'s own docblock works the same
+ * argument through for the blue, where the trap is the opposite way round.
+ */
+export const CONTROL_PLATES: Plates = { face: CONTROL_FACE, base: CONTROL_BASE, edge: CONTROL_EDGE };
+const COIN_PLATES: Plates = { face: PILL_BG, base: PILL_BASE, edge: shade(PILL_BASE, -0.2) };
 /** The cogwheel inside its disc, as a fraction of it -- the HUD's gear wears the same ratio. */
 const GEAR_GLYPH = 0.62;
 
@@ -191,25 +236,34 @@ export class TopBar {
      *
      * On a 1280-wide canvas with `margin = 1280 * 0.03 = 38.4`:
      *
-     *     left          = -w/2 + margin                    = -601.6
-     *     gear   centre = (left + GEAR_D/2,    barBottom - GEAR_D/2)                     = (-544.1, barBottom -  57.5)
-     *     checkin centre= (left + CHECKIN_D/2, gearY - GEAR_D/2 - COL_GAP - CHECKIN_D/2) = (-544.1, barBottom - 191.5)
-     *     coin   centre = (left + COIN_W/2,    checkinY - CHECKIN_D/2 - COL_GAP - COIN_H/2) = (-457.6, barBottom - 325.5)
+     *     left   = -w/2 + margin                                              = -601.6
+     *     drop   = COL_LIFT + COL_STROKE                                       =   18
+     *     gear   centre = (left + GEAR_D/2,    barBottom - GEAR_D/2)           = (-544.1, barBottom -  57.5)
+     *     checkin centre= (left + CHECKIN_D/2, gearY - 57.5 - drop - 40 - 57.5)= (-544.1, barBottom - 230.5)
+     *     coin   centre = (left + COIN_W/2,    checkinY - 57.5 - drop - 40 - 57.5) = (-457.6, barBottom - 403.5)
+     *
+     * THE COLUMN'S TOP IS STILL `barBottom` EVEN THOUGH EVERY CONTROL NOW HAS A RIM. The rim is
+     * drawn around the BASE, which sits `COL_LIFT` low, so its top edge reaches `57.5 + 4 - 14`
+     * = 47.5 from the gear's centre -- inside the face's own 57.5. Nothing pokes above the face,
+     * and `gearY` did not have to move. Below is another matter: the column now hangs 18 units
+     * further down per control, which is what `drop` is for.
      *
      * THE TOP OF THE COLUMN IS `barBottom` ITSELF -- the gear's own top edge, not its centre --
      * which is the same y the old row's BOTTOM edge sat at. That is deliberate, not a coincidence
      * of the arithmetic: the column runs down the left margin from that line, alongside the rail
      * rather than above it.
      *
-     * HOW CLOSE THE COLUMN NOW COMES TO THE RAIL, because `COL_SCALE` spent most of the clearance
-     * this arithmetic used to have and another step would spend the rest. The widest control is
-     * the coin pill, and its right edge is `-457.6 + COIN_W / 2` = -313.6. The furthest LEFT a
-     * badge ever draws is `ZIG_X` plus the widest thing a badge wears -- the current badge's
-     * bright highlight at its breathing scale, `70 * 1.26` = 88.2 -- so -210 - 88.2 = -298.2.
-     * That leaves 15.4 units between them. They do not touch, and they did not before either
-     * (63.4 units at the pre-`COL_SCALE` sizes), but a fifth of the gap is roughly all that is
-     * left. A further step up wants this line RE-DERIVED rather than scaled: the badge side of
-     * it comes from `home-view`, not from here, and it does not move when `COL_SCALE` does.
+     * HOW CLOSE THE COLUMN NOW COMES TO THE RAIL, and it is the number to watch on this screen.
+     * The widest control is the coin plate, and its right edge is now
+     * `-457.6 + COIN_W / 2 + COL_STROKE` = -309.6 -- the rim counts, it is drawn. The furthest
+     * LEFT a badge ever draws is `ZIG_X` plus the widest thing a badge wears, the current badge's
+     * bright highlight at its breathing scale (`70 * 1.26` = 88.2), so -210 - 88.2 = -298.2.
+     *
+     * THAT LEAVES 11.4 UNITS. They do not touch, and the arithmetic says they cannot, but the
+     * margin has gone 63.4 -> 15.4 -> 11.4 over three changes that each looked local: the column
+     * grew by a fifth, then it grew a rim. Anything that widens `COIN_W` or `COL_STROKE` again
+     * has to RE-DERIVE this line rather than assume it still holds, and the badge half of it
+     * comes from `home-view` -- it does not move when anything in this file does.
      *
      * Nothing here needed to move `railCenterY`, the cap or the ramp -- see their own files.
      */
@@ -226,10 +280,14 @@ export class TopBar {
         const gearY = barBottom - GEAR_D / 2;
         this.gear = this.buildGear(left + GEAR_D / 2, gearY);
 
-        const checkinY = gearY - GEAR_D / 2 - COL_GAP - CHECKIN_D / 2;
+        // `drop` is everything a control hangs BELOW its own face: the side it stands on and the
+        // rim around that side. Without it the gap is measured between two faces while the eye
+        // measures it between two drawn objects, and the two answers differ by 18 units.
+        const drop = COL_LIFT + COL_STROKE;
+        const checkinY = gearY - GEAR_D / 2 - drop - COL_GAP - CHECKIN_D / 2;
         this.checkin = this.buildCheckin(left + CHECKIN_D / 2, checkinY);
 
-        const coinY = checkinY - CHECKIN_D / 2 - COL_GAP - COIN_H / 2;
+        const coinY = checkinY - CHECKIN_D / 2 - drop - COL_GAP - COIN_H / 2;
         const coins = this.buildCoins(left + COIN_W / 2, coinY);
         this.coin = coins.holder;
         this.coinLabel = coins.label;
@@ -237,7 +295,9 @@ export class TopBar {
 
     /** The coin readout: the project's two-plate treatment, a coin at its left end, the count. */
     private buildCoins(x: number, y: number): { holder: Node; label: Label } {
-        const { holder, face } = liftedPill('TopBarCoins', COIN_W, COIN_H);
+        const { holder, face } = toonPill(
+            'TopBarCoins', COIN_W, COIN_H, COIN_PLATES, COL_LIFT, COL_STROKE,
+        );
         this.root.addChild(holder);
         holder.setPosition(x, y, 0);
 
@@ -254,8 +314,8 @@ export class TopBar {
         // arithmetic the HUD's passenger count uses for the same reason.
         const coinRight = -COIN_W / 2 + COIN_PAD + COIN_D;
         const count = makeLabel(face, 'TopBarCoinCount', COIN_SIZE, 0, (coinRight + COIN_W / 2) / 2);
-        // `PILL_INK`, not a copy of it. This plate is `liftedPill`'s face, and the ink that
-        // goes on that face travels with it -- see `ui-shapes`, where both now live.
+        // `PILL_INK`, not a copy of it. This plate wears `PILL_BG` as its face, and the ink
+        // that goes on that face travels with it -- see `ui-shapes`, where both live.
         count.color = PILL_INK;
         count.isBold = true;
         count.string = '0';
@@ -274,16 +334,11 @@ export class TopBar {
      * got when this bar needed the HUD's pill. Nothing about the colour changed.
      */
     private buildGear(x: number, y: number): Node {
-        const holder = new Node('TopBarGear');
-        holder.layer = Layers.Enum.UI_2D;
-        holder.addComponent(UITransform).setContentSize(GEAR_D, GEAR_D);
+        const { holder, face } = toonDisc(
+            'TopBarGear', GEAR_D, CONTROL_PLATES, COL_LIFT, COL_STROKE,
+        );
         this.root.addChild(holder);
         holder.setPosition(x, y, 0);
-        const base = dotSprite('base', GEAR_D, CONTROL_BASE);
-        holder.addChild(base);
-        base.setPosition(0, -PILL_LIFT, 0);
-        const face = dotSprite('face', GEAR_D, CONTROL_FACE);
-        holder.addChild(face);
         face.addChild(gearSprite('glyph', GEAR_D * GEAR_GLYPH, Color.WHITE));
         return holder;
     }

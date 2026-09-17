@@ -276,6 +276,19 @@ export const AREA_SHADOW_ALPHA = 30;
  */
 export const CONTROL_FACE = new Color(42, 138, 208, 255);
 export const CONTROL_BASE = new Color(20, 92, 150, 255);
+/**
+ * The dark rim around a control wearing those two -- see `ui-shapes.toonDisc`.
+ *
+ * ONE STEP BELOW THE BASE, NOT BELOW THE FACE, which is where this differs from the rail badges'
+ * `NODE_*_EDGE` trio. A badge's base is a mid tone and `shade(face, -0.2)` lands below it. This
+ * base is already dark: face L 49.02%, base L 33.33%, so the badges' rule would put the rim at
+ * 29.02% -- ABOVE the base it is supposed to outline, which is not a rim at all, it is a lighter
+ * ring behind a darker one. Off the base it lands at 13.33% and reads as a line.
+ *
+ * `shade` is declared further down this file and called here. That is a hoisted function
+ * declaration, not a `const`, so the call is resolved before this module's initialisers run.
+ */
+export const CONTROL_EDGE = shade(CONTROL_BASE, -0.2);
 
 /**
  * The coin, as two concentric discs: the darker edge first, the bright face on it.
