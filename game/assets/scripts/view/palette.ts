@@ -225,17 +225,6 @@ export const ROAD = new Color(86, 93, 108);
 /** Held at the +69 it had over ROAD, for the reason spelled out on LOT_DASH. */
 export const ROAD_LINE = new Color(156, 162, 176);
 /**
- * A colour with no surface to sit on yet: this board's car park is one slab, with no kerb
- * between the pavement and the road -- there is no pavement, so nothing here has ever needed
- * this colour. It exists for the lobby, whose street is going to need one.
- *
- * Placed between GROUND (189,200,218) and ROAD (86,93,108), BIASED TOWARD GROUND rather than
- * sitting at their midpoint (which would be about 137,146,163). A kerb is the edge of the
- * PAVEMENT, not the edge of the road, so it should read as the ground lifting into a lip at
- * its border, not as the road fading pale toward it.
- */
-export const KERB = new Color(150, 161, 180);
-/**
  * THE ONE DELIBERATE DEPARTURE FROM shadow.ts's `SHADOW_ALPHA` (44), and the area is the whole
  * argument. This shadow is about fifteen times the bay's, spread across the one part of the
  * screen that is meant to read as open pavement, and at 44 that much translucent ink stops being

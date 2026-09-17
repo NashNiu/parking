@@ -1,9 +1,8 @@
 import { Color, Layers, Node, UITransform } from 'cc';
-import { legSamples, nodeCenter, PathPoint, ZIG_X } from '../core/home-path';
-import { dotSprite, rampSprite, roundedSprite } from './ui-shapes';
-import { COLORS } from './colors';
-import { GROUND, KERB, ROAD } from './palette';
-import { SHADOW_ALPHA, SHADOW_INK } from './shadow';
+import { legSamples, nodeCenter, PathPoint } from '../core/home-path';
+import { rampSprite, roundedSprite } from './ui-shapes';
+import { GROUND, ROAD } from './palette';
+import { SHADOW_INK } from './shadow';
 
 /**
  * The lobby's street: flat, orthographic, top-down, and drawn entirely at runtime by
@@ -19,15 +18,24 @@ import { SHADOW_ALPHA, SHADOW_INK } from './shadow';
  * opacity its two straight edges showed as a pair of hard colour steps running the height of
  * the screen, which was the thing people actually reported.
  *
- * FOUR ELEMENTS, and the list is closed: road surface, kerb, trees, street lamps. NO BUILDINGS
- * -- from directly above a building is a rectangle, and a rectangle that is trying to be a
- * building invites the eye to work out what it is when the answer is "nothing". No cars
- * either: the cars belong on the board.
+ * TWO ELEMENTS NOW, and it used to be four: road surface, kerb, trees, street lamps. The kerb,
+ * the trees and the lamps are gone. The KERB went because it was never read as a kerb: a
+ * 10-unit band at an 8% lightness step off `GROUND` reads as a soft blurred ring, not as a lip --
+ * and that ring, not any actual blur, is what a player photographed and reported as the whole
+ * street being out of focus (see `roads`, below, for what replaced it). TREES AND LAMPS went
+ * because neither carries an outline or a shadow strong enough to read as an object at this
+ * scale: from directly above, a tree crown and a lamp head are both just a colour dot. What is
+ * left is the road surface and the hard shadow it casts. NO BUILDINGS -- from directly above a
+ * building is a rectangle, and a rectangle that is trying to be a building invites the eye to
+ * work out what it is when the answer is "nothing". No cars either: the cars belong on the
+ * board.
  *
- * THE COLOURS ARE THE BOARD'S OWN. `GROUND`, `ROAD` and `KERB` come from `palette.ts`, which
- * is the same file the parking board reads, so the lobby cannot drift away from the game the
- * way the photograph had already drifted. The living things -- tree crowns, lamp heads -- come
- * from `colors.ts`, the six colours the cars and passengers are painted in.
+ * THE COLOURS ARE THE BOARD'S OWN. `GROUND` and `ROAD` come from `palette.ts`, which is the
+ * same file the parking board reads, so the lobby cannot drift away from the game the way the
+ * photograph had already drifted. The shadow's ink, `SHADOW_INK`, is also read from there -- its
+ * colour only, not its geometry. `shadow.ts`'s `shadowThrow` derives an offset from the scene's
+ * key light and the board's tilt, and this canvas has neither: it is flat and orthographic, so
+ * the offset here is a fixed, chosen constant instead of a derived one. See `build`.
  *
  * THE GEOMETRY IS NOT HERE. Where the stops sit and how the road travels between them lives in
  * `core/home-path`, engine-free and under test, because "the road really passes through the
@@ -44,9 +52,6 @@ import { SHADOW_ALPHA, SHADOW_INK } from './shadow';
  * this one is a road the rail's stops sit ON.
  */
 const ROAD_W = 96;
-/** How much wider the kerb is than the road -- 10 of pavement lip showing down either side. */
-const KERB_PAD = 20;
-const KERB_W = ROAD_W + KERB_PAD;
 
 /**
  * The fade down the far left and right of the screen.
@@ -55,99 +60,36 @@ const KERB_W = ROAD_W + KERB_PAD;
  * to reach for a translucent overlay again here. The old one was a see-through slab laid over
  * a photograph, and its two HARD EDGES were the complaint. This one has no hard edge anywhere:
  * it is a `rampSprite`, opaque at one side and fully gone at the other, tinted `GROUND` -- the
- * exact colour of the pavement it is lying on -- so over plain pavement it is a no-op and over
- * anything standing in it (a tree, a lamp) it is a dissolve. The street stops having an outer
- * boundary instead of being cut off at one.
+ * exact colour of the pavement it is lying on -- so over plain pavement it is a no-op.
  *
  * 70, from the 60-80 the requirement asked for.
  */
 const FADE_W = 70;
 
 /**
- * A tree from directly above is two circles: the crown, and the crown's shadow beside it.
+ * The road's shadow: the same polyline as the road, the same width, drawn first and nudged
+ * down-right by (`SHADOW_OFFSET_X`, `SHADOW_OFFSET_Y`) in canvas units -- x right, y DOWN, which
+ * is negative canvas y.
  *
- * `TREE_SHADOW_OFF` throws the shadow UP the screen. That is the sign convention `shadow.ts`
- * spends a page arriving at for the board, where it falls out of the key light and the board's
- * tilt. Neither of those exists on this canvas -- `shadow.ts` says as much about the HUD -- so
- * the direction here is a free choice, and matching the board is the only choice that leaves
- * one light in the product.
+ * `SHADOW_INK` AT ALPHA 64, NOT `SHADOW_ALPHA` (44) OR `CONTACT_ALPHA` (112). The requirement
+ * asked for "the same shadow constants the board's cars use" and also asked for alpha 0.25 (64
+ * of 255), and those two halves conflict -- neither of the board's two alphas is 64. Ruling: the
+ * explicit alpha wins, and `SHADOW_INK` is the shared constant that is honoured. This is a
+ * deliberate departure from `shadow.ts`, not drift, for a reader who goes looking for 64 there
+ * and does not find it.
+ *
+ * `shadowThrow` IS NOT USED HERE, DELIBERATELY. It throws a shadow's offset from the scene's key
+ * light across a board that tilts under it (`BOARD_TILT`), and neither of those exists on this
+ * canvas: the lobby is flat and orthographic. Importing it here would apply a 3D board's light
+ * geometry to a 2D street that has none, which is exactly the kind of thing that looks like a
+ * fix later and is not one.
+ *
+ * "blur <= 4" has no engine counterpart to satisfy: these are flat sprites with an antialiased
+ * edge and nothing more, so the requirement is satisfied by construction.
  */
-const TREE_D = 88;
-const TREE_SHADOW_OFF = 8;
-/** How far the crown is walked back from `COLORS.green`. A lit car is not a tree. */
-const TREE_DIM = 0.7;
-/** The sizes a crown is allowed to come out at. See `dress` for why they vary at all. */
-const TREE_MIN = 0.85;
-const TREE_MAX = 1.15;
-
-/**
- * A street lamp from above: the pool of light it throws, the arm reaching out over the road,
- * and the head at the end of the arm.
- *
- * The pool is wide and very faint, and it is allowed to REACH THE ROAD: a lamp standing at the
- * inner end of the verge puts its pool's near edge at 354 - 54 - 60 = 240, inside the kerb's
- * 268. That is what a street lamp is for; a pool of light that stops politely at the pavement's
- * edge is a decal. A lamp further out keeps its light on the pavement, which is the same lamp
- * at a different distance rather than a different rule.
- */
-const LAMP_POST_W = 10;
-const LAMP_REACH = 54;
-const LAMP_HEAD_D = 26;
-const LAMP_POOL_D = 120;
-const LAMP_POOL_ALPHA = 26;
-/** One lamp every other leg. One per leg is a row of lamps; this is a street. */
-const LAMP_EVERY = 2;
-
-/**
- * Where the verge starts: the nearest a tree or a lamp's foot may stand to the centreline.
- *
- * Derived rather than typed, because it has to survive a change to any of its three terms. A
- * leg is a Bezier whose four control points all have x of +-`ZIG_X`, and a Bezier stays inside
- * its control hull, so NO part of the road surface is ever further out than
- * `ZIG_X + ROAD_W / 2`. One more road-width of clear pavement past that is the gap, which puts
- * the verge at 354 against a kerb reaching at most 268.
- */
-const VERGE_IN = ZIG_X + ROAD_W / 2 + ROAD_W;
-/** The narrowest the verge band may collapse to, for a viewport narrower than the design one. */
-const VERGE_MIN_BAND = 60;
-
-/**
- * An integer hash: the same `i` always gives back the same number in [0, 1).
- *
- * `Math.random` would be a BUG here rather than a shortcut. `layout()` runs on every frame of
- * a drag, and a position computed from a random source moves a few units per frame -- which
- * reads as the trees vibrating. A position has to be a pure function of the thing it belongs
- * to, and then it does not matter how often anything is recomputed.
- *
- * Checked before being relied on, over i = 0..2000: range [0.000266, 0.999883], the ten
- * deciles hold 177-217 of 2000 against an expected 200, and the mean absolute step between
- * consecutive i is 0.3303 against the 0.3333 an independent uniform sequence gives -- so
- * neighbouring legs are uncorrelated, which is the property that actually matters when the
- * numbers are used to scatter scenery.
- */
-function hash01(i: number): number {
-    const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
-    return x - Math.floor(x);
-}
-
-/**
- * Independent streams from the one hash.
- *
- * A tree's x and its y both want a number for the same leg, and `hash01(i)` has only one to
- * give. Striding by `HASH_STREAMS` gives each question its own sequence that no other
- * question's `i` can ever land on. Each stream was checked separately over 4000 legs: every
- * decile within 357-454 of an expected 400, and no agreement between streams at small `i`.
- */
-const HASH_STREAMS = 8;
-const S_TREE_X = 0;
-const S_TREE_Y = 1;
-const S_TREE_D = 2;
-const S_LAMP_X = 3;
-const S_LAMP_Y = 4;
-
-function pick(i: number, stream: number): number {
-    return hash01(i * HASH_STREAMS + stream);
-}
+const SHADOW_OFFSET_X = 2;
+const SHADOW_OFFSET_Y = -3;
+const ROAD_SHADOW = new Color(SHADOW_INK.r, SHADOW_INK.g, SHADOW_INK.b, 64);
 
 /** A bare node that can hold UI children -- four call sites want the same three lines. */
 function container(name: string, parent: Node): Node {
@@ -156,10 +98,6 @@ function container(name: string, parent: Node): Node {
     node.addComponent(UITransform);
     parent.addChild(node);
     return node;
-}
-
-function lerp(a: number, b: number, t: number): number {
-    return a + (b - a) * t;
 }
 
 /**
@@ -231,37 +169,25 @@ export class HomeScene {
      */
     private street: Node;
     /**
-     * ONE PASS PER LAYER, NOT ONE PASS PER LEG, and this is a bug fix rather than tidiness.
-     *
-     * Every leg used to hold its own kerb and its own road, which enforced kerb-before-road
-     * WITHIN a leg and not between two of them. Legs are siblings, so leg i+1 draws after leg i
-     * in full -- and leg i+1's KERB reaches `KERB_W / 2` (58) from the stop they share while its
-     * own ROAD only reaches `ROAD_W / 2` (48). The 10-unit annulus in between, where leg i's
-     * road runs, was repainted kerb and never restored: a 101 x 57 kerb-coloured crescent,
-     * about 1175 square units, immediately below EVERY interior stop. It hid under the stop
-     * chip, but the chip was translucent -- it rested at 190 of 255 -- so about a quarter of a
-     * 64-68-72 colour step came through it.
-     *
-     * THAT LAST SENTENCE IS NOW HISTORY, and the fix is not. The badges are opaque at every
-     * scroll position since they started meaning something (see `home-view`'s NODE_D), and a
-     * 101 x 57 crescent at the stop's own centre is well inside a 205 badge -- so the same
-     * defect would be invisible today. Drawing order is not something to get right only where
-     * it happens to show: the next leg, the next decoration or the next change of badge size
-     * is another chance for it to come out from under whatever is covering it.
-     *
-     * Two containers instead. All the kerb in the scene is drawn before any of the road, so the
-     * invariant holds globally and cannot be broken by adding a leg.
+     * ONE PASS PER LAYER, NOT ONE PASS PER LEG: every leg's shadow is drawn before any leg's
+     * road, across the whole street, rather than each leg drawing its own shadow-then-road pair
+     * -- because legs are siblings that overlap at the stop they share, and a leg drawing both
+     * of its layers before its neighbour would let that neighbour's later layer paint over this
+     * leg's already-drawn one at the shared seam. (This split used to separate the kerb from
+     * the road for exactly that reason; the kerb is gone, the ordering rule that protected it
+     * is not -- the next pass added here needs its own layer, not a spot inside an existing
+     * leg's node.)
      */
-    private kerbs: Node;
+    private shadows: Node;
     private roads: Node;
     /**
      * One node per leg in each container, so culling a leg is two `active` assignments rather
      * than a walk over its sprites. The two arrays are the same length and index together.
      */
-    private kerbLegs: Node[] = [];
+    private shadowLegs: Node[] = [];
     private roadLegs: Node[] = [];
     /**
-     * Set unconditionally by `build`, which `kerbLegs.length` is not: a one-level game has no
+     * Set unconditionally by `build`, which `roadLegs.length` is not: a one-level game has no
      * legs at all, so the re-entry guard cannot be a count of them without letting a second
      * call append a second pair of fades.
      */
@@ -298,32 +224,30 @@ export class HomeScene {
         this.root.addChild(ground);
 
         this.street = container('StreetScroll', this.root);
-        // Appended in this order, which IS their draw order: kerb under road. See `kerbs`.
-        this.kerbs = container('Kerbs', this.street);
+        // Appended in this order, which IS their draw order: shadow under road. See `shadows`.
+        this.shadows = container('Shadows', this.street);
         this.roads = container('Roads', this.street);
     }
 
     /**
-     * Build the road, the kerb, the trees and the lamps, now that the level count is known.
+     * Build the road and its shadow, now that the level count is known.
      *
      * Called from `HomeView.setLevels`, the same moment the stops themselves are built -- so
-     * the road and the things riding on it come into existence together or not at all.
+     * the road comes into existence together with the things riding on it or not at all.
      */
     build(levelCount: number): void {
         if (this.built) return;
         this.built = true;
         for (let i = 0; i < levelCount - 1; i++) {
             const pts = legSamples(i);
-            const kerbLeg = container(`Leg${i}`, this.kerbs);
-            strokePath(kerbLeg, pts, KERB_W, KERB, 'kerb');
-            this.kerbLegs.push(kerbLeg);
+
+            const shadowLeg = container(`Leg${i}`, this.shadows);
+            strokePath(shadowLeg, pts, ROAD_W, ROAD_SHADOW, 'shadow');
+            shadowLeg.setPosition(SHADOW_OFFSET_X, SHADOW_OFFSET_Y, 0);
+            this.shadowLegs.push(shadowLeg);
 
             const roadLeg = container(`Leg${i}`, this.roads);
             strokePath(roadLeg, pts, ROAD_W, ROAD, 'road');
-            // The scenery rides with the road rather than in a third container, and it is safe
-            // there: the verge starts at 354 and no road surface reaches past 258, so a later
-            // leg's road cannot paint over an earlier leg's tree.
-            this.dress(roadLeg, i);
             this.roadLegs.push(roadLeg);
         }
         this.buildFades();
@@ -359,18 +283,18 @@ export class HomeScene {
             const a = nodeCenter(i).y - offset;
             const b = nodeCenter(i + 1).y - offset;
             // The same verdict to both halves of the leg. They are only in two containers so
-            // that all the kerb draws under all the road; they are one leg for every other
-            // purpose, and a kerb left on with its road culled would be a pale ghost of the
+            // that all the shadow draws under all the road; they are one leg for every other
+            // purpose, and a shadow left on with its road culled would be a pale ghost of the
             // route running off the top of the screen.
             const on = Math.min(Math.abs(a), Math.abs(b)) <= visibleHalfHeight;
-            this.kerbLegs[i].active = on;
+            this.shadowLegs[i].active = on;
             this.roadLegs[i].active = on;
         }
     }
 
     /**
-     * The two fades, added to `root` AFTER `street` so they sit over the scenery, and outside
-     * `street` so they do not scroll away with it.
+     * The two fades, added to `root` AFTER `street` so they sit over it, and outside `street`
+     * so they do not scroll away with it.
      *
      * `rampSprite` is opaque along its own TOP edge and gone by its bottom. Turned a quarter
      * circle it is opaque along one SIDE: the right-hand one (`angle = -90`, which carries
@@ -380,9 +304,11 @@ export class HomeScene {
      *
      * WHAT IT DOES NOT DO, said plainly because the requirement was written for the old
      * straight strip and does not entirely survive the road becoming a curve: it cannot hug the
-     * kerb. The kerb wanders 420 units across and this is a straight band. Over plain pavement
-     * it is GROUND over GROUND and changes nothing; what it actually softens is the outer edge
-     * of the SCENERY, so the furthest trees dissolve instead of being sliced by the viewport.
+     * road. The road wanders 210 units across and this is a straight band, well clear of it, so
+     * over this pavement it is GROUND over GROUND and changes nothing on screen. It used to also
+     * soften the outer edge of the tree-and-lamp scenery that stood further out on the verge;
+     * that scenery is gone (see the header), so this fade is currently a no-op left in place on
+     * the chance a future pass puts something back out at the screen's edge for it to dissolve.
      */
     private buildFades(): void {
         const { w, h } = this;
@@ -392,116 +318,5 @@ export class HomeScene {
             fade.angle = side < 0 ? 90 : -90;
             fade.setPosition(side * (w / 2 - FADE_W / 2), 0, 0);
         }
-    }
-
-    /**
-     * One tree beside every leg, and one lamp beside every other one.
-     *
-     * They go INSIDE the leg's own road node, which means `layout`'s `active` assignment culls
-     * the scenery along with the road it stands beside, at no extra cost.
-     *
-     * NOTHING IS MIRRORED AND NO TWO AGREE. The distance out, the distance along and the
-     * crown's size are three independent draws from `pick`; only the SIDE is regular, for the
-     * reason spelled out below. The lamp goes on the opposite verge from the tree, so one leg
-     * never carries both on one side. `props.ts` learned this on the board the expensive way:
-     * four props at one y, one size, mirrored exactly across the centreline, reported --
-     * correctly -- as looking fake.
-     */
-    private dress(leg: Node, i: number): void {
-        // WHICH SIDE IS NOT A HASH, and that was the first attempt: drawing the side from
-        // `pick` put six of nine trees in a row on the left verge and left the right one empty
-        // for a third of the route, which is what an unbiased coin does over nine tosses and
-        // reads as a hedge rather than as scenery.
-        //
-        // Pairs instead. `i % 4 < 2` swaps sides every SECOND leg, so the count comes out even
-        // over any stretch without the strict left-right-left that makes a row of trees read as
-        // fence posts. It also puts a lamp leg (every second one) on each side in turn, which
-        // strict alternation would not: with lamps on even legs only, a side that flips every
-        // leg gives every lamp the same verge.
-        const treeSide = i % 4 < 2 ? 1 : -1;
-        const y0 = nodeCenter(i).y;
-        const y1 = nodeCenter(i + 1).y;
-
-        const crownD = TREE_D * lerp(TREE_MIN, TREE_MAX, pick(i, S_TREE_D));
-        // The band is closed against the WIDEST crown rather than against TREE_D, so the size
-        // drawn above can never push a tree off the edge of the canvas.
-        const treeX = treeSide * this.vergeX(pick(i, S_TREE_X), TREE_D * TREE_MAX / 2);
-        // 0.2 TO 0.8 OF THE LEG, which keeps a tree clear of the stops at either end -- a crown
-        // growing out of a level badge is a collision, not scenery -- and, less obviously, keeps
-        // two trees apart. Consecutive legs share a verge under the pairing above, and this
-        // range leaves 0.4 of a pitch (136) between their nearest possible centres against the
-        // 101 two of the widest crowns need. At 0.15-0.85 that margin was 102 against 101.
-        const treeY = lerp(y0, y1, 0.2 + 0.6 * pick(i, S_TREE_Y));
-
-        const tree = container(`Tree${i}`, leg);
-        tree.setPosition(treeX, treeY, 0);
-
-        // SHADOW FIRST, so the crown sits on it rather than under it.
-        //
-        // SHADOW_ALPHA (44), NOT palette's AREA_SHADOW_ALPHA (30). The 30 is documented in two
-        // places as ONE deliberate departure, and the argument for it is AREA: the car park's
-        // shadow is about fifteen times a parking bay's, and that much translucent ink stops
-        // reading as an edge and becomes a smudge the lot sits in. A crown is 88 across. It has
-        // no claim on that discount and takes the standard -- which is also what `props.ts`
-        // gives the board's own trees.
-        const shade = dotSprite('shadow', crownD, new Color(
-            SHADOW_INK.r, SHADOW_INK.g, SHADOW_INK.b, SHADOW_ALPHA,
-        ));
-        tree.addChild(shade);
-        shade.setPosition(0, TREE_SHADOW_OFF, 0);
-
-        const green = COLORS.green;
-        const crown = dotSprite('crown', crownD, new Color(
-            Math.round(green.r * TREE_DIM),
-            Math.round(green.g * TREE_DIM),
-            Math.round(green.b * TREE_DIM),
-            255,
-        ));
-        tree.addChild(crown);
-
-        if (i % LAMP_EVERY !== 0) return;
-        const lamp = container(`Lamp${i}`, leg);
-        const lampSide = -treeSide;
-        lamp.setPosition(
-            lampSide * this.vergeX(pick(i, S_LAMP_X), LAMP_POOL_D / 2),
-            lerp(y0, y1, 0.3 + 0.4 * pick(i, S_LAMP_Y)),
-            0,
-        );
-        // The arm reaches INWARD, toward the centreline, which is where the road is from either
-        // verge -- hence the minus. Everything the lamp actually does happens at the far end of
-        // the arm, so the head and the pool share that one x.
-        const over = -lampSide * LAMP_REACH;
-
-        const yellow = COLORS.yellow;
-        // The pool goes down first, under both the arm and the head.
-        const pool = dotSprite('pool', LAMP_POOL_D, new Color(
-            yellow.r, yellow.g, yellow.b, LAMP_POOL_ALPHA,
-        ));
-        lamp.addChild(pool);
-        pool.setPosition(over, 0, 0);
-
-        // A quarter turn lays the arm along x. Drawn in ROAD rather than in an ink of its own:
-        // from above a lamp post is a dark stick, and the darkest thing this palette has is its
-        // asphalt.
-        const arm = roundedSprite('arm', LAMP_POST_W, LAMP_REACH, ROAD, LAMP_POST_W / 2);
-        lamp.addChild(arm);
-        arm.angle = 90;
-        arm.setPosition(over / 2, 0, 0);
-
-        const head = dotSprite('head', LAMP_HEAD_D, yellow);
-        lamp.addChild(head);
-        head.setPosition(over, 0, 0);
-    }
-
-    /**
-     * How far out on the verge something of radius `radius` stands, given a draw in [0, 1).
-     *
-     * The band runs from `VERGE_IN` out to wherever the canvas edge leaves room for the thing's
-     * own radius, and is floored at `VERGE_MIN_BAND` wide so a narrow viewport gives a cramped
-     * street rather than an inverted one.
-     */
-    private vergeX(t: number, radius: number): number {
-        const out = Math.max(VERGE_IN + VERGE_MIN_BAND, this.w / 2 - radius);
-        return lerp(VERGE_IN, out, t);
     }
 }

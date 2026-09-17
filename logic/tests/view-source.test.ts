@@ -411,3 +411,40 @@ test('every scene prop stays inside the parking band, top and bottom', () => {
     }
   }
 });
+
+/**
+ * The lobby's street lost its decoration: no tree, no lamp, no kerb.
+ *
+ * WHAT THIS GUARDS. `home-scene.ts` used to paint a kerb under the road and scatter trees and
+ * street lamps along the verge; all three were deleted because the kerb read as a soft blurred
+ * ring rather than a lip (which a player photographed and reported as the whole street being
+ * out of focus) and the trees and lamps read as colour dots rather than as scenery. A source
+ * guard rather than a behavioural test, because this file imports `cc` and this suite does not
+ * load the engine -- the same limit every guard in this file works under. It cannot prove the
+ * screen looks uncluttered; it can prove the identifiers that drew the clutter never came back.
+ */
+test('home-scene has no tree, lamp or kerb identifiers', () => {
+  const src = readSrc('home-scene.ts');
+  expect(src).not.toMatch(/\bTREE_/);
+  expect(src).not.toMatch(/\bLAMP_/);
+  expect(src).not.toMatch(/\bKERB_/);
+});
+
+/**
+ * The road's shadow is drawn before the road, across the whole street.
+ *
+ * `HomeScene` keeps the shadow and the road in two separate containers -- `shadows` appended to
+ * `street` before `roads` -- rather than drawing each leg's shadow-then-road pair in one
+ * container, because legs are siblings that overlap at the stop they share: a leg drawing both
+ * of its own layers before its neighbour would let that neighbour's later layer paint over this
+ * leg's already-drawn one at the shared seam. This is the same ordering rule the kerb used to
+ * need, checked here because a "helpful" simplification that inlines the shadow into the road's
+ * own container would reintroduce exactly that bug, quietly, per leg.
+ */
+test('home-scene draws the shadow pass before the road pass', () => {
+  const src = readSrc('home-scene.ts');
+  const shadows = src.indexOf("this.shadows = container('Shadows', this.street);");
+  const roads = src.indexOf("this.roads = container('Roads', this.street);");
+  expect(shadows).toBeGreaterThan(0);
+  expect(roads).toBeGreaterThan(shadows);
+});
