@@ -19,10 +19,12 @@ import {
  * unread indicator up to a 200-unit glow. STAR_SIZE's docblock, just below, used to cite that
  * as the shape that "gets away with" a single small texture, "being a circle at 40". THAT
  * CLAIM IS NOW FALSE, and it is worth saying so rather than quietly fixing it: a level badge
- * is drawn at NODE_D, 170 design units, which on a 1170-wide phone against a 720-unit canvas
- * is about 275 device pixels -- a 32px frame stretched that far is exactly the softness and
- * halo a player photographed and reported. The dot stopped getting away with 32 the moment a
- * badge became a circle that large; it just took a while for anyone to look at one that big.
+ * was drawn at NODE_D = 170 design units when this was written -- and the canvas is 1280 wide,
+ * not 720 (`ui-layout.canvasSize` spells out why that pair is the trap it looks like), so on
+ * a 1170-wide phone that is 170 x 1170 / 1280 = about 155 device pixels. A 32px frame blown
+ * up 4.8x is exactly the softness and halo a player photographed and reported. The badge has
+ * since come down to 128, which is still four times the old frame; the dot stopped getting
+ * away with 32 the moment a badge became a circle that large, and it has not gone back.
  *
  * `dotBucket` picks a texture size per diameter now instead of one frame for all of them.
  * DOT_SIZE is only the smallest bucket, kept so the cheap circles -- the unread dot, the coin

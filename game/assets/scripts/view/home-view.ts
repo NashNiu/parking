@@ -260,10 +260,12 @@ const STAR_Y = -(NODE_D / 2 + NODE_LIFT + STAR_D / 2);
  * it: `home-view` already imports `HomeScene`, so the reverse import would be a cycle).
  *
  * THE STAR ROW WINS, not the breathing rings, and that is the one counter-intuitive result
- * worth writing down. The current badge's bright highlight is the outermost thing that
- * scales -- radius `(NODE_EDGE_D / 2 + NODE_HI_PAD) x BREATHE_TO` = 70 x 1.26 = 88.2, and it
- * sits `NODE_LIFT` low, so its farthest point is 103.2 from the node's centre -- but a
- * `done` badge's star row
+ * worth writing down. The current badge's bright highlight is the outermost thing that scales:
+ * radius 70, sitting `NODE_LIFT` (15) low, so its farthest point from the node's centre is
+ * `(70 + 15) x BREATHE_TO` = 107.1. THE OFFSET SCALES TOO -- `hi` is a child of the node
+ * `layout` scales, so 1.26 multiplies its local position as well as its radius, and adding an
+ * unscaled 15 to a scaled 88.2 (which is what an earlier version of this sentence did, for
+ * 103.2) understates it. But a `done` badge's star row
  * never scales at all and sits further out to begin with: the outer star is offset
  * (`STAR_PITCH`, `STAR_Y`) = (37, -95) from the node's own centre, radius `STAR_D / 2` = 16, so
  * the farthest point on it is `sqrt(37^2 + 95^2) + 16` ~ 117.95 from the centre a tree's distance

@@ -78,11 +78,27 @@
  *     290 - 111 (star row reaches -111) - 64 (badge below, scale 1.0 -- the face's own 64 beats
  *     the edge's 53 on the way up) = 115
  *
- *     pair (lower, upper)                          upper reaches down       lower reaches up
- *     (done, done)     290 - 111 - 64    = 115     star row, -111           64
- *     (done, current)  290 - 104.6 - 64  = 121.4   edge x 1.26, 104.6       64
- *     (current, lock)  290 - 66.4 - 83.2 = 140.4   edge x 0.8, 66.4         outline x 1.26, 83.2
- *     (lock, lock)     290 - 66.4 - 51.2 = 172.4   edge x 0.8, 66.4         edge x 0.8, 51.2
+ * A BADGE REACHES FURTHER DOWN THAN UP, because every disc but the face carries the base's own
+ * `NODE_LIFT` (15) offset: a disc of radius r at offset -15 reaches `s * (r + 15)` down and
+ * `s * (r - 15)` up, where `s` is the state's scale. The offset SCALES WITH THE DISC -- these are
+ * children of the node `layout` scales, so the offset is a local position and 1.26 multiplies it
+ * too. Adding an unscaled 15 to a scaled radius is a slip this table has already made once.
+ *
+ *     state     scale   reaches up                    reaches down
+ *     done      1.00    64   (face, offset 0)         111  (star row, -95 - 16)
+ *     current   1.26    80.6 (face, 64 x 1.26)        107.1 (highlight, (70+15) x 1.26)
+ *     locked    0.80    51.2 (face, 64 x 0.8)         66.4 (edge, (68+15) x 0.8)
+ *
+ *     pair (lower, upper)                           upper reaches down    lower reaches up
+ *     (done, done)     290 - 111   - 64    = 115    star row, 111         64
+ *     (done, current)  290 - 107.1 - 64    = 118.9  highlight, 107.1      64
+ *     (current, lock)  290 - 66.4  - 80.6  = 143    edge, 66.4            face, 80.6
+ *     (lock, lock)     290 - 66.4  - 51.2  = 172.4  edge, 66.4            face, 51.2
+ *
+ * The current badge's HIGHLIGHT is what reaches furthest down on that row, and its FACE is what
+ * reaches furthest up -- the highlight sits 15 low, so scaling drags its lower rim out and pulls
+ * its upper rim in (`(70 - 15) x 1.26` = 69.3, which the face's 80.6 beats). Two different discs
+ * win in the two directions; it is not one radius applied both ways.
  *
  * 115 is the tightest of the four -- comfortably positive, and far larger than the 170 badge's
  * own tightest figure (69) was against ITS pitch, because a smaller badge asks less of the same
