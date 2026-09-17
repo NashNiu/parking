@@ -889,14 +889,18 @@ export class HomeView {
         return (top + bottom) / 2;
     }
 
-    /** Which level the button plays: the newest one the save allows, never the scroll focus. */
+    /**
+     * Which level the button plays: the newest one the save allows, never the scroll focus.
+     *
+     * THE ONLY LEVEL NUMBER THIS SCREEN HANDS OUT. There used to be a `focusedLevel()` beside
+     * it returning the centred stop, and it went when its last caller did: `GameController`
+     * started a level from the scroll position, which was the defect this pass was opened to
+     * fix. Keeping the accessor "in case" would have left the wrong answer one call away from
+     * anyone reaching for a level number, which is exactly how it got used the first time.
+     * The scroll's `focused` is now private and stays that way.
+     */
     currentLevel(): number {
         return this.current;
-    }
-
-    /** Which stop is centred on the rail, 1-based -- the scroll focus, not what the button plays. */
-    focusedLevel(): number {
-        return this.focused + 1;
     }
 
     /**
