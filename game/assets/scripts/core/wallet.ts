@@ -122,3 +122,27 @@ export function coinsFromProgress(p: Progress, levelCount: number): number {
     }
     return total;
 }
+
+/**
+ * The wallet a save should be carrying, given the stars it has.
+ *
+ * RAISES, NEVER LOWERS, and that asymmetry is the whole function. A balance ABOVE the derived
+ * figure is not a bug to correct -- it is coins from a source that is not progress, and there
+ * is one landing in the check-in and more to come once coins buy parking bays. Deriving the
+ * balance outright would delete them on the next boot.
+ *
+ * WHY THIS IS A FUNCTION AND NOT THREE LINES AT THE CALL SITE. It was three lines at the call
+ * site, in `GameController`, which is the view layer and therefore has no test environment at
+ * all -- so the one safety property this whole feature rests on had no automated cover. The
+ * derivation was already pure and tested; the DECISION built on it was not, which is exactly
+ * backwards, because a wrong derivation shows up as a wrong number and a wrong decision shows
+ * up as a player's coins quietly vanishing.
+ *
+ * RETURNS THE SAME OBJECT when nothing is owed, so a caller can tell "unchanged" from "raised"
+ * with `===` rather than by comparing balances and re-deriving the comparison this function
+ * just made. `GameController` uses that to decide whether to touch storage at all.
+ */
+export function backfilledWallet(w: Wallet, p: Progress, levelCount: number): Wallet {
+    const derived = coinsFromProgress(p, levelCount);
+    return derived > w.coins ? { ...w, coins: derived } : w;
+}

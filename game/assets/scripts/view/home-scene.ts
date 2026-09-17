@@ -1,6 +1,6 @@
 import { Color, Layers, Node, UITransform } from 'cc';
 import { legSamples, nodeCenter, PathPoint } from '../core/home-path';
-import { rampSprite, roundedSprite } from './ui-shapes';
+import { roundedSprite } from './ui-shapes';
 import { GROUND, ROAD } from './palette';
 import { SHADOW_INK } from './shadow';
 
@@ -52,19 +52,6 @@ import { SHADOW_INK } from './shadow';
  * this one is a road the rail's stops sit ON.
  */
 const ROAD_W = 96;
-
-/**
- * The fade down the far left and right of the screen.
- *
- * SAME TOOL AS THE OLD STRIP, OPPOSITE JOB, and the distinction is the whole reason it is safe
- * to reach for a translucent overlay again here. The old one was a see-through slab laid over
- * a photograph, and its two HARD EDGES were the complaint. This one has no hard edge anywhere:
- * it is a `rampSprite`, opaque at one side and fully gone at the other, tinted `GROUND` -- the
- * exact colour of the pavement it is lying on -- so over plain pavement it is a no-op.
- *
- * 70, from the 60-80 the requirement asked for.
- */
-const FADE_W = 70;
 
 /**
  * The road's shadow: the same polyline as the road, the same width, drawn first and nudged
@@ -159,8 +146,8 @@ function strokePath(
 
 export class HomeScene {
     /**
-     * Everything the street draws, and it does NOT move. The ground and the two fades are
-     * screen furniture; only `street` scrolls.
+     * Everything the street draws, and it does NOT move. The ground is screen furniture;
+     * only `street` scrolls.
      */
     private root: Node;
     /**
@@ -189,7 +176,7 @@ export class HomeScene {
     /**
      * Set unconditionally by `build`, which `roadLegs.length` is not: a one-level game has no
      * legs at all, so the re-entry guard cannot be a count of them without letting a second
-     * call append a second pair of fades.
+     * call append a second road on top of the first.
      */
     private built = false;
     /**
@@ -250,7 +237,6 @@ export class HomeScene {
             strokePath(roadLeg, pts, ROAD_W, ROAD, 'road');
             this.roadLegs.push(roadLeg);
         }
-        this.buildFades();
     }
 
     /**
@@ -289,34 +275,6 @@ export class HomeScene {
             const on = Math.min(Math.abs(a), Math.abs(b)) <= visibleHalfHeight;
             this.shadowLegs[i].active = on;
             this.roadLegs[i].active = on;
-        }
-    }
-
-    /**
-     * The two fades, added to `root` AFTER `street` so they sit over it, and outside `street`
-     * so they do not scroll away with it.
-     *
-     * `rampSprite` is opaque along its own TOP edge and gone by its bottom. Turned a quarter
-     * circle it is opaque along one SIDE: the right-hand one (`angle = -90`, which carries
-     * local +y onto screen +x) is solid at the screen's edge and clear by `FADE_W` inward, and
-     * the left-hand one is its mirror. Sized (2h x FADE_W) because the rotation swaps those --
-     * on screen each is `FADE_W` across and twice the canvas tall, the ground's own reasoning.
-     *
-     * WHAT IT DOES NOT DO, said plainly because the requirement was written for the old
-     * straight strip and does not entirely survive the road becoming a curve: it cannot hug the
-     * road. The road wanders 210 units across and this is a straight band, well clear of it, so
-     * over this pavement it is GROUND over GROUND and changes nothing on screen. It used to also
-     * soften the outer edge of the tree-and-lamp scenery that stood further out on the verge;
-     * that scenery is gone (see the header), so this fade is currently a no-op left in place on
-     * the chance a future pass puts something back out at the screen's edge for it to dissolve.
-     */
-    private buildFades(): void {
-        const { w, h } = this;
-        for (const side of [-1, 1]) {
-            const fade = rampSprite(side < 0 ? 'FadeL' : 'FadeR', h * 2, FADE_W, GROUND);
-            this.root.addChild(fade);
-            fade.angle = side < 0 ? 90 : -90;
-            fade.setPosition(side * (w / 2 - FADE_W / 2), 0, 0);
         }
     }
 }

@@ -8,7 +8,7 @@ import {
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
     bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
     unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
-    addCoins, coinsForClear, coinsFromProgress, emptyWallet, parseWallet, serializeWallet, Wallet,
+    addCoins, backfilledWallet, coinsForClear, emptyWallet, parseWallet, serializeWallet, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -895,14 +895,14 @@ export class GameController extends Component {
      * before the wallet subsystem existed has a balance stuck at 0 (or wherever it was when
      * the subsystem landed) even though `this.progress` already earned more than that.
      * `coinsForClear` cannot pay that out itself -- it pays the difference at the moment of a
-     * clear, and there is no clear happening here to attach a payout to -- so this derives the
-     * total with `coinsFromProgress` and raises the stored balance to meet it directly.
+     * clear, and there is no clear happening here to attach a payout to -- so `backfilledWallet`
+     * derives the total and this wires the result into storage and the coin pill.
      *
-     * NEVER LOWERS the balance: raised only when it falls short of the derived figure, and
-     * only up to that figure. A wallet already at or above it holds coins from somewhere
-     * `coinsFromProgress` cannot see -- a check-in, a purchase, some future source that isn't
-     * progress -- and clamping down to the derived total on every single load would claw those
-     * back before the player ever got to spend them.
+     * THE DECISION IS NOT MADE HERE, deliberately. Raising-but-never-lowering is the one
+     * property this feature rests on, and it used to be three lines in this method -- in the
+     * view layer, which has no test environment, so the safest-sounding half of the feature was
+     * the untested half. `core/wallet`'s `backfilledWallet` owns it and jest pins it. What is
+     * left here is wiring: ask, and if the answer is a different object, persist it.
      *
      * This does not reopen the "clear -> wipe -> clear again" farm that kept coins out of
      * `Progress` in the first place: `wipeProgress` clears the wallet and the progress
@@ -918,12 +918,16 @@ export class GameController extends Component {
      * repaint the pill again, not just persist it.
      */
     private backfillWallet(levelCount: number): void {
-        const derived = coinsFromProgress(this.progress, levelCount);
-        if (derived <= this.wallet.coins) return;
-        this.wallet = { ...this.wallet, coins: derived };
+        // The raise-or-leave decision lives in `core/wallet`, not here, and the identity check
+        // below is why that is worth a function call: `backfilledWallet` hands back the SAME
+        // object when nothing is owed, so "did anything change" is one `===` rather than a
+        // second copy of the comparison it just made. This layer has no tests; that one does.
+        const next = backfilledWallet(this.wallet, this.progress, levelCount);
+        if (next === this.wallet) return;
+        this.wallet = next;
         saveWalletText(serializeWallet(this.wallet));
         this.home?.setCoins(this.wallet.coins);
-        console.log(`[Game] wallet backfilled to ${derived} coins`);
+        console.log(`[Game] wallet backfilled to ${this.wallet.coins} coins`);
     }
 
     /** Leave the home screen for `name`. The inverse of `showHome`. */

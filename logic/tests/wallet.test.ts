@@ -1,5 +1,6 @@
 import {
-  addCoins, coinsForClear, coinsFromProgress, emptyWallet, parseWallet, serializeWallet,
+  addCoins, backfilledWallet, coinsForClear, coinsFromProgress, emptyWallet, parseWallet,
+  serializeWallet,
   WALLET_VERSION,
 } from '../../game/assets/scripts/core/wallet';
 import { emptyProgress, recordClear } from '../../game/assets/scripts/core/progress';
@@ -97,4 +98,38 @@ test('mixed ratings sum the cumulative payout of every level, including unrated 
 test('levels beyond levelCount are not counted', () => {
   const { progress } = recordClear(emptyProgress(), 5, 3);
   expect(coinsFromProgress(progress, 4)).toBe(0);
+});
+
+/**
+ * The raise-or-leave decision, which used to live in `GameController` where nothing could
+ * reach it.
+ *
+ * The identity assertions are the point of the last two: `backfilledWallet` returning the SAME
+ * object is the signal `GameController` uses to skip a storage write, so "unchanged" has to be
+ * unchanged by reference, not merely equal by value.
+ */
+test('a wallet below its derived figure is raised to it', () => {
+  let p = emptyProgress();
+  p = recordClear(p, 1, 3).progress; // 60
+  p = recordClear(p, 2, 2).progress; // 40
+  const raised = backfilledWallet({ version: WALLET_VERSION, coins: 0 }, p, 10);
+  expect(raised.coins).toBe(100);
+});
+
+test('a wallet above its derived figure keeps every coin, by reference', () => {
+  const p = recordClear(emptyProgress(), 1, 3).progress; // derives 60
+  // 5000 against a derived 60: the extra came from somewhere that is not progress.
+  const rich = { version: WALLET_VERSION, coins: 5000 };
+  expect(backfilledWallet(rich, p, 10)).toBe(rich);
+});
+
+test('a wallet exactly at its derived figure is left alone, by reference', () => {
+  const p = recordClear(emptyProgress(), 1, 3).progress;
+  const exact = { version: WALLET_VERSION, coins: 60 };
+  expect(backfilledWallet(exact, p, 10)).toBe(exact);
+});
+
+test('an empty save leaves an empty wallet alone, by reference', () => {
+  const w = emptyWallet();
+  expect(backfilledWallet(w, emptyProgress(), 10)).toBe(w);
 });
