@@ -471,21 +471,79 @@ test('every scene prop stays inside the parking band, top and bottom', () => {
 });
 
 /**
- * The lobby's street lost its decoration: no tree, no lamp, no kerb.
+ * The lobby's street still has no kerb.
  *
- * WHAT THIS GUARDS. `home-scene.ts` used to paint a kerb under the road and scatter trees and
- * street lamps along the verge; all three were deleted because the kerb read as a soft blurred
- * ring rather than a lip (which a player photographed and reported as the whole street being
- * out of focus) and the trees and lamps read as colour dots rather than as scenery. A source
- * guard rather than a behavioural test, because this file imports `cc` and this suite does not
- * load the engine -- the same limit every guard in this file works under. It cannot prove the
- * screen looks uncluttered; it can prove the identifiers that drew the clutter never came back.
+ * WHAT THIS GUARDS, AND WHAT IT STOPPED GUARDING. `home-scene.ts` used to paint a kerb under the
+ * road and scatter trees and street lamps along the verge; all three were deleted at once,
+ * because the kerb read as a soft blurred ring rather than a lip (which a player photographed
+ * and reported as the whole street being out of focus) and the trees and lamps read as colour
+ * dots rather than as scenery. The kerb stays deleted -- nothing fixed the ring, so nothing
+ * brought it back. Trees and lamps came back in a later revision, deliberately, because they now
+ * carry the outline and the hard shadow that were the actual missing ingredient; this guard no
+ * longer bans `TREE_`/`LAMP_`, and the guard below checks the thing that was actually missing
+ * instead of the identifiers that happened to be attached to it.
  */
-test('home-scene has no tree, lamp or kerb identifiers', () => {
+test('home-scene has no kerb identifiers', () => {
   const src = readSrc('home-scene.ts');
-  expect(src).not.toMatch(/\bTREE_/);
-  expect(src).not.toMatch(/\bLAMP_/);
   expect(src).not.toMatch(/\bKERB_/);
+});
+
+/**
+ * Every tree and every lamp carries an outline and a hard shadow -- the requirement's own kill
+ * switch: 「必须有描边和硬投影……做不到有描边有投影就先不要放」.
+ *
+ * WHAT THIS GUARDS. The colour-dot failure this file's header describes was not "no trees or
+ * lamps drawn" -- it was trees and lamps drawn AS FLAT DOTS, with nothing behind them to read as
+ * an edge or a drop. `buildTree` and `buildLamp` are the only two places that construct one, so
+ * pinning what each of THOSE functions does is pinning the property for every tree and lamp the
+ * screen ever draws, not just the ones on screen today.
+ *
+ * THE OUTLINE CHECK IS FOR `shade(`, NOT FOR A COLOUR LITERAL, because the requirement names the
+ * mechanism ("the screen's one outline idiom") rather than a number -- a hand-picked darker
+ * literal would satisfy "looks darker" today and drift from the crown/head colour on the next
+ * retune, which `shade` cannot do by construction (see its own docblock in `palette.ts`).
+ *
+ * THE SHADOW CHECK IS FOR `ROAD_SHADOW` AND THE SHARED OFFSETS, NOT A FRESH ALPHA-64 COLOUR OR A
+ * FRESH `(2, -3)` PAIR, because the brief is explicit that the road's shadow already defines
+ * these constants and a tree or lamp shadow must reuse them rather than write a second copy that
+ * can drift from the first.
+ *
+ * A SOURCE GUARD, for the reason every guard in this file is one: this suite does not load the
+ * engine, so it cannot render a tree and measure whether it reads as a colour dot. What it CAN
+ * pin is that the code path which builds one never stops calling `shade` or stops reusing the
+ * road's own shadow constants.
+ */
+test('every tree and lamp carries an outline (shade) and the road\'s own hard shadow', () => {
+  const src = readSrc('home-scene.ts');
+  for (const fn of ['private buildTree(', 'private buildLamp(']) {
+    const body = extractFn(src, fn);
+    expect(body).toMatch(/shade\(/);
+    expect(body).toContain('ROAD_SHADOW');
+    expect(body).toContain('SHADOW_OFFSET_X');
+    expect(body).toContain('SHADOW_OFFSET_Y');
+  }
+});
+
+/**
+ * The guard above can still see the defect it is written for.
+ *
+ * Without this, "found" is indistinguishable from "the check stopped running" -- the same
+ * discipline every self-test in this file applies. This is not a reimplementation of the guard;
+ * it runs `extractFn` itself, the same function the guard above calls, against a hand-built
+ * "reverted" tree builder that draws a flat dot with no outline and no shadow, and confirms the
+ * guard's own assertions would fail against it.
+ */
+test('the outline/shadow guard would fail against a reverted, flat-dot tree builder', () => {
+  const reverted = `
+    private buildTree(leg: Node, i: number, side: number, y0: number, y1: number): void {
+        const tree = container(\`Tree\${i}\`, leg);
+        const crown = dotSprite('crown', TREE_D, COLORS.green);
+        tree.addChild(crown);
+    }
+  `;
+  const body = extractFn(reverted, 'private buildTree(');
+  expect(body).not.toMatch(/shade\(/);
+  expect(body).not.toContain('ROAD_SHADOW');
 });
 
 /**
@@ -598,6 +656,23 @@ test('the centre dashes sit after the road, and their ratios track the lot borde
   // The RATIOS travel, not the board-unit figures -- see `DASH_LEN`'s own docblock.
   expect(dashGap / dashLen).toBeCloseTo(boardGap / boardDash, 1);
   expect(dashThick / dashLen).toBeCloseTo(boardThick / boardDash, 1);
+});
+
+/**
+ * The scenery -- trees and lamps -- is its own fifth container, appended last of all.
+ *
+ * WHY LAST RATHER THAN A SIXTH SPOT IN AN EXISTING PER-LEG LOOP. `vergeIn` keeps every tree and
+ * lamp clear of `PAVING`'s own band by construction, so unlike `paving`/`dashes` above it has no
+ * "wider eats narrower" seam to protect against -- but it still needs its OWN container, appended
+ * after `dashes`, so a leg's scenery cannot be caught underneath a neighbouring leg's ground layer
+ * at the stop they share.
+ */
+test('home-scene appends the scenery container last, after the dashes', () => {
+  const src = readSrc('home-scene.ts');
+  const dashes = src.indexOf("this.dashes = container('Dashes', this.street);");
+  const scenery = src.indexOf("this.scenery = container('Scenery', this.street);");
+  expect(dashes).toBeGreaterThan(0);
+  expect(scenery).toBeGreaterThan(dashes);
 });
 
 /**

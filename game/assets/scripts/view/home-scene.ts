@@ -1,7 +1,8 @@
 import { Color, Layers, Node, UITransform } from 'cc';
-import { legSamples, nodeCenter, PathPoint } from '../core/home-path';
-import { roundedSprite } from './ui-shapes';
-import { LAWN, PAVING, ROAD, ROAD_LINE } from './palette';
+import { legSamples, nodeCenter, PathPoint, ZIG_X } from '../core/home-path';
+import { dotSprite, roundedSprite } from './ui-shapes';
+import { COLORS } from './colors';
+import { LAWN, PAVING, ROAD, ROAD_LINE, shade } from './palette';
 import { SHADOW_INK } from './shadow';
 
 /**
@@ -18,17 +19,18 @@ import { SHADOW_INK } from './shadow';
  * opacity its two straight edges showed as a pair of hard colour steps running the height of
  * the screen, which was the thing people actually reported.
  *
- * TWO ELEMENTS NOW, and it used to be four: road surface, kerb, trees, street lamps. The kerb,
- * the trees and the lamps are gone. The KERB went because it was never read as a kerb: a
- * 10-unit band at an 8% lightness step off `GROUND` reads as a soft blurred ring, not as a lip --
- * and that ring, not any actual blur, is what a player photographed and reported as the whole
- * street being out of focus (see `roads`, below, for what replaced it). TREES AND LAMPS went
- * because neither carries an outline or a shadow strong enough to read as an object at this
- * scale: from directly above, a tree crown and a lamp head are both just a colour dot. What is
- * left is the road surface and the hard shadow it casts. NO BUILDINGS -- from directly above a
- * building is a rectangle, and a rectangle that is trying to be a building invites the eye to
- * work out what it is when the answer is "nothing". No cars either: the cars belong on the
- * board.
+ * IT USED TO BE FOUR: road surface, kerb, trees, street lamps -- then two, when the kerb, the
+ * trees and the lamps were all deleted in one pass. The KERB is gone for good: a 10-unit band
+ * at an 8% lightness step off `GROUND` reads as a soft blurred ring, not as a lip, and that
+ * ring, not any actual blur, is what a player photographed and reported as the whole street
+ * being out of focus (see `roads`, below, for what replaced it). TREES AND LAMPS WENT FOR A
+ * DIFFERENT REASON -- neither carried an outline or a shadow strong enough to read as an object
+ * at this scale, so from directly above a tree crown and a lamp head were both just a colour
+ * dot -- and THAT IS THE ONLY REASON THEY WERE GONE: they are back now, in `scenery`, below,
+ * because every one of them carries both (see `buildTree`/`buildLamp`). NO BUILDINGS -- from
+ * directly above a building is a rectangle, and a rectangle that is trying to be a building
+ * invites the eye to work out what it is when the answer is "nothing". No cars either: the
+ * cars belong on the board.
  *
  * THAT COUNT HAS SINCE GROWN AGAIN, to four ground layers plus a line, and for a different
  * reason than the kerb's. `LAWN` (the oversized backdrop, recoloured), `PAVING` (a band along
@@ -41,12 +43,20 @@ import { SHADOW_INK } from './shadow';
  * `HomeScene`'s field docblocks below for why that discipline still matters with two more
  * layers in it.
  *
+ * TREES AND LAMPS CAME BACK AS A FIFTH LAYER, `scenery`, for the reason given above: every one
+ * now carries `shade(colour, -0.2)` as a darker, slightly larger disc behind it (`OUTLINE_PAD`)
+ * and the SAME hard shadow the road casts -- `ROAD_SHADOW`, `SHADOW_OFFSET_X/Y`, imported once
+ * and not redefined. They stand on `LAWN`, clear of `PAVING`'s own band, by a bound derived from
+ * `PAVING_W` and `ZIG_X` rather than typed -- see `vergeIn`.
+ *
  * THE COLOURS ARE MOSTLY THE BOARD'S OWN. `ROAD` comes from `palette.ts`, which is the same
  * file the parking board reads, so the road cannot drift away from the game the way the
  * photograph had already drifted. The shadow's ink, `SHADOW_INK`, is also read from there -- its
  * colour only, not its geometry. `shadowThrow` derives an offset from the scene's key light and
  * the board's tilt, and this canvas has neither: it is flat and orthographic, so the offset here
- * is a fixed, chosen constant instead of a derived one. See `build`.
+ * is a fixed, chosen constant instead of a derived one. See `build`. The tree crown and the lamp
+ * head are `colors.ts`'s own green and yellow -- the same six colours the cars and passengers
+ * wear -- so the scenery cannot drift from the play palette either.
  *
  * `LAWN` AND `PAVING` ARE THE DELIBERATE EXCEPTION to "the colours are the board's own", and
  * that exception was made in `palette.ts`, not here: its own header explains that no surface a
@@ -138,6 +148,80 @@ const DASH_LEN = 34;
 const DASH_GAP = 25;
 const DASH_THICK = 9;
 
+/**
+ * A tree from directly above is a crown; a lamp is a post and a head. Both stand on `LAWN`,
+ * behind their own outline and hard shadow -- see `buildTree` and `buildLamp`.
+ */
+const TREE_D = 88;
+/** How far the crown is walked back from `COLORS.green`. A lit car is not a tree. */
+const TREE_DIM = 0.7;
+const LAMP_POST_D = 20;
+const LAMP_HEAD_D = 40;
+/**
+ * How far the head sits above the foot, straight up-canvas -- no sideways reach. That keeps the
+ * whole lamp's x-extent equal to its own outline radius, which is exactly what `vergeIn` bounds;
+ * an arm reaching toward the road (the old lamp had one, for its light pool) would need a second
+ * term this bound does not have.
+ */
+const LAMP_ARM_LEN = 26;
+/** One lamp every other leg. One per leg is a row of lamps; this is a street. */
+const LAMP_EVERY = 2;
+
+/**
+ * How much larger the outline disc is than the shape it rims, in diameter.
+ *
+ * Shared by the tree crown and the lamp head -- "the screen's one outline idiom" the badge
+ * takes too, in a later task. `shade(colour, -0.2)` (from `palette.ts`) supplies the darker
+ * half of the outline; this supplies the "slightly larger" half.
+ */
+const OUTLINE_PAD = 8;
+
+/**
+ * Where the verge starts: the nearest a tree or lamp's own outline may stand to the centreline.
+ *
+ * Derived rather than typed, so it survives a change to either width. A leg is a Bezier whose
+ * four control points all have x of +-`ZIG_X` (`legSamples`'s own docblock), and a Bezier stays
+ * inside its control points' convex hull, so no `PAVING` sample is ever further out than
+ * `ZIG_X + PAVING_W / 2` -- `PAVING_W`'s own worst-case reach from the canvas centre. One more
+ * `radius` of clearance -- the object's OWN outline radius, not just its centre -- keeps the
+ * whole disc off the paving, not merely the point it is anchored at.
+ */
+function vergeIn(radius: number): number {
+    return ZIG_X + PAVING_W / 2 + radius;
+}
+/** The narrowest the verge band may collapse to, for a viewport narrower than the design one. */
+const VERGE_MIN_BAND = 60;
+
+/**
+ * An integer hash: the same `i` always gives back the same number in [0, 1).
+ *
+ * `Math.random` would be a BUG here rather than a shortcut. `layout()` runs on every frame of
+ * a drag, and a position computed from a random source moves a few units per frame -- which
+ * reads as the trees vibrating. A position has to be a pure function of the thing it belongs
+ * to, and then it does not matter how often anything is recomputed.
+ */
+function hash01(i: number): number {
+    const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+}
+
+/**
+ * Independent streams from the one hash: a tree's x, a tree's y, a lamp's x, a lamp's y.
+ *
+ * ONLY A POSITION HASH -- there is no size stream any more. 尺寸统一 (uniform size) is a
+ * reversal of the per-tree size jitter this file used to draw; dropping the stream along with
+ * the jitter is what keeps the hash honestly about scatter and nothing else.
+ */
+const HASH_STREAMS = 4;
+const S_TREE_X = 0;
+const S_TREE_Y = 1;
+const S_LAMP_X = 2;
+const S_LAMP_Y = 3;
+
+function pick(i: number, stream: number): number {
+    return hash01(i * HASH_STREAMS + stream);
+}
+
 /** A bare node that can hold UI children -- many call sites want the same three lines. */
 function container(name: string, parent: Node): Node {
     const node = new Node(name);
@@ -145,6 +229,10 @@ function container(name: string, parent: Node): Node {
     node.addComponent(UITransform);
     parent.addChild(node);
     return node;
+}
+
+function lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
 }
 
 /**
@@ -299,19 +387,27 @@ export class HomeScene {
      * (see `strokePath`), so a later leg's road reaching back over that stop would still paint
      * over an earlier leg's already-drawn dash if the dash lived inside the road's own per-leg
      * container instead of a container of its own, appended after `roads`.
+     *
+     * `SCENERY` IS APPENDED LAST, above all four ground layers, rather than folded under
+     * `paving` the way an early draft of this file had it. The trees and lamps stand on `LAWN`
+     * clear of `PAVING`'s own band BY CONSTRUCTION (`vergeIn`), so nothing here ever overlaps a
+     * ground layer and the ordering risk the other four containers guard against does not apply
+     * to it -- appending it last only has to be true once, not re-argued per layer.
      */
     private paving: Node;
     private shadows: Node;
     private roads: Node;
     private dashes: Node;
+    private scenery: Node;
     /**
-     * One node per leg in each container, so culling a leg is four `active` assignments rather
-     * than a walk over its sprites. All four arrays are the same length and index together.
+     * One node per leg in each container, so culling a leg is five `active` assignments rather
+     * than a walk over its sprites. All five arrays are the same length and index together.
      */
     private pavingLegs: Node[] = [];
     private shadowLegs: Node[] = [];
     private roadLegs: Node[] = [];
     private dashLegs: Node[] = [];
+    private sceneryLegs: Node[] = [];
     /**
      * Set unconditionally by `build`, which `roadLegs.length` is not: a one-level game has no
      * legs at all, so the re-entry guard cannot be a count of them without letting a second
@@ -326,6 +422,14 @@ export class HomeScene {
      * rather than a broken one.
      */
     private centreY = 0;
+    /**
+     * The canvas size, kept as fields again now that the scenery is back: `vergeX` measures a
+     * tree or lamp's outer bound against `w` the same way the deleted `dress()` used to, on
+     * every leg `build()` constructs. Nothing else here reads `h`, but the pair travels together
+     * rather than one being a field and the other a constructor-only local.
+     */
+    private w: number;
+    private h: number;
 
     /**
      * Builds the ground and nothing else.
@@ -335,11 +439,8 @@ export class HomeScene {
      * constructed. See `build`.
      */
     constructor(parent: Node, w: number, h: number) {
-        // `w` and `h` are used HERE and nowhere else, so they are not kept as fields. They
-        // were, until the scenery went: `dress()` measured the verge against the canvas
-        // width and the edge fades spanned its height. Both are gone, and a field nothing
-        // reads is an invitation to measure something new off a number this class has no
-        // business still holding -- the ground is the only thing here sized by the screen.
+        this.w = w;
+        this.h = h;
         this.root = container('HomeStreet', parent);
 
         // TWICE THE CANVAS, which is the one thing kept from the backdrop this replaces: a
@@ -357,12 +458,14 @@ export class HomeScene {
 
         this.street = container('StreetScroll', this.root);
         // Appended in this order, which IS their draw order: paving under shadow under road
-        // under the dashes -- see the field docblocks above for why each needs its own
-        // top-level container rather than a spot inside another layer's per-leg loop.
+        // under the dashes, scenery last of all -- see the field docblocks above for why each
+        // needs its own top-level container rather than a spot inside another layer's per-leg
+        // loop.
         this.paving = container('Paving', this.street);
         this.shadows = container('Shadows', this.street);
         this.roads = container('Roads', this.street);
         this.dashes = container('Dashes', this.street);
+        this.scenery = container('Scenery', this.street);
     }
 
     /**
@@ -393,6 +496,10 @@ export class HomeScene {
             const dashLeg = container(`Leg${i}`, this.dashes);
             strokeDashes(dashLeg, pts, DASH_LEN, DASH_GAP, DASH_THICK, ROAD_LINE);
             this.dashLegs.push(dashLeg);
+
+            const sceneryLeg = container(`Leg${i}`, this.scenery);
+            this.dressLeg(sceneryLeg, i);
+            this.sceneryLegs.push(sceneryLeg);
         }
     }
 
@@ -425,16 +532,131 @@ export class HomeScene {
             // edge, which is what says the route continues.
             const a = nodeCenter(i).y - offset;
             const b = nodeCenter(i + 1).y - offset;
-            // The same verdict to all four layers of the leg. They are only in four containers
+            // The same verdict to all five layers of the leg. They are only in five containers
             // so that every leg's paving draws under every leg's shadow, under every leg's
-            // road, under every leg's dash (see the field docblocks above); they are one leg
-            // for every other purpose, and any one of the four left on with the rest culled
-            // would be a stray band or dash running off the top of the screen.
+            // road, under every leg's dash, under every leg's scenery (see the field docblocks
+            // above); they are one leg for every other purpose, and any one of the five left on
+            // with the rest culled would be a stray band, dash or tree running off the top of
+            // the screen.
             const on = Math.min(Math.abs(a), Math.abs(b)) <= visibleHalfHeight;
             this.pavingLegs[i].active = on;
             this.shadowLegs[i].active = on;
             this.roadLegs[i].active = on;
             this.dashLegs[i].active = on;
+            this.sceneryLegs[i].active = on;
         }
+    }
+
+    /**
+     * How far out on the verge a `radius`-radius object stands, given a draw in [0, 1).
+     *
+     * The band runs from `vergeIn(radius)` out to wherever the canvas edge leaves room for the
+     * object's own radius, floored at `VERGE_MIN_BAND` wide so a narrow viewport gives a
+     * cramped street rather than an inverted one.
+     */
+    private vergeX(t: number, radius: number): number {
+        const inner = vergeIn(radius);
+        const out = Math.max(inner + VERGE_MIN_BAND, this.w / 2 - radius);
+        return lerp(inner, out, t);
+    }
+
+    /**
+     * One tree beside every leg, and one lamp beside every other one.
+     *
+     * They go inside the leg's own scenery node, which is what lets `layout`'s `active`
+     * assignment cull them along with everything else the leg draws, at no extra cost.
+     *
+     * WHICH SIDE IS NOT A HASH, and that was the first attempt: drawing the side from `pick`
+     * put six of nine trees in a row on the left verge and left the right one empty for a third
+     * of the route, which is what an unbiased coin does over nine tosses and reads as a hedge
+     * rather than as scenery.
+     *
+     * Pairs instead. `i % 4 < 2` swaps sides every SECOND leg, so the count comes out even over
+     * any stretch without the strict left-right-left that makes a row of trees read as fence
+     * posts. It also puts a lamp leg (every second one) on each side in turn, which strict
+     * alternation would not: with lamps on even legs only, a side that flips every leg gives
+     * every lamp the same verge. The lamp takes the OPPOSITE verge from the tree on its own leg,
+     * so one leg never carries both on one side.
+     */
+    private dressLeg(leg: Node, i: number): void {
+        const treeSide = i % 4 < 2 ? 1 : -1;
+        const y0 = nodeCenter(i).y;
+        const y1 = nodeCenter(i + 1).y;
+
+        this.buildTree(leg, i, treeSide, y0, y1);
+        if (i % LAMP_EVERY === 0) this.buildLamp(leg, i, -treeSide, y0, y1);
+    }
+
+    /**
+     * A tree: a hard shadow, an outline, then the crown on top of both -- the one outline idiom
+     * this screen uses (`OUTLINE_PAD`, and `shade`'s own docblock in `palette.ts`), and the SAME
+     * hard shadow the road casts, not a fresh one (`ROAD_SHADOW`, `SHADOW_OFFSET_X/Y`, both
+     * declared once, above, for the road's own shadow).
+     */
+    private buildTree(leg: Node, i: number, side: number, y0: number, y1: number): void {
+        const outlineD = TREE_D + OUTLINE_PAD;
+        const x = side * this.vergeX(pick(i, S_TREE_X), outlineD / 2);
+        // 0.2 TO 0.8 OF THE LEG, which keeps a tree clear of the stops at either end -- a crown
+        // growing out of a level badge is a collision, not scenery.
+        const y = lerp(y0, y1, 0.2 + 0.6 * pick(i, S_TREE_Y));
+
+        const tree = container(`Tree${i}`, leg);
+        tree.setPosition(x, y, 0);
+
+        // SHADOW FIRST, so the crown sits on it rather than under it.
+        const shadow = dotSprite('shadow', TREE_D, ROAD_SHADOW);
+        tree.addChild(shadow);
+        shadow.setPosition(SHADOW_OFFSET_X, SHADOW_OFFSET_Y, 0);
+
+        const green = COLORS.green;
+        const crownColour = new Color(
+            Math.round(green.r * TREE_DIM),
+            Math.round(green.g * TREE_DIM),
+            Math.round(green.b * TREE_DIM),
+            255,
+        );
+        // The outline: the crown's own colour, `shade`d darker and drawn slightly larger, behind
+        // the crown.
+        const outline = dotSprite('outline', outlineD, shade(crownColour, -0.2));
+        tree.addChild(outline);
+
+        const crown = dotSprite('crown', TREE_D, crownColour);
+        tree.addChild(crown);
+    }
+
+    /**
+     * A lamp: a post at the foot, then a head straight up-canvas from it -- no sideways arm, so
+     * the whole object's x-extent is exactly its outline radius and `vergeIn` bounds it exactly.
+     * NO LIGHT POOL: the old one sat at alpha 26 and read as an unloaded asset, and nothing here
+     * brings it back in any form.
+     */
+    private buildLamp(leg: Node, i: number, side: number, y0: number, y1: number): void {
+        const outlineD = LAMP_HEAD_D + OUTLINE_PAD;
+        const x = side * this.vergeX(pick(i, S_LAMP_X), outlineD / 2);
+        const y = lerp(y0, y1, 0.3 + 0.4 * pick(i, S_LAMP_Y));
+
+        const lamp = container(`Lamp${i}`, leg);
+        lamp.setPosition(x, y, 0);
+
+        // The post: a small dark disc at the foot, ROAD-coloured -- the darkest ink this
+        // palette has, for a thin structural piece rather than the object the outline/shadow
+        // rule is written for.
+        const post = dotSprite('post', LAMP_POST_D, ROAD);
+        lamp.addChild(post);
+
+        const headY = LAMP_ARM_LEN;
+        // SHADOW FIRST, offset the same as the tree's and the road's own.
+        const shadow = dotSprite('shadow', LAMP_HEAD_D, ROAD_SHADOW);
+        lamp.addChild(shadow);
+        shadow.setPosition(SHADOW_OFFSET_X, headY + SHADOW_OFFSET_Y, 0);
+
+        const yellow = COLORS.yellow;
+        const outline = dotSprite('outline', outlineD, shade(yellow, -0.2));
+        lamp.addChild(outline);
+        outline.setPosition(0, headY, 0);
+
+        const head = dotSprite('head', LAMP_HEAD_D, yellow);
+        lamp.addChild(head);
+        head.setPosition(0, headY, 0);
     }
 }
