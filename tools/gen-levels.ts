@@ -29,10 +29,14 @@ import { CAP_SIZE } from '../game/assets/scripts/core/types';
  *   npm run gen -- --only 8    -> level 8 alone
  *   npm run gen -- --only 4-6  -> levels 4 to 6
  *
- * `--only` exists because a tunnel level costs about 150 seconds to pack (TUNNEL_ATTEMPTS is
- * 400 where a tunnel-free level runs 200), so regenerating all ten to look at one of them is
- * twenty-odd minutes of waiting. Every id is seeded from the id alone, so writing one level
- * cannot disturb any other -- the files this does not touch stay exactly as they were.
+ * `--only` exists because generation is slow: `TUNNEL_ATTEMPTS` is 4000 packing attempts where
+ * a tunnel-free level runs 200. Measured end to end on this machine, `--only 2` (no tunnel) is
+ * 1m57s and `--only 4` (one tunnel) is 4m30s, so regenerating all ten to look at one of them is
+ * well over half an hour. Every id is seeded from the id alone, so writing one level cannot
+ * disturb any other -- the files this does not touch stay exactly as they were.
+ *
+ * (This paragraph said 400 and "about 150 seconds to pack". The constant is 4000, ten times
+ * that, and the 150 was derived from the wrong figure. Both are measured now.)
  *
  * The `--` is npm's, not ours: without it npm eats the flag instead of passing it on.
  */

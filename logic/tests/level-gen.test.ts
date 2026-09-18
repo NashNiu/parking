@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
@@ -18,38 +20,116 @@ const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
  */
 const PACKED = IDS.filter((id) => id !== 1);
 
+/** Where `tools/gen-levels.ts` writes, and where the game loads from at runtime. */
+const SHIPPED_DIR = path.join(__dirname, '../../game/assets/resources/levels');
+
+/** The level file the GAME loads for `id`, parsed. */
+function shipped(id: number): LevelData {
+  const file = path.join(SHIPPED_DIR, `level-${id}.json`);
+  return JSON.parse(fs.readFileSync(file, 'utf8')) as LevelData;
+}
+
 /**
- * `generateLevel` for an id, computed once per run.
+ * The level for an id: READ FROM THE SHIPPED FILE for the ten that ship, generated only past
+ * them.
  *
- * Not an optimisation for its own sake: packing a lot takes about a second now that
- * placement is a relaxation over oriented boxes rather than a scan of integer cells, and
- * the tests below ask for a level about 170 times between them. Uncached, the suite ran
- * past ten minutes and never finished. `generateLevel` is seeded from the id alone and
- * has no other input, so serving the same object twice is what it means for it to be
- * deterministic -- which the very first test proves independently, by calling the real
- * thing twice and comparing. Every other test wants "the level for id N", not a fresh
- * computation of it.
+ * THIS SUITE USED TO REGENERATE ALL TEN, AND THAT IS WHAT MADE IT UNRUNNABLE. The docblock
+ * that stood here said packing a lot takes about a second, which is true and is not the cost:
+ * `choosePainting` searches up to 400 paintings and runs `isHardButFair` -- seven full
+ * simulations -- on each, over up to six candidate packings. Measured with the project's own
+ * tool, `npm run gen -- --only 2` takes 1m57s for ONE level, and that is the cheap end; a
+ * tunnel level is about 151s of packing before any painting. The comment on 'the curve keeps
+ * producing legal tracks past the authored table' had already written the total down: 1756
+ * seconds. Nobody could run `npm test` to the end, so in practice nobody ran it.
+ *
+ * READING THE FILE IS NOT A WEAKER CHECK, IT IS A STRONGER ONE. What ships is the JSON in
+ * `resources/levels`; what the old tests checked was what a fresh generation WOULD produce,
+ * which is a different object that happens to be equal. Every claim below -- solvable, on
+ * target for blocked cars, inside the passenger budget, drawable track -- now holds of the
+ * bytes the player's device actually loads.
+ *
+ * THE TWO ARE THE SAME TODAY, and that was verified rather than assumed before this changed.
+ * `npm run gen -- --only 2` rewrote level-2.json byte-for-byte identically, and so did
+ * `--only 4`, leaving a clean working tree both times.
+ *
+ * THAT COMMAND IS ALSO WHERE THE TWO CLAIMS THIS FILE GAVE UP NOW LIVE, and they are named
+ * here because deleting a test without saying what replaced it is how a check quietly stops
+ * existing:
+ *
+ *     cd logic && npm run gen -- --only 4    # then `git status`: clean means the generator
+ *                                           # still reproduces the committed bytes
+ *     cd logic && npm run gen -- --only 11   # validates before it writes, so a non-zero exit
+ *                                           # IS "the packer broke past the authored table"
+ *                                           # (delete the level-11.json it leaves behind)
+ *
+ * WHY COMMANDS AND NOT TESTS. Both were tests, briefly, in a `level-gen.slow.test.ts` that
+ * `npm test` skipped. They were deleted because they could not be run: the same two
+ * generations take 9 to 10 minutes through the tool and had passed no verdict after 36 minutes
+ * under ts-jest, and jest's `testTimeout` cannot interrupt them either -- it is checked between
+ * ticks of the event loop, and `generateLevel` is synchronous CPU-bound code that yields none.
+ * A test nobody can run is the problem this whole change was made to fix; keeping two of them
+ * behind a different filename would only have moved it.
+ *
+ * WHAT GUARDS DETERMINISM IN THIS FILE INSTEAD is a source check that the generator draws no
+ * entropy it was not seeded with -- see 'the generator takes no input but its id'.
+ *
+ * PAST THE TEN there is no file, so those ids are generated. Nothing here asks for one.
  */
 const cache = new Map<number, LevelData>();
 function levelFor(id: number): LevelData {
   const hit = cache.get(id);
   if (hit) return hit;
-  const made = generateLevel(id);
+  const made = IDS.includes(id) ? shipped(id) : generateLevel(id);
   cache.set(id, made);
   return made;
 }
 
-test('the same id generates the same level every time', () => {
-  // Deliberately NOT through `levelFor()` -- the cache would make this pass for free, so
-  // this is the one test that pays for a real second generation.
-  //
-  // ONE id, not all ten. What is under test is that `generateLevel` draws every random
-  // number from a generator seeded by the id alone, with no other input and no shared
-  // mutable state -- a property of the seeding, which one id witnesses as well as ten.
-  // Ten ids meant twenty uncached packs, about half this suite's runtime, to prove the
-  // same single thing. That the id actually REACHES the seed is a different claim, and
-  // the next test is the one that makes it.
-  expect(generateLevel(4)).toEqual(generateLevel(4));
+/**
+ * The generator takes no input but its id.
+ *
+ * A SOURCE CHECK, STANDING IN FOR A NINE-MINUTE ONE. The test that used to live here called
+ * `generateLevel(4)` twice and compared. Id 4 is a tunnel level and one generation of it is
+ * 4m30s measured, so that was nine minutes of a suite to witness one property -- and under
+ * ts-jest, where the same work runs at least four times slower again, it was closer to
+ * unrunnable. What runs here instead catches the regression it was written for at no cost.
+ *
+ * The regression is somebody reaching for ambient entropy -- `Math.random()`, a clock -- inside
+ * a generator that must be reproducible, because the shipped JSON is generated once and
+ * committed. `mulberry32(id * ...)` is the only source of randomness the generator is allowed,
+ * and a seeded PRNG cannot be non-deterministic. So the assertion is the absence of the others.
+ *
+ * It is a weaker statement than running the thing twice, and it is not the only guard: the real
+ * proof is that `npm run gen` rewrites the committed files byte-for-byte, which is visible as a
+ * clean `git status` every time anyone regenerates.
+ */
+test('the generator takes no input but its id', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '../../game/assets/scripts/core/level-gen.ts'), 'utf8',
+  );
+  const code = src.split('\n').filter((l) => {
+    const t = l.trim();
+    return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+  }).join('\n');
+  expect(code).not.toMatch(/Math\.random\s*\(/);
+  expect(code).not.toMatch(/Date\.now\s*\(/);
+  expect(code).not.toMatch(/new Date\s*\(/);
+  // And the seeded generator it is allowed is still there, taking the id.
+  expect(code).toMatch(/mulberry32\(/);
+});
+
+/**
+ * The ten files the game loads are all there, and each one knows which id it is.
+ *
+ * The first thing every other test in this file now depends on. `shipped()` reads by filename,
+ * so a missing or misnamed file is the one failure that could make the rest of the suite test
+ * the wrong level while still passing -- or, worse, pass vacuously.
+ */
+test('every shipped level file exists and carries its own id', () => {
+  for (const id of IDS) {
+    const level = shipped(id);
+    expect(level.id).toBe(id);
+    expect(level.lot.cars.length).toBeGreaterThan(0);
+  }
 });
 
 test('different ids generate different levels', () => {
@@ -521,8 +601,10 @@ test('the curve keeps producing legal tracks past the authored table', () => {
     const p = trackParams(id);
     expect(capacityOptions(p.track)).toContain(p.capacity);
   }
-  expect(validateLevel(levelFor(11))).toEqual([]);
-  expect(validateTrack(levelFor(11))).toEqual([]);
+  // The PACKER half of this -- that id 11 generates into a valid, drawable level -- is not a
+  // test any more. It costs a full tunnel-level generation, and `npm run gen -- --only 11` makes
+  // exactly that check (the tool validates before it writes), with progress printed and a
+  // Ctrl-C that works. See `levelFor` above for why that trade was made.
 });
 
 test('a degenerate level id still yields a drawable track', () => {
