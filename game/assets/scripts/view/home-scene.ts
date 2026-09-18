@@ -2,7 +2,9 @@ import { Color, Layers, Node, UITransform } from 'cc';
 import { legSamples, nodeCenter, PathPoint, ZIG_X } from '../core/home-path';
 import { dotSprite, roundedSprite } from './ui-shapes';
 import { COLORS } from './colors';
-import { LAWN, PAVING, ROAD, ROAD_LINE, shade } from './palette';
+import {
+    LAWN, PAVING, ROAD, ROAD_LINE, shade, TREE_CROWN, TREE_TRUNK,
+} from './palette';
 import { SHADOW_INK } from './shadow';
 
 /**
@@ -150,12 +152,75 @@ const DASH_GAP = 25;
 const DASH_THICK = 9;
 
 /**
- * A tree from directly above is a crown; a lamp is a post and a head. Both stand on `LAWN`,
- * behind their own outline and hard shadow -- see `buildTree` and `buildLamp`.
+ * THE LOBBY'S TREE IS THE BOARD'S TREE, FLATTENED -- same three-ball crown, same tapered trunk,
+ * same proportions, drawn as discs instead of spheres.
+ *
+ * IT USED TO BE ONE DISC, and one disc is exactly what was wrong with it: 「树的样式再调整一下，
+ * 现在看不出来是棵树」. A single circle of flat green on flat green grass has no feature that says
+ * tree -- no trunk to stand on, and a silhouette a ball, a bush and a smudge all share. The board
+ * had already solved this for its own props, in `props.ts`, whose docblock says it in one line:
+ * 「THE CROWN IS THREE BALLS, NOT ONE, and one was the whole of what was wrong with it」. The
+ * lobby was drawing a different, worse tree a few hundred lines away.
+ *
+ * THE NUMBERS ARE THE BOARD'S, SCALED ONCE. `props.ts` measures its tree in board units against
+ * `CROWN_SPAN` (0.30, the crown's half-width); mapping that half-width onto `TREE_D / 2` gives
+ * `s = 88 / 0.60` = 146.667, and every figure below is a board figure times `s`, rounded:
+ *
+ *     board                 r       x        y      ->   lobby    d      x      y
+ *     crown ball 1        .240    .000     .500              70      0     73
+ *     crown ball 2        .155   -.145     .415              45    -21     61
+ *     crown ball 3        .145    .135     .435              43     20     64
+ *     trunk (mean r)     .0675     ---     .150          w   20      -     22   (h = .30s = 44)
+ *
+ * ROUNDED, AND WRITTEN OUT RATHER THAN COMPUTED AT RUNTIME, for the reason the rest of this pass
+ * was opened for: a disc asked for at 45.47 units is a disc the engine has to resample. The test
+ * that guards these re-derives them from `props.ts` and allows the rounding, so the two trees
+ * cannot drift apart without something failing.
+ *
+ * THE CROWN IS NOT SYMMETRIC and that is the board's doing, not a slip: ball 2 reaches
+ * `21 + 22.5` = 43.5 to the left and ball 3 `20 + 21.5` = 41.5 to the right. 43.5 is inside
+ * `TREE_D / 2` = 44, which is what lets `buildTree` go on bounding itself with `outlineD / 2`.
+ *
+ * A lamp is still a post and a head. Both stand on `LAWN`, behind their own outline and hard
+ * shadow -- see `buildTree` and `buildLamp`.
  */
 const TREE_D = 88;
-/** How far the crown is walked back from `COLORS.green`. A lit car is not a tree. */
-const TREE_DIM = 0.7;
+const TREE_LOBES: readonly { d: number; x: number; y: number }[] = [
+    { d: 70, x: 0, y: 73 },
+    { d: 45, x: -21, y: 61 },
+    { d: 43, x: 20, y: 64 },
+];
+const TRUNK_W = 20;
+const TRUNK_H = 44;
+const TRUNK_Y = 22;
+const TRUNK_R = 6;
+
+/**
+ * Where along its leg a tree may stand, as a fraction: `LO` to `LO + SPAN`.
+ *
+ * THE SPAN IS WHAT KEEPS TWO TREES APART, and the band had to narrow when the tree stopped being
+ * a disc. `dressLeg` puts trees on the same side for two legs at a time (`i % 4 < 2`), so
+ * consecutive trees share an x lane often enough that "they will probably be at different x" is
+ * not an answer -- `vergeX` scatters them across a 196-wide band and a tree is 88 wide.
+ *
+ * HOW FAR A TREE REACHES FROM ITS OWN FOOT, rim included. Up, the top ball: `73 + 35` plus half
+ * the outline pad = 112. Down, the trunk's foot: `TRUNK_Y` is exactly half of `TRUNK_H`, so the
+ * trunk stands ON the node and only the rim hangs below = 4. The old disc reached 48 each way.
+ *
+ * Worst case is the late tree on one leg and the early tree on the next, and the gap between
+ * them does not depend on `LO` at all -- shifting the band moves both ends together:
+ *
+ *     gap = RAIL_PITCH * (1 - SPAN) - up - down
+ *         = 290 * 0.54 - 112 - 4 = 40.6
+ *
+ * At the old 0.2..0.8 (span 0.6) it comes to EXACTLY 0: `290 * 0.4` = 116, and the tree's own
+ * reach is `112 + 4` = 116. Two trees rim to rim with nothing between them is not a margin -- it
+ * is the case that fails the moment any of those figures is retuned by a unit. Neither number is
+ * taken on trust here: the test re-derives the reach from the lobes, `RAIL_PITCH` from
+ * `core/home-path`, and checks that the old band would still fail the floor it enforces.
+ */
+const TREE_BAND_LO = 0.27;
+const TREE_BAND_SPAN = 0.46;
 const LAMP_POST_D = 20;
 const LAMP_HEAD_D = 40;
 /**
@@ -664,30 +729,56 @@ export class HomeScene {
         const x = side * this.vergeX(pick(i, S_TREE_X), outlineD / 2);
         // 0.2 TO 0.8 OF THE LEG, which keeps a tree clear of the stops at either end -- a crown
         // growing out of a level badge is a collision, not scenery.
-        const y = lerp(y0, y1, 0.2 + 0.6 * pick(i, S_TREE_Y));
+        const y = lerp(y0, y1, TREE_BAND_LO + TREE_BAND_SPAN * pick(i, S_TREE_Y));
 
         const tree = container(`Tree${i}`, leg);
         tree.setPosition(x, y, 0);
 
-        // SHADOW FIRST, so the crown sits on it rather than under it.
-        const shadow = dotSprite('shadow', TREE_D, ROAD_SHADOW);
-        tree.addChild(shadow);
-        shadow.setPosition(SHADOW_OFFSET_X, SHADOW_OFFSET_Y, 0);
+        // EVERY SHADOW FIRST, then the trunk FINISHED, then the crown. `buildLamp` interleaves
+        // its two parts across three passes because they overlap and either can be the one in
+        // front; a tree is simpler and stricter -- the trunk is entirely BEHIND the crown, so it
+        // is drawn complete (rim and all) before the first crown outline goes down. Running the
+        // trunk's face after the crown's outlines instead would punch a trunk-coloured notch
+        // through the bottom of the crown's rim, in the 6 units where the two overlap.
+        //
+        // The shadows all go first for the same reason the lamp's do: a shadow is cast by the
+        // whole object, so none of them may land on top of any part of it.
+        const trunkShadow = roundedSprite('shadow', TRUNK_W, TRUNK_H, ROAD_SHADOW, TRUNK_R);
+        tree.addChild(trunkShadow);
+        trunkShadow.setPosition(SHADOW_OFFSET_X, TRUNK_Y + SHADOW_OFFSET_Y, 0);
+        for (const lobe of TREE_LOBES) {
+            const shadow = dotSprite('shadow', lobe.d, ROAD_SHADOW);
+            tree.addChild(shadow);
+            shadow.setPosition(lobe.x + SHADOW_OFFSET_X, lobe.y + SHADOW_OFFSET_Y, 0);
+        }
 
-        const green = COLORS.green;
-        const crownColour = new Color(
-            Math.round(green.r * TREE_DIM),
-            Math.round(green.g * TREE_DIM),
-            Math.round(green.b * TREE_DIM),
-            255,
+        // The rim is `OUTLINE_PAD / 2` on every side, so a rounded rect's corner radius has to
+        // grow by the same amount or the rim comes out thinner at the corners than along the
+        // sides -- the same concentric-capsule argument `toonPill` makes in `ui-shapes`.
+        const trunkOutline = roundedSprite(
+            'outline', TRUNK_W + OUTLINE_PAD, TRUNK_H + OUTLINE_PAD,
+            shade(TREE_TRUNK, -0.2), TRUNK_R + OUTLINE_PAD / 2,
         );
-        // The outline: the crown's own colour, `shade`d darker and drawn slightly larger, behind
-        // the crown.
-        const outline = dotSprite('outline', outlineD, shade(crownColour, -0.2));
-        tree.addChild(outline);
+        tree.addChild(trunkOutline);
+        trunkOutline.setPosition(0, TRUNK_Y, 0);
+        const trunk = roundedSprite('trunk', TRUNK_W, TRUNK_H, TREE_TRUNK, TRUNK_R);
+        tree.addChild(trunk);
+        trunk.setPosition(0, TRUNK_Y, 0);
 
-        const crown = dotSprite('crown', TREE_D, crownColour);
-        tree.addChild(crown);
+        // ALL THREE RIMS, THEN ALL THREE BALLS, so the rim only ever shows around the crown's
+        // OUTER silhouette. A ball finished one at a time would lay its neighbour's rim across
+        // its own face, and the crown would read as three circles rather than as one canopy.
+        const crownEdge = shade(TREE_CROWN, -0.2);
+        for (const lobe of TREE_LOBES) {
+            const outline = dotSprite('outline', lobe.d + OUTLINE_PAD, crownEdge);
+            tree.addChild(outline);
+            outline.setPosition(lobe.x, lobe.y, 0);
+        }
+        for (const lobe of TREE_LOBES) {
+            const ball = dotSprite('lobe', lobe.d, TREE_CROWN);
+            tree.addChild(ball);
+            ball.setPosition(lobe.x, lobe.y, 0);
+        }
     }
 
     /**

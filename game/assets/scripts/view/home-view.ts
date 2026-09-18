@@ -120,9 +120,24 @@ const CHEVRON_INK = new Color(150, 163, 196, 220);
  * screen, and on a phone with no inset at all it would genuinely be on the edge.
  */
 const START_MARGIN = 90;
-const START_W = 400;
-const START_H = 116;
-const START_R = 40;
+/**
+ * THE PRIMARY BUTTON'S SIZE. 400x116 -> 560x148, on instruction: 「开始第六关 这个按钮再放大一些」.
+ *
+ * 560 IS 44% OF THE CANVAS WIDTH, up from 31%. It is the one control on this screen that every
+ * session goes through, and it was competing for weight with a rail of 128-unit badges beside it
+ * -- the badges are what the eye should read first, but the button is what the thumb should find
+ * without looking. The radius goes with the height (48 against 148) so the shape stays the same
+ * lozenge rather than getting squarer as it grows.
+ *
+ * WHAT HAS TO STILL FIT, checked against the longest string this button can hold rather than the
+ * one in the screenshot. At `START_LABEL_SIZE` 60, 「重玩 第 10 关」 is four CJK glyphs (240), two
+ * digits (about 60) and three spaces (about 45) = 345; with the icon and its gap the whole block
+ * is `52 + 18 + 345` = 415 inside 560, leaving about 72 each side. That clears `START_R`'s 48, so
+ * no glyph ever sits against a rounded corner. 「开始 第 2 关」 is 30 narrower still.
+ */
+const START_W = 560;
+const START_H = 148;
+const START_R = 48;
 const START = new Color(86, 199, 104, 255);
 const START_BASE = new Color(56, 156, 76, 255);
 /** How far the base peeks out below the face. Same lip the HUD's buttons wear. */
@@ -158,9 +173,15 @@ const BTN_LIFT = 8;
  * first revealed, so this placeholder is never actually seen; it exists so the icon has SOME
  * position between construction and that first `setCurrent` rather than sitting on the origin.
  */
-const START_ICON_D = 40;
-const START_ICON_GAP = 14;
+const START_ICON_D = 52;
+const START_ICON_GAP = 18;
 const START_LABEL_X = (START_ICON_D + START_ICON_GAP) / 2;
+/**
+ * The type on it. A NAMED CONSTANT NOW, because it used to be a bare 46 passed to `makeLabel` at
+ * the call site -- which is how it got left behind the last time this button was resized, and is
+ * why the arithmetic in `START_W`'s docblock had nothing to refer to.
+ */
+const START_LABEL_SIZE = 60;
 const START_ICON_X = -START_W / 2 + START_R + START_ICON_D / 2 + 8;
 
 /**
@@ -760,7 +781,7 @@ export class HomeView {
         const icon = triSprite('icon', START_ICON_D, Color.WHITE);
         face.addChild(icon);
         icon.setPosition(START_ICON_X, 0, 0);
-        const label = makeLabel(face, 'HomeStartLabel', 46, 0, START_LABEL_X);
+        const label = makeLabel(face, 'HomeStartLabel', START_LABEL_SIZE, 0, START_LABEL_X);
         label.isBold = true;
         label.string = '开始游戏';
         return { node: btn, face, base, label, icon };

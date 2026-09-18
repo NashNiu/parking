@@ -653,6 +653,141 @@ test('every scene prop stays inside the parking band, top and bottom', () => {
 });
 
 /**
+ * The lobby's tree IS the board's tree, and two trees on one verge cannot grow into each other.
+ *
+ * 「树的样式再调整一下，现在看不出来是棵树」. The lobby drew one flat green disc; `props.ts` had
+ * already worked out why that fails, in a docblock that says it in one line -- 「THE CROWN IS
+ * THREE BALLS, NOT ONE, and one was the whole of what was wrong with it」 -- and the lobby was
+ * drawing a different, worse tree a few hundred lines away, in a green it dimmed by hand.
+ *
+ * SO THE FIGURES ARE RE-DERIVED HERE RATHER THAN COPIED. The lobby's lobes are the board's balls
+ * scaled once, by mapping `CROWN_SPAN` onto `TREE_D / 2`, and this test does that arithmetic from
+ * both sources and compares. Written-down numbers that "came from" another file are how the two
+ * trees drifted apart the first time; a retune of either side now has to move both or fail here.
+ * The rounding is allowed for deliberately -- a disc asked for at 45.47 units is a disc the
+ * engine resamples, which is the blur this whole pass was opened for.
+ *
+ * AND THE BAND THAT KEEPS TREES APART. The tree grew from a 48-unit disc to something 112 tall,
+ * and `dressLeg` puts trees on the SAME side for two legs at a time, so the old 0.2..0.8
+ * placement band would have let consecutive trees touch (a gap of -0.4). The clearance is
+ * re-derived here from `RAIL_PITCH` and the tree's own reach rather than trusting either number
+ * as written -- it is the kind of overlap that looks like a drawing fault in a screenshot and
+ * has nothing in the scene to complain about it.
+ */
+test('the lobby tree is the board tree scaled, and trees clear each other', () => {
+  const num = (src: string, name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*(-?[0-9.]+)\\s*;`).exec(src);
+    if (!m) throw new Error(`${name} not found -- renamed?`);
+    return Number(m[1]);
+  };
+  const props = readSrc('props.ts');
+  const scene = readSrc('home-scene.ts');
+
+  // The board's three balls, and the lobby's three lobes.
+  const balls = [...props.matchAll(
+    /\{\s*r:\s*([0-9.]+),\s*x:\s*(-?[0-9.]+),\s*y:\s*([0-9.]+),\s*z:/g,
+  )].map((m) => ({ r: Number(m[1]), x: Number(m[2]), y: Number(m[3]) }));
+  const lobes = [...scene.matchAll(
+    /\{\s*d:\s*([0-9.]+),\s*x:\s*(-?[0-9.]+),\s*y:\s*([0-9.]+)\s*\}/g,
+  )].map((m) => ({ d: Number(m[1]), x: Number(m[2]), y: Number(m[3]) }));
+  expect(balls.length).toBe(3);
+  expect(lobes.length).toBe(3);
+
+  const treeD = num(scene, 'TREE_D');
+  const scale = treeD / (2 * num(props, 'CROWN_SPAN'));
+  balls.forEach((b, i) => {
+    expect(lobes[i].d).toBe(Math.round(2 * b.r * scale));
+    expect(lobes[i].x).toBe(Math.round(b.x * scale));
+    expect(lobes[i].y).toBe(Math.round(b.y * scale));
+  });
+
+  // The trunk, from the board's tapered cylinder: the mean of its two radii, its height, and a
+  // centre at half that height -- which is what puts the tree's FOOT on its own node.
+  const meanR = (num(props, 'TRUNK_R_TOP') + num(props, 'TRUNK_R_BOTTOM')) / 2;
+  const trunkH = num(scene, 'TRUNK_H');
+  expect(num(scene, 'TRUNK_W')).toBe(Math.round(2 * meanR * scale));
+  expect(trunkH).toBe(Math.round(num(props, 'TRUNK_H') * scale));
+  expect(num(scene, 'TRUNK_Y')).toBe(trunkH / 2);
+
+  // The crown may not reach wider than the bound `buildTree` passes to `vergeX`, which is what
+  // keeps a tree off the badges and off the paving.
+  const pad = num(scene, 'OUTLINE_PAD');
+  const reachX = Math.max(...lobes.map((l) => Math.abs(l.x) + l.d / 2));
+  expect(reachX).toBeLessThanOrEqual(treeD / 2);
+
+  // Two same-side trees on consecutive legs. The gap does not depend on where the band starts,
+  // only on how wide it is -- shifting the band moves both ends together.
+  const up = Math.max(...lobes.map((l) => l.y + l.d / 2)) + pad / 2;
+  const down = pad / 2;
+  const pitch = num(readCore('home-path.ts'), 'RAIL_PITCH');
+  const gap = pitch * (1 - num(scene, 'TREE_BAND_SPAN')) - up - down;
+  expect(gap).toBeGreaterThan(30);
+  // And the band that shipped before this tree would NOT clear that floor, so the check is
+  // live rather than vacuously true. It comes to exactly 0 -- rim to rim, no margin at all --
+  // which is why the floor is a positive number and not "greater than zero".
+  expect(pitch * (1 - 0.6) - up - down).toBeLessThan(30);
+});
+
+/**
+ * The lobby's tree wears the BOARD's two colours, not a hand-dimmed copy of the play green.
+ *
+ * The old crown was `COLORS.green` multiplied by 0.7 at build time -- a second tree colour with
+ * no argument behind it, a few hundred lines from one that has a whole docblock. Both colours
+ * live in `palette` now and both files read them, which is the resolution `CONTROL_FACE` got
+ * when the lobby needed the HUD's gear.
+ *
+ * The trunk is the half that makes the shape read: it is the only brown on either screen, and a
+ * crown without one is a bush.
+ */
+test('both trees read their crown and trunk from the shared palette', () => {
+  const pal = stripComments(readSrc('palette.ts'));
+  expect(pal).toContain('export const TREE_CROWN = new Color(74, 142, 86);');
+  expect(pal).toContain('export const TREE_TRUNK = new Color(116, 88, 66);');
+  for (const file of ['props.ts', 'home-scene.ts']) {
+    const src = stripComments(readSrc(file));
+    expect(src).toMatch(/import \{[^}]*TREE_CROWN[^}]*\} from '\.\/palette';/);
+    expect(src).toContain('TREE_TRUNK');
+  }
+  // No local copy of either, and no hand-dimming of the play green.
+  const scene = stripComments(readSrc('home-scene.ts'));
+  expect(scene).not.toContain('TREE_DIM');
+  expect(scene).not.toContain('COLORS.green');
+  expect(stripComments(readSrc('props.ts'))).not.toContain('PROP_GREEN');
+});
+
+/**
+ * The primary button's type size is a NAMED constant, and the longest label still fits.
+ *
+ * 「开始第六关 这个按钮再放大一些」. The size that had to change was written as a bare `46` at the
+ * `makeLabel` call, which is how it got left behind the previous time this button was resized --
+ * every other figure on the button had a name and that one did not, so the docblock arguing the
+ * arithmetic had nothing to refer to.
+ *
+ * THE FIT CHECK IS AN APPROXIMATION AND IS MEANT TO BE. Measuring real glyph advances needs the
+ * font, which this suite cannot load; a CJK glyph at about one em, a digit at a half and a space
+ * at a quarter is close enough to catch the failure that matters -- type running into the rounded
+ * corners after someone grows the label or narrows the button. It is a smoke alarm, not a ruler,
+ * so it asserts clearance against `START_R` rather than a tight margin.
+ */
+test('the start button names its type size, and the longest label clears the corners', () => {
+  const num = (src: string, name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*(-?[0-9.]+)\\s*;`).exec(src);
+    if (!m) throw new Error(`${name} not found -- renamed?`);
+    return Number(m[1]);
+  };
+  const src = readSrc('home-view.ts');
+  expect(stripComments(src)).toContain(
+    "makeLabel(face, 'HomeStartLabel', START_LABEL_SIZE, 0, START_LABEL_X)");
+
+  const size = num(src, 'START_LABEL_SIZE');
+  // The widest string this button can hold: 重玩 第 10 关 -- four CJK, two digits, three spaces.
+  const widest = size * (4 * 1.0 + 2 * 0.5 + 3 * 0.25);
+  const block = num(src, 'START_ICON_D') + num(src, 'START_ICON_GAP') + widest;
+  const sideRoom = (num(src, 'START_W') - block) / 2;
+  expect(sideRoom).toBeGreaterThan(num(src, 'START_R'));
+});
+
+/**
  * The lobby's street still has no kerb.
  *
  * WHAT THIS GUARDS, AND WHAT IT STOPPED GUARDING. `home-scene.ts` used to paint a kerb under the

@@ -367,6 +367,32 @@ export const LAWN = new Color(147, 203, 128);
 export const PAVING = new Color(113, 122, 142);
 
 /**
+ * THE TREE'S TWO COLOURS, shared by the board's mesh props and the lobby's flat scenery.
+ *
+ * A GREEN NO CAR AND NO PASSENGER CAN BE. The play palette's green is (55, 219, 101) -- bright
+ * and high-chroma, because it has to be told apart from five other play colours at a glance.
+ * Scenery that shared it would read as a game object, and the one thing a tree must not do is
+ * look like something to tap. It was lifted from (62, 122, 74), which was dark enough that the
+ * crown read as a hole in the pavement rather than as foliage; it still sits 41 luminance units
+ * off the play green, which is the separation that matters, and 84 off the board's pavement.
+ *
+ * THEY LIVE HERE BECAUSE THE LOBBY GREW A TREE OF ITS OWN. They were private to `props.ts`, and
+ * the lobby's flat tree darkened the PLAY green by a hand-picked 0.7 instead -- two trees, two
+ * greens, neither knowing about the other. The board's is the one with an argument behind it, so
+ * the lobby takes it and `props.ts` reads it from here. Same resolution `CONTROL_FACE` got when
+ * the lobby needed the HUD's gear.
+ *
+ * ON GRASS RATHER THAN ON PAVEMENT, which is the lobby's case and is re-measured rather than
+ * assumed: `TREE_CROWN` is 115.3 in Rec.601 luma against `LAWN`'s 177.8, a separation of 62.5.
+ * That is less than the 84 it has on the board's pavement and more than enough -- and the crown
+ * is rimmed with `shade(TREE_CROWN, -0.2)` besides, which is what actually draws its edge.
+ * `TREE_TRUNK` is at 93.9, so it stands 84 off the grass, and it is the only brown on either
+ * screen: nothing else can be mistaken for it.
+ */
+export const TREE_CROWN = new Color(74, 142, 86);
+export const TREE_TRUNK = new Color(116, 88, 66);
+
+/**
  * RGB -> HSL, each component normalised to [0,1] (`h` as a fraction of a full turn, not degrees).
  * Standard colour-space conversion, named so that `shade` below is not secretly reimplementing
  * one at the call site.
