@@ -155,12 +155,21 @@ export class GameCore {
    *
    * Shares `canFill` with `isDeadlocked` on purpose: this state is what a deadlock is minus
    * the lockable stalls, so the two must not be able to disagree about what "nothing can
-   * board" means.
+   * board" means. Both wait on `stillFilling` for the same reason.
+   *
+   * NOT ASKED WHILE THE RING IS STILL FILLING. `canFill` is exact -- `reachableColors` says
+   * so and is right -- but it is exact about where the ring is GOING, and this was being put
+   * to the player while they could still see gaps on the ring and rows streaming in from the
+   * channels. Reported as 上方的圆环中还有空位,理论上还没结束. A true answer the player has no
+   * way to check reads as a wrong one, and waiting costs nothing: the ring settles in at
+   * most `capacity` steps, and once it has, the same question is answered by what is on the
+   * screen rather than by a prediction about it.
    */
   needsUnlock(): boolean {
     return this.state === 'playing'
       && !this.parking.hasFreeSlot()
       && this.parking.canUnlock()
+      && !this.loop.stillFilling()
       && !this.canFill();
   }
 
@@ -198,6 +207,10 @@ export class GameCore {
     const room = this.parking.hasFreeSlot() || this.parking.canUnlock();
     const canBringOut = room && this.lot.movableCarIds().length > 0;
     if (canBringOut) return false;
+    // The same wait `needsUnlock` makes, and for a stronger reason: this one ENDS the level.
+    // Calling a level lost while rows are still arriving would be the same premature
+    // judgement, with nothing the player could do about it afterwards.
+    if (this.loop.stillFilling()) return false;
     return !this.canFill();
   }
 }

@@ -1,5 +1,6 @@
 import { Color, Mesh, MeshRenderer, Node, utils } from 'cc';
 import { flatMaterial, alphaMaterial } from './materials';
+import { SHADOW_INK, SHADOW_ALPHA } from './shadow';
 
 /** One primitive geometry, in the shape `utils.createMesh` and `mergeParts` both take. */
 export interface MeshPart {
@@ -42,6 +43,48 @@ export function mergeParts(parts: MeshPart[]): Mesh {
         base += vc;
     }
     return utils.createMesh({ positions, normals, uvs, indices });
+}
+
+/**
+ * One part's geometry, rotated about X and then moved into place, ready to merge.
+ *
+ * Here rather than in pax-figure, which built it: the crowd was the first thing assembled out
+ * of engine primitives, and the scene props are the second. It belongs next to `mergeParts`,
+ * which is the only thing it produces input for.
+ *
+ * Normals are rotated but NOT translated, which is the whole reason this is not a four-line
+ * loop: translating a normal stops it being a direction, and the lighting then goes wrong in
+ * a way that is easy to ship and hard to see.
+ */
+export function placed(
+    g: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] },
+    deg: number, tx: number, ty: number, tz: number,
+): MeshPart {
+    const rad = deg * Math.PI / 180;
+    const cos = Math.cos(rad), sin = Math.sin(rad);
+    const positions = new Array<number>(g.positions.length);
+    for (let i = 0; i < g.positions.length; i += 3) {
+        const y = g.positions[i + 1], z = g.positions[i + 2];
+        positions[i] = g.positions[i] + tx;
+        positions[i + 1] = y * cos - z * sin + ty;
+        positions[i + 2] = y * sin + z * cos + tz;
+    }
+    let normals: number[] | undefined;
+    if (g.normals) {
+        normals = new Array<number>(g.normals.length);
+        for (let i = 0; i < g.normals.length; i += 3) {
+            const y = g.normals[i + 1], z = g.normals[i + 2];
+            normals[i] = g.normals[i];
+            normals[i + 1] = y * cos - z * sin;
+            normals[i + 2] = y * sin + z * cos;
+        }
+    }
+    return {
+        positions,
+        normals,
+        uvs: g.uvs ? Array.from(g.uvs) : undefined,
+        indices: g.indices ? Array.from(g.indices) : undefined,
+    };
 }
 
 /** Segments per rounded corner. Four is plenty at the size these slabs are drawn. */
@@ -200,14 +243,14 @@ export function makeMerged(name: string, parts: MeshPart[], color: Color): Node 
 /**
  * The soft drop shadow under a panel: the same rounded shape in translucent black,
  * offset down and set behind the panel so only the sliver below it shows. Real shadows
- * are wrong here (the whole board is tilted ~52°, so a directional light throws long
+ * are wrong here (the whole board is tilted -- see BOARD_TILT -- so a directional light throws long
  * offset shadows onto a slanted ground) and this is what the reference art does anyway.
  */
-export function makeShadowSlab(name: string, w: number, h: number, r: number, alpha = 42): Node {
+export function makeShadowSlab(name: string, w: number, h: number, r: number, alpha = SHADOW_ALPHA): Node {
     const node = new Node(name);
     const mr = node.addComponent(MeshRenderer);
     mr.mesh = mergeParts([roundedSlabPart(w, h, 0.02, r)]);
-    mr.material = alphaMaterial(new Color(24, 34, 56, alpha));
+    mr.material = alphaMaterial(new Color(SHADOW_INK.r, SHADOW_INK.g, SHADOW_INK.b, alpha));
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
     return node;
 }

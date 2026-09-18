@@ -6,8 +6,11 @@ import {
 import {
     GameCore, validateLevel, LevelData, firstBlocker, Flight, LANE, carBox, CAP_BOX, CAR_SCALE,
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
-    emptyProgress, parseProgress, Progress, recordClear, serializeProgress, unlockedThrough,
-    defaultSettings, parseSettings, serializeSettings, Settings,
+    bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
+    unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
+    addCoins, backfilledWallet, canClaim, Checkin, claim as claimCheckin, coinsForClear,
+    emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin, serializeWallet,
+    todayKey, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -15,17 +18,21 @@ import { colorOf } from './colors';
 import { GridView } from './grid-view';
 import { buildTunnel, tunnelCrown, TUNNEL_SHELL } from './tunnel-mesh';
 import { bayPanelSize, ParkingView, stallFootprint } from './parking-view';
+import { setupProps, baySideProps } from './props';
 import { TrackView, trackReach, leftLaneFloor } from './track-view';
 import { HudView } from './hud-view';
 import { HomeView } from './home-view';
 import {
-    clearProgressText, loadProgressText, loadSettingsText, saveProgressText, saveSettingsText,
+    clearCheckinText, clearProgressText, clearWalletText, loadCheckinText, loadProgressText,
+    loadSettingsText, loadWalletText, saveCheckinText, saveProgressText, saveSettingsText,
+    saveWalletText,
 } from './storage';
 import { setHaptics } from './haptics';
 import { setupEnvironment, setupAntiAliasing } from './environment';
 import {
-    setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad, GROUND,
+    setupBackground, setupStage, setupRoads, lotHeight, lotWidth, RingRoad,
 } from './scene-stage';
+import { GROUND } from './palette';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
@@ -56,7 +63,7 @@ const nowMs: () => number =
         ? () => performance.now()
         : () => Date.now();
 
-const BUILD_TAG = 'build 0903-01';
+const BUILD_TAG = 'build 0914-01';
 
 /**
  * A one-line fingerprint of the level data that ACTUALLY arrived, stamped next to the build
@@ -162,6 +169,33 @@ const CELL_MAX = 1.4;
  * spaced by core's CLEARANCE, not by this.
  */
 const CELL_GAP = 0.02;
+
+/**
+ * Clear air between the ring road and the parking bay, and between the bay and the track's
+ * outermost waiting figure. One constant for both, since both are the same job.
+ *
+ * Up here rather than beside the bay it spaces, because the cell budget has to add the whole
+ * stack above the lot up before it can know what is left below it -- see `cell`.
+ */
+const BAND_GAP = 0.16;
+
+/**
+ * How far the lot's SLAB overhangs the grid of cars, on every side. `lotWidth`/`lotHeight`
+ * own it; it is named here because the cell budget has to subtract it from both directions
+ * and two bare 0.3s are two chances to disagree with scene-stage.
+ */
+const SLAB_PAD = 0.3;
+
+/**
+ * A floor under the cell, so a frame too small to hold the board produces a small board
+ * rather than an inside-out one. The vertical budget is a SUBTRACTION now (see `cell`), and
+ * a subtraction can go negative where the old ratio could not -- `padTop` and `padBottom`
+ * are each clamped at 0.45, so a HUD claiming both would leave the board a fifth of the
+ * screen and the budget below zero. Nothing realistic reaches it: the phone this was
+ * measured on reserves 0.134 between them.
+ */
+const MIN_CELL = 0.2;
+
 const EXIT_X = 7.5;
 const EXIT_TURN_TIME = 0.16;
 const EXIT_SPEED = 8;
@@ -367,23 +401,6 @@ const LIT_MATERIAL = 'materials/lit';
 const PRELOAD_DEADLINE = 8;
 
 /**
- * How long the home screen's title must be held to clear the save.
- *
- * Three seconds is long enough that no ordinary tap or fumble reaches it, and short enough
- * that someone who has been told about it does not give up. See `wipeProgress`.
- */
-const HOLD_SECONDS = 3;
-
-/**
- * How far the finger may stray and still be holding rather than swiping, in design units.
- *
- * 24, against the rail's own DRAG_SLOP of 14: a gesture can be a drag before it stops being
- * a hold. The gap is deliberate -- the two questions are different, and a thumb resting for
- * three seconds drifts further than one deciding whether to swipe.
- */
-const HOLD_SLOP = 24;
-
-/**
  * The blocked-tap nudge: the car drives at the thing in its way, both cars jolt, and it
  * reverses. A car that only shuddered in place said "no" without saying WHY — this points
  * at the obstacle, which is the one piece of information the player is missing.
@@ -471,25 +488,28 @@ export class GameController extends Component {
      */
     private settings: Settings = defaultSettings();
     /**
-     * Whether the press-and-hold that wipes the save is counting down.
+     * The coin balance, in memory, held exactly the way `progress` is: read once on boot,
+     * written only when it changes, never read back off the device again.
      *
-     * A flag rather than trusting `unschedule` to undo an over-arm: on web a single click
-     * emits BOTH a mouse and a touch event, so the press handler runs twice for one press,
-     * and this keeps the second one from arming a timer the release cannot see.
+     * It is a SECOND save under a second key, but not a second lifetime -- wiping the progress
+     * wipes this too (`clearWalletText` says why, and it is the opposite call from settings).
+     * Nothing spends coins yet; the lobby's top bar is the only thing that reads the number.
      */
-    private holdArmed = false;
-    /** Where the press that armed the hold landed, so a swipe off it can cancel the hold. */
-    private holdFromX = 0;
+    private wallet: Wallet = emptyWallet();
+
+    /**
+     * The daily check-in streak, read once on the boot path beside the wallet.
+     *
+     * A SAVE OF ITS OWN rather than a field on the wallet, for the reason `core/checkin`
+     * gives: coins are what it pays out, not what it is. It goes in the wipe with the
+     * progress -- `storage.clearCheckinText` argues that end of it.
+     */
+    private checkin: Checkin = emptyCheckin();
     /**
      * Whether the release about to arrive was a rail DRAG rather than a tap. Set by
      * `onPressEnd`, read once by `handleTap`; see there for why the order matters.
      */
     private slidHome = false;
-    /**
-     * Held as a field because `unschedule` matches on the callback's identity -- an inline
-     * arrow would arm a timer that nothing could ever cancel.
-     */
-    private readonly holdWipe = (): void => this.wipeProgress();
 
     private core: GameCore | null = null;
     private gridView: GridView | null = null;
@@ -713,6 +733,12 @@ export class GameController extends Component {
         // so a corrupt or absent save costs the player their stars and not their game.
         this.progress = parseProgress(loadProgressText());
         this.settings = parseSettings(loadSettingsText());
+        // Beside the progress, and on the same terms: `parseWallet` cannot throw either, so a
+        // corrupt balance costs the player their coins and not their game.
+        this.wallet = parseWallet(loadWalletText());
+        // Same contract and the same reason: `parseCheckin` cannot throw either, so a
+        // corrupt streak costs the player a day rather than the boot.
+        this.checkin = parseCheckin(loadCheckinText());
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
@@ -809,7 +835,6 @@ export class GameController extends Component {
         input.off(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
         input.off(Input.EventType.MOUSE_DOWN, this.onPressStart, this);
         input.off(Input.EventType.MOUSE_MOVE, this.onPressMove, this);
-        this.unschedule(this.holdWipe);
     }
 
     /**
@@ -854,10 +879,21 @@ export class GameController extends Component {
      */
     private showHome(): void {
         this.unloadLevel();
-        if (!this.home && this.canvasNode) this.home = new HomeView(this.canvasNode);
+        if (!this.home && this.canvasNode) {
+            this.home = new HomeView(this.canvasNode);
+            // Once, with the view -- the bar is standing furniture and its one reserved
+            // entry does not change. The dot on top of it does, so it is repainted below.
+            this.home.fillCheckin(() => this.openCheckin());
+        }
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
         this.home?.setProgress(this.progress);
+        // Every return to the lobby repaints the balance, which is what makes a clear's payout
+        // show up: the bar is standing and was drawn long before the coins were earned.
+        this.home?.setCoins(this.wallet.coins);
+        // On every return, not only on the first build: a player who came back after
+        // midnight has a claim waiting that was not there when the bar was drawn.
+        this.paintCheckinDot();
         this.home?.show();
     }
 
@@ -871,9 +907,50 @@ export class GameController extends Component {
     private finishLoading(): void {
         const count = this.countLevels();
         this.home?.setLevels(count);
+        this.backfillWallet(count);
         this.home?.setProgress(this.progress);
         this.home?.setLoading(false);
         console.log(`[Game] home screen ready: ${count} levels`);
+    }
+
+    /**
+     * Catch the wallet up to a save whose stars predate it: a player who cleared levels
+     * before the wallet subsystem existed has a balance stuck at 0 (or wherever it was when
+     * the subsystem landed) even though `this.progress` already earned more than that.
+     * `coinsForClear` cannot pay that out itself -- it pays the difference at the moment of a
+     * clear, and there is no clear happening here to attach a payout to -- so `backfilledWallet`
+     * derives the total and this wires the result into storage and the coin pill.
+     *
+     * THE DECISION IS NOT MADE HERE, deliberately. Raising-but-never-lowering is the one
+     * property this feature rests on, and it used to be three lines in this method -- in the
+     * view layer, which has no test environment, so the safest-sounding half of the feature was
+     * the untested half. `core/wallet`'s `backfilledWallet` owns it and jest pins it. What is
+     * left here is wiring: ask, and if the answer is a different object, persist it.
+     *
+     * This does not reopen the "clear -> wipe -> clear again" farm that kept coins out of
+     * `Progress` in the first place: `wipeProgress` clears the wallet and the progress
+     * TOGETHER (see `clearWalletText`'s call site), so the next load derives 0 from an empty
+     * save, not the balance the player wiped away. Nothing here runs a second time on the same
+     * clear either -- once raised, the stored balance is no longer below its own derived
+     * figure, so a later load is a no-op.
+     *
+     * Runs from `finishLoading`, not from `start`'s load path alongside `parseWallet`: it
+     * needs `countLevels()`, which needs the resources bundle index, and that index is not
+     * ready any earlier than this (see `finishLoading`'s own docblock). `showHome` already
+     * painted the pre-backfill balance on the very first frame, so a change here has to
+     * repaint the pill again, not just persist it.
+     */
+    private backfillWallet(levelCount: number): void {
+        // The raise-or-leave decision lives in `core/wallet`, not here, and the identity check
+        // below is why that is worth a function call: `backfilledWallet` hands back the SAME
+        // object when nothing is owed, so "did anything change" is one `===` rather than a
+        // second copy of the comparison it just made. This layer has no tests; that one does.
+        const next = backfilledWallet(this.wallet, this.progress, levelCount);
+        if (next === this.wallet) return;
+        this.wallet = next;
+        saveWalletText(serializeWallet(this.wallet));
+        this.home?.setCoins(this.wallet.coins);
+        console.log(`[Game] wallet backfilled to ${this.wallet.coins} coins`);
     }
 
     /** Leave the home screen for `name`. The inverse of `showHome`. */
@@ -1069,6 +1146,32 @@ export class GameController extends Component {
         // has to happen before the loop below re-adds the badges the new level actually owns.
         this.hud?.clearTunnelBadges();
 
+        // The track's shape, and how far the drawn ring reaches above and below its own
+        // origin. HERE, well before the ring is built, because the cell budget below has to
+        // add up everything that sits ABOVE the lot before it can tell what is left under
+        // it, and the ring is the tallest term in that sum. `buildShape`'s switch is
+        // exhaustive with no default, so an unrecognised shape would crash rather than draw
+        // -- hence the fallback; `validateTrack` further down says which field is wrong.
+        const rawTrack = level.loop.track as TrackShape;
+        const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
+        const path = new TrackPath(shape);
+        const reach = trackReach(path);
+        // The HUD's bands are part of the framing, not something to be overlapped. They
+        // arrive as fractions of the SCREEN's height because that is what they are -- a
+        // notch and a plate of fixed design units both scale with the viewport, and the
+        // board does not. So the board gets what is left: with `f` reserved, the content
+        // has to fit in (1 - f) of the frame, hence the divisor rather than a plain
+        // halving. On a screen with no notch this still reserves the plate's own band,
+        // which is the difference between the title clearing the ring by arithmetic and
+        // clearing it by luck.
+        //
+        // Read before the cell rather than after it (which is where it used to sit): the
+        // lot is sized into the same box `fitCamera` will frame it in, so these two are the
+        // same `usable` or the dead band comes straight back.
+        this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
+        this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
+        const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
+
         // The box the lot and its ring road have to live in. These were CONSTANTS
         // (RING_LOW -5.76, LOT_HALF_W 3.83), both derived from the +/-4.90 by +/-6.21 frame
         // of the editor preview window -- and a phone's frame is neither of those numbers.
@@ -1079,9 +1182,8 @@ export class GameController extends Component {
         // now -- see the asymmetry below -- but by 0.21 and on purpose, where before it was
         // by 0.23 and by accident, on a lane the layout believed was fully visible.)
         //
-        // `ringLow` is the lowest a ring lane's CENTRELINE can sit with its outer edge still
-        // on screen; `lotHalfW` is what is left across once the lot's offset to the side
-        // lane comes off each side.
+        // `lotHalfW` is what is left across once the lot's offset to the side lane comes off
+        // each side.
         //
         // Note the asymmetry, which is deliberate. Downwards the whole lane has to fit,
         // because the bottom lane's outer kerb IS the bottom of the board and the lot sits
@@ -1094,7 +1196,6 @@ export class GameController extends Component {
         // 76% of the screen; this puts it at 82%, and the cell that comes free makes the
         // cars 2.5% bigger on top of that.
         const frame = this.viewFrame();
-        const ringLow = -(frame.halfH - ROAD_H / 2);
         // HALF the offset, not all of it. The side lanes carry no traffic (see the note
         // above), so what they owe the layout is a hint of kerb, not a whole lane: at
         // RING_OFF/2 their centreline sits 0.31 off screen and about 0.14 of inner kerb is
@@ -1103,13 +1204,51 @@ export class GameController extends Component {
         const lotHalfW = frame.halfW - RING_OFF / 2;
         // The lot hangs exactly one lane below the top road, so the road stays put and the
         // lot moves with the grid's size. The cell takes whichever budget is tighter — the
-        // rows against the height left under the stalls, or the columns against the width —
-        // and the slab is then widened to the full frame.
-        const cell = Math.min(
+        // rows against the height the rest of the board leaves, or the columns against the
+        // width — and the slab is then widened to the full frame.
+        //
+        // THE VERTICAL BUDGET IS MEASURED AGAINST WHERE THE FRAME ACTUALLY IS, and that is
+        // the fix for a band of dead screen under the lot that nothing could explain from
+        // the numbers on either side of it. It used to be
+        //
+        //     (ROAD_Y - 2 * RING_OFF - ringLow - SLAB_PAD) / level.lot.h
+        //
+        // with `ringLow = -(frame.halfH - ROAD_H / 2)` -- the lowest a lane's centreline can
+        // sit in a frame CENTRED ON y = 0. The camera is not centred on y = 0: `fitCamera`
+        // centres the drawn content and reserves the HUD's bands off the ends, so the real
+        // view on a 1170x2532 phone runs -14.59..11.06 where that formula assumed
+        // -12.82..12.82. The lot was therefore sized against a floor 1.8 units above the
+        // real one, and `fitCamera` then split the leftover evenly top and bottom: 2.38
+        // board units of nothing under the road's outer kerb, 1.03 of which is the home
+        // indicator's own band and the rest of which was simply lost. It is 1.32 now.
+        //
+        // So add the stack up instead. Everything above the lot's slab is either fixed or
+        // proportional to the scale, and the whole of it is
+        //
+        //     span = ROAD_H + 2 * BAND_GAP + 2 * RING_OFF + SLAB_PAD   (fixed)
+        //          + (reach.top - reach.bottom)                        (the drawn ring)
+        //          + scale * (bayPerScale + level.lot.h)               (bay and lot)
+        //
+        // and it has to fit in the `usable` share of the frame -- which is exactly the box
+        // `fitCamera` frames it into, so the two cannot drift. Solving for the scale gives
+        // the budget below. Checked against the shipped numbers: a portrait phone keeps the
+        // cell it has (1.032, width-bound either way), and the screens that were HEIGHT-bound
+        // come out bigger than they were even while carrying two more rows of lot -- 18:9
+        // 0.996 -> 1.032, 16:9 0.865 -> 0.873 -- because they were being under-sized for
+        // exactly the same reason the band under the lot was there.
+        //
+        // `stallFootprint(1)` is not a stall anyone parks in: a bay's HEIGHT is linear in
+        // the scale, so the bay at scale 1 IS the coefficient. Read off the real functions
+        // rather than restated, or this is a third place that has to be kept in step with
+        // `stallFootprint` and `bayPanelSize`.
+        const bayPerScale = bayPanelSize(level.parking.slots, stallFootprint(1)).h;
+        const above = ROAD_H + 2 * BAND_GAP + 2 * RING_OFF + SLAB_PAD
+            + (reach.top - reach.bottom);
+        const cell = Math.max(MIN_CELL, Math.min(
             CELL_MAX,
-            (ROAD_Y - 2 * RING_OFF - ringLow - 0.3) / level.lot.h - CELL_GAP,
-            (2 * lotHalfW - 0.3) / level.lot.w - CELL_GAP,
-        );
+            (2 * frame.halfH * usable - above) / (bayPerScale + level.lot.h) - CELL_GAP,
+            (2 * lotHalfW - SLAB_PAD) / level.lot.w - CELL_GAP,
+        ));
         const scale = cell + CELL_GAP;
         this.boardScale = scale;
         const lotH = lotHeight(level.lot.h, scale);
@@ -1164,11 +1303,6 @@ export class GameController extends Component {
         // validateTrack is the drawability gate; the offline tool already fails the build
         // on it, so anything reaching here is either hand-edited or from an older file.
         for (const problem of validateTrack(level)) console.warn(`[track] ${problem}`);
-        // buildShape's switch is exhaustive with no default, so an unrecognised shape would
-        // crash rather than draw. The warn loop above has already said which field is wrong.
-        const rawTrack = level.loop.track as TrackShape;
-        const shape = TRACK_SHAPES.includes(rawTrack) ? rawTrack : DEFAULT_TRACK;
-        const path = new TrackPath(shape);
 
         // Where the parking bay and the loop track go, up the board.
         //
@@ -1182,12 +1316,8 @@ export class GameController extends Component {
         // It also spends height that was going begging: the board reached y = 7.31 of the
         // 8.98 the phone's frame allows, so pushing the track up costs nothing and takes the
         // blank band from 23% of the screen to 16%.
-        const reach = trackReach(path);
         const stall = stallFootprint(scale);
         const bay = bayPanelSize(level.parking.slots, stall);
-        // Clear air between the road and the bay, and between the bay and the track's
-        // outermost waiting figure. One constant for both, since both are the same job.
-        const BAND_GAP = 0.16;
         const bandBottom = ROAD_Y + ROAD_H / 2 + BAND_GAP;
         const PARKING_Y = bandBottom + bay.h / 2;
         const LOOP_Y = bandBottom + bay.h + BAND_GAP - reach.bottom;
@@ -1231,17 +1361,6 @@ export class GameController extends Component {
         // 130 px of margin taken off one end of the screen and handed to the other.
         this.contentTop = LOOP_Y + reach.top;
         this.contentBottom = this.ring.bottom - ROAD_H / 2;
-        // The HUD's bands are part of the framing, not something to be overlapped. They
-        // arrive as fractions of the SCREEN's height because that is what they are -- a
-        // notch and a plate of fixed design units both scale with the viewport, and the
-        // board does not. So the board gets what is left: with `f` reserved, the content
-        // has to fit in (1 - f) of the frame, hence the divisor below rather than a plain
-        // halving. On a screen with no notch this still reserves the plate's own band,
-        // which is the difference between the title clearing the ring by arithmetic and
-        // clearing it by luck.
-        this.padTop = Math.max(0, Math.min(0.45, this.hud?.topReserve() ?? 0));
-        this.padBottom = Math.max(0, Math.min(0.45, this.hud?.bottomReserve() ?? 0));
-        const usable = Math.max(0.2, 1 - this.padTop - this.padBottom);
         // The SLAB has to be on screen; the ring road around it does not. Reserving
         // `lotW / 2 + RING_OFF` here would undo the widening above entirely: a wider slab
         // would push this past LANE.edgeLimit, the camera would zoom out to fit a side lane
@@ -1294,6 +1413,17 @@ export class GameController extends Component {
             parkingRoot, level.parking.slots, level.parking.unlocked, PARKING_Y, scale,
         );
         this.parkingView.render();
+
+        // Scene dressing, in the one strip of board that is not spoken for: either side of the
+        // bay, which is narrower than the lot's slab. `baySideProps` returns nothing when that
+        // strip is too tight, so a level with more stalls simply goes undressed rather than
+        // putting a tree through the bay. See props.ts for why there is so little room.
+        setupProps(parkingRoot, baySideProps(
+            bayPanelSize(level.parking.slots, stallFootprint(scale)).w / 2,
+            PARKING_Y,
+            lotW / 2,
+            scale,
+        ));
 
         const gridRoot = new Node('GridRoot');
         gridRoot.setPosition(0, GRID_Y, 0);
@@ -2072,11 +2202,28 @@ export class GameController extends Component {
             //
             // `rating`, not `stars`: `stars` in this file is the particle burst above.
             const rating = this.core!.stars();
+            // THE ORDER OF THESE TWO LINES IS LOAD-BEARING, and it is the kind of thing
+            // somebody reorders while tidying. `coinsForClear` pays the DIFFERENCE between what
+            // this rating is worth and what the level's previous best was worth, and
+            // `recordClear` is what replaces that previous best -- so asked afterwards it
+            // compares the new best against itself and always yields 0. Earn first, record
+            // second. (`core/wallet` says the same thing from its end.)
+            const earned = coinsForClear(bestStars(this.progress, this.levelIdNum), rating);
             const rec = recordClear(this.progress, this.levelIdNum, rating);
             this.progress = rec.progress;
             if (rec.changed) {
                 saveProgressText(serializeProgress(this.progress));
                 console.log(`[Game] level ${this.levelIdNum} cleared with ${rating} stars`);
+            }
+            // Only a payout that is actually worth something is written, which is the same
+            // discipline `rec.changed` enforces one line up and for the same reason: the store
+            // on the device is a synchronous call, and a re-clear that beats nothing has
+            // nothing to save. The balance is repainted by `showHome`, not here -- the bar is
+            // not on screen while this card is up.
+            if (earned > 0) {
+                this.wallet = addCoins(this.wallet, earned);
+                saveWalletText(serializeWallet(this.wallet));
+                console.log(`[Game] earned ${earned} coins, balance ${this.wallet.coins}`);
             }
             // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
@@ -2103,8 +2250,11 @@ export class GameController extends Component {
         input.on(Input.EventType.TOUCH_END, this.onTouchEnd, this);
         input.on(Input.EventType.MOUSE_UP, this.onMouseUp, this);
         input.on(Input.EventType.KEY_UP, this.onKeyUp, this);
-        // Presses, for the one control in the game that is a HOLD rather than a tap. Nothing
-        // else reads them, so they only ever arm and disarm the wipe.
+        // Presses, for the lobby. Every other screen in the game decides on RELEASE; the
+        // lobby's rail is a gesture, so it needs the press that starts it and the moves that
+        // carry it -- and the start button's pressed state hangs off the same two events.
+        // They used to exist for a three-second HOLD that wiped the save; that gesture is
+        // gone (see `onPressStart`), and this is what took its place.
         input.on(Input.EventType.TOUCH_START, this.onPressStart, this);
         input.on(Input.EventType.TOUCH_MOVE, this.onPressMove, this);
         input.on(Input.EventType.TOUCH_CANCEL, this.onPressEnd, this);
@@ -2167,40 +2317,47 @@ export class GameController extends Component {
     }
 
     /**
-     * Arm the press-and-hold that clears the save, if this press landed on the home screen's
-     * title. Every other press in the game is a tap and is handled on release.
+     * Take hold of the rail. Every press in the game is a TAP, decided on release; the lobby
+     * is the one screen where a press also begins a gesture, so it needs the press itself.
      *
-     * It FIRES at HOLD_SECONDS rather than waiting for the release, so the confirmation
-     * arrives while the finger is still down -- a hidden control that only reacts after you
-     * let go leaves you unsure whether you held it long enough.
+     * IT USED TO ARM A THREE-SECOND HOLD that wiped the save, targeted at the home screen's
+     * floating caption plate. The plate is gone (it clipped the badges scrolling behind it --
+     * see `home-view`), and a hidden destructive gesture with no visible target is worse than
+     * no gesture: `wipeProgress` is now reached from the settings card, where it is a labelled
+     * button with a confirmation in front of it.
+     *
+     * THE SETTINGS CARD OWNS THE PRESS WHILE IT IS UP, the same way `handleTap` gives it every
+     * tap on this screen and for the same reason: it is the topmost thing here, and a scrim
+     * over the lobby means the lobby is not being touched. Without this line a drag across the
+     * card scrolled the rail behind it -- `endDrag` runs `setFocus(railFlick(...))` on release,
+     * so closing the panel revealed a different level centred under the button -- and a press
+     * over where the start button sits behind the scrim visibly depressed it. Same defect class
+     * the tap side closed: a control answering input it should not be able to hear.
      */
     private onPressStart(e: EventTouch | EventMouse): void {
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
+        if (this.hud?.settingsOpen()) return;
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
         this.slidHome = false;
         // ui.y, because the home rail runs up the screen now.
         this.home.beginDrag(ui.y, nowMs() / 1000);
-        if (this.holdArmed || !this.home.hitsReset(ui)) return;
-        this.holdArmed = true;
-        this.holdFromX = ui.x;
-        this.scheduleOnce(this.holdWipe, HOLD_SECONDS);
+        // A press landing on the start button also depresses it. The button is always live
+        // now -- it plays whatever level the save allows, never the (possibly locked) rail
+        // focus -- so there is no "shut" state left for `hitsStart` to special-case; it only
+        // refuses while the screen itself is not up.
+        if (this.home.hitsStart(ui)) this.home.setStartPressed(true);
     }
 
-    /**
-     * Carry the drag, and cancel the press-and-hold once the finger has really moved: a hold
-     * is a hold, and a swipe that happens to start on the title is not one.
-     */
+    /** Carry the drag. */
     private onPressMove(e: EventTouch | EventMouse): void {
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
         // MOUSE_MOVE fires on every desktop mouse move, button or no button, so the cheap
-        // check comes before the projection rather than after it. A press always begins a
-        // drag on this screen, so "not dragging" also means "no hold can be armed".
+        // check comes before the projection rather than after it.
         if (!this.home.isDragging()) return;
         const p = e.getLocation();
         const ui = this.uiCam.screenToWorld(new Vec3(p.x, p.y, 0), new Vec3());
         this.home.moveDrag(ui.y, nowMs() / 1000);
-        if (this.holdArmed && Math.abs(ui.x - this.holdFromX) > HOLD_SLOP) this.cancelHold();
     }
 
     /**
@@ -2212,30 +2369,14 @@ export class GameController extends Component {
      * lets a tap be told from the end of a swipe.
      */
     private onPressEnd(): void {
-        this.cancelHold();
         if (this.screen === 'home' && this.home) {
             this.slidHome = this.home.endDrag(nowMs() / 1000) === 'slid';
         }
+        // Unconditional, not "if it was pressed" -- this also runs on TOUCH_CANCEL, and a
+        // button stuck in its pressed state is a worse outcome than one redundant assignment.
+        this.home?.setStartPressed(false);
     }
 
-    private cancelHold(): void {
-        if (!this.holdArmed) return;
-        this.holdArmed = false;
-        this.unschedule(this.holdWipe);
-    }
-
-    /**
-     * Throw the save away, on a three-second hold of the home screen's title.
-     *
-     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why it is a long hold on
-     * an unlabelled target rather than a button. A "clear my progress" button on the home
-     * screen of a ten-level game is louder than the thing it does, and this is the only
-     * destructive path in the game.
-     *
-     * The confirmation is two things: the grid repaints fully locked, which is evidence
-     * rather than a claim, and a toast that says so in words. The toast activates its own
-     * node, so it works with the in-level HUD hidden.
-     */
     /**
      * Hand the preferences to the things that obey them.
      *
@@ -2269,11 +2410,98 @@ export class GameController extends Component {
         vibrate('light');
     }
 
+    /**
+     * Raise the check-in card. The bar's live entry does exactly this and nothing else.
+     *
+     * `todayKey(new Date())` is read here and handed down, so the card and the row it draws
+     * agree with each other. THAT IS NOT A GUARANTEE ABOUT THE PAYOUT, and an earlier version
+     * of this comment claimed it was. `claimCheckinToday` reads the clock again, so a card
+     * opened at 23:59:58 and claimed at 00:00:01 is TWO reads: the streak `last` was
+     * continuing is now the day before yesterday, the claim restarts at day 1, and the cell
+     * that lit up said 40 while the player is paid 20.
+     *
+     * That is left as it is, deliberately. The PAYOUT is always right for the day it happens
+     * on -- the clock the wallet is written from is the last one read -- and `paintCheckin`
+     * repaints the row immediately after, so what the player is looking at a second later
+     * agrees with what they were paid. The alternative is a card that re-raises itself
+     * under the player's thumb at midnight, which trades a one-second-per-day discrepancy
+     * for a control that moves while being pressed.
+     *
+     * The dot has a milder version of the same: nothing repaints it while the lobby sits
+     * open, so a player who crosses midnight without leaving the screen does not see it
+     * light up until the next `showHome`. See `paintCheckinDot`.
+     */
+    private openCheckin(): void {
+        this.hud?.showCheckin(this.checkin, todayKey(new Date()));
+    }
+
+    /**
+     * Take today's coins.
+     *
+     * The guard is not defensive duplication: `hitsCheckin` already refuses to return 'claim'
+     * when the button is not live, so this can only be reached on a claimable day -- but that is
+     * a fact about a VIEW, and the wallet is not something to write on a view's say-so. A second
+     * call in the same tick, or a future caller that is not the card, stops here.
+     */
+    private claimCheckinToday(): void {
+        const today = todayKey(new Date());
+        if (!canClaim(this.checkin, today)) return;
+        const { checkin, coins } = claimCheckin(this.checkin, today);
+        this.checkin = checkin;
+        this.wallet = addCoins(this.wallet, coins);
+        saveCheckinText(serializeCheckin(this.checkin));
+        saveWalletText(serializeWallet(this.wallet));
+        this.home?.setCoins(this.wallet.coins);
+        this.hud?.paintCheckin(this.checkin, today);
+        this.paintCheckinDot();
+        this.sfx?.play('tap');
+        vibrate('light');
+        console.log(`[Game] check-in day ${this.checkin.day} paid ${coins} coins`);
+    }
+
+    /** The unread dot on the bar's check-in entry: on exactly while a claim is waiting. */
+    private paintCheckinDot(): void {
+        this.home?.setCheckinDot(canClaim(this.checkin, todayKey(new Date())));
+    }
+
+    /**
+     * Throw the save away.
+     *
+     * ITS ONE CALLER IS THE RED BUTTON on the lobby's settings card, which asks once before it
+     * gets here (`HudView.confirmWipe`). It used to be a three-second press-and-hold on the
+     * home screen's floating caption plate, and the plate has gone: a 320x88 slab with a
+     * 285-tall badge scrolling behind it read as a clipping fault, which is what the lobby's
+     * top bar is for. The gesture could not follow the caption into the bar -- an unlabelled
+     * destructive hold needs a target a player has been TOLD about, and a bar of live controls
+     * is the worst place to hide one. Nobody ever found the hold; a labelled button that asks
+     * is the honest version of the same action.
+     *
+     * UNRECOVERABLE -- there is no cloud copy and no undo -- which is why the replacement is a
+     * confirmed button rather than a bare one.
+     *
+     * THE WALLET GOES WITH IT, and `clearWalletText` is where that reasoning lives: coins are
+     * derived from the progress, so a wipe that spared them would make "clear -> wipe -> clear
+     * again" an unlimited mint. THE CHECK-IN STREAK GOES WITH IT for the same reason and
+     * one of its own: it pays in coins, and its seventh day pays 100, so a streak that
+     * survived a wipe would put the table's one week-long figure two taps away. All three
+     * saves, all three in-memory copies, the readout and the bar's dot.
+     *
+     * THE PANEL COMES DOWN FIRST, because the confirmation is two things the panel is standing
+     * in front of: the rail repaints fully locked, which is evidence rather than a claim, and a
+     * toast says so in words. Leaving the card up would put both behind its scrim, so the one
+     * irreversible action in the game would look like it had done nothing.
+     */
     private wipeProgress(): void {
-        this.holdArmed = false;
+        this.hud?.hideSettings();
         clearProgressText();
+        clearWalletText();
+        clearCheckinText();
         this.progress = emptyProgress();
+        this.wallet = emptyWallet();
+        this.checkin = emptyCheckin();
         this.home?.setProgress(this.progress);
+        this.home?.setCoins(0);
+        this.paintCheckinDot();
         this.hud?.showToast('进度已清除');
         this.sfx?.play('tap');
         vibrate('light');
@@ -2293,18 +2521,72 @@ export class GameController extends Component {
         // neither the start button nor a chip is swallowed rather than falling through.
         if (this.screen === 'home') {
             if (!this.uiCam || !this.home) return;
+            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
+            // THE PANEL IS ASKED FIRST, before the gear that opens it and before the rail:
+            // while it is up it is the topmost thing on this screen, which is exactly the
+            // priority it has in play (see the branch below, which this mirrors).
+            if (this.hud?.settingsOpen()) {
+                const hit = this.hud.hitsSettings(ui);
+                // Any other answer on the card stands the red button back down -- see
+                // `HudView.disarmWipe`. A destructive button left armed while the player does
+                // something else on the same card is a trap.
+                if (hit !== null && hit !== 'wipe') this.hud.disarmWipe();
+                if (hit === 'close') this.hud.hideSettings();
+                else if (hit === 'sfx' || hit === 'haptics') this.toggleSetting(hit);
+                // Two taps, and `confirmWipe` counts them: the first one only changes the
+                // button's label into a question. 'home' and 'replay' cannot arrive here --
+                // `hitsSettings` gates them on the lobby flag, because the nodes are switched
+                // off and `inBox` would otherwise still answer for where they used to be.
+                else if (hit === 'wipe' && this.hud.confirmWipe()) this.wipeProgress();
+                return;   // anything else on this screen is swallowed
+            }
+            // The check-in card is asked on the same terms as the settings card above, and
+            // for the same reason: while it is up it is the topmost thing on this screen.
+            if (this.hud?.checkinOpen()) {
+                const hit = this.hud.hitsCheckin(ui);
+                if (hit === 'close') this.hud.hideCheckin();
+                else if (hit === 'claim') this.claimCheckinToday();
+                return;   // anything else on this screen is swallowed
+            }
+            if (this.home.hitsGear(ui)) {
+                this.sfx?.play('tap');
+                this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
+                return;
+            }
+            // The check-in place, below the gear and answering on the same terms.
+            if (this.home.hitsCheckin(ui)) {
+                this.sfx?.play('tap');
+                this.home.tapCheckin();
+                return;
+            }
+            // The merged coin pill, below check-in. It is drawn and answers a tap like its two
+            // neighbours -- `tapCoins` is a no-op until there is an ad unit to point it at, which
+            // is the whole of what 「点击无反应」 asks for; see `TopBar.coinTap`.
+            if (this.home.hitsCoins(ui)) {
+                this.sfx?.play('tap');
+                this.home.tapCoins();
+                return;
+            }
             // A release that DRAGGED the rail is not also a tap -- otherwise every swipe
             // would end by selecting whatever it happened to stop over. `endDrag` already
             // ran, from `onPressEnd`, and said which it was.
+            //
+            // AFTER THE PANEL, THE GEAR AND THE SLOTS, deliberately. None of those three is on
+            // the rail, so the end of a swipe has no business swallowing a tap on any of them
+            // -- while a tap that lands on the rail after a drag is precisely what this guard
+            // is for.
             if (this.slidHome) return;
-            const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
-            // THE BUTTON IS THE ONLY WAY IN, and it opens whatever is in the middle of the
-            // rail (`focusedLevel`, which is also what labelled it). Tapping a stop only
-            // brings it to the middle. Two jobs on one control is how a stray tap starts a
-            // level nobody asked for -- and on a rail, a stray tap is what a
-            // slightly-too-still drag looks like.
+            // THE BUTTON IS THE ONLY WAY IN, and it opens whatever `selectedLevel()` says --
+            // the level the rail is aimed at when the save allows it, and the newest allowed
+            // level when it does not. The gate lives entirely on that side: nothing here needs
+            // to re-check whether the level is unlocked, and nothing here should, because two
+            // places deciding that is how they come to disagree.
+            //
+            // Tapping a stop only brings it to the middle; it never starts anything. Two jobs
+            // on one control is how a stray tap starts a level nobody asked for -- and on a
+            // rail, a stray tap is what a slightly-too-still drag looks like.
             if (this.home.hitsStart(ui)) {
-                this.enterLevel(`level-${this.home.focusedLevel()}`);
+                this.enterLevel(`level-${this.home.selectedLevel()}`);
                 return;
             }
             const stop = this.home.hitsStop(ui);
@@ -2381,7 +2663,9 @@ export class GameController extends Component {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             if (this.hud.hitsGear(ui)) {
                 this.sfx?.play('tap');
-                this.hud.showSettings(this.settings.sfx, this.settings.haptics);
+                // `false`: this is the in-game card, which keeps its 主页 and 重玩 answers
+                // and has no clear-save button on it.
+                this.hud.showSettings(this.settings.sfx, this.settings.haptics, false);
                 return;
             }
         }

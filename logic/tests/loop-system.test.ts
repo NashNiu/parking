@@ -288,3 +288,48 @@ test('the doorway never reaches an entry cell', () => {
     for (const cell of loop.boardIndices()) expect(entries.has(cell)).toBe(false);
   }
 });
+
+/**
+ * `stillFilling` is the gate the deadlock checks wait on, so its two false cases matter as
+ * much as its true one: a ring that is full and a ring whose queues are spent are both
+ * SETTLED, and holding off on either would be the board going quiet forever.
+ */
+test('stillFilling is true only while a row can still arrive on its own', () => {
+  // Four rows of red into four cells: full on construction, queues spent. Settled twice over.
+  const full = new LoopSystem(4, 2, [{ color: 'red', count: 16 }]);
+  expect(full.ring.some((g) => g === null)).toBe(false);
+  expect(full.stillFilling()).toBe(false);
+
+  // Four rows into six cells: two gaps, and nothing left to put in them. Also settled --
+  // those gaps are permanent, which is exactly when the prompt SHOULD be allowed to speak.
+  const short = new LoopSystem(6, 2, [{ color: 'red', count: 4 }, { color: 'blue', count: 12 }]);
+  expect(short.ring.filter((g) => g === null)).toHaveLength(2);
+  expect(short.channels.every((c) => c.queue.length === 0)).toBe(true);
+  expect(short.stillFilling()).toBe(false);
+
+  // The reported shape: rows waiting behind a full ring, then a cell opens. Only boarding
+  // can open one, which is why this is the only way the state arises in play.
+  const live = new LoopSystem(4, 2, [{ color: 'red', count: 4 }, { color: 'blue', count: 20 }]);
+  expect(live.stillFilling()).toBe(false);            // full ring, rows waiting: sealed
+  for (let i = 0; i < 4; i++) live.boardPassengerAt(0);
+  expect(live.ring[0]).toBeNull();
+  expect(live.stillFilling()).toBe(true);             // a gap, and a row for it
+});
+
+/**
+ * THE TERMINATION ARGUMENT, run rather than asserted in prose. If this could stay true the
+ * gate would freeze the board -- the defect the unlock prompt was built to fix -- so the
+ * bound is checked: every cell rotates past the live entrance within `capacity` steps.
+ */
+test('a ring that is still filling always settles, within capacity steps per gap', () => {
+  const loop = new LoopSystem(4, 2, [{ color: 'red', count: 4 }, { color: 'blue', count: 20 }]);
+  for (let i = 0; i < 4; i++) loop.boardPassengerAt(0);
+  expect(loop.stillFilling()).toBe(true);
+  let steps = 0;
+  while (loop.stillFilling() && steps < 64) {
+    loop.step();
+    steps++;
+  }
+  expect(loop.stillFilling()).toBe(false);
+  expect(steps).toBeLessThanOrEqual(loop.capacity);
+});

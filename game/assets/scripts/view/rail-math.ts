@@ -8,30 +8,31 @@
  * overshoots the last level, or a snap back to the stop you just dragged away from. Pure
  * functions mean `logic/tests/rail-math.test.ts` can pin all of that without an engine.
  *
- * It imports nothing. `home-view` owns the nodes and the touch handling; this owns the
- * numbers.
+ * `home-view` owns the nodes and the touch handling; this owns the numbers. It carried over
+ * from a horizontal rail to a vertical one without a line changing -- it is one-dimensional
+ * offset arithmetic (pitch, nearest, flick, rubber), and nothing in this file knows which axis
+ * that offset runs along.
+ *
+ * `RAIL_PITCH` itself is not defined here any more: it lives in `core/home-path`, because both
+ * the stop geometry (`nodeCenter`, `legSamples`) and this file's scroll arithmetic need the
+ * same number, and a value two files depend on belongs on the floor they share, not in either
+ * one of them.
  *
  * THE COORDINATE. `offset` is how far the rail has scrolled, in canvas design units, and
  * `offset = i * RAIL_PITCH` is exactly the offset that puts stop `i` in the middle of the
  * screen. Positive velocity means "later levels are travelling toward the centre", which is
  * what a leftward drag produces -- so the view negates the finger's dx once, here at the
  * boundary, and nothing downstream has to think about it again.
+ *
+ * THE SCROLL NOW DRIVES NO APPEARANCE AT ALL. This file used to also export `railStopT`, the
+ * distance from the centre in pitches that the view faded a halo by -- the one appearance in
+ * `home-view` that was still a function of `offset` rather than of the save. That halo was the
+ * bug (a success-green ring that rode the drag onto whatever badge, locked or not, was last
+ * pulled to the middle) and it is gone along with its only reader; `railStopT` went with it.
+ * Every function left here answers "where" and "which stop", never "how it should look".
  */
 
-/**
- * Centre-to-centre spacing of the stops, along whatever axis the rail runs.
- *
- * NOTHING IN THIS FILE KNOWS WHICH AXIS THAT IS. It is one-dimensional offset arithmetic --
- * pitch, nearest, flick, rubber -- and it carried over from a horizontal rail to a vertical
- * one without a line changing. Only this number did, because a number is the one thing here
- * that has to be measured against a screen.
- *
- * 272 against a 148-tall stop leaves 124 units of gap, and puts about eight stops on the
- * shortest phone this has to hold (h = 2276 at 16:9) and eleven on the tallest. It was 132
- * when the rail was horizontal, measured against a 104 chip and the five a 390-wide phone
- * had to show.
- */
-export const RAIL_PITCH = 272;
+import { RAIL_PITCH } from '../core/home-path';
 
 /**
  * How much velocity is worth one extra stop, in offset units per second.
@@ -96,13 +97,3 @@ export function railRubber(offset: number, count: number): number {
     return offset;
 }
 
-/**
- * How far stop `i` is from the centre, in PITCHES -- 0 for the focused one, 1 for its
- * neighbour, and fractional while a finger is moving.
- *
- * Continuous on purpose: the view turns this into scale and opacity, and a stepped value
- * would make the chips snap between sizes mid-drag instead of growing as they arrive.
- */
-export function railStopT(offset: number, i: number): number {
-    return Math.abs(railOffset(i) - offset) / RAIL_PITCH;
-}

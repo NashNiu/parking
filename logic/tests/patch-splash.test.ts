@@ -62,9 +62,11 @@ test('the notice slot can be turned off without touching anything else', () => {
 
 test('the patch recolours the band and the progress bar', () => {
   const out = patchFirstScreen(SAMPLE, GAME_SPLASH);
-  // HomeView's navy: 24/255, so the first screen's foot and the menu behind it are the same
-  // colour and the hand-off is not a change of scene.
-  expect(out).toContain('let bgColor = [0.094118, 0.117647, 0.196078, 1];');
+  // `palette.GROUND`, 189/255 -- the lobby's pavement and the UI camera's clear colour, so the
+  // first screen's foot and the menu behind it are the same colour and the hand-off is not a
+  // change of scene. It was HomeView's navy until that navy was deleted with the photographic
+  // lobby, at which point the splash ended near-black and the menu opened pale.
+  expect(out).toContain('let bgColor = [0.741176, 0.784314, 0.854902, 1];');
   expect(out).toContain('let progressBarColor = [0.980392, 0.768627, 0.243137, 1];');
   expect(out).toContain('let progressBackground = [0.227451, 0.258824, 0.321569, 1];');
 });

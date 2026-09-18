@@ -37,6 +37,7 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const GAME = join(REPO, 'game');
 const BUILD = join(GAME, 'build', 'wechatgame');
 const BUILD_LOGS = join(GAME, 'temp', 'builder', 'log');
+const PACKER_LOG = join(GAME, 'temp', 'programming', 'packer-driver', 'logs', 'debug.log');
 
 const argv = process.argv.slice(2);
 const args = new Set(argv);
@@ -152,6 +153,51 @@ function missingClassErrors(logPath) {
     return [...hits];
 }
 
+/**
+ * What the SCRIPT PACKER was doing when the build finished, read out of its own log.
+ *
+ * WHY THIS EXISTS. `missingClassErrors` can tell that a build lost a class; it cannot tell
+ * WHY, and the two causes want opposite things from the human. A script that genuinely fails
+ * to compile is fixed by opening Creator and reading the error. A build that simply FINISHED
+ * FIRST is fixed by letting the editor settle and building again -- and telling that human to
+ * go and find a compile error sends them looking for something that is not there. That is
+ * exactly what happened on 2026-09-14, and this function is what the diagnosis cost.
+ *
+ * THE SIGNATURE OF THE RACE, from that day's logs:
+ *
+ *   19:47:47  packer: Pulling asset-db.
+ *   19:47:54  packer: Fetch asset-db cost: 6538ms          <- a cold, slow pull
+ *   19:47:48  builder: Script ... is missing or invalid    <- SIX SECONDS EARLIER
+ *   19:47:57  packer: Build iteration starts. 51 changes   <- project scripts start compiling
+ *   19:47:57  packer: Target(editor) build started.        <- and the log stops here
+ *   19:48:05  builder: build Task Finished in (17 s)       <- Creator exits, packer killed
+ *
+ * The tell is the LAST LINE of the packer's log: a `build started` with no matching `ends
+ * with cost` means the packer was still compiling when the process went away. The bundle it
+ * should have written comes out holding nothing but Babel helpers, which is how a build can
+ * look complete, be a few kilobytes, and boot to a blank screen.
+ *
+ * Returns null when the log says nothing useful -- a missing log is not evidence either way.
+ */
+function packerWasStillWorking() {
+    if (!existsSync(PACKER_LOG)) return null;
+    const lines = readFileSync(PACKER_LOG, 'utf8').split(/\r?\n/).filter((l) => l.trim());
+    let started = null;
+    let ended = false;
+    let changes = null;
+    let pull = null;
+    for (const line of lines) {
+        if (/Target\(.*\) build started/.test(line)) { started = line.trim(); ended = false; }
+        if (/Target\(.*\) ends with cost/.test(line)) ended = true;
+        const c = /Number of accumulated asset changes:\s*(\d+)/.exec(line);
+        if (c) changes = Number(c[1]);
+        const f = /Fetch asset-db cost:\s*([0-9.]+)/.exec(line);
+        if (f) pull = Math.round(Number(f[1]));
+    }
+    if (!started || ended) return null;
+    return { started, changes, pull };
+}
+
 const wx = findWx();
 if (!wx) {
     console.error('[preview] WeChat devtools CLI not found. Set WX_DEVTOOLS_CLI to its cli.bat.');
@@ -235,26 +281,59 @@ function buildOnce() {
     console.error('          would boot to a blank screen -- see the note on missingClassErrors.');
     for (const line of lost) console.error(`          ${line}`);
     console.error(`          (from ${log.path})`);
-    return 'lost-a-class';
+    const racing = packerWasStillWorking();
+    if (racing) {
+        console.error('');
+        console.error('          AND THE SCRIPT PACKER WAS STILL RUNNING when the build finished,');
+        console.error('          so this is the race and NOT a script that fails to compile:');
+        console.error(`            ${racing.started}`);
+        if (racing.changes !== null) {
+            console.error(`            the editor had ${racing.changes} asset changes to absorb`);
+        }
+        if (racing.pull !== null) {
+            console.error(`            and its asset-db pull took ${racing.pull}ms`);
+        }
+        console.error('          See the note on packerWasStillWorking.');
+    }
+    return racing ? 'packer-lost-the-race' : 'lost-a-class';
 }
 
 if (creator) {
     let outcome = buildOnce();
-    // Retry ONCE, and only for the race. The first attempt leaves the editor's compiled
-    // chunks on disk, so the second one finds the class cache warm -- a real mechanism, not
-    // a superstition. A folder with no output at all is not a race and gets no retry.
-    if (outcome === 'lost-a-class') {
+    // Retry ONCE. A folder with no output at all is not a race and gets no retry.
+    //
+    // THE RETRY IS WORTH LESS THAN IT LOOKS, and the comment here used to claim otherwise:
+    // "the first attempt leaves the editor's compiled chunks on disk, so the second one finds
+    // the class cache warm -- a real mechanism, not a superstition". It is a superstition.
+    // Each attempt starts a FRESH Creator, which pulls the asset-db from cold every time, and
+    // when the first attempt was killed mid-compile (see packerWasStillWorking) it left no
+    // warm chunks to find. The second attempt is exactly as cold as the first, which is why
+    // 2026-09-14 lost the class twice running on code that compiles.
+    //
+    // It is kept because it costs one build and does sometimes win the race, but "twice in a
+    // row" is NOT evidence of a compile error -- the packer's own log is, and that is what
+    // decides the message below.
+    if (outcome === 'lost-a-class' || outcome === 'packer-lost-the-race') {
         console.log('');
-        console.log('[preview] retrying once -- the first build warmed the class cache.');
+        console.log('[preview] retrying once.');
         outcome = buildOnce();
     }
     if (outcome !== 'ok') {
         console.error('');
         console.error('[preview] NOT handing this build to the devtools.');
-        if (outcome === 'lost-a-class') {
-            console.error('          Two builds in a row lost the class, so this is not the race:');
-            console.error('          open the project in Creator and look for a script that fails');
-            console.error('          to compile.');
+        if (outcome === 'packer-lost-the-race') {
+            console.error('          The build finished before the script packer did, both times.');
+            console.error('          Nothing is wrong with the source. The editor has a backlog of');
+            console.error('          asset changes it has to absorb ONCE, and a build that exits');
+            console.error('          while it is still doing that takes the backlog with it.');
+            console.error('');
+            console.error('          Open the project in Cocos Creator, wait for it to finish');
+            console.error('          importing, close it, and run this again. The pull is then');
+            console.error('          warm and the packer gets in first.');
+        } else if (outcome === 'lost-a-class') {
+            console.error('          The packer had finished and the class is still missing, so');
+            console.error('          this is not the race: open the project in Creator and look');
+            console.error('          for a script that fails to compile.');
         }
         process.exit(1);
     }

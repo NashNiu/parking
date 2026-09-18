@@ -3,8 +3,7 @@ import { Cap } from '../core/index';
 import { vertexColorMaterial } from './materials';
 import { carMesh } from './car-mesh';
 import { blobShadow } from './blob-shadow';
-import { KEY_LIGHT_PITCH_DEG } from './environment';
-import { BOARD_TILT } from './board-layout';
+import { LIFT, shadowThrow } from './shadow';
 
 // Re-exported so the view layer can keep importing Cap from here; it is core's type now,
 // not a second declaration of the same three strings. `export type`, not `export`: this is
@@ -13,15 +12,16 @@ import { BOARD_TILT } from './board-layout';
 export type { Cap };
 
 /**
- * How high off the board the car is meant to READ as being, in world units. The drop shadow is
- * thrown from it, so it is the only place the car's apparent height is stated.
+ * THE CAR'S APPARENT HEIGHT NOW LIVES IN `shadow.ts` as `LIFT.contact`, with the same 0.06 it
+ * always had, because every other panel in the scene needed the same declaration and they were
+ * each keeping their own.
  *
- * It can afford to be generous, which corrects an earlier note here saying the opposite. The
- * shadow uses `builtin-unlit` technique 1, whose depth state is `depthTest: true,
- * depthWrite: false` -- so a shadow at z = -0.06 is depth-REJECTED wherever a car in front of it
- * has already written depth, and cannot paint across a neighbour's paint at any offset.
+ * The note that stood here is worth keeping, because it is about THIS shadow and not about the
+ * height: the lift can afford to be generous. The shadow uses `builtin-unlit` technique 1,
+ * whose depth state is `depthTest: true, depthWrite: false` -- so a shadow at z = -0.06 is
+ * depth-REJECTED wherever a car in front of it has already written depth, and cannot paint
+ * across a neighbour's paint at any offset.
  */
-const SHADOW_LIFT = 0.06;
 
 /**
  * A board-space offset, expressed in `body`'s own frame.
@@ -56,9 +56,7 @@ function boardToLocal(angle: number, dx: number, dy: number): [number, number] {
  */
 function addShadow(body: Node, len: number, wid: number, angle: number): void {
     const shadow = blobShadow('shadow', len * 0.94, wid * 1.02);
-    const throwDown = SHADOW_LIFT
-        * Math.tan((-KEY_LIGHT_PITCH_DEG - BOARD_TILT) * Math.PI / 180);
-    const [dx, dy] = boardToLocal(angle, 0, -throwDown);
+    const [dx, dy] = boardToLocal(angle, 0, shadowThrow(LIFT.contact));
     shadow.setPosition(dx, dy, -0.06);
     body.addChild(shadow);
 }

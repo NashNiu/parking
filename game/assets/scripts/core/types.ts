@@ -88,13 +88,27 @@ export const CAP_BOX: Record<Cap, Box> = {
 };
 
 /**
- * One factor on every car's size. The release valve for packing density: 36 cars drawn from
- * CAP_MIX would cover 47.7% of the 7x8 lot on paper, and the ten shipped levels come out at
- * 45.8% (38.1% to 53.5% level by level, since each car's capacity is an independent draw).
- * Random rotated rectangles handle that with room to spare, so it starts at 1. Turn it down
- * only if `pack` cannot seat all 36.
+ * One factor on every car's size. It began as the release valve for packing density -- turn
+ * it down if `pack` cannot seat the quota -- and it is now also the knob that answers "make
+ * the cars a bit smaller", which is what took it off 1.
+ *
+ * 0.92, asked for as 车辆的整体尺寸稍微缩小一点. UNIFORM is the whole reason it is this knob
+ * and not three edits to CAP_BOX: every body keeps its proportions exactly, so
+ * `REFERENCE_ASPECT` in car-mesh.ts -- the medium car's length/width, which the drawn corner
+ * radius is worked out at -- does not move. Editing CAP_BOX by hand is how a car's corners
+ * change shape without anyone meaning it.
+ *
+ * 8% off each dimension is 15.4% off the footprint, and it is spent, not saved: it pairs with
+ * the lot growing to 8 x 12 and CARS_PER_LEVEL going to 89 (see LOT). Measured across the ten
+ * shipped levels, body coverage comes out at 48.3% of the larger lot against 47.9% of the
+ * smaller one -- the same car park, with more and smaller cars in it, which is what "a bit
+ * smaller, a bit further apart, and harder" adds up to.
+ *
+ * EVERY reader of CAP_BOX multiplies by this; there is no path that takes a body size without
+ * it (checked across core, the view and the tools). Adding one that does not would make a car
+ * that is drawn one size and collided at another.
  */
-export const CAR_SCALE = 1.0;
+export const CAR_SCALE = 0.92;
 
 /**
  * The least board a PARKED car must have around it, in board units. It governs how a lot is
@@ -117,12 +131,13 @@ export const CAR_SCALE = 1.0;
  * axis-aligned and parted company the moment angles became free. Add a reader, split it in
  * half.
  *
- * 0.08, and this is the TIGHTEST gap a parked pair may have, not their average -- the
- * measured mean nearest-neighbour gap that comes out of it is 0.103.
+ * 0.10, and this is the TIGHTEST gap a parked pair may have, not their average -- the
+ * measured mean nearest-neighbour gap that comes out of it is rather wider.
  *
- * Doubled from 0.04, asked for as "a bit more room between the cars". At 0.04 (about 2.6
- * screen px) adjacent bodies read as touching; 0.08 is about 5.2 px, which is a seam the eye
- * actually resolves. It costs nothing anywhere it was feared it might:
+ * It went 0.04 -> 0.08 -> 0.10, each step asked for as "a bit more room between the cars". At
+ * 0.04 (about 2.6 screen px) adjacent bodies read as touching; 0.08 was about 5.2 px. This
+ * step is worth more than the 25% on the number suggests, because the cars came DOWN 8% at
+ * the same time (see CAR_SCALE): against a body, the gap is 36% wider than it was. It costs nothing anywhere it was feared it might:
  *
  *  - THE PACKER still seats all 60 cars, and the body coverage is unchanged (0.494 against
  *    0.491). The gap is bought out of air the lot already had, not out of cars.
@@ -136,15 +151,19 @@ export const CAR_SCALE = 1.0;
  *    is its target. That follows from the split above -- this margin never governed driving,
  *    so widening it cannot hand a car a lane it did not have.
  *
- * It does not go further than 0.08 for one measured reason: at 0.10 the blocked count starts
- * to drift (level 2 falls to 37), and levels 7 to 10 are already asking for every blocked car
- * their geometry can produce (see BLOCKED_LAST in level-gen.ts), so a drift of one would take
- * them off target and flatten the back of the curve.
+ * 0.10 WAS REFUSED ONCE, and the reason it is accepted now is that the thing it would have
+ * broken has moved. The note said: at 0.10 the blocked count drifts (level 2 fell to 37) and
+ * levels 7 to 10 were already asking for every blocked car their geometry could produce, so a
+ * drift of one took them off target. That was a statement about a 63-car lot of full-size
+ * bodies on 80 square units. The lot is 96 units now, the bodies are 8% smaller and there are
+ * 89 of them -- BLOCKED_FIRST and BLOCKED_LAST had to be re-measured against that geometry
+ * whatever this constant did (see level-gen.ts), so the drift this was guarding against is
+ * inside a band that was re-derived after the change rather than before it.
  *
  * This does give back some of what M7 spent several rounds tightening. That was deliberate
  * then and this is deliberate now; what must not happen is it moving again by accident.
  */
-export const CLEARANCE = 0.08;
+export const CLEARANCE = 0.10;
 
 /** One car waiting in a tunnel. Everything else about it -- where it stands, which way
  * it leaves, what id it gets -- belongs to the tunnel, not to the car. */

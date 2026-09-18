@@ -52,6 +52,97 @@ export function safeInsets(): { top: number; bottom: number } {
 }
 
 /**
+ * How far down the screen the wx capsule -- the 胶囊按钮, the share/close pill every mini
+ * program wears -- reaches, as a FRACTION of the screen's height.
+ *
+ * A SECOND RESERVATION, not a duplicate of `safeInsets().top`. The notch is a hole in the
+ * screen; the capsule is a control the platform draws ON the screen, and on a phone with no
+ * notch at all (or a very shallow one) the capsule still hangs several times lower than the
+ * safe area's top edge. Anything anchored to the top has to clear the LARGER of the two, which
+ * is why callers take `Math.max(safeInsets().top, capsuleInset())` rather than picking one.
+ *
+ * `bottom`, not `top`, because what a layout needs is the first y that is clear of it -- the
+ * capsule's own top edge tells you nothing about where it stops.
+ *
+ * Same shape as `safeInsets` above -- READ ONCE AND CACHED, clamped into a sane band, ZERO
+ * off-device, because there is no capsule in a browser or in the editor preview and a layout
+ * that reserved room for one there would be wrong on the only screen a developer actually
+ * looks at.
+ *
+ * ONE READ, AT CONSTRUCTION, AND NO RETRY -- which is a change, and the reason is that the
+ * retry stopped being reachable. This used to cache only an ANSWERED read: if wx was present
+ * but `getMenuButtonBoundingClientRect` handed back zeros, it returned 0 WITHOUT caching so
+ * that "the next caller asks again". The failure that shape guards against is real -- caching
+ * a premature zero pins every control anchored to the top UNDERNEATH the system capsule for
+ * the rest of the process, the try/catch eats the reason, and the failure is invisible to
+ * everything except a person holding the phone. BUT THERE IS NO NEXT CALLER. `barBottomY` is
+ * the only thing that calls this, and `HomeView`'s constructor is the only thing that calls
+ * `barBottomY` -- once, from `GameController.start()` on frame 0, and `HomeView` is never
+ * reconstructed. A retry with a single caller is machinery that reads like a guarantee and
+ * provides none, which is worse than not having it: the next person sizes something against a
+ * second chance that cannot arrive.
+ *
+ * WHAT THE SINGLE READ RISKS, said rather than hidden. `wx.getMenuButtonBoundingClientRect`
+ * is SYNCHRONOUS, and the capsule is drawn by the platform before the mini program's first
+ * frame is -- so by the time an engine has started, a canvas has been sized and `start()` has
+ * run, a platform that is going to answer has answered. If one ever does not, this screen's
+ * top row sits under the capsule for that session and the next launch is fine. That is a
+ * cosmetic loss on one launch, weighed against a retry nothing can reach.
+ *
+ * SO THE THREE CASES COLLAPSE TO TWO: a usable rect is cached, and anything else (no wx, no
+ * call, a zero rect, a throw) caches zero. Either way this runs exactly once.
+ *
+ * IF A SECOND SCREEN EVER MEASURES OFF THIS, the honest fix is not to bring the retry back --
+ * it is to re-read at a known later moment and REPOSITION what was already placed, which is a
+ * second positioning path somebody has to write and test. Do that, or pass the one number
+ * down the way `HomeView` passes it to `TopBar`. Do not make this function claim a retry it
+ * does not perform.
+ */
+let capsule: number | null = null;
+
+export function capsuleInset(): number {
+    if (capsule !== null) return capsule;
+    capsule = 0;
+    try {
+        if (typeof wx === 'undefined' || !wx.getMenuButtonBoundingClientRect) return capsule;
+        const rect = wx.getMenuButtonBoundingClientRect();
+        const info = wx.getSystemInfoSync ? wx.getSystemInfoSync() : null;
+        const h = info && info.screenHeight;
+        if (rect && h > 0 && rect.bottom > 0) {
+            capsule = Math.max(0, Math.min(0.3, rect.bottom / h));
+        }
+    } catch { /* zero is the answer, and it is cached -- see the docblock above */ }
+    return capsule;
+}
+
+/**
+ * The top bar's height, and the gap it keeps from the screen's own top edge.
+ *
+ * HERE RATHER THAN IN `top-bar.ts`, because `home-view` needs them too: centring the rail
+ * means measuring the free band between the bar's bottom edge and the start button's top
+ * edge, and the bar's bottom edge is exactly what these two numbers decide. A copy in each
+ * file is two layouts that agree today and drift the first time one of them is retuned.
+ *
+ * 96 is the height of the HUD's two readout dials. The top of one screen and the top of the
+ * other should be cut to the same measure.
+ *
+ * The margin is a fraction of the WIDTH, not of the height: the width is pinned at 1280 on
+ * every device (see `canvasSize`) while the height is whatever the aspect ratio makes it, so
+ * a fraction of the height would give a tablet a different gap from a tall phone.
+ */
+export const BAR_H = 96;
+export const BAR_MARGIN_F = 0.03;
+
+/**
+ * The y of the top bar's bottom edge, in canvas coordinates. `w` and `h` come from
+ * `canvasSize`.
+ */
+export function barBottomY(w: number, h: number): number {
+    const top = Math.max(safeInsets().top, capsuleInset());
+    return h / 2 - top * h - w * BAR_MARGIN_F - BAR_H;
+}
+
+/**
  * The canvas, in DESIGN UNITS. Read it; do not assume it.
  *
  * IT IS 1280 WIDE, not 720, and getting that wrong is expensive. The project ships

@@ -1,9 +1,14 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import {
     roundedSprite, dotSprite, starSprite, burstSprite, gearSprite, speakerSprite, buzzSprite,
+    binSprite,
+    liftedPill, PILL_INK, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
-import { STAR_MAX } from '../core/index';
+import { COIN_FACE, COIN_RIM, CONTROL_BASE, CONTROL_FACE } from './palette';
+import {
+    canClaim, CHECKIN_REWARDS, Checkin, nextDay, STAR_MAX,
+} from '../core/index';
 
 /**
  * What the win card reports. Assembled by the caller, because every one of these is a fact
@@ -71,23 +76,6 @@ function paxGlyph(parent: Node): void {
 }
 
 /**
- * A readout plate: a white face over a base of the same shape, offset down so it shows as a
- * lip. Returns both, because callers hang their contents off the FACE (so the contents move
- * with it) and position the HOLDER.
- */
-function liftedPill(name: string, w: number, h: number): { holder: Node; face: Node } {
-    const holder = new Node(name);
-    holder.layer = Layers.Enum.UI_2D;
-    holder.addComponent(UITransform).setContentSize(w, h);
-    const base = roundedSprite('base', w, h, PILL_BASE);
-    holder.addChild(base);
-    base.setPosition(0, -PILL_LIFT, 0);
-    const face = roundedSprite('face', w, h, PILL_BG);
-    holder.addChild(face);
-    return { holder, face };
-}
-
-/**
  * The remaining-passenger pill, sized off its own type so it stays in step with the HUD.
  *
  * 236 wide, up from 210: the count reaches FOUR digits now (a level runs 1200-1350 passengers,
@@ -95,19 +83,6 @@ function liftedPill(name: string, w: number, h: number): { holder: Node; face: N
  */
 const PILL_W = 240;
 const PILL_H = 88;
-/**
- * Both readouts are drawn as TWO plates -- a white face over a cool-grey base peeking out
- * below -- which is the same trick as the unlock button, the padlock rims on the board and the
- * win panel's stars. They were flat white stadiums, and flat is what "redesign these" was
- * about: on a HUD where the pressable things have a top face, the readouts having none made
- * them read as unfinished rather than as a different kind of object.
- *
- * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
- * blue-grey (see GROUND in scene-stage), so a neutral shadow under a white plate reads as
- * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
- */
-const PILL_BASE = new Color(202, 211, 231, 255);
-const PILL_LIFT = 6;
 /** Corner inset, as a fraction of the canvas width — the only resolution-relative number here. */
 const PILL_MARGIN = 0.03;
 
@@ -160,8 +135,19 @@ const TITLE_PILL_H = PILL_H;
  * busiest thing on the screen, so the board showing through was costing it exactly the
  * legibility it exists for.
  */
-const TOAST_W = 660;
-const TOAST_H = 200;
+/**
+ * A UNIFORM 0.82 DOWN FROM 660x200 AT 96, asked for as 稍微小一点.
+ *
+ * Every proportion is unchanged, which is what makes it a step rather than a redesign: the
+ * text still fills 58% of the pill's width, still keeps 21% of padding on each side, and the
+ * outline is still a sixteenth of the font size. Only the whole thing is smaller.
+ *
+ * It had grown with the dialogs when the canvas turned out to be 1280 wide rather than 720,
+ * and that scale-up was right for a card you have to answer and too much for this: the toast
+ * takes no answer and is gone in TOAST_HOLD, so it only has to be read, not dealt with.
+ */
+const TOAST_W = 540;
+const TOAST_H = 164;
 const TOAST_HOLD = 1.5;
 /**
  * The card's colours, not the dark slab this used to be -- 所有提示都做成同一种风格.
@@ -174,7 +160,8 @@ const TOAST_HOLD = 1.5;
 const TOAST_BG = new Color(64, 172, 236, 245);
 const TOAST_BASE = new Color(28, 112, 176, 245);
 const TOAST_LIFT = 11;
-const TOAST_SIZE = 96;
+const TOAST_SIZE = 78;
+const TOAST_RIM_W = 5;
 
 /**
  * THE CARD: the shape both of this HUD's dialogs are cut from -- a thick coloured rim, a
@@ -228,16 +215,13 @@ const CARD_PAGE_W = CARD_W - CARD_RIM * 2;
  */
 const CARD_TITLE_SIZE = 96;
 /**
- * The frame, DARKER than it was (64,172,236 over 28,112,176), asked for as 卡片外层的背景颜色再
- * 深一些.
+ * The frame is drawn in the family's blue, `CONTROL_FACE` / `CONTROL_BASE`, which is imported
+ * from `palette` now rather than declared here as `CARD_RIM_FACE` / `CARD_RIM_BASE`.
  *
- * The bright cyan was competing with the cream page for the eye instead of holding it: a
- * frame's job is to be the edge of the thing, and an edge brighter than the page it frames
- * reads as the subject. It is still the family's blue -- the gear, the switches and the side
- * buttons all take these two -- just seated behind the page rather than in front of it.
+ * It moved because the lobby's top bar wears the same pair on its gear and had written its own
+ * copy of the two numbers -- a name that says CARD is not one another screen can honestly
+ * import. The colour did not change, and its history moved with it; `palette` has both.
  */
-const CARD_RIM_FACE = new Color(42, 138, 208, 255);
-const CARD_RIM_BASE = new Color(20, 92, 150, 255);
 const CARD_PAGE = new Color(253, 246, 232, 255);
 /**
  * Ink on the cream page, and the quieter ink under it.
@@ -334,21 +318,41 @@ const PROMPT_REPLAY_Y = -240;
  * it is. The panel node is raised by SET_RAISE so that the card and the button row TOGETHER
  * centre on the screen; without it the composition hangs low by half a button.
  *
- *   card    y  536 .. 122    (SET_H 828: CARD_HEAD 210 + a 576-tall page + CARD_RIM 42)
- *   buttons y -336 .. -536   (SET_BTN_GAP_Y 42 below the card, so the whole thing is
- *                            symmetric about the middle of the screen)
- */
-const SET_H = 828;
-/**
- * The two switch rows, in page coordinates: 196 tall each, 232 apart, on a 576-tall page.
+ *   card    y  651 .. -409  (SET_H 1060: CARD_HEAD 210 + an 808-tall page + CARD_RIM 42,
+ *                            centred on SET_RAISE 121)
+ *   buttons y -451 .. -651   (SET_BTN_GAP_Y 42 below the card, so the composition spans
+ *                            651 .. -651 and is symmetric about the middle of the screen)
  *
- * That leaves 74 clear above the first and below the second and 36 between them. The two
- * rows are the only things on this page, and rows crammed against a frame read as a list
- * that has been cut off.
+ * THE PREVIOUS VERSION OF THOSE TWO LINES READ `536 .. 122` for the card, which is not a span
+ * this arithmetic produces from any frame -- the card's own half was 414 and the panel's raise
+ * 121, so it ran 535 .. -293. The buttons' line was right. Recomputed rather than adjusted.
+ *
+ * IT GREW BY EXACTLY ONE ROW PITCH, from 828, when 清除进度 became a row on this page instead
+ * of a button under it -- 「这个清除进度的设置能否放到设置里面，作为设置的一项」. 232 is the
+ * pitch and 232 is what the card gained, which is why the clearances below are unchanged
+ * rather than merely close.
+ */
+const SET_H = 1060;
+/**
+ * The rows, in page coordinates: 196 tall each, 232 apart, on an 808-tall page.
+ *
+ * THE PAGE HOLDS THREE ROWS OR TWO, depending on which screen raised the card, and `rowY`
+ * centres whichever it is. Three (the lobby: sound, buzz, clear) sit at 232 / 0 / -232, leaving
+ * 74 clear above the first and below the last and 36 between them -- the same three numbers the
+ * two-row page had at 576 tall, which is what "grew by exactly one pitch" buys. Two (in play:
+ * sound, buzz) sit at 116 / -116 with 190 clear top and bottom, a roomier card rather than a
+ * card with a hole in it where the third row would have been.
+ *
+ * A SHORTER CARD IN PLAY WAS THE OTHER OPTION AND IS NOT AVAILABLE: `buildCard` takes its
+ * height once, at build time, and this panel is built once and raised from both screens.
  */
 const SET_ROW_H = 196;
-const SET_ROW1_Y = 116;
-const SET_ROW2_Y = -116;
+const SET_ROW_PITCH = 232;
+
+/** Where row `i` of `n` sits on the page. See `SET_ROW_H`. */
+function rowY(i: number, n: number): number {
+    return ((n - 1) / 2 - i) * SET_ROW_PITCH;
+}
 /** Icon, then label, then track, measured in from the page's own edges. */
 const SET_ICON_D = 116;
 const SET_ICON_X = -CARD_PAGE_W / 2 + 104;
@@ -433,6 +437,47 @@ const SET_BTN_GAP_Y = 42;
 const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
 const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
 /**
+ * The clear-save control: a RED button in the third row's control slot, and only on the card
+ * the lobby opens. See `buildWipeRow` for why it is red and `confirmWipe` for the two taps.
+ *
+ * IT USED TO BE A BUTTON UNDER THE CARD, on a row of its own below the three answers, and it
+ * moved on instruction: 「这个清除进度的设置能否放到设置里面，作为设置的一项」. What it is now is
+ * a settings ROW -- icon, label, control -- exactly like 音效 and 震动 above it, which is also
+ * the honest description of what it always was. The answers below the card are about the LEVEL
+ * (go home, replay, carry on); clearing the save is not one of those and never sat well among
+ * them.
+ *
+ * IT TAKES THE SWITCHES' SLOT EXACTLY, `SET_SW_W` x `SET_SW_H` at `SET_SW_X`, because every row
+ * on this page puts its control in the same box and a third row that put its control somewhere
+ * else would stop the three reading as a list. Type at 56: the longer of the two strings is
+ * 「确定?」 at three glyphs, about 168 wide inside 268.
+ */
+const SET_WIPE_SIZE = 56;
+/**
+ * Red, and the only red on this HUD. Nothing else in the game is destructive, so the colour
+ * has no second meaning to be confused with -- which is most of what it is buying: the button
+ * has to look unlike the two blue ones beside it before it is read, not after.
+ *
+ * Same two-plate treatment and the same darker-base ratio as the family blue, so it reads as
+ * the same KIND of control -- a button, pressable, part of this card -- in a different colour.
+ * A red that also broke the drawing convention would read as a warning graphic.
+ */
+const WIPE_FACE = new Color(230, 82, 78, 255);
+const WIPE_BASE = new Color(168, 52, 49, 255);
+/**
+ * The row's label, then what the button on it says before and after its first tap.
+ *
+ * THE ROW NAMES THE ACTION AND THE BUTTON ANSWERS FOR IT, which is what moving into the card
+ * bought: the button no longer has to carry the whole sentence, so 「清除进度 / 确定清除?」 became
+ * 「清除 / 确定?」 with the subject standing to the left of it permanently. The armed label still
+ * ASKS rather than warns -- a control that has changed from naming an action to asking about it
+ * is the whole of the confirmation, and it stays in the same place, in the same colour, so the
+ * second tap is a deliberate answer to a question the player can still read.
+ */
+const WIPE_ROW_TEXT = '清除进度';
+const WIPE_TEXT = '清除';
+const WIPE_ASK = '确定?';
+/**
  * The cost line, smaller than the sub and directly under the button it applies to.
  *
  * It is the line this redesign is really for. Opening a stall was free, unlimited as far as
@@ -452,6 +497,90 @@ const PROMPT_COST_SIZE = 50;
  */
 const PROMPT_SHADOW = new Color(8, 12, 24, 90);
 const PROMPT_SHADOW_DROP = 10;
+/**
+ * THE DAILY CHECK-IN CARD, seven day cells and one button, on the settings card's own idiom.
+ *
+ * IT LIVES IN THIS FILE RATHER THAN A LOBBY ONE, and that is worth defending because the card
+ * is only ever raised from the lobby. `buildCard` and `buildCardBtn` are private here, and the
+ * SETTINGS card -- which the lobby also raises, through `showSettings(.., lobby)` -- already
+ * established that a shared card lives beside its helpers rather than exporting them. A new file
+ * would have had to either copy those two helpers or trigger an extraction refactor of the HUD,
+ * and neither is what this round was opened to do.
+ *
+ * FOUR CELLS THEN THREE, not seven across. Seven across a 1036-wide page is 148 a cell, and a
+ * cell has to hold a caption, a coin and a figure; 4+3 gives 232, which holds them at the type
+ * sizes the rest of the project uses. The second row is centred rather than left-aligned, so the
+ * odd one out reads as the end of a week rather than as a column that failed to fill.
+ *
+ *     page             1036 x 504   (CHK_H - CARD_HEAD - CARD_RIM)
+ *     row 1            4 x 232 + 3 x 24 = 1000, 18 clear either side
+ *     row 2            3 x 232 + 2 x 24 =  744, centred
+ *     rows at +/-112   2 x 200 + 24 = 424 in 504, 40 clear top and bottom
+ */
+const CHK_H = 756;
+const CHK_CELL_W = 232;
+const CHK_CELL_H = 200;
+const CHK_GAP = 24;
+const CHK_CELL_R = 28;
+const CHK_ROW_DY = (CHK_CELL_H + CHK_GAP) / 2;
+const CHK_COIN_D = 56;
+const CHK_DAY_Y = 68;
+const CHK_COIN_Y = 4;
+const CHK_FIG_Y = -62;
+const CHK_DAY_SIZE = 30;
+const CHK_FIG_SIZE = 40;
+
+/**
+ * The three states a cell can be in, as three faces on the card's cream page.
+ *
+ * They are separated by VALUE and not only by hue, because the row has to be readable at a
+ * glance and two of the three are always adjacent: claimed days are the coolest and darkest,
+ * the claimable one is the warmest and lightest, and the days still to come sit between them
+ * as plain unmarked page. The claimable cell is the only one that also gets a rim.
+ */
+const CHK_DONE_FACE = new Color(214, 228, 212, 255);
+const CHK_NEXT_FACE = new Color(255, 240, 200, 255);
+const CHK_SOON_FACE = new Color(238, 231, 216, 255);
+const CHK_NEXT_RIM = new Color(214, 152, 20, 255);
+const CHK_NEXT_RIM_W = 5;
+const CHK_DAY_INK = new Color(122, 112, 92, 255);
+const CHK_FIG_INK = new Color(150, 106, 18, 255);
+
+/**
+ * The tick on a claimed cell: two rounded bars, DRAWN rather than typed.
+ *
+ * `ui-shapes` has no tick and this does not need one: a check mark is two strokes, and a rounded
+ * rectangle at `radius = height / 2` is a stroke (the same capsule identity `home-scene`'s
+ * `strokePath` leans on). Drawn rather than set as a glyph for the reason the padlock and the
+ * gear are drawn -- a font substitution turns a typed tick into a hollow box, and this one would
+ * be the only thing distinguishing a claimed day from a missed one.
+ *
+ * The vertex sits at (-4, -14); the short arm runs up-left to (-22, 4) and the long one up-right
+ * to (20, 14). Lengths and angles follow from those three points and are written out as
+ * literals below rather than derived, because the shape is a drawing and not a calculation.
+ */
+const CHK_TICK_W = 12;
+const CHK_TICK_INK = new Color(72, 150, 76, 255);
+
+/** The 领取 button, hung under the card exactly as the settings card hangs 继续游戏. */
+const CHK_BTN_W = 460;
+const CHK_BTN_SIZE = 72;
+const CHK_BTN_Y = -(CHK_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
+const CHK_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
+/** The bright face's share of a cell's coin -- the same 0.74 the top bar's coin wears. */
+const CHK_COIN_FACE_F = 0.74;
+/**
+ * What 领取 says, and what it looks like, once today's coins are in the wallet.
+ *
+ * The button STAYS ON THE CARD rather than disappearing, because its absence would leave the
+ * player looking for it. Greyed and saying 明天再来 it answers the question the player came with.
+ * It stops ANSWERING in `hitsCheckin`, which is the half that matters -- see the gate there.
+ */
+const CHK_CLAIM_TEXT = '领取';
+const CHK_CLAIMED_TEXT = '明天再来';
+const CHK_BTN_DONE = new Color(150, 158, 172, 255);
+const CHK_BTN_DONE_BASE = new Color(110, 118, 132, 255);
+
 const SCRIM = new Color(10, 14, 26, 178);
 
 /**
@@ -793,8 +922,6 @@ const TUNNEL_CHIP_DROP = 3;
 const TUNNEL_COUNT_INK = new Color(24, 44, 88);
 const TUNNEL_COUNT_SIZE = 40;
 
-const PILL_BG = new Color(252, 252, 255);
-const PILL_INK = new Color(48, 60, 92);
 const PILL_CAPTION = new Color(126, 134, 156);
 /**
  * The passenger badge: a saturated disc at the pill's left end with a WHITE figure on it.
@@ -877,14 +1004,54 @@ export class HudView {
     private promptReplay: Node | null = null;
     /** The only line on the prompt that changes. See `showUnlockPrompt`. */
     private promptCost: Label | null = null;
-    /** The settings panel's scrim and its five hit targets, built on first use. */
+    /** The settings panel's scrim and its six hit targets, built on first use. */
     private settings: Node | null = null;
     private setClose: Node | null = null;
     private setResume: Node | null = null;
     private setHome: Node | null = null;
     private setReplay: Node | null = null;
+    private setWipe: Node | null = null;
+    /**
+     * The whole 清除进度 ROW, which is what gets switched off on the in-game card.
+     *
+     * Separate from `setWipe` (the button on it) because the two answer different questions:
+     * the row is what is SHOWN or not, the button is what is TAPPED. Switching the button off
+     * and leaving the row would leave an icon and a label naming an action with nothing to
+     * press.
+     */
+    private setWipeRow: Node | null = null;
     private sfxSwitch: SwitchParts | null = null;
     private hapticSwitch: SwitchParts | null = null;
+    /**
+     * This card was opened from the LOBBY, where three of its controls have nothing to act on.
+     *
+     * A field rather than a look at which nodes are switched on, and `hitsSettings` is where it
+     * earns that: `inBox` measures a node's `worldPosition`, and a node that is switched off
+     * keeps the position it had -- so hiding 主页 and 重玩 does not stop the card answering
+     * 'home' for a tap where they used to be, and in the lobby 'home' means a `showHome()` that
+     * resets the rail the player was reading. This flag is what the three branches are gated on.
+     */
+    private setLobby = false;
+    /**
+     * 清除进度 is armed: it has been tapped once and its label is asking. See `confirmWipe`.
+     *
+     * The state is HERE rather than in the controller because it belongs to the control: it is
+     * a fact about what this button currently says, not about the game, and it dies with the
+     * panel. `hideSettings` stands it back down.
+     */
+    private wipeArmed = false;
+    /** The check-in card's scrim, its cells and its two hit targets. Built on first use. */
+    private checkin: Node | null = null;
+    private chkClose: Node | null = null;
+    private chkClaim: Node | null = null;
+    private chkClaimLabel: Label | null = null;
+    /** One per day of the cycle, index 0 = day 1. `paintCheckin` writes all seven every raise. */
+    private chkCells: { face: Node; rim: Node; tick: Node }[] = [];
+    /** Whether 领取 is live. `hitsCheckin` reads it; see `paintCheckin` for why it is a field. */
+    private chkClaimable = false;
+
+    /** The wipe button's own label, which is the only thing that shows its armed state. */
+    private setWipeLabel: Label | null = null;
     private pickNodes: Node[] = [];
     /**
      * The two readout plates, by their HOLDERS rather than their labels: `setPlayVisible`
@@ -993,10 +1160,10 @@ export class HudView {
         holder.addComponent(UITransform).setContentSize(GEAR_D, GEAR_D);
         canvas.addChild(holder);
         holder.setPosition(x, y, 0);
-        const base = dotSprite('base', GEAR_D, CARD_RIM_BASE);
+        const base = dotSprite('base', GEAR_D, CONTROL_BASE);
         holder.addChild(base);
         base.setPosition(0, -PILL_LIFT, 0);
-        const face = dotSprite('face', GEAR_D, CARD_RIM_FACE);
+        const face = dotSprite('face', GEAR_D, CONTROL_FACE);
         holder.addChild(face);
         face.addChild(gearSprite('glyph', GEAR_D * GEAR_GLYPH, Color.WHITE));
         return holder;
@@ -1092,7 +1259,7 @@ export class HudView {
      */
     private syncGear(): void {
         const modal = !!(this.win?.active) || !!(this.prompt?.active)
-            || !!(this.settings?.active) || !!(this.lose?.active);
+            || !!(this.settings?.active) || !!(this.lose?.active) || !!(this.checkin?.active);
         this.gearBtn.active = this.play && !modal;
     }
 
@@ -1251,7 +1418,7 @@ export class HudView {
         // CJK glyphs at about 384 wide inside a 660 pill, which leaves room for the five that
         // 「进度已清除」 needs, and reads as the same HUD as the plates above it, only louder.
         this.toastTitle = makeLabel(face, 'ToastTitle', TOAST_SIZE, 0);
-        rimLabel(this.toastTitle, TOAST_BASE, 6);
+        rimLabel(this.toastTitle, TOAST_BASE, TOAST_RIM_W);
         pill.active = false;
         this.toast = pill;
     }
@@ -1352,6 +1519,211 @@ export class HudView {
     }
 
     /**
+     * Build the check-in card once. Seven cells, a close button, and 领取 hung underneath.
+     *
+     * Nothing about the SAVE is read here -- the cells are drawn blank and `paintCheckin` writes
+     * every one of them on every raise. That split is the same one `buildSettings` /
+     * `paintSwitches` keeps, and it is what stops a reused card showing yesterday's row: there is
+     * no cell state that survives a raise, because there is no cell state a raise does not
+     * overwrite.
+     */
+    private buildCheckin(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('ChkScrim', w * 2, h * 2, SCRIM, 2);
+        this.canvas.addChild(scrim);
+        scrim.setPosition(0, 0, 0);
+
+        const panel = new Node('ChkPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
+        scrim.addChild(panel);
+        panel.setPosition(0, CHK_RAISE, 0);
+
+        const { page, close } = this.buildCard(panel, 'ChkCard', CHK_H, '签到');
+        this.chkClose = close;
+
+        // Four then three. The row's own width is what centres it, so the second row needs no
+        // special case beyond the count -- see CHK_H's docblock for the arithmetic.
+        this.chkCells = [];
+        for (let d = 0; d < 7; d++) {
+            const row = d < 4 ? 0 : 1;
+            const inRow = row === 0 ? 4 : 3;
+            const idx = row === 0 ? d : d - 4;
+            const rowW = inRow * CHK_CELL_W + (inRow - 1) * CHK_GAP;
+            const x = -rowW / 2 + CHK_CELL_W / 2 + idx * (CHK_CELL_W + CHK_GAP);
+            const y = row === 0 ? CHK_ROW_DY : -CHK_ROW_DY;
+            this.chkCells.push(this.buildCheckinCell(page, d, x, y));
+        }
+
+        this.chkClaim = this.buildCardBtn(panel, {
+            x: 0, y: CHK_BTN_Y, w: CHK_BTN_W, text: '领取',
+            face: PROMPT_BTN, base: PROMPT_BTN_BASE, rim: CARD_BTN_RIM, size: CHK_BTN_SIZE,
+        });
+        this.chkClaimLabel = this.chkClaim.getChildByName('face')!
+            .getChildByName('l')!.getComponent(Label)!;
+
+        scrim.active = false;
+        this.checkin = scrim;
+    }
+
+    /** One day cell: a rim under a face, a caption, a coin, its figure, and a tick over it. */
+    private buildCheckinCell(
+        page: Node, d: number, x: number, y: number,
+    ): { face: Node; rim: Node; tick: Node } {
+        const cell = new Node(`day${d + 1}`);
+        cell.layer = Layers.Enum.UI_2D;
+        cell.addComponent(UITransform).setContentSize(CHK_CELL_W, CHK_CELL_H);
+        page.addChild(cell);
+        cell.setPosition(x, y, 0);
+
+        // The rim is a slightly larger plate BEHIND the face, which is how every raised thing in
+        // this project gets an edge -- there is no stroke primitive and this needs none.
+        const rim = roundedSprite(
+            'rim', CHK_CELL_W + CHK_NEXT_RIM_W * 2, CHK_CELL_H + CHK_NEXT_RIM_W * 2,
+            CHK_NEXT_RIM, CHK_CELL_R + CHK_NEXT_RIM_W,
+        );
+        cell.addChild(rim);
+        const face = roundedSprite('face', CHK_CELL_W, CHK_CELL_H, CHK_SOON_FACE, CHK_CELL_R);
+        cell.addChild(face);
+
+        const day = makeLabel(face, 'day', CHK_DAY_SIZE, CHK_DAY_Y);
+        day.color = CHK_DAY_INK;
+        day.string = `第 ${d + 1} 天`;
+
+        const coin = dotSprite('coin', CHK_COIN_D, COIN_RIM);
+        face.addChild(coin);
+        coin.setPosition(0, CHK_COIN_Y, 0);
+        coin.addChild(dotSprite('face', CHK_COIN_D * CHK_COIN_FACE_F, COIN_FACE));
+
+        const fig = makeLabel(face, 'fig', CHK_FIG_SIZE, CHK_FIG_Y);
+        fig.color = CHK_FIG_INK;
+        fig.isBold = true;
+        fig.string = `${CHECKIN_REWARDS[d]}`;
+
+        // Last, so it draws over the coin it marks off. See CHK_TICK_W for the three points.
+        const tick = new Node('tick');
+        tick.layer = Layers.Enum.UI_2D;
+        tick.addComponent(UITransform);
+        cell.addChild(tick);
+        tick.setPosition(0, CHK_COIN_Y, 0);
+        const short = roundedSprite('a', 26, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
+        tick.addChild(short);
+        short.setPosition(-13, -5, 0);
+        short.angle = -45;
+        const long = roundedSprite('b', 37, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
+        tick.addChild(long);
+        long.setPosition(8, 0, 0);
+        long.angle = 49;
+
+        return { face, rim, tick };
+    }
+
+    /**
+     * Raise the check-in card and write today's row into it.
+     *
+     * `today` is handed in rather than read from a clock here, for the reason every other date in
+     * this feature is handed in: `core/checkin` owns what a day is, and a view calling
+     * `new Date()` would be a second clock, free to disagree with the one the payout used.
+     */
+    showCheckin(c: Checkin, today: string): void {
+        if (!this.checkin) this.buildCheckin();
+        const scrim = this.checkin!;
+        this.paintCheckin(c, today);
+        if (scrim.active) return;
+        scrim.active = true;
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncGear();
+        const panel = scrim.getChildByName('ChkPanel')!;
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.86, 0.86, 1);
+        tween(panel)
+            .to(0.14, { scale: new Vec3(1.03, 1.03, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: Vec3.ONE })
+            .start();
+    }
+
+    /**
+     * Write all seven cells and the button from the save.
+     *
+     * WHICH CELL IS CLAIMABLE COMES FROM `core`, via `nextDay` -- not from `c.day + 1`, which is
+     * wrong on every day a streak has broken, and not inferred from `nextReward`, which cannot
+     * tell day 1 from day 2 because both pay 20. The cell that lights up is the cell `claim` will
+     * pay, by construction rather than by two rules agreeing.
+     *
+     * A cell is CLAIMED when it is at or below `claimedThrough`, and THE TWO BRANCHES READ
+     * DIFFERENT FIELDS, which is the whole of what this line gets right and got wrong once.
+     *
+     * While today is still unclaimed, `nextDay` is the day in FRONT of the player, so the claimed
+     * run stops one short of it. Once today HAS been claimed, the answer is `c.day` -- the day the
+     * claim recorded -- and NOT `nextDay`, which is a trap here: `nextDay` continues a streak only
+     * when `last` is literally yesterday, and after a claim `last` is TODAY, so it falls through
+     * to its "streak broken, start again" branch and returns 1. Reading it in that branch ticked
+     * day 1 and nothing else, whatever day had actually just been paid -- so on six days of the
+     * seven the card contradicted the payout, the seventh worst of all: 100 coins paid and the
+     * cell still showing as a day to come. It stayed wrong until the next midnight, because
+     * nothing between now and then changes what `nextDay` answers.
+     *
+     * `c.day` is 1..7 whenever `live` is false FOR ANY SAVE `claim` PRODUCED, because `live` is
+     * false only once a claim has been recorded and a recorded claim always writes a day in that
+     * range. It is not a property `parseCheckin` enforces: it bounds `day` to 0..7 and `last` to
+     * a string, but does not correlate them, so a hand-edited save can present `day: 0` with
+     * today's `last`. That draws a row with nothing ticked and a spent button, which is wrong and
+     * harmless -- no crash, no payout -- and it is not worth a branch here. A save that has been
+     * edited by hand is not a state this card owes a correct picture of.
+     */
+    paintCheckin(c: Checkin, today: string): void {
+        if (!this.checkin) return;
+        const live = canClaim(c, today);
+        const landing = nextDay(c, today);
+        const claimedThrough = live ? landing - 1 : c.day;
+        this.chkClaimable = live;
+        for (let d = 0; d < 7; d++) {
+            const cell = this.chkCells[d];
+            const done = d + 1 <= claimedThrough;
+            const next = live && d + 1 === landing;
+            cell.face.getComponent(Sprite)!.color =
+                done ? CHK_DONE_FACE : next ? CHK_NEXT_FACE : CHK_SOON_FACE;
+            cell.rim.active = next;
+            cell.tick.active = done;
+        }
+        const claim = this.chkClaim!;
+        this.chkClaimLabel!.string = live ? CHK_CLAIM_TEXT : CHK_CLAIMED_TEXT;
+        claim.getChildByName('face')!.getComponent(Sprite)!.color =
+            live ? PROMPT_BTN : CHK_BTN_DONE;
+        claim.getChildByName('base')!.getComponent(Sprite)!.color =
+            live ? PROMPT_BTN_BASE : CHK_BTN_DONE_BASE;
+    }
+
+    hideCheckin(): void {
+        if (this.checkin) this.checkin.active = false;
+        this.syncGear();
+    }
+
+    /** Whether the check-in card is up. Same shape, and same reasoning, as `settingsOpen`. */
+    checkinOpen(): boolean {
+        return !!this.checkin && this.checkin.activeInHierarchy;
+    }
+
+    /**
+     * Where a tap on the check-in card landed.
+     *
+     * `chkClaimable` GATES 'claim' the same way `setLobby` gates the settings card's three
+     * conditional answers, and for the identical reason: `inBox` measures a `worldPosition`, so a
+     * button that has merely been repainted grey still occupies its box and would still answer.
+     * Repainting it is what the player sees; this gate is what makes it true.
+     */
+    hitsCheckin(ui: Vec3): 'close' | 'claim' | null {
+        if (!this.checkinOpen()) return null;
+        const c = this.chkClose!.worldPosition;
+        const r = CARD_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
+        if (this.chkClaimable && this.inBox(ui, this.chkClaim!, CHK_BTN_W, PROMPT_BTN_H)) {
+            return 'claim';
+        }
+        return null;
+    }
+
+    /**
      * The card every dialog here is built on: rim, page, title, close button. See CARD_R for
      * what it looks like and why.
      *
@@ -1376,10 +1748,10 @@ export class HudView {
         const shadow = roundedSprite('shadow', w, h, PROMPT_SHADOW, CARD_R);
         card.addChild(shadow);
         shadow.setPosition(0, -CARD_LIFT - PROMPT_SHADOW_DROP, 0);
-        const rimBase = roundedSprite('rimBase', w, h, CARD_RIM_BASE, CARD_R);
+        const rimBase = roundedSprite('rimBase', w, h, CONTROL_BASE, CARD_R);
         card.addChild(rimBase);
         rimBase.setPosition(0, -CARD_LIFT, 0);
-        const rim = roundedSprite('rim', w, h, CARD_RIM_FACE, CARD_R);
+        const rim = roundedSprite('rim', w, h, CONTROL_FACE, CARD_R);
         card.addChild(rim);
 
         const pageH = h - CARD_HEAD - CARD_RIM;
@@ -1390,7 +1762,7 @@ export class HudView {
 
         // On the rim, centred in the band the page leaves above itself.
         const label = makeLabel(rim, 'title', CARD_TITLE_SIZE, h / 2 - CARD_HEAD / 2);
-        rimLabel(label, CARD_RIM_BASE, 6);
+        rimLabel(label, CONTROL_BASE, 6);
         label.string = title;
 
         // A child of the CARD and its LAST one, so it draws over the rim and the page both.
@@ -1401,10 +1773,10 @@ export class HudView {
         card.addChild(close);
         close.setPosition(w / 2 - CARD_X_INSET, h / 2 - CARD_X_INSET, 0);
         close.addChild(dotSprite('ring', CARD_X_D + CARD_X_RING * 2, Color.WHITE));
-        const xBase = dotSprite('base', CARD_X_D, CARD_RIM_BASE);
+        const xBase = dotSprite('base', CARD_X_D, CONTROL_BASE);
         close.addChild(xBase);
         xBase.setPosition(0, -CARD_X_LIFT, 0);
-        const xFace = dotSprite('face', CARD_X_D, CARD_RIM_FACE);
+        const xFace = dotSprite('face', CARD_X_D, CONTROL_FACE);
         close.addChild(xFace);
         const x = makeLabel(xFace, 'x', CARD_X_SIZE, 2);
         x.isBold = true;
@@ -1501,23 +1873,31 @@ export class HudView {
     }
 
     /**
-     * The settings panel: two switches and the three things a player wants from a level they
-     * are in the middle of.
+     * The settings panel: the rows that are settings, and below the card the answers that are
+     * about the level.
      *
      * IT REPLACED A BARE HOME BUTTON, and the reason is worth keeping: that button sat under
      * WeChat's capsule (see GEAR_D), and a single exit in a corner is also a mis-tap that
      * throws a level away. A panel asks, and it has room for the switches the corner had
      * nowhere to put.
      *
-     * Laid out from the top edge down, plate spanning y -240..240, each line's box being 1.2x
-     * its font size (`makeLabel`):
+     * WHAT IS ON THE PAGE, in page coordinates, for the lobby's three-row case. In play the
+     * third row is switched off and `rowY` centres the other two instead -- see SET_ROW_H.
      *
-     *   title  y  176 +/- 29   ->  147..205   (35 off the top edge)
-     *   rule   y  126          ->  125..127   (20 clear of the title)
-     *   sound  y   76 +/- 28   ->   48..104   (21 clear of the rule, switch height)
-     *   buzz   y   -4 +/- 28   ->  -32..24    (16 clear of the row above: one block)
-     *   rule   y  -62          ->  -63..-61   (29 clear)
-     *   answers y -140 +/- 48  -> -188..-92   (29 clear, 52 off the bottom)
+     *   page spans      404 .. -404   (808 tall: SET_H 1060 less CARD_HEAD 210 and CARD_RIM 42)
+     *   音效     row y   232 +/- 98   ->  330..134    (74 clear of the page's top edge)
+     *   震动     row y     0 +/- 98   ->   98..-98    (36 clear of the row above)
+     *   清除进度 row y  -232 +/- 98   -> -134..-330   (36 clear above, 74 below)
+     *
+     * The title is not on this page at all -- it sits on the card's RIM, in the band `CARD_HEAD`
+     * leaves above the page -- and neither are the answers, which sit below the whole card (see
+     * SET_BTN_Y). The page holds rows and nothing else.
+     *
+     * THE TABLE THAT USED TO BE HERE DESCRIBED A CARD THAT NO LONGER EXISTS: a 480-tall plate,
+     * horizontal rules between the rows, the answers ON the page, and type about a third of
+     * today's size. It stopped being true when the cards were scaled to the real canvas width
+     * and nothing brought it along; the rules it lists were never drawn at all. Recomputed from
+     * the constants rather than adjusted from those numbers.
      *
      * NO MUSIC ROW: nothing in this project plays a track, and a switch that toggles nothing
      * is worse than no switch.
@@ -1540,8 +1920,15 @@ export class HudView {
         const { page, close } = this.buildCard(panel, 'SetCard', SET_H, '设置');
         this.setClose = close;
 
-        this.sfxSwitch = this.buildSwitch(page, 'Sfx', '音效', SET_ROW1_Y, speakerSprite);
-        this.hapticSwitch = this.buildSwitch(page, 'Buzz', '震动', SET_ROW2_Y, buzzSprite);
+        this.sfxSwitch = this.buildSwitch(page, 'Sfx', '音效', speakerSprite);
+        this.hapticSwitch = this.buildSwitch(page, 'Buzz', '震动', buzzSprite);
+        // The third row, built with the card rather than on demand so the page has one shape
+        // for its whole life. `showSettings` only ever switches it on or off and places the
+        // rows for whichever count is showing.
+        const wipe = this.buildWipeRow(page);
+        this.setWipeRow = wipe.row;
+        this.setWipe = wipe.btn;
+        this.setWipeLabel = wipe.label;
 
         // Three answers in one row, the middle one wide and green: carrying on is what nearly
         // every visit to this panel ends in, so it is the one that looks like a button.
@@ -1552,11 +1939,11 @@ export class HudView {
         const side = SET_WIDE_W / 2 + SET_BTN_GAP + SET_SIDE_W / 2;
         this.setHome = this.buildCardBtn(panel, {
             x: -side, y: SET_BTN_Y, w: SET_SIDE_W, text: '主页',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
         this.setReplay = this.buildCardBtn(panel, {
             x: side, y: SET_BTN_Y, w: SET_SIDE_W, text: '重玩',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
 
         scrim.active = false;
@@ -1573,28 +1960,40 @@ export class HudView {
      * `icon` is passed in rather than chosen from `text`, so this function has no table of
      * strings to keep in step with `ui-shapes`; the caller names both.
      */
-    private buildSwitch(
-        page: Node, name: string, text: string, y: number,
+    private buildRow(
+        page: Node, name: string, text: string,
         icon: (name: string, d: number, color: Color) => Node,
-    ): SwitchParts {
+    ): Node {
         const row = new Node(`Row${name}`);
         row.layer = Layers.Enum.UI_2D;
         row.addComponent(UITransform).setContentSize(CARD_PAGE_W, SET_ROW_H);
         page.addChild(row);
-        row.setPosition(0, y, 0);
 
-        const glyph = icon('icon', SET_ICON_D, CARD_RIM_FACE);
+        const glyph = icon('icon', SET_ICON_D, CONTROL_FACE);
         row.addChild(glyph);
         glyph.setPosition(SET_ICON_X, 0, 0);
 
         const label = makeLabel(row, 'label', SET_LABEL_SIZE, 0, SET_LABEL_X);
-        rimLabel(label, CARD_RIM_BASE, 6);
+        rimLabel(label, CONTROL_BASE, 6);
         label.string = text;
         // Anchored at its LEFT edge, so SET_LABEL_X is where the text starts rather than
-        // where its middle happens to land. Both rows say two characters today and centring
-        // them would look identical -- and would quietly misalign the moment one of them
-        // says three.
+        // where its middle happens to land. Two of these rows say two characters and the
+        // third says four; centring them would have looked identical until the third arrived.
         label.node.getComponent(UITransform)!.setAnchorPoint(0, 0.5);
+        return row;
+    }
+
+    /**
+     * One switch row: `buildRow`'s icon and label, with a track and a knob in the control slot.
+     *
+     * NO `y`. Rows are positioned by `showSettings`, not at build time, because how many rows
+     * this page has depends on which screen raised it -- see `rowY`.
+     */
+    private buildSwitch(
+        page: Node, name: string, text: string,
+        icon: (name: string, d: number, color: Color) => Node,
+    ): SwitchParts {
+        const row = this.buildRow(page, name, text, icon);
 
         const track = roundedSprite('track', SET_SW_W, SET_SW_H, SET_SW_TRACK, SET_SW_H / 2);
         row.addChild(track);
@@ -1621,19 +2020,83 @@ export class HudView {
     }
 
     /**
+     * The 清除进度 row: `buildRow`'s icon and label, with a RED BUTTON in the control slot.
+     *
+     * RED, AND THE ONLY RED ON THIS HUD. Nothing else in the game is destructive, so the colour
+     * has no second meaning to be confused with -- which is most of what it is buying: it has to
+     * look unlike the switches above it before it is read, not after. It keeps the two-plate
+     * treatment and the same darker-base ratio as the family blue, so it reads as the same KIND
+     * of control in a different colour; a red that also broke the drawing convention would read
+     * as a warning graphic rather than as a button.
+     *
+     * A BUTTON AND NOT A SWITCH, because this is not a setting with two states -- it is an
+     * action, and an action that cannot be undone. A third knob on this page would have said
+     * the save could be cleared and un-cleared.
+     *
+     * THE CAPSULE'S RADIUS IS THE TRACK'S, `SET_SW_H / 2`, rather than the cards' `PROMPT_BTN_R`.
+     * It sits in the slot two switch tracks also sit in, directly under one of them, and a
+     * different corner radius in that column reads as a mistake at a glance.
+     */
+    private buildWipeRow(page: Node): { row: Node; btn: Node; label: Label } {
+        const row = this.buildRow(page, 'Wipe', WIPE_ROW_TEXT, binSprite);
+        const btn = new Node('wipe');
+        btn.layer = Layers.Enum.UI_2D;
+        btn.addComponent(UITransform).setContentSize(SET_SW_W, SET_SW_H);
+        row.addChild(btn);
+        btn.setPosition(SET_SW_X, 0, 0);
+        const base = roundedSprite('base', SET_SW_W, SET_SW_H, WIPE_BASE, SET_SW_H / 2);
+        btn.addChild(base);
+        base.setPosition(0, -PROMPT_BTN_LIFT, 0);
+        const face = roundedSprite('face', SET_SW_W, SET_SW_H, WIPE_FACE, SET_SW_H / 2);
+        btn.addChild(face);
+        const label = makeLabel(face, 'l', SET_WIPE_SIZE, 0);
+        rimLabel(label, WIPE_BASE, Math.round(SET_WIPE_SIZE / 10));
+        label.string = WIPE_TEXT;
+        return { row, btn, label };
+    }
+
+    /**
      * Raise the settings panel. `sfx` and `haptics` are the caller's current values -- the
      * panel draws them and reports taps; it does not remember them, because the thing that
      * has to be right is what the game is actually doing, not what a panel thinks.
+     *
+     * `lobby` says which screen raised it, and it is not cosmetic. The lobby has no level to
+     * go home from or replay, and it is the only screen where clearing the save makes sense,
+     * so three of this card's controls swap places between the two callers. It is passed on
+     * every raise rather than set once because one HudView serves both screens.
      */
-    showSettings(sfx: boolean, haptics: boolean): void {
+    showSettings(sfx: boolean, haptics: boolean, lobby: boolean): void {
         if (!this.settings) this.buildSettings();
         const scrim = this.settings!;
         this.paintSwitches(sfx, haptics);
+        this.setLobby = lobby;
+        // `setHome` and `setReplay` are `Node | null`, not a wrapper with a `.node` -- these
+        // are the nodes themselves. Switching them off is HALF of what makes them go away;
+        // the other half is the gate in `hitsSettings`, which is where the trap is.
+        this.setHome!.active = !lobby;
+        this.setReplay!.active = !lobby;
+        this.setWipeRow!.active = lobby;
+        // WHERE THE ROWS SIT DEPENDS ON HOW MANY THERE ARE. Three on the lobby's card, two in
+        // play, centred either way -- see `rowY`. Written on every raise for the same reason
+        // the three controls above are: one panel serves both screens.
+        const rows = lobby ? 3 : 2;
+        this.sfxSwitch!.row.setPosition(0, rowY(0, rows), 0);
+        this.hapticSwitch!.row.setPosition(0, rowY(1, rows), 0);
+        this.setWipeRow!.setPosition(0, rowY(2, 3), 0);
+        // A raise is a fresh card: whatever the red button was asking last time, it is not
+        // asking now. `hideSettings` does this too -- both ends, because a panel can be taken
+        // down by `setPlayVisible` without either being called.
+        this.disarmWipe();
+        // ONE RAISE FOR BOTH SCREENS NOW. The lobby's panel used to hang a whole extra button
+        // lower than the in-game one, because the clear-save button was a fourth row beneath the
+        // answers, and it needed half of that back to stay centred. With that button inside the
+        // card the two compositions are the same height and `SET_RAISE` is the only raise.
+        const panel = scrim.getChildByName('SetPanel')!;
+        panel.setPosition(0, SET_RAISE, 0);
         if (scrim.active) return;
         scrim.active = true;
         scrim.setSiblingIndex(this.canvas.children.length - 1);
         this.syncGear();
-        const panel = scrim.getChildByName('SetPanel')!;
         Tween.stopAllByTarget(panel);
         panel.setScale(0.86, 0.86, 1);
         tween(panel)
@@ -1659,7 +2122,42 @@ export class HudView {
 
     hideSettings(): void {
         if (this.settings) this.settings.active = false;
+        this.disarmWipe();
         this.syncGear();
+    }
+
+    /**
+     * Advance the clear-save button's two steps, and say whether the caller should now DO it.
+     *
+     * The first tap arms it and rewrites its label into a question; only the second returns
+     * true. The caller's whole part is `if (hud.confirmWipe()) this.wipeProgress();` -- it does
+     * not have to know there are two steps, and it cannot get the count wrong.
+     *
+     * NOT FOLDED INTO `hitsSettings`, which stays a pure question about where a tap landed, the
+     * way every hit test on both screens is. A hit test that also changed state would mean
+     * asking "what did they tap" had a side effect, and the answer to that is normally asked
+     * before the caller has decided whether the press was even a tap.
+     */
+    confirmWipe(): boolean {
+        if (this.wipeArmed) {
+            this.disarmWipe();
+            return true;
+        }
+        this.wipeArmed = true;
+        if (this.setWipeLabel) this.setWipeLabel.string = WIPE_ASK;
+        return false;
+    }
+
+    /**
+     * Stand the red button back down: it names the action again and the next tap only arms it.
+     *
+     * Called when the panel closes and after any OTHER answer on the card. A destructive
+     * button left armed while the player does something else is a trap -- they come back to a
+     * card that looks the way they left it, and the next tap on the red one is the last one.
+     */
+    disarmWipe(): void {
+        this.wipeArmed = false;
+        if (this.setWipeLabel) this.setWipeLabel.string = WIPE_TEXT;
     }
 
     /** Whether the panel is up, i.e. whether it owns the next tap. */
@@ -1672,14 +2170,35 @@ export class HudView {
      * that hits nothing is SWALLOWED rather than closing the panel, because the board behind
      * it is mid-level and a stray tap there would move a car.
      */
-    hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | null {
+    hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | 'wipe' | null {
         if (!this.settingsOpen()) return null;
         const c = this.setClose!.worldPosition;
         const r = CARD_X_D / 2 + 12;
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
         if (this.inBox(ui, this.setResume!, SET_WIDE_W, PROMPT_BTN_H)) return 'close';
-        if (this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
-        if (this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
+        // THE THREE GATED BRANCHES, and `setLobby` is what gates them. Switching a node off is
+        // not enough on its own: `inBox` compares a `worldPosition`, and a node that is not
+        // being drawn still has the position it was built at -- so without these, a tap where
+        // 主页 used to be would answer 'home' on the lobby's card, and the lobby's answer to
+        // 'home' is a `showHome()` that resets the rail the player was reading. The wipe row
+        // is gated the same way from the other side: it does not exist on the in-game card,
+        // and it is the one answer here that cannot be undone.
+        //
+        // The other three answers are NOT gated, because they are true on both cards: the X
+        // and 继续游戏 both mean close, and the two switches act on settings rather than on a
+        // level. See the class's `setLobby` for the field itself.
+        if (!this.setLobby
+            && this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
+        if (!this.setLobby
+            && this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
+        // THE BUTTON, NOT THE ROW, and that asymmetry with the two switches below is the point.
+        // A switch's whole row answers because widening the target of a two-state control costs
+        // nothing -- a mis-tap toggles the sound and the player toggles it back. This row holds
+        // the one action on this HUD that cannot be undone, so its target is the thing that
+        // looks like a button and nothing else: the icon and the label beside it are not
+        // tappable, and a thumb landing anywhere else in the row does nothing at all.
+        if (this.setLobby
+            && this.inBox(ui, this.setWipe!, SET_SW_W, SET_SW_H)) return 'wipe';
         // The whole ROW is the switch's target, icon and label included: a 150-wide track is
         // a small thing to ask of a thumb when the row it sits in is 588 wide and holds
         // nothing else. The row is a node with that size on it, so this is the same `inBox`
@@ -1690,7 +2209,23 @@ export class HudView {
         return null;
     }
 
+    /**
+     * Is `ui` inside `node`'s box? A BACKSTOP against the trap described on `setLobby`: a node
+     * that is switched off keeps its `worldPosition`, so this used to answer for buttons that
+     * were not on screen.
+     *
+     * The three branches above are gated on `setLobby` as well, and the redundancy is
+     * deliberate rather than an oversight. They say at the branch WHY an answer is not
+     * available on that card, which is the part a reader needs; this line makes the general
+     * rule true for the next button someone hides, who will not have read them. It is the same
+     * discipline `TopBar.hitsCheckin` and `hitsGear` already keep -- the one flag that decides
+     * whether a control is drawn also decides whether it answers.
+     *
+     * Every other caller passes a node that is active whenever its own panel is up (the win
+     * and lose cards switch their SCRIM, never a button), so nothing else changes behaviour.
+     */
     private inBox(ui: Vec3, node: Node, wid: number, hgt: number): boolean {
+        if (!node.activeInHierarchy) return false;
         const p = node.worldPosition;
         return Math.abs(ui.x - p.x) <= wid / 2 + 8 && Math.abs(ui.y - p.y) <= hgt / 2 + 8;
     }
@@ -1896,7 +2431,7 @@ export class HudView {
         this.winReplay = this.buildCardBtn(page, {
             x: -total / 2 + WIN_REPLAY_W / 2, y: WIN_BTN_Y, w: WIN_REPLAY_W,
             text: '重玩本关',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
         this.winCta = this.buildCardBtn(page, {
             x: total / 2 - WIN_NEXT_W / 2, y: WIN_BTN_Y, w: WIN_NEXT_W, text: '下一关',
@@ -2087,7 +2622,7 @@ export class HudView {
         const total = LOSE_HOME_W + LOSE_BTN_GAP + LOSE_REPLAY_W;
         this.loseHome = this.buildCardBtn(page, {
             x: -total / 2 + LOSE_HOME_W / 2, y: LOSE_BTN_Y, w: LOSE_HOME_W, text: '主页',
-            face: CARD_RIM_FACE, base: CARD_RIM_BASE, rim: CARD_RIM_BASE, size: SET_SIDE_SIZE,
+            face: CONTROL_FACE, base: CONTROL_BASE, rim: CONTROL_BASE, size: SET_SIDE_SIZE,
         });
         this.loseReplay = this.buildCardBtn(page, {
             x: total / 2 - LOSE_REPLAY_W / 2, y: LOSE_BTN_Y, w: LOSE_REPLAY_W,

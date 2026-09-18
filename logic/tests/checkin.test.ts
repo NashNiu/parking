@@ -1,0 +1,206 @@
+import {
+  CHECKIN_REWARDS, CHECKIN_VERSION, Checkin, canClaim, claim, emptyCheckin,
+  nextDay, nextReward, parseCheckin, serializeCheckin, todayKey,
+} from '../../game/assets/scripts/core/checkin';
+
+/**
+ * The reward table, as LITERALS.
+ *
+ * THE ONLY ASSERTION IN THIS FILE THAT DOES NOT READ `CHECKIN_REWARDS`, and it is here because
+ * every other one does. A test that expects `CHECKIN_REWARDS[n]` is asking the implementation
+ * what it pays and then agreeing with the answer: transpose two entries or drop a digit and the
+ * whole suite still passes. That is fine for the cases about STREAK arithmetic, which is what
+ * they are really about -- but it leaves the figures themselves unpinned, and the figures are
+ * the part a product decision fixed ("先按默认值做": 20/20/30/30/40/40/100, seven days, reset on
+ * a miss). Pin them once, here, so changing them is a deliberate edit to this line.
+ */
+test('the seven-day table pays the agreed figures', () => {
+  expect(CHECKIN_REWARDS).toEqual([20, 20, 30, 30, 40, 40, 100]);
+});
+
+/**
+ * Same boot-path contract as `parseWallet`: anything that is not exactly a valid, current-
+ * version checkin comes back as `emptyCheckin()`, never an exception. `''` is in the list
+ * because that is what WeChat's `getStorageSync` returns for a missing key, where a browser's
+ * `getItem` returns null -- the two must be indistinguishable here.
+ */
+test.each([
+  ['a missing key (null)', null],
+  ['a missing key on WeChat (empty string)', ''],
+  ['whitespace', '   '],
+  ['not JSON at all', '{oops'],
+  ['a truncated object', '{"version":1,"day":3'],
+  ['JSON that is not an object', '42'],
+  ['JSON null', 'null'],
+  ['an array', '[1,2,3]'],
+  ['a future version', '{"version":2,"day":3,"last":"2026-01-01"}'],
+  ['no version', '{"day":3,"last":"2026-01-01"}'],
+  ['day missing', '{"version":1,"last":"2026-01-01"}'],
+  ['day as a string', '{"version":1,"day":"3","last":"2026-01-01"}'],
+  ['day negative', '{"version":1,"day":-1,"last":"2026-01-01"}'],
+  ['day above 7', '{"version":1,"day":8,"last":"2026-01-01"}'],
+  ['day is a fraction', '{"version":1,"day":3.5,"last":"2026-01-01"}'],
+  ['day is NaN (written as JSON null)', '{"version":1,"day":null,"last":"2026-01-01"}'],
+  ['last missing', '{"version":1,"day":3}'],
+  ['last is a number', '{"version":1,"day":3,"last":20260101}'],
+])('%s parses as an empty checkin', (_what, raw) => {
+  expect(parseCheckin(raw as string | null)).toEqual(emptyCheckin());
+});
+
+test('a valid checkin round-trips', () => {
+  const c: Checkin = { version: CHECKIN_VERSION, day: 4, last: '2026-01-05' };
+  expect(parseCheckin(serializeCheckin(c))).toEqual(c);
+});
+
+test('an empty checkin has claimed nothing', () => {
+  expect(emptyCheckin()).toEqual({ version: CHECKIN_VERSION, day: 0, last: '' });
+});
+
+describe('canClaim', () => {
+  test('is false the second time on the same day', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 1, last: '2026-01-01' };
+    expect(canClaim(c, '2026-01-01')).toBe(false);
+  });
+
+  test('is true once the day has changed', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 1, last: '2026-01-01' };
+    expect(canClaim(c, '2026-01-02')).toBe(true);
+  });
+
+  test('is true on a checkin that has never claimed', () => {
+    expect(canClaim(emptyCheckin(), '2026-01-01')).toBe(true);
+  });
+});
+
+describe('claim', () => {
+  test('the very first claim lands on day 1', () => {
+    const { checkin, coins } = claim(emptyCheckin(), '2026-01-01');
+    expect(checkin).toEqual({ version: CHECKIN_VERSION, day: 1, last: '2026-01-01' });
+    expect(coins).toBe(CHECKIN_REWARDS[0]);
+  });
+
+  test('consecutive days advance the streak through day 7, then wrap to day 1', () => {
+    let c = emptyCheckin();
+    let expectedDay = 0;
+    for (let i = 0; i < 8; i++) {
+      const today = todayKey(new Date(2026, 0, 1 + i));
+      const result = claim(c, today);
+      expectedDay = expectedDay === 7 ? 1 : expectedDay + 1;
+      expect(result.checkin.day).toBe(expectedDay);
+      expect(result.checkin.last).toBe(today);
+      expect(result.coins).toBe(CHECKIN_REWARDS[expectedDay - 1]);
+      c = result.checkin;
+    }
+  });
+
+  test('a one-day gap breaks the streak and restarts it at day 1', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 5, last: '2026-01-05' };
+    // 2026-01-06 was never claimed, so 2026-01-07 is not "yesterday" from 01-05's point of view.
+    const result = claim(c, '2026-01-07');
+    expect(result.checkin).toEqual({ version: CHECKIN_VERSION, day: 1, last: '2026-01-07' });
+    expect(result.coins).toBe(CHECKIN_REWARDS[0]);
+  });
+
+  test('a multi-day gap also restarts the streak at day 1', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 6, last: '2026-01-05' };
+    const result = claim(c, '2026-01-20');
+    expect(result.checkin).toEqual({ version: CHECKIN_VERSION, day: 1, last: '2026-01-20' });
+    expect(result.coins).toBe(CHECKIN_REWARDS[0]);
+  });
+});
+
+describe('nextReward', () => {
+  test('previews the fresh-streak payout', () => {
+    expect(nextReward(emptyCheckin(), '2026-01-01')).toBe(CHECKIN_REWARDS[0]);
+  });
+
+  test('previews a mid-streak payout without mutating anything', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 3, last: '2026-01-05' };
+    expect(nextReward(c, '2026-01-06')).toBe(CHECKIN_REWARDS[3]);
+  });
+
+  test('previews the day-7-to-1 wrap', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 7, last: '2026-01-05' };
+    expect(nextReward(c, '2026-01-06')).toBe(CHECKIN_REWARDS[0]);
+  });
+
+  test('previews the reset a gap would cause', () => {
+    const c: Checkin = { version: CHECKIN_VERSION, day: 5, last: '2026-01-01' };
+    expect(nextReward(c, '2026-01-10')).toBe(CHECKIN_REWARDS[0]);
+  });
+});
+
+describe('todayKey', () => {
+  test('formats as YYYY-MM-DD, zero-padded', () => {
+    expect(todayKey(new Date(2026, 0, 5))).toBe('2026-01-05');
+  });
+
+  test('crosses a month boundary', () => {
+    expect(todayKey(new Date(2026, 0, 31))).toBe('2026-01-31');
+    expect(todayKey(new Date(2026, 1, 1))).toBe('2026-02-01');
+  });
+
+  test('crosses a year boundary', () => {
+    expect(todayKey(new Date(2025, 11, 31))).toBe('2025-12-31');
+    expect(todayKey(new Date(2026, 0, 1))).toBe('2026-01-01');
+  });
+});
+
+/**
+ * `nextDay` is exported for the CARD, and these pin the property that makes exporting it better
+ * than letting the card work it out: the cell the card highlights is the day `claim` records.
+ *
+ * The day-1/day-2 case is the one that matters. Both pay 20, so a card that inferred the cell
+ * from `nextReward` would light the wrong one on the second day of every streak and nothing
+ * would look wrong until the seventh.
+ */
+test('nextDay is the day claim actually records, including where rewards repeat', () => {
+  let c = emptyCheckin();
+  for (const [today, expected] of [
+    ['2026-03-01', 1], ['2026-03-02', 2], ['2026-03-03', 3], ['2026-03-04', 4],
+    ['2026-03-05', 5], ['2026-03-06', 6], ['2026-03-07', 7], ['2026-03-08', 1],
+  ] as [string, number][]) {
+    expect(nextDay(c, today)).toBe(expected);
+    const result = claim(c, today);
+    expect(result.checkin.day).toBe(expected);
+    c = result.checkin;
+  }
+});
+
+test('nextDay restarts at 1 after a gap, whatever day the streak had reached', () => {
+  const c = { version: CHECKIN_VERSION, day: 5, last: '2026-03-05' };
+  // One missed day is a break, and so is a week of them.
+  expect(nextDay(c, '2026-03-07')).toBe(1);
+  expect(nextDay(c, '2026-03-14')).toBe(1);
+  // The day after is still a continuation.
+  expect(nextDay(c, '2026-03-06')).toBe(6);
+});
+
+test('nextDay and nextReward cannot disagree', () => {
+  const c = { version: CHECKIN_VERSION, day: 6, last: '2026-03-06' };
+  expect(nextReward(c, '2026-03-07')).toBe(CHECKIN_REWARDS[nextDay(c, '2026-03-07') - 1]);
+  expect(nextReward(c, '2026-03-09')).toBe(CHECKIN_REWARDS[nextDay(c, '2026-03-09') - 1]);
+});
+
+/**
+ * `nextDay` ON THE DAY OF A CLAIM ANSWERS 1, NOT THE DAY JUST CLAIMED.
+ *
+ * It is the natural reading of the name that is wrong, and a view believed it: after a claim,
+ * `last` is TODAY, which is not yesterday-of-today, so the streak-continues branch does not fire
+ * and the function falls through to "start again". That is correct for what `nextDay` is FOR --
+ * it answers "what would a claim made now land on", and a second claim today is not possible, so
+ * the value is unreachable rather than meaningful.
+ *
+ * Pinned because the check-in card read it in exactly that state and drew day 1 as the only
+ * claimed cell, whatever day had just been paid. Anything wanting "the day just claimed" reads
+ * `c.day`; this documents why it cannot read this instead.
+ */
+test('nextDay is meaningless, and answers 1, on a day already claimed', () => {
+  for (let day = 1; day <= 7; day++) {
+    const c = { version: CHECKIN_VERSION, day, last: '2026-04-10' };
+    expect(canClaim(c, '2026-04-10')).toBe(false);
+    expect(nextDay(c, '2026-04-10')).toBe(1);
+    // What a caller in that state actually wants is on the save already.
+    expect(c.day).toBe(day);
+  }
+});

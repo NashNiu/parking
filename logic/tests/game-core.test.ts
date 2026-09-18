@@ -356,3 +356,73 @@ test('stars ignore how the level is going', () => {
   expect(game.getState()).toBe('won');
   expect(game.stars()).toBe(3);
 });
+
+/** `deadlockLevel`, with more rows than the ring holds, so some are still queued behind it. */
+function fillingLevel(): LevelData {
+  const level = deadlockLevel();
+  level.loop = {
+    capacity: 4,
+    boardIndex: 2,
+    queue: [{ color: 'red', count: 16 }, { color: 'blue', count: 8 }],
+  };
+  return level;
+}
+
+/**
+ * THE ONE THE HUMAN REPORTED, off a device: 上方的圆环中还有空位,理论上还没结束.
+ *
+ * `canFill` was exact about this position -- `reachableColors` proves the queued rows can
+ * never reach a car, because nothing can board and only boarding opens a cell -- so the old
+ * answer was arithmetically right. It was still the wrong thing to say, because it was said
+ * while the player could see a gap on the ring and rows streaming in towards it, and a true
+ * answer nobody can check reads as a wrong one.
+ *
+ * So the question waits for the ring, and the wait is free: it settles in at most `capacity`
+ * steps and the answer does not change, it just becomes one the screen agrees with.
+ */
+test('the unlock question waits for the ring to stop filling before it is asked', () => {
+  const core = new GameCore(fillingLevel());
+  // Open a cell the only way play ever opens one, and leave rows queued behind it.
+  for (let i = 0; i < 4; i++) core.loop.boardPassengerAt(0);
+  expect(core.loop.ring[0]).toBeNull();
+  expect(core.loop.stillFilling()).toBe(true);
+
+  core.tapCar(1);
+  core.tapCar(2);
+  core.stepLoop();
+  expect(core.parking.hasFreeSlot()).toBe(false);
+  // Green cars against a red-and-blue ring: nothing can board, and nothing ever will. The
+  // answer is already known -- and deliberately not given yet.
+  expect(core.needsUnlock()).toBe(false);
+  expect(core.getState()).toBe('playing');
+
+  let steps = 0;
+  while (core.loop.stillFilling() && steps < 64) {
+    core.stepLoop();
+    steps++;
+  }
+  expect(steps).toBeLessThanOrEqual(core.loop.capacity);
+  // Same position, same answer, now visible on the ring rather than predicted about it.
+  expect(core.needsUnlock()).toBe(true);
+});
+
+/**
+ * The stronger half of the same gate. `needsUnlock` merely asks; `isDeadlocked` ENDS the
+ * level, so a premature one is a loss the player never had a chance to play out of.
+ */
+test('a level is not declared lost while rows are still arriving', () => {
+  const level = fillingLevel();
+  level.parking = { slots: 2, unlocked: 2 };   // nothing left to unlock: a real deadlock
+  const core = new GameCore(level);
+  for (let i = 0; i < 4; i++) core.loop.boardPassengerAt(0);
+  expect(core.loop.stillFilling()).toBe(true);
+
+  core.tapCar(1);
+  core.tapCar(2);
+  core.stepLoop();
+  expect(core.getState()).toBe('playing');
+
+  while (core.loop.stillFilling()) core.stepLoop();
+  core.stepLoop();
+  expect(core.getState()).toBe('deadlock');
+});

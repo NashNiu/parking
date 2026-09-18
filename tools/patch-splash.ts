@@ -226,12 +226,21 @@ function rgba(r: number, g: number, b: number, a = 1): Rgba {
 /**
  * The game's own loading screen.
  *
- * `bgColor` is what shows below the artwork, which is HomeView's own navy -- so the hand-off
- * from the first screen to the menu is not a change of scene. It is almost entirely covered
- * by the scrim (see SplashLayout.scrim), and matching the two means a rounding error at their
- * boundary cannot show as a line.
+ * `bgColor` is what shows below the artwork, and it is `palette.GROUND` (189,200,218) -- the
+ * pavement the lobby is drawn on, and the colour the UI camera clears to. The hand-off from the
+ * first screen to the menu is therefore not a change of scene: the last frame of the splash and
+ * the first frame of the lobby are the same colour at the bottom of the screen. It is almost
+ * entirely covered by the scrim (see SplashLayout.scrim), and matching the two means a rounding
+ * error at their boundary cannot show as a line.
  *
- * IT USED TO BE A ROAD GREY, meant to continue the artwork's foot. That only works if the
+ * IT USED TO BE HOMEVIEW'S NAVY, 24,30,50, and that was right for exactly as long as the lobby
+ * opened on a navy. The lobby is a flat code-drawn street now and `BG` is deleted, so the navy
+ * stopped tracking anything: the splash ended on near-black and the menu began on pale
+ * pavement, about 165 luminance units of jump at precisely the moment this constant exists to
+ * smooth. A constant named after another file's colour has to be re-read when that file
+ * changes, and this one was not.
+ *
+ * BEFORE THAT IT WAS A ROAD GREY, meant to continue the artwork's foot. That only works if the
  * artwork's bottom edge is one colour, and this one is not: the left 55% is asphalt and the
  * right 45% is warm cream paving. No flat colour continues that -- whatever it is, half the
  * seam shows. Hence the scrim, which covers the join instead of trying to match it.
@@ -249,7 +258,7 @@ export const GAME_SPLASH: SplashPatch = {
     useLogo: true,
     logoName: 'splash-notice.png',
     useDefaultLogo: false,
-    bgColor: rgba(24, 30, 50),
+    bgColor: rgba(189, 200, 218),
     progressBarColor: rgba(250, 196, 62),
     progressBackground: rgba(58, 66, 82),
 };
@@ -271,9 +280,12 @@ export const GAME_LAYOUT: SplashLayout = {
     barAspect: 14,
     barUp: 0.12,
     barGap: 0.02,
-    // HomeView's own navy, which is also bgColor -- a cool shadow under a warm sunlit scene,
-    // and the same colour the menu behind it opens on.
-    scrim: [24 / 255, 30 / 255, 50 / 255, 0.78],
+    // The lobby's pavement, which is also bgColor -- the two MUST be the same colour, because
+    // the scrim's opaque part runs down into the band and any difference between them shows as
+    // a line across the screen. It is `palette.GROUND`, so what the splash fades down into is
+    // exactly what the menu behind it opens on. It was HomeView's navy until that navy was
+    // deleted; see GAME_SPLASH.bgColor for what that cost.
+    scrim: [189 / 255, 200 / 255, 218 / 255, 0.78],
     scrimSolid: 0.14,
     scrimOver: 0.01,
     scrimFade: 0.04,

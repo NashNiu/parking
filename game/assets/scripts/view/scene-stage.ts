@@ -1,47 +1,56 @@
 import { Node, Color } from 'cc';
-import { makeSlab, makeMerged, boxPart, MeshPart } from './slabs';
+import { makeSlab, makeMerged, makeShadowSlab, boxPart, MeshPart } from './slabs';
+import { LIFT, shadowThrow } from './shadow';
+import { GRID_LINE, GROUND, LOT, LOT_DASH, ROAD, ROAD_LINE, AREA_SHADOW_ALPHA } from './palette';
 
 /**
  * The scene's flat graphic layer: ground, grid, lot, roads. Every colour here is the
  * colour that reaches the screen — these panels are unlit (see `makeSlab`) — and every
  * panel is rounded, which is most of what separates this from a pile of boxes.
  *
- * They read light to dark in that order: ground, lot, road. The ground carries the whole
- * palette's floor, so it cannot go much lighter than this — the passenger track is white,
- * and against the first version's near-white ground it disappeared.
+ * The colours themselves live in `palette.ts` now, shared with anything else that needs to
+ * track this scene's surfaces; see that file's header for why.
  */
-export const GROUND = new Color(205, 215, 236);
-/** Grid line: a lighter tint of GROUND, opaque. */
-const GRID_LINE = new Color(224, 232, 247);
-/**
- * The lot, six units under the ground and BEHIND the grid, which is a change of kind rather
- * than of shade. It was 190,200,226 -- fifteen units under -- and it sat in FRONT of the grid,
- * so the lower half of the screen was a large flat panel of a different colour with no grid on
- * it while the upper half was gridded. Reported, twice, as the background not carrying on: once
- * about the top of the screen (which was the ground panel falling short; see `setupBackground`)
- * and once about the bottom, which was this.
- *
- * Now the grid runs unbroken from the top of the frame to the bottom and the lot is a faint
- * tint under it, still bounded by its dashed border. Six units is enough to see when you look
- * for the play area and not enough to read as a second background.
- *
- * ITS DROP SHADOW WENT WITH IT. A panel you can barely see cannot be lifted off anything, and
- * a shadow under an invisible edge reads as dirt. The parking bay above still has one, and
- * should -- that panel is genuinely a raised tray.
- */
-const LOT = new Color(199, 209, 231);
-const LOT_DASH = new Color(255, 255, 255);
-const ROAD = new Color(166, 177, 204);
-const ROAD_LINE = new Color(242, 246, 253);
-
-const GRID_PITCH = 0.66;
-const GRID_THICK = 0.03;
 
 /**
- * The lot's corner radius. The drop-shadow offset that used to live beside it went with the
- * lot's shadow (see LOT); the parking bay keeps its own copy, which is where it is used.
+ * Doubled from 0.66, and thinned with it. At the old pitch the seams fell about a car's width
+ * apart, so the floor carried more lines than it carried cars and the eye read the ruling
+ * before it read the board. Twice the spacing is slab-sized, lands on every second line the old
+ * grid drew (so nothing shifts relative to the lot), and halves the merged mesh while it is
+ * there.
  */
+const GRID_PITCH = 1.32;
+const GRID_THICK = 0.025;
+
+/** The lot's corner radius. */
 const LOT_R = 0.24;
+
+/*
+ * The lot's drop-shadow offset used to be a constant here (0.14). It is `LIFT.surface` in
+ * shadow.ts now -- along with the argument that went with it, which turned out to apply to
+ * every panel rather than just this one.
+ */
+
+/**
+ * The lot's shaded side, and how much of it shows.
+ *
+ * THE SAME TWO-PLATE TRICK THE HUD USES -- a lit face with a darker plate peeking out below it,
+ * which is what PILL_BASE's note calls out as shared with the unlock button, the padlock rims
+ * and the win panel's stars. Here it turns the lot from a coloured region into a slab of asphalt
+ * with a thickness.
+ *
+ * IT SHOWS BELOW, not above, and that is the camera rather than the light. The board is tilted
+ * back, so the side of a raised object that faces the viewer is the one toward board -Y -- the
+ * same face car-mesh calls the near wall and spends WALL_LIFT on. The drop shadow goes the other
+ * way (see shadow.ts) because that is set by the light, not by the viewing angle; a plinth and a
+ * shadow on opposite sides is what a lit, tilted object actually looks like.
+ *
+ * 0.07 fits inside the 0.17 of pavement between the lot's top edge and the ring road's near
+ * kerb, so the plinth never touches the road. That clearance is RING_OFF minus half ROAD_H and
+ * lives in GameController; if the ring road ever moves in, this is what gives first.
+ */
+const LOT_PLINTH = new Color(70, 76, 90);
+const LOT_PLINTH_DROP = 0.07;
 
 /**
  * The depth stack, front to back. Cars stand ON the board plane (wheels at z = 0) with a
@@ -52,23 +61,45 @@ const LOT_R = 0.24;
  *
  *   -0.06  car contact shadows
  *   -0.08  stall pads          -0.09  stall rims (parking-view)
- *   -0.11  lot dashed border    -0.11  parking bay panel (parking-view)
+ *   -0.11  lot dashed border    -0.14  parking bay panel (parking-view)
+ *                               -0.15  parking bay plinth (parking-view)
  *   -0.18  panel drop shadows
  *   -0.28  ring road
+ *   -0.29  lot
+ *   -0.30  lot plinth
+ *   -0.31  lot drop shadow
  *   -0.32  grid lines
- *   -0.35  lot                  -0.5   ground
+ *   -0.5   ground
  *
  * Neighbouring faces stay at least 0.01 apart and never coplanar, so the ordering holds
- * without depth-bias tricks.
+ * without depth-bias tricks. THE BAND FROM -0.28 TO -0.32 IS NOW FULL: ring road, lot, lot
+ * plinth, lot shadow and grid lines sit at exactly 0.01 apart all the way down, which is the
+ * minimum this scheme allows. Anything else that needs to go in there requires the whole band
+ * re-spaced, not squeezed -- there is no room left to borrow.
  */
 const GROUND_Z = -0.5;
 const GRID_Z = -0.32;
 /**
- * BEHIND the grid, not in front of it, which is what lets the grid cross the lot -- see LOT.
+ * IN FRONT of the grid, which is what stops the paving grid crossing the asphalt -- see LOT,
+ * where the reversal of the old "behind" is argued. Still behind the ring road, so the road
+ * covers the lot where the two meet, exactly as before.
+ *
  * The dashed border stays where it was, well in front of both, because the border is the thing
  * that has to be read.
  */
-const LOT_Z = -0.35;
+const LOT_Z = -0.29;
+/**
+ * The lot's shaded side, one band behind the lot's face. It has to be BEHIND the face it belongs
+ * to (so only the sliver past the edge shows) and IN FRONT of the shadow (a plinth is part of the
+ * object; the shadow falls under the whole of it).
+ */
+const LOT_PLINTH_Z = -0.30;
+/**
+ * The lot's own drop shadow, between the lot and the grid: it has to fall ON the paved ground
+ * and UNDER the asphalt that casts it. Same reasoning as the panel shadows at -0.18, one band
+ * down. See LOT for why the lot casts a shadow again at all.
+ */
+const LOT_SHADOW_Z = -0.31;
 const DASH_Z = -0.11;
 const ROAD_Z = -0.28;
 /** Exported for the parking bay's shadow, which is the only panel that still casts one. */
@@ -150,6 +181,16 @@ export function setupBackground(root: Node, halfW: number, halfH: number, cy: nu
  * caller knows how wide that is.
  */
 export function setupStage(root: Node, bw: number, bh: number, gridY: number): void {
+    // Built before the lot so it is the earlier sibling, the same order the parking bay uses.
+    // Depth orders these two regardless, but sibling order is what a reader checks first.
+    const shadow = makeShadowSlab('LotShadow', bw, bh, LOT_R, AREA_SHADOW_ALPHA);
+    shadow.setPosition(0, gridY + shadowThrow(LIFT.surface), LOT_SHADOW_Z);
+    root.addChild(shadow);
+
+    const plinth = makeSlab('LotPlinth', bw, bh, 0.06, LOT_PLINTH, LOT_R);
+    plinth.setPosition(0, gridY - LOT_PLINTH_DROP, LOT_PLINTH_Z);
+    root.addChild(plinth);
+
     const lot = makeSlab('Lot', bw, bh, 0.06, LOT, LOT_R);
     lot.setPosition(0, gridY, LOT_Z);
     root.addChild(lot);

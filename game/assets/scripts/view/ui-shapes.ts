@@ -12,13 +12,36 @@ import {
  * texture, white so it can be tinted, and shared by every node that asks for it.
  */
 
+/**
+ * The floor of the dot's bucketed frame sizes, in pixels -- see `dotBucket` below.
+ *
+ * A dot used to share ONE 32px frame across every circle in the project, from a 22-unit
+ * unread indicator up to a 200-unit glow. STAR_SIZE's docblock, just below, used to cite that
+ * as the shape that "gets away with" a single small texture, "being a circle at 40". THAT
+ * CLAIM IS NOW FALSE, and it is worth saying so rather than quietly fixing it: a level badge
+ * was drawn at NODE_D = 170 design units when this was written -- and the canvas is 1280 wide,
+ * not 720 (`ui-layout.canvasSize` spells out why that pair is the trap it looks like), so on
+ * a 1170-wide phone that is 170 x 1170 / 1280 = about 155 device pixels. A 32px frame blown
+ * up 4.8x is exactly the softness and halo a player photographed and reported. The badge has
+ * since come down to 128, which is still four times the old frame; the dot stopped getting
+ * away with 32 the moment a badge became a circle that large, and it has not gone back.
+ *
+ * `dotBucket` picks a texture size per diameter now instead of one frame for all of them.
+ * DOT_SIZE is only the smallest bucket, kept so the cheap circles -- the unread dot, the coin
+ * -- still pay for a 32-square texture rather than every dot paying for the badge's worst
+ * case.
+ */
 const DOT_SIZE = 32;
+/** The largest bucket `dotBucket` will hand out, in pixels -- see it below for why. */
+const DOT_SIZE_MAX = 256;
 
 /**
  * The star, painted at 128 so its points survive being drawn large: a win panel's star is
- * about 130 design units, which on a 1170-wide phone against a 720-unit canvas is roughly
- * 210 device pixels. A 32px frame -- the size the dot gets away with, being a circle at 40 --
- * would be visibly soft at that magnification, and a soft point is not a star.
+ * about 130 design units, which on a 1170-wide phone is `130 x 1170 / 1280` = about 119 device
+ * pixels. (THE CANVAS IS 1280 WIDE, not 720 -- `ui-layout.canvasSize` exists to warn about that
+ * exact pair, and three comments in this file quoted the 720 anyway.) A 32px frame -- the size
+ * a small dot needs, and once the ONLY size any dot got -- would be blown up 3.7x there, and a
+ * soft point is not a star.
  */
 const STAR_SIZE = 128;
 /** Inner radius over outer: 0.475 is the proportion a five-pointed star is normally drawn at. */
@@ -40,6 +63,17 @@ const BURST_SPOKES = 12;
 const BURST_FADE = 0.30;
 
 /**
+ * The play-head triangle, painted into a 64-square texture.
+ *
+ * Half of STAR_SIZE's 128, because a triangle asks less of the texture than a star does. This
+ * shape is never drawn larger than about 48 design units -- an icon on the start button -- and
+ * it has only three straight edges, so the one thing magnification can soften is the single
+ * pixel of border along each of them. A star needs the full 128 because it has five points, and
+ * a soft point reads as round rather than sharp.
+ */
+const TRI_SIZE = 64;
+
+/**
  * One rounded frame per corner radius asked for, painted on demand.
  *
  * It used to be a single 32px frame with a radius of 15 -- half its width, so the painted
@@ -55,10 +89,12 @@ const BURST_FADE = 0.30;
  * one radius cannot suit both a 88-tall pill and a 420-tall panel.
  */
 const roundFrames = new Map<number, SpriteFrame>();
-let dotFrame: SpriteFrame | null = null;
+/** One frame per size BUCKET -- see `dotBucket` -- rather than the single frame this used to be. */
+const dotFrames = new Map<number, SpriteFrame>();
 let rampFrame: SpriteFrame | null = null;
 let starFrame: SpriteFrame | null = null;
 let burstFrame: SpriteFrame | null = null;
+let triFrame: SpriteFrame | null = null;
 
 /**
  * White pixels whose alpha comes from `coverage`, evaluated at each pixel centre and
@@ -116,9 +152,34 @@ function roundedCoverage(r: number, size: number): (x: number, y: number) => num
     };
 }
 
-function dotCoverage(x: number, y: number): number {
-    const r = DOT_SIZE / 2;
-    return r - Math.hypot(x - r, y - r);
+function dotCoverage(size: number): (x: number, y: number) => number {
+    const r = size / 2;
+    return (x, y) => r - Math.hypot(x - r, y - r);
+}
+
+/**
+ * The texture size to paint a `d`-unit dot into: the smallest power of two at least `d`,
+ * clamped to DOT_SIZE..DOT_SIZE_MAX.
+ *
+ * Mirrors `roundedSprite`'s one-frame-per-radius cache, except the key is a bucket rather than
+ * the exact size, because a dot is asked for at whatever diameter its caller happens to need --
+ * unlike a corner radius, which a designer picks from a short list -- and a fresh bucket per
+ * exact diameter would cache one frame per distinct dot on the whole screen instead of five or
+ * six shared ones.
+ *
+ * THE FLOOR keeps the cheap circles cheap: an unread dot at 22 units or a coin at 52 still
+ * gets a 32 or 64-square frame, not the largest bucket a badge needs.
+ *
+ * THE CEILING is not decoration. 256x256 RGBA is 256 KB, and the largest circle the lobby
+ * draws -- the current badge's bright outline, `NODE_HI_D` = 140 design units -- is comfortably
+ * inside it. Without
+ * a ceiling, a future caller passing a much larger diameter would silently allocate a texture
+ * many times that size for one frame.
+ */
+function dotBucket(d: number): number {
+    let size = DOT_SIZE;
+    while (size < d) size *= 2;
+    return Math.min(size, DOT_SIZE_MAX);
 }
 
 /**
@@ -193,6 +254,52 @@ function burstCoverage(size: number): (x: number, y: number) => number {
     };
 }
 
+/**
+ * Coverage for an equilateral triangle inscribed in a `size` texture, tip pointing RIGHT -- a
+ * play head.
+ *
+ * A triangle is CONVEX, which makes this the third distinct technique in this file for turning
+ * a shape into coverage: `roundedCoverage` clamps to the nearest corner, `starCoverage` casts a
+ * ray from the centre because a star is NOT convex, and a convex polygon needs neither trick --
+ * the signed distance to each edge, minimum taken over all three, is exact inside and
+ * conservative outside (the same reasoning `polyIn`, further down, spells out in full for the
+ * icon shapes). Of the three, a convex polygon is the easiest to get right.
+ *
+ * The 1.5 inset on the circumradius exists for the same reason `starCoverage` has one: a vertex
+ * sitting exactly on the texture's edge has nowhere to fade out to, so the triangle is pulled in
+ * half a pixel short of the frame.
+ */
+function triCoverage(size: number): (x: number, y: number) => number {
+    const c = size / 2;
+    const r = c - 1.5;
+    // Vertex 0 sits straight right (angle 0); the other two follow at 120-degree steps. Texture
+    // y runs DOWN, so walking the vertices in this order traces them clockwise on screen -- the
+    // opposite sense from `polyIn`'s edges below, which are wound so the interior sits on the
+    // LEFT of each one. That is why the edge distance is negated (`-d`, not `d`) before it goes
+    // into the minimum: checked numerically, this makes the centre come out strongly positive
+    // (+15.75 at TRI_SIZE) and a texture corner strongly negative (-15.25), which is what
+    // "positive inside" requires.
+    const pts: [number, number][] = [0, 1, 2].map((k) => {
+        const a = (k * 2 * Math.PI) / 3;
+        return [c + r * Math.cos(a), c + r * Math.sin(a)] as [number, number];
+    });
+    return (x, y) => {
+        let min = Infinity;
+        for (let k = 0; k < 3; k++) {
+            const [ax, ay] = pts[k];
+            const [bx, by] = pts[(k + 1) % 3];
+            const ex = bx - ax, ey = by - ay;
+            const len = Math.hypot(ex, ey);
+            // Cross product over edge length = signed distance to the line this edge sits on,
+            // negated here because these vertices wind the opposite way from `polyIn`'s -- see
+            // above.
+            const d = ((x - ax) * ey - (y - ay) * ex) / len;
+            min = Math.min(min, -d);
+        }
+        return min + 0.5;
+    };
+}
+
 function spriteNode(
     name: string, w: number, h: number, color: Color, frame: SpriteFrame, type: number,
 ): Node {
@@ -260,10 +367,18 @@ export function rampSprite(name: string, w: number, h: number, color: Color): No
     return spriteNode(name, w, h, color, rampFrame, Sprite.Type.SIMPLE);
 }
 
-/** A filled circle of diameter `d`, tinted `color`. */
+/**
+ * A filled circle of diameter `d`, tinted `color`, from a frame cached per `dotBucket(d)` --
+ * see it above for why one bucket cannot serve every dot in the project any more.
+ */
 export function dotSprite(name: string, d: number, color: Color): Node {
-    if (!dotFrame) dotFrame = frameFrom(paint(DOT_SIZE, dotCoverage), DOT_SIZE);
-    return spriteNode(name, d, d, color, dotFrame, Sprite.Type.SIMPLE);
+    const size = dotBucket(d);
+    let frame = dotFrames.get(size);
+    if (!frame) {
+        frame = frameFrom(paint(size, dotCoverage(size)), size);
+        dotFrames.set(size, frame);
+    }
+    return spriteNode(name, d, d, color, frame, Sprite.Type.SIMPLE);
 }
 
 /**
@@ -285,6 +400,16 @@ export function burstSprite(name: string, d: number, color: Color): Node {
 }
 
 /**
+ * A `d`-unit-wide triangular play head, tip right, tinted `color`. SIMPLE, not sliced -- like
+ * the star, it has no middle that can be stretched, so it scales as a whole and one frame
+ * serves every size it is drawn at.
+ */
+export function triSprite(name: string, d: number, color: Color): Node {
+    if (!triFrame) triFrame = frameFrom(paint(TRI_SIZE, triCoverage(TRI_SIZE)), TRI_SIZE);
+    return spriteNode(name, d, d, color, triFrame, Sprite.Type.SIMPLE);
+}
+
+/**
  * THE THREE GLYPH ICONS: a gear for the settings button, a speaker and a buzzing phone for
  * the two switches inside it.
  *
@@ -299,9 +424,10 @@ export function burstSprite(name: string, d: number, color: Color): Node {
  * so the numbers below read as fractions of the icon rather than as pixels of whatever size
  * it happens to be painted at.
  *
- * Painted at 96 rather than the dot's 32: these are drawn at 44 to 68 design units, which on
- * a 1170-wide phone against a 720-unit canvas is up to 110 device pixels, and a gear tooth
- * has corners a circle does not.
+ * Painted at 96 rather than the dot's 32: these are drawn at 44 to 68 design units, which on a
+ * 1170-wide phone is up to about 62 device pixels, so 96 is a minification at every size they
+ * are used at -- and a gear tooth has corners a circle does not, so it cannot afford the
+ * magnification a disc shrugs off.
  */
 const ICON_SIZE = 96;
 
@@ -348,15 +474,39 @@ function polyIn(px: number, py: number, pts: [number, number][]): number {
  * The teeth are one test rather than eight shapes -- the angle to the NEAREST tooth centre,
  * folded into a single wedge -- and the wedge's angular half-width is turned into a length by
  * multiplying by the radius, so a tooth has parallel sides instead of widening outward.
+ *
+ * THIS USED TO DRAW A BALD PATCH, NOT MERELY TOO FEW TEETH, and the difference matters because
+ * the fix is not "add more teeth" -- it is "stop losing the ones already specified" for half the
+ * circle. `Math.atan2` returns a NEGATIVE angle for the whole lower-left half of the circle
+ * (roughly -pi to 0), and `%` in JavaScript keeps the sign of its LEFT operand rather than
+ * folding into a positive range the way a mathematical modulo does. For any angle where
+ * `atan2(py, px) + span` was itself negative but small in magnitude -- a band about `2 * span`
+ * (45 degrees) wide -- `(atan2 + span) % (2 * span)` returned that same small negative number
+ * completely UNWRAPPED (the quotient truncates to zero, so there is no wraparound at all), and
+ * subtracting `span` again then put `a` as far as `2 * span` outside the intended `[-span, span)`
+ * wedge. `Math.abs(a)` that large makes `span * 0.46 - Math.abs(a)` strongly negative, so the
+ * tooth term never wins there -- the gear had no tooth over that whole band, and the wrap error
+ * compounds around the rest of the negative-angle half, so what actually rendered was drawn teeth
+ * over less than half the circle and a bald arc over the rest of it -- sampled at the tooth radius
+ * on a fresh render, 170 of 360 degrees came back with no tooth at all. It was NOT a matter of too
+ * few teeth spaced too far apart; the spacing (`2 * span` = 45 degrees, eight teeth) was always
+ * right, and a correctly-folded `a` proves it: the fix below is the same formula with a second
+ * `% (2 * span)` added after shifting by a full period, which is the standard way to force a
+ * possibly-negative JavaScript `%` into `[0, 2 * span)` before subtracting `span` back out.
  */
 function gearCoverage(size: number): (x: number, y: number) => number {
     const span = Math.PI / 8;
+    const period = 2 * span;
     return (x, y) => {
         const px = x / size - 0.5, py = y / size - 0.5;
         const d = Math.hypot(px, py);
         // The exact centre has no angle, and it is inside the hole regardless.
         if (d < 1e-6) return -1;
-        const a = ((Math.atan2(py, px) + span) % (2 * span)) - span;
+        // Folded into [0, period) first -- see the docblock above for why the naive
+        // `(angle + span) % period` alone leaves a band unwrapped -- then shifted back to
+        // [-span, span), the wedge every tooth is tested against.
+        const wrapped = (((Math.atan2(py, px) + span) % period) + period) % period;
+        const a = wrapped - span;
         const tooth = Math.min(0.46 - d, (span * 0.46 - Math.abs(a)) * d);
         return (Math.min(Math.max(0.33 - d, tooth), d - 0.13)) * size + 0.5;
     };
@@ -424,6 +574,190 @@ function iconSprite(
 /** A cogwheel `d` units across, tinted `color`. */
 export const gearSprite = iconSprite('gear', gearCoverage);
 /** A speaker with sound coming off it, `d` units across, tinted `color`. */
+/**
+ * A waste bin: body, lid, grip. The icon for the settings card's 清除进度 row.
+ *
+ * COMPOSED FROM THREE ROUNDED PLATES, not painted from a coverage function like the speaker and
+ * the buzzer below it. Those two are single silhouettes with curves and notches that are easier
+ * to describe per-pixel than to build; a bin is three rectangles with rounded corners, which is
+ * how this project draws everything else that is three rectangles (see the lobby's calendar
+ * leaf). Writing a `binCoverage` would have been per-pixel arithmetic in aid of a shape the
+ * existing primitives already make exactly.
+ *
+ * Proportions are of `d`, so it scales with whatever row it lands in. At the card's 116 the
+ * grip's top reaches 47 and the body's bottom -47.5, inside the 58 the box allows on each side.
+ */
+export function binSprite(name: string, d: number, color: Color): Node {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(d, d);
+    const body = roundedSprite('body', d * 0.56, d * 0.58, color, Math.round(d * 0.1));
+    holder.addChild(body);
+    body.setPosition(0, -d * 0.12, 0);
+    const lid = roundedSprite('lid', d * 0.76, d * 0.13, color, Math.round(d * 0.06));
+    holder.addChild(lid);
+    lid.setPosition(0, d * 0.24, 0);
+    const grip = roundedSprite('grip', d * 0.3, d * 0.1, color, Math.round(d * 0.05));
+    holder.addChild(grip);
+    grip.setPosition(0, d * 0.35, 0);
+    return holder;
+}
+
 export const speakerSprite = iconSprite('speaker', speakerCoverage);
 /** A shaking phone `d` units across, tinted `color`. */
 export const buzzSprite = iconSprite('buzz', buzzCoverage);
+
+/**
+ * THE TWO-PLATE READOUT, and the three constants it is made of.
+ *
+ * HERE RATHER THAN IN `hud-view`, where it lived while the HUD was the only screen with
+ * readouts on it. The lobby's top bar wears the same coin plate, and the alternative was a
+ * second copy of these four lines -- which is how one button style becomes two that agree
+ * today and disagree after the first retune of either. `hud-view` imports it now; nothing
+ * about the HUD's own geometry moved with it.
+ *
+ * NOT A CONTRADICTION OF THIS FILE'S HEADER, which says it paints textures. It still does:
+ * this composes two `roundedSprite`s and paints nothing new. What it shares is the SHAPE
+ * every pressable and every readout in this project wears, which is the same kind of fact as
+ * "a star has five points".
+ */
+
+/**
+ * Both readouts are drawn as TWO plates -- a white face over a cool-grey base peeking out
+ * below -- which is the same trick as the unlock button, the padlock rims on the board and the
+ * win panel's stars. They were flat white stadiums, and flat is what "redesign these" was
+ * about: on a HUD where the pressable things have a top face, the readouts having none made
+ * them read as unfinished rather than as a different kind of object.
+ *
+ * The base is a TINT OF THE BOARD, not grey and not a darker white. The board behind is
+ * blue-grey (see GROUND in `palette.ts`), so a neutral shadow under a white plate reads as
+ * dirty; a shadow biased the same way as the surface it falls on reads as a shadow.
+ *
+ * It tracks GROUND at the same few units under it that it always sat at, so it followed the
+ * floor down when the floor moved (see `palette.ts`). Left where it was, a base still carrying
+ * the old pale blue would have been lighter than the board it is supposed to be a shadow on.
+ *
+ * IT HAS NOW FOLLOWED THE FLOOR BACK UP, to -4 under 199 where it was -4 under 177, and the
+ * paragraph above is the whole reason it had to. The failure it describes has a mirror image
+ * and this constant was one edit away from it: a base held at 173 against a 199 floor is 26
+ * units under the board rather than 4, which does not read as a soft lip beneath the plate --
+ * it reads as a dark bar drawn round it. Too light and too dark break this the same way,
+ * because what makes it a shadow is that it is CLOSE to the surface and biased with it.
+ *
+ * Both readouts sit on the upper half of the screen, which is the half that stayed pavement
+ * when the scene split, so GROUND is still the right thing for it to track. Anything that
+ * moves onto the asphalt wants its own base, not this one.
+ *
+ * THE LOBBY'S COIN PLATE ALSO STANDS ON PAVEMENT -- `palette.GROUND`, the same surface the
+ * argument above is about -- so it takes this base unchanged rather than picking its own.
+ */
+export const PILL_BASE = new Color(185, 196, 214, 255);
+/** How far the base peeks out below the face. */
+export const PILL_LIFT = 6;
+/** The face: off-white, so ink on it is near-black rather than fighting pure white. */
+export const PILL_BG = new Color(252, 252, 255);
+/**
+ * The ink that goes ON that face: a very dark blue, not black, biased the same way as every
+ * other colour in this project.
+ *
+ * HERE RATHER THAN IN EACH CALLER, which is the same argument `PILL_BASE`, `PILL_BG` and
+ * `liftedPill` came out of `hud-view` on, and it was left behind by that move. The HUD's
+ * readouts and the lobby's coin plate carried identical copies of 48,60,92 under two private
+ * names -- one file's retune of its plate's face would have left the other file's ink on it,
+ * and nothing anywhere would have said so. A face and the only ink that ever lands on it are
+ * one fact.
+ */
+export const PILL_INK = new Color(48, 60, 92);
+
+/**
+ * The three plates a TOY control is drawn from, outermost first.
+ *
+ * `edge` is a dark ring that rims the base, `base` is the control's SIDE seen from slightly
+ * above, and `face` is its top. It is the stack the rail's level badges already wear -- see
+ * `home-view`'s `NODE_EDGE` -- lifted out of that file so the lobby's own controls can wear it
+ * too, because 「样式能否做的更卡通一些」 and this is what the cartoon reading on this screen
+ * already consists of.
+ *
+ * THE COLOURS COME FROM THE CALLER, all three of them, rather than being derived here from one.
+ * The badges make their edge `shade(face, -0.2)`, which works because a badge's face carries a
+ * hue to darken; the lobby's coin plate has a near-white face, and a fifth off white is a light
+ * grey that reads as nothing. Its edge is derived from its BASE instead. One rule could not have
+ * served both, and a helper that picked for its callers would have been wrong for one of them.
+ */
+export interface Plates { face: Color; base: Color; edge: Color; }
+
+/**
+ * A round toy control: the three plates of `Plates`, the outer two lifted, returning the face
+ * so the caller can hang a glyph on it.
+ *
+ * `stroke` IS ADDED ON EVERY SIDE of the base, not of the face, and the edge carries the base's
+ * own offset so the two stay concentric. Rimming the FACE instead would need a stroke wider than
+ * the lift just to reach past the base's lowest point -- the same trap `home-view`'s `NODE_EDGE`
+ * docblock works through at length for the badges, with the same answer.
+ */
+export function toonDisc(
+    name: string, d: number, c: Plates, lift: number, stroke: number,
+): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(d, d);
+    const edge = dotSprite('edge', d + stroke * 2, c.edge);
+    holder.addChild(edge);
+    edge.setPosition(0, -lift, 0);
+    const base = dotSprite('base', d, c.base);
+    holder.addChild(base);
+    base.setPosition(0, -lift, 0);
+    const face = dotSprite('face', d, c.face);
+    holder.addChild(face);
+    return { holder, face };
+}
+
+/**
+ * The same stack on a capsule instead of a disc.
+ *
+ * NEITHER SPRITE IS GIVEN A RADIUS, and that is what keeps the rim even. `roundedSprite` falls
+ * back to half the short side, so the face gets `h / 2` and the edge `(h + 2 * stroke) / 2` --
+ * exactly `stroke` more, on every side, which is the definition of concentric for two capsules.
+ * Passing a radius to one and not the other, or the same radius to both, is how a rim comes out
+ * thicker at the ends than along the top.
+ */
+export function toonPill(
+    name: string, w: number, h: number, c: Plates, lift: number, stroke: number,
+): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(w, h);
+    const edge = roundedSprite('edge', w + stroke * 2, h + stroke * 2, c.edge);
+    holder.addChild(edge);
+    edge.setPosition(0, -lift, 0);
+    const base = roundedSprite('base', w, h, c.base);
+    holder.addChild(base);
+    base.setPosition(0, -lift, 0);
+    const face = roundedSprite('face', w, h, c.face);
+    holder.addChild(face);
+    return { holder, face };
+}
+
+/**
+ * A readout plate: a white face over a base of the same shape, offset down so it shows as a
+ * lip. Returns both, because callers hang their contents off the FACE (so the contents move
+ * with it) and position the HOLDER.
+ *
+ * THIS IS THE FLAT VERSION AND IT STAYS FLAT. `toonPill` above is the same plate with a rim and
+ * a deeper lip; the lobby's column moved to it and the HUD's readouts and the lobby's toast did
+ * not, because the ask was about three buttons in a corner and restyling every plate in the game
+ * is a different change with a different reviewer.
+ */
+export function liftedPill(
+    name: string, w: number, h: number,
+): { holder: Node; face: Node } {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(w, h);
+    const base = roundedSprite('base', w, h, PILL_BASE);
+    holder.addChild(base);
+    base.setPosition(0, -PILL_LIFT, 0);
+    const face = roundedSprite('face', w, h, PILL_BG);
+    holder.addChild(face);
+    return { holder, face };
+}

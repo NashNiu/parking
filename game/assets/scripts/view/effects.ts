@@ -1,5 +1,6 @@
 import { Node, Vec3, Color, tween, Tween, MeshRenderer, utils, primitives } from 'cc';
 import { unlitMaterial, setEmissive } from './materials';
+import { COLORS } from './colors';
 
 let activeParticles = 0;
 const MAX_PARTICLES = 80;
@@ -118,10 +119,25 @@ function spawnBoxParticle(parent: Node, at: Vec3, color: Color, size: number): N
     return n;
 }
 
-const CONFETTI_COLORS = [
-    new Color(255, 80, 80), new Color(255, 200, 40), new Color(80, 200, 255),
-    new Color(120, 255, 140), new Color(200, 120, 255), new Color(255, 140, 200),
-];
+/**
+ * Confetti takes the PLAY PALETTE, lifted, rather than a list of its own.
+ *
+ * It used to be six hand-written near-matches -- (255,80,80), (255,200,40), (80,200,255),
+ * (120,255,140), (200,120,255), (255,140,200) -- chosen to look like the cars without being
+ * them. That is a second copy of a palette, and it broke the moment the first one moved: the
+ * cars' purple went to magenta when colors.ts was rebuilt in HCL, while this list still held a
+ * blue-violet, so a win threw confetti in a colour no car on the board had.
+ *
+ * Derived, it cannot drift again. The lift is what the hand-written list was really for: this
+ * is celebration on top of a dimmed board, so the colours want to be brighter than the cars
+ * they came from, and 0.30 toward white is roughly the gap the old list had.
+ */
+const CONFETTI_LIFT = 0.30;
+const CONFETTI_COLORS = Object.values(COLORS).map((c) => new Color(
+    Math.round(c.r + (255 - c.r) * CONFETTI_LIFT),
+    Math.round(c.g + (255 - c.g) * CONFETTI_LIFT),
+    Math.round(c.b + (255 - c.b) * CONFETTI_LIFT),
+));
 
 /**
  * Victory confetti: ~16 small colored boxes launched outward from `at`, falling
@@ -164,10 +180,23 @@ export function confetti(parent: Node, at: Vec3): void {
     }
 }
 
-/** A small puff of dust that drifts up and fades (scales to zero) then self-destructs. */
+/**
+ * A small puff of dust that drifts up and fades (scales to zero) then self-destructs.
+ *
+ * PALE, where it was (116, 122, 133). It is thrown under a car's wheels and so lands on the lot,
+ * and the lot went from 170 luminance to 102 when the scene split into pavement and asphalt (see
+ * the head of scene-stage) -- which left this puff sitting 2 units off the surface it is drawn
+ * against. Not dimmer: INVISIBLE, and invisible without erroring, on the one effect that tells
+ * the player a car actually moved.
+ *
+ * At 174 it clears the asphalt by 72, which is roughly the 49 it used to clear the old lot by,
+ * with a little more because it now also has to work over the ring road (93) that cars drive out
+ * along. Kicked-up dust being lighter than the tarmac is also just what dust looks like; the old
+ * value was only ever darker than its background because the background was pale.
+ */
 export function dustBurst(parent: Node, at: Vec3): void {
     for (let i = 0; i < 5; i++) {
-        const p = spawnParticle(parent, at, new Color(150, 160, 182), 0.12);
+        const p = spawnParticle(parent, at, new Color(168, 175, 188), 0.12);
         if (!p) break;
         const dx = (i - 2) * 0.12;
         tween(p)

@@ -1,4 +1,4 @@
-import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
@@ -259,7 +259,7 @@ test('level 1 is the teaching level it was authored to be', () => {
   expect(new Set(cars.map((c) => c.cap)).size).toBe(3);
 });
 
-test('a later level is measurably harder than the first packed one, at the same size', () => {
+test('a later level is harder by what the curve still steers, at the same size', () => {
   // Car count is flat over the packed levels (CARS_PER_LEVEL): the lot is full on every one
   // of them, so a later level cannot be harder by being bigger, and this test asserts
   // exactly that -- the same number of cars, more colours, and more of what the curve steers.
@@ -276,16 +276,44 @@ test('a later level is measurably harder than the first packed one, at the same 
   // steered term went the other way. The old assertion was passing on the size of level 1's
   // handicap, not on the curve.
   //
-  // What the two steered terms make this claim is also SAFE BY CONSTRUCTION, not by luck:
-  // `blockedTarget` asks level 2 for 41 and level 10 for 43, the test above pins both within
-  // BLOCKED_TOLERANCE of 1, so level 10's count cannot come out below level 2's -- and level
-  // 10 has the extra colour on top of that.
-  const steered = (d: { blocked: number; colors: number }): number => d.blocked * 2 + d.colors;
-  const first = estimateDifficulty(levelFor(2));
-  const last = estimateDifficulty(levelFor(10));
+  // THE TANGLE TERM IS OUT OF THE RAMP, and that is a measurement rather than a concession.
+  // This assertion has now been corrected twice, and both corrections were the same mistake:
+  // reading a ramp into a number the curve does not actually hold.
+  //
+  // Blocked cars as a share of the board each level OPENS with, on the 8x12 lot:
+  //
+  //     level     2      3      4      5      6      7      8      9     10
+  //     share  .809   .809   .826   .814   .826   .771   .831   .747   .807
+  //
+  // Flat and noisy, spanning .747 to .831 with no trend -- at 89 cars the lot is saturated,
+  // roughly four cars in five are blocked wherever you look, and there is no room left for a
+  // packing to be MORE tangled than its neighbour. Level 10 comes out at .807 against level
+  // 2's .809: a dead heat, short by a fifth of one car. The COUNT is even less use, because
+  // the two boards are not the same size -- the tunnel curve holds eight of level 10's cars
+  // off the board, so it opens with 83 against level 2's 89 and 67 blocked is a bigger share
+  // than the number looks.
+  //
+  // So this asserts what the curve does steer, and says out loud that the tangle is a tie:
+  //
+  //  - the BUDGET is equal (this is the "at the same size" in the name, and the one way of
+  //    being harder that this test exists to rule out);
+  //  - the COLOUR COUNT goes up, which is the ramp that survived (see levelParams);
+  //  - the TUNNEL COUNT goes up, which is the other one (see tunnelParams);
+  //  - and the tangle does not go backwards by even one car, which is the weakest true thing
+  //    that can be said about it. If a future change gives the blocked share a real ramp
+  //    again, tighten this line -- do not leave it at a tie by inertia.
+  const onBoard = (lvl: LevelData): number =>
+    lvl.lot.cars.length + (lvl.lot.tunnels ?? []).length;
+  const firstLvl = levelFor(2);
+  const lastLvl = levelFor(10);
+  const first = estimateDifficulty(firstLvl);
+  const last = estimateDifficulty(lastLvl);
   expect(last.cars).toBe(first.cars);
   expect(last.colors).toBeGreaterThan(first.colors);
-  expect(steered(last)).toBeGreaterThan(steered(first));
+  expect((lastLvl.lot.tunnels ?? []).length)
+    .toBeGreaterThan((firstLvl.lot.tunnels ?? []).length);
+  expect(last.blocked / onBoard(lastLvl))
+    .toBeGreaterThan(first.blocked / onBoard(firstLvl) - 1 / onBoard(lastLvl));
 });
 
 test('every level above the colour floor beats the one-line rule, and stays winnable', () => {
@@ -307,15 +335,29 @@ test('every level above the colour floor beats the one-line rule, and stays winn
   }
 });
 
-test('the curve actually sets the blocked-car count, within its stated tolerance', () => {
-  // The contract levelParams makes. Worth pinning because it was NOT true in the grid era
-  // and is easy to lose again: the band has to sit on the range the packer produces, or the
-  // generator quietly falls back to its nearest miss on every level and the ramp does
-  // nothing. Measured across the ten: every level lands within 1 of its target.
+test('the curve brackets the blocked-car count from both sides', () => {
+  // The contract levelParams makes, and it is TWO-SIDED now rather than a single distance.
+  //
+  // It used to assert `|blocked - target| <= BLOCKED_TOLERANCE` on every packed level, and
+  // that was the right shape while every level could reach its target. On the 8x12 lot the
+  // band deliberately aims ABOVE what levels 7 to 10 can reach -- their boards are the
+  // emptiest, because the tunnel curve holds eight cars off them, so the most tangled packing
+  // they own is below the line (see BLOCKED_FIRST for the measured ranges and for why a
+  // rising ramp cannot pass through both ends). Those four land on their own ceiling, which
+  // is the level this asked for and could not name.
+  //
+  // So the two things worth pinning are named separately:
+  //
+  //  - NO LEVEL IS MORE TANGLED THAN IT WAS ASKED FOR. This is the half that still catches
+  //    the original failure -- a band sitting below the range the packer produces, which is
+  //    how levels 2 and 3 came out at their floors and one of them turned out to have no
+  //    hard painting at all.
+  //  - NO LEVEL IS SLACK. `BLOCKED_FLOOR`, which is what the old distance was implicitly
+  //    providing from underneath and what the ceiling case would otherwise throw away.
+  //
   // Only the blocked count is asserted. A companion `rounds >= minRounds` check would be
   // vacuous: minRounds runs 2..5 over these ten while the rounds they actually come out with
-  // run 6..12, so it could only fire in the case this line already catches -- the generator
-  // giving up and returning a nearest miss.
+  // run 13..21, so it could only fire in a case these lines already catch.
   //
   // The denominator is the cars ON THE BOARD at the opening position -- the grid cars plus
   // one mouth car per tunnel -- and not the level's 60-car budget. That is not a loosening:
@@ -331,9 +373,11 @@ test('the curve actually sets the blocked-car count, within its stated tolerance
   for (const id of PACKED) {
     const p = levelParams(id);
     const tp = tunnelParams(id);
-    const want = Math.round(p.blockedRatio * (p.cars - tp.count * tp.cars + tp.count));
-    expect(Math.abs(estimateDifficulty(levelFor(id)).blocked - want))
-      .toBeLessThanOrEqual(BLOCKED_TOLERANCE);
+    const onBoard = p.cars - tp.count * tp.cars + tp.count;
+    const want = Math.round(p.blockedRatio * onBoard);
+    const got = estimateDifficulty(levelFor(id)).blocked;
+    expect({ id, over: got - want <= BLOCKED_TOLERANCE, slack: got / onBoard < BLOCKED_FLOOR })
+      .toEqual({ id, over: true, slack: false });
   }
 });
 
@@ -375,11 +419,16 @@ test('a level is short enough to finish: passengers stay within the budget', () 
     // 42 seconds of boarding -- SHORTER than the 900 this replaces was at the old tick (76
     // seconds), so the ceiling went up and the levels got quicker at the same time.
     //
-    // 1400, raised with the lot: 60 cars on an 8x10 board run 1200 to 1350, so this still
-    // leaves headroom rather than sitting on the number the generator happens to produce.
-    // At GROUP_SIZE a tick that is about 320 ticks, or 54 seconds of boarding -- the ceiling
-    // that matters is how long a level takes to finish, and this is what it costs.
-    expect(pax).toBeLessThanOrEqual(1400);
+    // 2000, raised with the lot again: 89 cars on an 8x12 board run 19.5 to 21.3 passengers
+    // each, so at worst about 1900 -- this still leaves headroom rather than sitting on the
+    // number the generator happens to produce. At GROUP_SIZE a tick that is about 460 ticks,
+    // or 77 seconds of boarding.
+    //
+    // This is the expensive half of CARS_PER_LEVEL going to 89, and it was a decision rather
+    // than a consequence: a denser lot is a longer level, because every car on the board is a
+    // carful of passengers that has to come round the ring. The ceiling that matters is how
+    // long a level takes to finish, and this is what it costs.
+    expect(pax).toBeLessThanOrEqual(2000);
   }
 });
 

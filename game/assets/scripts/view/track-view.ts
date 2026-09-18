@@ -3,6 +3,7 @@ import { BOARD_TILT } from './board-layout';
 import { colorOf } from './colors';
 import { flatMaterial, alphaMaterial } from './materials';
 import { makeSlab, makeShadowSlab, mergeParts, MeshPart } from './slabs';
+import { LIFT, shadowThrow, SHADOW_INK, SHADOW_ALPHA } from './shadow';
 import { buildPaxDot, buildPaxFigure, recolorPaxFigure } from './pax-figure';
 import {
     BLOCK, blockOffset, blockRanks, blockSpan, boardArc, Channel, FeedSide, GAP_ARC, GROUP_SIZE, LANE,
@@ -58,11 +59,26 @@ function faceYaw(fx: number, fy: number): number {
  * The track surface, how far behind the board plane it sits, and the soft shadow that
  * lifts it off the ground. White on a light ground is a weak edge on its own; the shadow
  * is what actually makes the ribbon and the two channels read as raised.
+ *
+ * THE SHADOW IS DOING MORE OF THAT WORK THAN IT WAS. The ground went from 177 to 199 luminance
+ * when the scene split into light pavement and dark asphalt (see the head of scene-stage),
+ * which leaves this white ribbon 56 units clear of what it lies on instead of 78 -- the
+ * tightest contrast in the scene and the one that would break first. The alpha went 34 -> 46
+ * to hold it up, and then to the shared SHADOW_ALPHA of 44 when the scene's shadows were
+ * unified: 44 and 46 separate by 38.2 and 40.0 against white, a difference of under two units
+ * that is not worth a second constant.
+ *
+ * The compensation is spent on the right thing: an edge between two pale surfaces is genuinely
+ * carried by the shadow rather than by the step in value, so an edge that lost a third of its
+ * step wants a stronger shadow rather than a darker ground. If a device says the ribbon still
+ * sits flat, the honest next move is GROUND back down a few units, not more alpha -- past
+ * roughly 60 this stops reading as a lifted edge and starts reading as a dark outline, and it
+ * would now take every other shadow in the scene with it.
  */
 const BAND = new Color(255, 255, 255);
 const BAND_Z = -0.09;
-const BAND_SHADOW = new Color(24, 34, 56, 34);
-const BAND_DROP = 0.07;
+const BAND_SHADOW = new Color(SHADOW_INK.r, SHADOW_INK.g, SHADOW_INK.b, SHADOW_ALPHA);
+/* BAND_DROP (0.07) is `LIFT.ribbon` in shadow.ts now. */
 
 /**
  * Height of a passenger figure on the board. Calibrated against LANE_STEP (0.45): the
@@ -375,8 +391,21 @@ const NORMAL_SCRATCH = new Vec3();
  * information the player is reading off the channel (which car will these fit?), and a
  * dimmed red is a colour that no car anywhere has. The floor carries the signal now, so
  * "which channel feeds next" is still readable and the colours stay honest.
+ *
+ * IT IS DARKER THAN THE GROUND NOW, WHERE IT USED TO BE LIGHTER, and that is a repair rather
+ * than a preference. At 217 luminance it cleared the old 177 ground by 40; the ground moved to
+ * 199 (see the head of scene-stage) and 18 units is not a signal. The whole job of this
+ * constant -- "which channel feeds next", readable without a tutorial -- was about to quietly
+ * stop working, while the live channel and the ring carried on looking exactly right.
+ *
+ * Going DOWN to 169 rather than back up: up is where the white is, and the gap between the
+ * ground and white is only 56 units wide now, so a three-step scale does not fit in it. Below
+ * the ground the room is open, and the reading is better anyway -- a lit floor for the channel
+ * that is running and a floor in shade for the one that is not is the plain meaning of the two
+ * colours, where "white, and slightly less white" was always a convention the player had to
+ * pick up. It keeps 68 units clear of the asphalt below (102), so it never reads as lot.
  */
-const BAND_IDLE = new Color(211, 217, 231);
+const BAND_IDLE = new Color(162, 170, 186);
 
 /**
  * Renders the passenger loop as whatever closed track `core` hands it: rows of
@@ -607,7 +636,7 @@ export class TrackView {
         smr.mesh = mesh;
         smr.material = alphaMaterial(BAND_SHADOW);
         smr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
-        shadow.setPosition(0, -BAND_DROP, BAND_Z - 0.06);
+        shadow.setPosition(0, shadowThrow(LIFT.ribbon), BAND_Z - 0.06);
         parent.addChild(shadow);
 
         const n = new Node('track-band');
@@ -710,9 +739,11 @@ export class TrackView {
             const angle = Math.atan2(out.y, out.x) * 180 / Math.PI;
 
             const shadow = makeShadowSlab(
-                `lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, LANE_SLAB_R, 34,
+                // No alpha override: a channel is the ring running off to the side, so it
+                // takes the same shadow. It used to pass 34 against the ring's 46.
+                `lane-shadow-${channel.side}`, slabW, BAND_HALF * 2, LANE_SLAB_R,
             );
-            shadow.setPosition(mid.x, mid.y - BAND_DROP, BAND_Z - 0.06);
+            shadow.setPosition(mid.x, mid.y + shadowThrow(LIFT.ribbon), BAND_Z - 0.06);
             shadow.setRotationFromEuler(0, 0, angle);
             parent.addChild(shadow);
 

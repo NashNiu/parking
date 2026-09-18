@@ -1,6 +1,6 @@
 import { Node, Color, Material, Mesh, MeshRenderer, primitives, utils } from 'cc';
 import { instancedLitMaterial } from './materials';
-import { mergeParts, MeshPart } from './slabs';
+import { mergeParts, placed, MeshPart } from './slabs';
 
 /**
  * Procedural passenger figure: a large round head sitting on a small tapered body, and
@@ -172,43 +172,6 @@ const CAPSULE_HEIGHT_SEGMENTS = 8;
  */
 const ARM_POSE_DEG = 14;
 
-/**
- * One part's geometry, rotated about X and then moved into place, ready to merge.
- *
- * Normals are rotated but NOT translated, which is the whole reason this is not a four-line
- * loop: translating a normal stops it being a direction, and the lighting then goes wrong in
- * a way that is easy to ship and hard to see.
- */
-function placed(
-    g: { positions: number[]; normals?: number[]; uvs?: number[]; indices?: number[] },
-    deg: number, tx: number, ty: number, tz: number,
-): MeshPart {
-    const rad = deg * Math.PI / 180;
-    const cos = Math.cos(rad), sin = Math.sin(rad);
-    const positions = new Array<number>(g.positions.length);
-    for (let i = 0; i < g.positions.length; i += 3) {
-        const y = g.positions[i + 1], z = g.positions[i + 2];
-        positions[i] = g.positions[i] + tx;
-        positions[i + 1] = y * cos - z * sin + ty;
-        positions[i + 2] = y * sin + z * cos + tz;
-    }
-    let normals: number[] | undefined;
-    if (g.normals) {
-        normals = new Array<number>(g.normals.length);
-        for (let i = 0; i < g.normals.length; i += 3) {
-            const y = g.normals[i + 1], z = g.normals[i + 2];
-            normals[i] = g.normals[i];
-            normals[i + 1] = y * cos - z * sin;
-            normals[i + 2] = y * sin + z * cos;
-        }
-    }
-    return {
-        positions,
-        normals,
-        uvs: g.uvs ? Array.from(g.uvs) : undefined,
-        indices: g.indices ? Array.from(g.indices) : undefined,
-    };
-}
 
 let figureMeshCache: Mesh | null = null;
 /**
@@ -331,9 +294,15 @@ export function buildPaxFigure(name: string, color: Color, height: number): Node
     const mr = fit.addComponent(MeshRenderer);
     mr.mesh = figureMesh();
     mr.material = mat;
-    // Nothing here casts a shadow: `setupEnvironment` turns the shadow map off and the board
-    // paints blob shadows instead. Saying so per renderer keeps the crowd out of any shadow
-    // pass a future pipeline change might switch back on.
+    // Nothing here casts a shadow: `setupEnvironment` turns the shadow map off. Saying so per
+    // renderer keeps the crowd out of any shadow pass a future pipeline change might switch
+    // back on.
+    //
+    // AND NOTHING PAINTS ONE FOR IT EITHER. This used to claim the board paints blob shadows
+    // for the crowd; it does not -- `blobShadow`'s only caller is `car-builder`. A passenger
+    // has no contact shadow of any kind. Left as it is rather than fixed, because adding 256
+    // of them is a performance question (see ROW_AS_DOT in track-view for what the crowd
+    // already costs) and not a comment's to decide.
     mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
 
     registry.set(root, { renderer: mr, mat });
