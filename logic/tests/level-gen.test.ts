@@ -5,6 +5,11 @@ import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
+import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
+import { carBox } from '../../game/assets/scripts/core/move-solver';
+import { OBB, overlapMTV, inflate } from '../../game/assets/scripts/core/geometry';
+import { CLEARANCE } from '../../game/assets/scripts/core/types';
+import { skeletonShape, skeletonLanes, LANE_W } from '../../game/assets/scripts/core/lot-skeleton';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -845,4 +850,19 @@ test('no band is bigger than the biggest car', () => {
   for (const g of bandedQueue(cars, [], 0, 1)) {
     expect(g.count).toBeLessThanOrEqual(CAP_SIZE.big);
   }
+});
+
+test('排除区里的空地不算洞——一条刻意的车道不是撞出来的空白', () => {
+  const level = shipped(2);
+  const bare = fillableHoles(level);
+  // 场地正中挖一条竖条当作排除区
+  const strip = [{ x: 0, y: 0, angle: 90, len: LOT.h, wid: 2.0 }];
+  const masked = fillableHoles(level, strip);
+  expect(masked.big + masked.medium + masked.small)
+    .toBeLessThanOrEqual(bare.big + bare.medium + bare.small);
+});
+
+test('不传排除区时行为与从前完全一致', () => {
+  const level = shipped(2);
+  expect(fillableHoles(level, [])).toEqual(fillableHoles(level));
 });

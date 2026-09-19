@@ -1508,10 +1508,15 @@ const HOLE_STEP = 0.1;
 /** Holes a lot has room for, counted by the largest car each one would take. */
 export interface Holes { big: number; medium: number; small: number }
 
-export function fillableHoles(level: LevelData): Holes {
+export function fillableHoles(level: LevelData, exclude: OBB[] = []): Holes {
     const pad = CLEARANCE / 2;
     const taken: OBB[] = level.lot.cars.map((c) => inflate(carBox(c), pad));
     for (const t of level.lot.tunnels ?? []) taken.push(inflate(tunnelReservation(t), pad));
+    // 排除区原样放进 `taken`,不 inflate:它不是一个实体,是一块"这里的空白是刻意的"
+    // 的声明。见 spec §4.1——任何能开车的车道都能顺着停下一辆车,所以不排除的话
+    // 车道本身会被整条数成一串 `big` 洞,而这个指标本来是用来回答"这块空白是撞出
+    // 来的吗"的。
+    for (const e of exclude) taken.push(e);
     const found: Holes = { big: 0, medium: 0, small: 0 };
     for (const cap of ['big', 'medium', 'small'] as Cap[]) {
         const box = CAP_BOX[cap];
