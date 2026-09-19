@@ -9,7 +9,7 @@ import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
 import { carBox } from '../../game/assets/scripts/core/move-solver';
 import { OBB, overlapMTV, inflate } from '../../game/assets/scripts/core/geometry';
 import { CLEARANCE } from '../../game/assets/scripts/core/types';
-import { skeletonShape, skeletonLanes, LANE_W } from '../../game/assets/scripts/core/lot-skeleton';
+import { laneTight, skeletonShape, skeletonLanes, LANE_W } from '../../game/assets/scripts/core/lot-skeleton';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -908,7 +908,7 @@ test('每种骨架都打得出包,而且车身不压进车道', () => {
     const lanes = skeletonLanes(shape, LOT.w, LOT.h);
     let settled = 0;
     for (let seed = 0; seed < 10; seed++) {
-      const pieces = pack(mulberry32(seed * 7919), 40, [], lanes);
+      const pieces = pack(mulberry32(seed * 7919), 40, [], lanes, laneTight(shape));
       if (pieces.length === 0) continue;      // [] 的意思是这次尝试没收敛
       settled++;
       for (const p of pieces) {
@@ -957,7 +957,7 @@ test.skip('出货用的车数下,每种骨架也打得出包', () => {
     const lanes = skeletonLanes(shape, LOT.w, LOT.h);
     let settled = 0;
     for (let seed = 0; seed < 10; seed++) {
-      if (pack(mulberry32(seed * 7919), 85, [], lanes).length > 0) settled++;
+      if (pack(mulberry32(seed * 7919), 85, [], lanes, laneTight(shape)).length > 0) settled++;
     }
     expect(settled).toBeGreaterThan(0);
   }

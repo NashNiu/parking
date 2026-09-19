@@ -13,6 +13,68 @@ import { insideRect, OBB, overlapMTV } from './geometry';
  */
 export const LANE_W = 0.8;
 
+/**
+ * 车道长度占它"满长"的比例,本设计的第三个旋钮。
+ *
+ * 车道不必通到场地边缘 —— spec §3 说过,一条内部车道给的是腾挪空间不是出口。而实测
+ * 里它是**骨架三个旋钮中最有力的一个**:座位数对车道"长"远比对车道"宽"敏感(米字关
+ * 在 GAP 0.25 下,车道缩短 30% 是 35 → 51 个座位,而收窄到 0.5 只有 35 → 40)。
+ *
+ * 理由是几何的:一条贯穿的车道把**每一行**都截断一次,而截断一次就要按"跳过一整个
+ * 车位"的规则白扔一个车身长(见 `latticeSeats` 里那张表,以及为什么不能改成贴着蹭)。
+ * 缩短车道减少的是被截断的行数,收窄车道只减少每次截断的宽度,而宽度根本不是代价。
+ *
+ * 实测每种形状铺得下多少(CROSS 0.35,GAP 0.20,10 个种子,want 85,不带隧道):
+ *
+ *     LEN_F   none  spine  ring  star
+ *     1.00      85     76    49    38
+ *     0.85      85     76    51    41
+ *     0.70      85     77    50    53
+ *     0.55      85     85    63    66
+ *
+ * **每种形状一个值,因为回字不跟别人一样。** 米字在 0.7 上从 38 涨到 53,真实生成里
+ * 从 30 辆涨到 50 辆、排除车道后的大洞从 7 个降到 5 个;回字在 0.7 上却**一辆车都生
+ * 成不出来** —— 上表不带隧道,而第 6 关带一条,短车道加隧道之后它在 RELAX_ITERS 内
+ * 再也收敛不了。回字因此留在满长,那是已知能出关的那一档。
+ *
+ * 回字是这套骨架里唯一的问题儿童,原因是几何的:它把 8 x 12 切成一个 4 x 6 的内胆和
+ * 一圈两三格宽的外框,两边都不好铺,所以覆盖率天然低、洞天然多(满长时排除车道后仍
+ * 有 14 个大洞)。这一条尚未解决,见 spec §7。
+ */
+const LANE_LEN_F: Record<SkeletonShape, number> = {
+    none: 1.0, spine: 0.7, cross: 0.7, ring: 1.0, star: 0.7,
+};
+
+/**
+ * 一辆车被车道挡住时,是**贴着车道停**(紧),还是**跳过一整个车位**(松)。
+ *
+ * 紧的那一档明显更省地方,也明显更难收敛 —— 它把车挤到关系放松处理不了的密度,
+ * `pack` 于是返回 [],关卡一辆车都生成不出来。两档都实测过(10 个种子,want 85,
+ * 不带隧道,CROSS 0.2):
+ *
+ *     收敛 / 平均车数    none      spine     cross     star
+ *     跳整格(松)       8/10 85   9/10 74   6/10 60   7/10 52
+ *     贴着停(紧)       9/10 85   3/10 83   1/10 76   1/10 66
+ *
+ * **光看这张表会选错。** 真实生成(带隧道)才是判据:
+ *
+ * - 十字关贴着停 = 79 辆车、排除车道后 **0 个大洞**、on target 且 hard;跳整格只有
+ *   55 辆、4 个大洞。这一关是靠紧档才达标的。
+ * - 米字关贴着停 = **零辆车**。它有四条车道加两条隧道,余量最少,1/10 的不带隧道
+ *   收敛率一加上隧道就归零。
+ *
+ * 所以这是一张按形状取值的表,不是一个全局开关,而且每一格都是量出来的。要改任何一
+ * 格,请重跑那一关的真实生成 —— 上面那张不带隧道的表会把你引向相反的结论。
+ */
+const LANE_TIGHT: Record<SkeletonShape, boolean> = {
+    none: false, spine: true, cross: true, ring: false, star: false,
+};
+
+/** 这个形状被挡住时贴着停还是跳一格。见 `LANE_TIGHT`。 */
+export function laneTight(shape: SkeletonShape): boolean {
+    return LANE_TIGHT[shape];
+}
+
 export type SkeletonShape = 'none' | 'spine' | 'cross' | 'ring' | 'star';
 
 /**
@@ -27,21 +89,39 @@ const SHAPE_CURVE: readonly SkeletonShape[] = [
     'spine',  // 3
     'spine',  // 4
     'cross',  // 5
-    'ring',   // 6
-    'ring',   // 7
-    'ring',   // 8
-    'star',   // 9  斜向车道从这里开始
+    'cross',  // 6
+    'cross',  // 7
+    'star',   // 8  斜向车道从这里开始
+    'star',   // 9
     'star',   // 10
 ];
+
+/**
+ * 为什么曲线里没有 `ring`,而 `skeletonLanes` 仍然认得它。
+ *
+ * 回字在这个场地上做不出来,原因是几何的而不是参数的:它把 8 x 12 切成一个 4 x 6 的
+ * 内胆和一圈两三格宽的外框,两边都不好铺,于是只坐得下三十几辆车 —— 覆盖率约四分之
+ * 一,排除车道之后仍然留着 14 个大洞,而"不要留下明显的大块空白"正是这套设计要解决
+ * 的那条要求。想过的办法都不成立:缩短车道会让它连关卡都生成不出来(第 6 关带一条
+ * 隧道,短车道加隧道之后关系放松在 RELAX_ITERS 内收敛不了);让车贴着车道停会让**所有**
+ * 骨架关归零;降 `CROSS` 拿不到更多车。
+ *
+ * 人类伙伴最初的原话是"米字型**或者**回字形",要的是"有一些设计感的车辆摆放位置" ——
+ * 形状是手段,不是目的。米字做得到(50 辆,排除车道后 5 个大洞,on target 且 hard),
+ * 所以坡度改成 无 → 一条主道 → 十字 → 米字。
+ *
+ * `ring` 的几何留在 `skeletonLanes` 里没有删:它本身是对的,测试也在测它,将来场地变
+ * 大或者换一种铺法时它随时可以回到曲线上。
+ */
 
 export function skeletonShape(id: number): SkeletonShape {
     const i = Math.min(Math.max(1, Math.trunc(id)), SHAPE_CURVE.length) - 1;
     return SHAPE_CURVE[i];
 }
 
-/** 一条车道:沿 `angle` 方向长 `len`,宽 `LANE_W`,中心在 (x, y)。 */
-function lane(x: number, y: number, angle: number, len: number): OBB {
-    return { x, y, angle, len, wid: LANE_W };
+/** 一条车道:沿 `angle` 方向长 `len * f`,宽 `LANE_W`,中心在 (x, y)。 */
+function lane(x: number, y: number, angle: number, len: number, f: number): OBB {
+    return { x, y, angle, len: len * f, wid: LANE_W };
 }
 
 /**
@@ -51,34 +131,35 @@ function lane(x: number, y: number, angle: number, len: number): OBB {
  * import 本模块,反向 import 会成环。
  */
 export function skeletonLanes(shape: SkeletonShape, w: number, h: number): OBB[] {
+    const f = LANE_LEN_F[shape];
     switch (shape) {
         case 'none':
             return [];
         // 一条纵贯车道,居中。
         case 'spine':
-            return [lane(0, 0, 90, h)];
+            return [lane(0, 0, 90, h, f)];
         // 纵横各一,十字。
         case 'cross':
-            return [lane(0, 0, 90, h), lane(0, 0, 0, w)];
+            return [lane(0, 0, 90, h, f), lane(0, 0, 0, w, f)];
         // 回字:一圈矩形环,离边 1/4 处。上下两条横的,左右两条竖的。
         case 'ring': {
             const dx = w / 4;
             const dy = h / 4;
             return [
-                lane(0, dy, 0, w / 2),
-                lane(0, -dy, 0, w / 2),
-                lane(-dx, 0, 90, h / 2),
-                lane(dx, 0, 90, h / 2),
+                lane(0, dy, 0, w / 2, f),
+                lane(0, -dy, 0, w / 2, f),
+                lane(-dx, 0, 90, h / 2, f),
+                lane(dx, 0, 90, h / 2, f),
             ];
         }
         // 米字:纵横各一,再加两条对角。对角长度取场地对角线的一半,免得伸出去。
         case 'star': {
             const diag = Math.hypot(w, h) / 2;
             return [
-                lane(0, 0, 90, h),
-                lane(0, 0, 0, w),
-                lane(0, 0, 45, diag),
-                lane(0, 0, 135, diag),
+                lane(0, 0, 90, h, f),
+                lane(0, 0, 0, w, f),
+                lane(0, 0, 45, diag, f),
+                lane(0, 0, 135, diag, f),
             ];
         }
     }
@@ -129,7 +210,7 @@ export interface Seat { x: number; y: number; angle: number }
  */
 export function latticeSeats(
     lanes: OBB[], blocked: OBB[], w: number, h: number, gap: number,
-    rng: () => number, cross: number, bodies: Body[],
+    rng: () => number, cross: number, bodies: Body[], tight: boolean,
 ): Seat[] {
     const seats: Seat[] = [];
     const angle = latticeAngle(lanes);
@@ -177,15 +258,30 @@ export function latticeSeats(
                 len: b.len,
                 wid: b.wid,
             };
-            // 不论收不收都要推进:一辆车绕过车道继续往前找,而不是被丢掉。
-            u += extent + gap;
             // 两项剔除都拿**车身**做,不是中心点。中心点避开车道是不够的——Task 4 的
             // Critical 就是这个形状:14%(spine)到 36%(star)的座位会让车身压进车道,
             // 关系放松在 RELAX_ITERS 内收敛不了,`pack` 返回 [],第 3 关生成出零辆车。
-            if (!insideRect(box, w, h)) continue;
-            if (blocked.some((r) => overlapMTV(box, r))) continue;
-            seats.push({ x: box.x, y: box.y, angle: box.angle });
-            k++;                      // 收下了才换下一辆
+            if (insideRect(box, w, h) && !blocked.some((r) => overlapMTV(box, r))) {
+                seats.push({ x: box.x, y: box.y, angle: box.angle });
+                k++;                  // 收下了才换下一辆
+                u += extent + gap;
+                continue;
+            }
+            // 放不下就跳过一整个车位,让这辆车到下一个位置去试 —— 而不是"贴着障碍往前
+            // 蹭一小步再试"。后者看起来明显更好(每穿过一条车道就少白扔一个车身长的
+            // 位置,而回字关排除车道后量到 13 个大洞,大半就是这么来的),实测却相反:
+            //
+            //     收敛率(10 个种子,want 85)  none  spine  ring  star
+            //     跳整格(本实现)                 5/10   2/10  4/10  4/10
+            //     贴着蹭一个 gap                  6/10   0/10  0/10  2/10
+            //     贴着蹭 + 抖动减半               5/10   0/10  0/10  0/10
+            //
+            // 贴着蹭确实铺得更密(star 46-50 辆对 36-41),密到关系放松在 RELAX_ITERS
+            // 内收不了,`pack` 返回 [],有车道的关卡一辆车都生成不出来。抖动减半不能
+            // 救它,所以原因不是抖动吃掉了余量 —— 那是试过并被推翻的两个猜想之一。
+            // 贴着停还是跳一格,按形状取值 —— 见 `LANE_TIGHT`,那里有两档的实测对比,
+            // 以及为什么不带隧道的收敛率表会把人引向相反的结论。
+            u += tight ? gap : extent + gap;
         }
     }
     return seats;

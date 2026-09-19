@@ -10,7 +10,7 @@ import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
 import { LotSystem } from './lot-system';
-import { latticeSeats, shuffled, skeletonLanes, skeletonShape } from './lot-skeleton';
+import { laneTight, latticeSeats, shuffled, skeletonLanes, skeletonShape } from './lot-skeleton';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -305,10 +305,25 @@ export const CARS_PER_LEVEL = 89;
  * 和车道面积一起决定能坐下多少车,保留两个互相矛盾的旋钮只会让它们打架。它仍然是
  * 一个上限,以便乘客预算有硬边界。
  *
- * 0.25 是初值,还没有标定过:Task 4 扫的是 `CROSS`,`GAP` 一次都没动过。它的扫描
- * 属于 Task 5(spec §4.1),和 `CROSS` 一起。
+ * 0.20 是扫出来的。第 2 关(无骨架,量的是点阵本身)每档跑一次真实生成:
+ *
+ *     GAP   cars  blocked/want  rounds  score   pax   holes   play
+ *     0.10   89      71/71       14     278   1904  3/2/3   FREE
+ *     0.15   89      71/71       12     272   1888  1/1/7   FREE
+ *     0.20   89      70/71       12     270   1880  0/1/6   hard (careless 100%)
+ *     0.25   78      63/62       11     242   1696  2/3/4   hard (careless 100%)
+ *     0.30   77      62/62       16     254   1648  2/0/8   hard (careless 80%)
+ *     0.35   72      59/58       15     240   1512  3/2/5   hard (careless 60%)
+ *
+ * **洞的数量对 `GAP` 不是单调的**,这一条反直觉,写在这里免得下一个人照着直觉调。
+ * 缝小不等于洞少:行距和行内步长要恰好铺满 8 x 12,0.20 那一档 89 辆车正好填满,
+ * 两边都有边角剩下来,剩下的边角就是洞。所以这个数是扫出来的不是推出来的,改它之前
+ * 请重扫,别在表上插值。
+ *
+ * 0.20 是表里唯一 `big === 0` 的一档(这是"不要留下明显的大块空白"的量化形式),
+ * 而且它还 `hard`、还保住了 89 辆车 —— 在每个轴上都优于初值 0.25。
  */
-export const GAP = 0.25;
+export const GAP = 0.20;
 
 /**
  * 点阵里横过来的车所占的比例,本设计的第二个旋钮。
@@ -367,7 +382,7 @@ export const GAP = 0.25;
  * 还是中间态,不是终态:`GAP` 还钉在未标定的 0.25 上,而那个 big 洞该由 `GAP` 去关,
  * 不是靠把 `CROSS` 降回打不出 hard 的档位。这是 Task 5 的活。
  */
-export const CROSS = 0.35;
+export const CROSS = 0.2;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -1118,7 +1133,7 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  */
 // Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
 export function pack(
-    rng: () => number, want: number, tunnels: TunnelSpec[], lanes: OBB[],
+    rng: () => number, want: number, tunnels: TunnelSpec[], lanes: OBB[], tight: boolean,
 ): Piece[] {
     // The same half-clearance-plus-rounding-slack `packBox` gives a car, applied to the
     // reservation instead: a settled piece and a reservation then owe each other the full
@@ -1144,10 +1159,21 @@ export function pack(
     const bodies = order.map((c) => ({
         len: CAP_BOX[c].len * CAR_SCALE, wid: CAP_BOX[c].wid * CAR_SCALE,
     }));
-    // `lanes` 定方向,`reserved` 挡车身。保留区在这里已经膨胀过 pad,而 `latticeSeats`
-    // 拿的是没膨胀的车身,两者一加正好是 `packBox` 对保留区欠的那份间隙——所以这里
-    // 不必再拿 `packBox` 对着 `reserved` 重做一遍检查,铺下来的座位本来就是干净的。
-    const seats = latticeSeats(lanes, reserved, LOT.w, LOT.h, GAP, rng, CROSS, bodies);
+    // `lanes` 定方向,`latticeBlocked` 挡车身,而它比 `reserved` 又厚了一个 pad ——
+    // 这一层是实测出来的,不是保险起见:
+    //
+    // `latticeSeats` 拿的是**裸车身**,而关系放松拿的是 `packBox`,也就是车身再膨胀
+    // 一个 pad;它对的又是已经膨胀过 pad 的 `reserved`。两边各膨胀一次,所以车身对
+    // 车道欠的是 **2 x pad**,不是 pad。只传 `reserved` 的话,贴着车道停下的每一辆车
+    // 都恰好差一个 pad,放松去推它、它推邻居,整片连锁,`pack` 在 RELAX_ITERS 内收
+    // 敛不了,返回 [] —— 回字关和米字关会生成出零辆车。
+    //
+    // 这个错在"放不下就跳过一整格"的年代不发作,因为车很少正好停在边界上;改成贴着
+    // 障碍蹭之后,每一辆挨着车道的车都踩在这条线上,它立刻就现形了。
+    const latticeBlocked = reserved.map((r) => inflate(r, pad));
+    const seats = latticeSeats(
+        lanes, latticeBlocked, LOT.w, LOT.h, GAP, rng, CROSS, bodies, tight,
+    );
     // 铺不下的车就不存在 —— `CARS_PER_LEVEL` 是上限不是目标,这是 spec §2.3 一开始
     // 就写下的,只是直到这里才真的执行。
     //
@@ -1427,8 +1453,9 @@ function scatter(
 ): { cars: CarSpec[]; tunnels: TunnelSpec[] } {
     const tunnels = placeTunnels(rng, p.colors, tp);
     if (tunnels.length < tp.count) return { cars: [], tunnels: [] };
-    const lanes = skeletonLanes(skeletonShape(id), LOT.w, LOT.h);
-    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, lanes);
+    const shape = skeletonShape(id);
+    const lanes = skeletonLanes(shape, LOT.w, LOT.h);
+    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, lanes, laneTight(shape));
     const aimed = aimTunnels(tunnels, pieces);
     const order = peel(rng, pieces, aimed.map(tunnelBox));
     const cars = order.map(({ piece, angle }, i) => ({
