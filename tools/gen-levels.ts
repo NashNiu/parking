@@ -110,7 +110,8 @@ for (const id of ids) {
     // at the opening position, which is no longer `want.cars` once a tunnel holds some of the
     // budget back -- and a column that scored the level against a different target than the
     // search aimed at would print NEAREST MISS on every tunnel level.
-    const target = blockedTarget(id);
+    // 实际车数,不是曲线的名义车数 —— 车数是结果(spec §2.3),而搜索瞄的也是这个数。
+    const target = blockedTarget(id, level.lot.cars.length, (level.lot.tunnels ?? []).length);
     const onTarget = Math.abs(got.blocked - target) <= BLOCKED_TOLERANCE && got.rounds >= want.minRounds;
     // An AUTHORED level (see TEACH_CARS) never went through the search, so scoring it against
     // the curve's blocked target would print NEAREST MISS on a level that was not aiming at

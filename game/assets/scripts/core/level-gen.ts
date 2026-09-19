@@ -167,9 +167,6 @@ const RELAX_ITERS = 60;
 const HEADING_STEP = 45;
 const HEADINGS = 360 / HEADING_STEP;
 
-/** Draws a piece gets at finding a seat clear of the reservations. See `pack`'s fallback. */
-const SEED_TRIES = 8;
-
 /**
  * Below this, a residual `overlapMTV` reading is floating-point noise from a pair the
  * relaxation already settled, not a real overlap still to resolve.
@@ -350,10 +347,25 @@ export const GAP = 0.25;
  * 取的是**扫到的最小能 hard 的值**,不是连续意义上的最小——0.2 与 0.35 之间没有扫,
  * 门槛可能更低。
  *
- * **这一档没有通过 spec §4.5 的验收条件 #1**(`fillableHoles.big === 0`):它是 1/0/5,
- * 而被否掉的 0.2 反倒是 0/0/13。spec §4.1 不许拿一个条件换另一个,所以现在这个状态是
- * 中间态,不是终态:`GAP` 还钉在未标定的 0.25 上,而那个 big 洞该由 `GAP` 去关,不是
- * 靠把 `CROSS` 降回打不出 hard 的档位。这是 Task 5 的活。
+ * **上面那张表是在旧点阵上扫的,已经作废。** 旧点阵行内步长写死 1.25,而大车含留白
+ * 1.758,同一行两辆大车一出生就重叠 0.508(见 Task 4b 与 `latticeSeats`)。那三档的
+ * 分数因此全都是"一大堆互相压着的车被关系放松推开之后"量出来的,布局已经不是现在
+ * 这个布局,数也不再能拿来互相比较。留着它是为了记住这一档当初是怎么选出来的,不是
+ * 为了照着读数。
+ *
+ * Task 4b 在新点阵上重新确认了这一档——同一关(第 2 关,骨架 `none`)、同一个旋钮:
+ *
+ *            cars colors blocked/want rounds/min score  pax   holes  inward  packing    play
+ *   0.35,新  89     5      70/71       14/2      276  1840  1/1/0    24%   on target  hard (careless 80%)
+ *
+ * 仍然是 `hard`,所以 0.35 留着,不必再往上提(Task 4b 的止损规则:是 `FREE` 才提到
+ * 0.5 重跑)。`rounds` 从 11 涨到 14、`score` 从 267 涨到 276 都是往好的方向走,但那
+ * 不是 `CROSS` 的功劳——是播种不再自带重叠。
+ *
+ * **这一档仍然没有通过 spec §4.5 的验收条件 #1**(`fillableHoles.big === 0`):旧点阵
+ * 上是 1/0/5,新点阵上是 1/1/0。spec §4.1 不许拿一个条件换另一个,所以现在这个状态
+ * 还是中间态,不是终态:`GAP` 还钉在未标定的 0.25 上,而那个 big 洞该由 `GAP` 去关,
+ * 不是靠把 `CROSS` 降回打不出 hard 的档位。这是 Task 5 的活。
  */
 export const CROSS = 0.35;
 
@@ -1059,18 +1071,26 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * overlapping pairs apart along their minimum translation vector is about thirty
  * lines and is the difference between seating 36 and seating 28.
  *
- * Big bodies come first in the list, and placement order IS load-bearing again. It was
- * not, briefly: with uniform-random seeding every piece was scattered before any
- * relaxation ran, so the sort decided only which rng draws mapped to which capacity and
- * the `i < j` order the separation sweep walks pairs in. Lattice seeding put the head
- * start back -- the seats are a finite supply claimed first fit, so the sort decides who
- * gets first pick of them and who is left seeding at random.
+ * THE RETURNED PIECES ARE IN `order`, NOT LONGEST FIRST, and that changes the order the
+ * relaxation sweeps pairs in. It has to: `latticeSeats` lays the bodies down one at a
+ * time and returns the i-th seat FOR the i-th body, so the sequence handed to it is the
+ * sequence that comes back, and the shuffle that keeps big cars from stacking up at one
+ * end of the lot is a shuffle of that sequence.
  *
- * That cuts the favourable way. Seat supply against `want`, measured: id 2 99/89, id 3
- * about 89/89, id 5 about 80/85, ids 6-8 about 81/85, ids 9-10 about 71/81 -- so roughly
- * ten cars on the star levels seed at random. Longest first means those ten are the
- * SMALLEST cars in the lot, which is the least bad place to lose the lattice's spacing
- * guarantee: a small body has the most ways to fit whatever the relaxation leaves it.
+ * Which is acceptable now in a way it would not have been before. The note below on
+ * over-correcting the separation push is written about a uniform scatter where almost
+ * every pair overlaps something at iteration zero; in that regime sweep order is a real
+ * bias, because whoever is walked first gets shoved into a crowd that has not moved yet.
+ * Lattice seeding with a per-body step does not hand the relaxation a pile of mutually
+ * overlapping cars at all -- the seats it returns are already clear of each other, of the
+ * reservations and of the walls, and what is left for the sweep is jitter, the walls, and
+ * the few cars that found no seat. Sweep order biases much less when there is much less
+ * to sweep.
+ *
+ * The sort by length that still runs before the shuffle no longer buys a head start --
+ * seats are not a contested pool any more, they are bound one-to-one to bodies. It is
+ * kept because it fixes which rng draws map to which capacity, and re-deriving that would
+ * move every shipped level for no reason.
  *
  * SPEC DIVERGENCE, recorded rather than hidden. Spec 2.3 says the overflow should be
  * DROPPED, with `CARS_PER_LEVEL` acting as a cap. This code falls back to random seeding
@@ -1116,53 +1136,29 @@ export function pack(
     // 点阵播种,取代原本的均匀随机。见 `latticeSeats` 的注释:随机撒点的空隙尺寸也
     // 是随机的,所以必然留下车形大洞,而排名造不出一个从未出现过的整齐打包。
     //
-    // 座位可能比车少(车道吃掉了地方),也可能比车多。少了就让剩下的车回到随机播种
-    // ——关系放松仍会把它们安顿好,只是那几辆的间距不受点阵保证;多了就按顺序取用。
-    const rowPitch = CAP_BOX.big.wid * CAR_SCALE;
-    // 座位要打散:上面的 caps 按车长从大到小排过序,而点阵一行一行生成,顺次取用会
-    // 把大车全堆在场地的一头,分层到可以一层一层剥掉。
-    const seats = shuffled(latticeSeats(lanes, LOT.w, LOT.h, GAP, rowPitch, rng, CROSS), rng);
-    const taken = new Array<boolean>(seats.length).fill(false);
-    const pieces: Piece[] = caps.map((cap) => {
-        // 座位是偏好,保留区是硬约束。点阵既不知道这辆车多大,也不知道隧道在哪:它
-        // 只拿中心点避开车道,而车是有身子的。所以这里逐辆拿它自己的车身试,挤不进
-        // 去就往后找下一个空座位 —— 贴着车道的那些座位于是留给后面更小的车。
-        //
-        // 不这么做的后果实测过:14%(spine)到 36%(star)的座位会让车身压进车道,
-        // 关系放松在 RELAX_ITERS 内收敛不了,`pack` 返回 [],200 次尝试全废,第 3 关
-        // 生成出来是零辆车。
-        //
-        // 无车道无隧道时 `reserved` 是空的,`some` 恒假,first-fit 就是顺次取 0、1、
-        // 2 ……——与逐个下标取座位逐字节相同。第 2 关正是这样一关,所以 `CROSS` 上那
-        // 张探针表不受这次改动影响。
-        for (let s = 0; s < seats.length; s++) {
-            if (taken[s]) continue;
-            const seat = seats[s];
-            const p: Piece = { x: seat.x, y: seat.y, angle: seat.angle, cap };
-            if (reserved.some((r) => overlapMTV(packBox(p), r))) continue;
-            taken[s] = true;
-            return p;
-        }
-        // 一个空座位都容不下这辆车:退回随机播种,和从前一样。
-        //
-        // Seeded OFF the reservations where a draw or two can manage it. A piece dropped on
-        // top of a reservation starts the relaxation with a shove it cannot negotiate -- the
-        // reservation will not move, so the piece has to walk out through whatever is packed
-        // around it, dragging the neighbours it displaces along. Measured on level 7: seeding
-        // blind, the packer settled 7 attempts in 200; resampling here, 42. Eight draws is
-        // where it stops paying (thirty gave the identical run), and a piece that never finds
-        // a clear seat is kept anyway rather than dropped -- the relaxation is still allowed
-        // to solve it.
-        let p: Piece;
-        for (let k = 0; ; k++) {
-            const angle = (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP;
-            p = { x: (rng() - 0.5) * LOT.w, y: (rng() - 0.5) * LOT.h, angle, cap };
-            clampInside(p);
-            if (k + 1 >= SEED_TRIES) break;
-            if (!reserved.some((r) => overlapMTV(packBox(p), r))) break;
-        }
-        return p;
-    });
+    // 尺寸要打散:`caps` 按车长排过序,而行是一行一行铺的,顺着铺会把大车全堆在场
+    // 地的一头,分层到可以一层一层剥掉。打散的是**铺车的顺序**,不是座位——新契约
+    // 下座位和车是绑定的(第 i 个座位就是第 i 辆车的),再去洗座位就把这个对应关系
+    // 洗掉了。
+    const order = shuffled(caps, rng);
+    const bodies = order.map((c) => ({
+        len: CAP_BOX[c].len * CAR_SCALE, wid: CAP_BOX[c].wid * CAR_SCALE,
+    }));
+    // `lanes` 定方向,`reserved` 挡车身。保留区在这里已经膨胀过 pad,而 `latticeSeats`
+    // 拿的是没膨胀的车身,两者一加正好是 `packBox` 对保留区欠的那份间隙——所以这里
+    // 不必再拿 `packBox` 对着 `reserved` 重做一遍检查,铺下来的座位本来就是干净的。
+    const seats = latticeSeats(lanes, reserved, LOT.w, LOT.h, GAP, rng, CROSS, bodies);
+    // 铺不下的车就不存在 —— `CARS_PER_LEVEL` 是上限不是目标,这是 spec §2.3 一开始
+    // 就写下的,只是直到这里才真的执行。
+    //
+    // 从前这里把溢出的车退回随机播种,而那正是骨架关卡一辆车都生成不出来的原因:车道
+    // 吃掉面积之后,米字关的点阵只铺得下八十一辆里的三十几辆,剩下几十辆撒进一个已经
+    // 满了的场地,关系放松在 RELAX_ITERS 内永远收不了,`pack` 返回 [],两百次尝试全废。
+    // 实测每关铺得下多少(GAP 0.25,十个种子平均,want 89):无骨架 85.6,spine 67.1,
+    // cross 54.7,ring 44.2,star 35.6。
+    const pieces: Piece[] = seats.map((seat, i) => (
+        { x: seat.x, y: seat.y, angle: seat.angle, cap: order[i] }
+    ));
 
     for (let iter = 0; iter < RELAX_ITERS; iter++) {
         let moved = false;
@@ -1704,10 +1700,15 @@ function better(a: Ranked, b: Ranked): number {
  * They were three copies of one expression before tunnels existed, and the copies agreed only
  * because the denominator happened to be the same.
  */
-export function blockedTarget(id: number): number {
+export function blockedTarget(id: number, cars?: number, tunnels?: number): number {
     const p = levelParams(id);
     const tp = tunnelParams(id);
-    return Math.round(p.blockedRatio * (p.cars - tp.count * tp.cars + tp.count));
+    // 不传就按曲线的名义车数算,与从前逐位相同 —— 钉曲线的测试要的是这个数。传了就按
+    // 场上实际的车算,因为车数成了结果(spec §2.3):点阵铺得下多少就是多少,而一个
+    // 按名义 89 辆算出来的绝对缠绕数,米字关永远够不到,每一关都会打成 NEAREST MISS。
+    const grid = cars ?? p.cars - tp.count * tp.cars;
+    const tun = tunnels ?? tp.count;
+    return Math.round(p.blockedRatio * (grid + tun));
 }
 
 /**
@@ -1792,10 +1793,7 @@ export function generateLevel(id: number): LevelData {
     if (authored) return authored;
     const p = levelParams(id);
     const tp = tunnelParams(id);
-    // The tunnels' cars come OUT of the level's budget, so the lot gets the remainder.
-    const gridCars = p.cars - tp.count * tp.cars;
     const attempts = tp.count > 0 ? TUNNEL_ATTEMPTS : ATTEMPTS;
-    const wantBlocked = blockedTarget(id);
     // Every candidate tied at the best miss so far, not just the first one seen. A level that
     // finds nothing on target still gets to pick a TIDY nearest miss -- level 9 shipped with
     // four big holes in it because this used to keep whichever equally-close attempt happened
@@ -1807,9 +1805,14 @@ export function generateLevel(id: number): LevelData {
     for (let attempt = 0; attempt < attempts && onTarget.length < PACKINGS; attempt++) {
         // Seeded from the id, so the same id walks the same attempts in the same order.
         const { cars, tunnels } = scatter(mulberry32(id * 7919 + attempt), id, p, tp);
-        // Short on either count is short: an attempt that seated the tunnels but not the
-        // cars, or the cars but not the tunnels, is not this level.
-        if (cars.length < gridCars || tunnels.length < tp.count) continue;
+        // 车数不再是判据,隧道仍然是:一次没把隧道都坐下的尝试不是这一关。
+        //
+        // 这里没有车数下限,而那不是漏写。缠绕率自己就是下限 —— 目标按本次尝试的实际
+        // 车数算,而一个稀稀拉拉的场地缠绕率天然低(车有地方走),够不到 `blockedRatio`。
+        // 反过来,任何一个固定的分数下限都会把米字关整个判死:它本来就只铺得下八十一辆
+        // 里的三十几辆,而那是几何,不是这次尝试没发挥好。
+        if (tunnels.length < tp.count) continue;
+        const wantBlocked = blockedTarget(id, cars.length, tunnels.length);
         const level = assemble(id, cars, tunnels);
         if (!isSolvable(level)) continue;
         const welded = weldedMouths(level);

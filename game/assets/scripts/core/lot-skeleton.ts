@@ -1,4 +1,4 @@
-import { OBB, overlapMTV } from './geometry';
+import { insideRect, OBB, overlapMTV } from './geometry';
 
 /**
  * 车道宽度。
@@ -93,32 +93,55 @@ export function skeletonLanes(shape: SkeletonShape, w: number, h: number): OBB[]
  */
 const JITTER_F = 0.5;
 
+/** 车身尺寸,已经乘过 `CAR_SCALE`。`len` 沿车身,`wid` 垂直于它,与 OBB 一致。 */
+export interface Body { len: number; wid: number }
+
+/** 一辆车的落点:位置加朝向。 */
+export interface Seat { x: number; y: number; angle: number }
+
 /**
- * 把车摆成沿车道方向的松散行列,返回每个座位的位置和朝向。
+ * 把 `bodies` 按顺序铺成沿骨架方向的松散行列。
  *
  * 这是本设计的要害。`pack()` 原本均匀随机撒点,所以**空隙尺寸也是随机的**——大多
  * 数缝很窄,偶尔留下一块车形空地,而排名只能在候选里挑最不烂的一个,造不出一个从
  * 未出现过的整齐打包。点阵的空隙是设计出来的尺寸。
  *
+ * 返回的第 i 个座位就是 `bodies[i]` 的位置,所以**返回数组与入参逐位对应**;铺不下的
+ * 车不返回,数组因此可能比 `bodies` 短,由调用方决定怎么安置它们。
+ *
+ * 这与"先撒一片座位、再把车填进去"的差别是本模块存在的理由:座位要多长,取决于坐
+ * 它的那辆车有多长,而一个均匀点阵没法同时服务 0.887 和 1.650 两种车身——按小的定
+ * 就压住大的,按大的定就浪费三分之一的地。这一点不是推论,是实测:行内步长曾经写
+ * 死成 1.0 + gap = 1.250,而大车含留白 1.758,同一行里两辆大车一出生就重叠 0.508,
+ * 压掉近三成车身,全部丢给关系放松去救。后果是第 2 关(无车道)收敛率 4/20,任何
+ * 一种车道形状下 0/60——`generateLevel(3)` 生成出零辆车。spec §2.2 从一开始写的就是
+ * "行内车距 = 该车 len * CAR_SCALE + GAP",这里补上的是那半句。
+ *
  * 点阵的基准方向只有一个,取自骨架的第一条车道,没有车道时朝上——见 `latticeAngle`,
  * 那里写了为什么不能按座位各取最近的车道。自由角度没有作废,只是从随机取八向之一
  * 变成跟着骨架取向。
+ *
+ * `lanes` 只用来定方向,`blocked` 是不能压的地方(车道和隧道,由调用方膨胀好再传进
+ * 来)——两者分开,是因为无车道而有隧道的关卡不能拿隧道定方向。
  *
  * `cross` 是在这个基准方向之上横过来的座位比例:0 全场同向,1 全场转 90 度,中间
  * 是比例。它调的是难度不是观感,理由写在 `level-gen.ts` 的 `CROSS` 上。
  */
 export function latticeSeats(
-    lanes: OBB[], w: number, h: number, gap: number, rowPitch: number, rng: () => number,
-    cross: number,
-): { x: number; y: number; angle: number }[] {
-    const seats: { x: number; y: number; angle: number }[] = [];
+    lanes: OBB[], blocked: OBB[], w: number, h: number, gap: number,
+    rng: () => number, cross: number, bodies: Body[],
+): Seat[] {
+    const seats: Seat[] = [];
     const angle = latticeAngle(lanes);
     const rad = (angle * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
 
-    const pitch = rowPitch + gap;     // 垂直于车身:按车宽
-    const along = 1.0 + gap;          // 平行于车身:按最常见的小车身长 0.887 向上取整到 1.0
+    // 行距按**最宽**的那辆车,spec §2.2 原文。行距是全行共用的一个数,按别的车定都
+    // 会让最宽的那辆压住隔壁行——这跟行内步长不能是常数是同一件事的另一半。
+    let widest = 0;
+    for (const b of bodies) if (b.wid > widest) widest = b.wid;
+    const pitch = widest + gap;
     const jitter = gap * JITTER_F;
 
     // `u` 沿车身方向,`v` 垂直于它。点阵在 (u, v) 里是规整的,再旋到场地坐标系 ——
@@ -127,36 +150,42 @@ export function latticeSeats(
     // 扫描范围取场地对角线的一半:场地四角到原点正是这个距离,所以旋到任何角度都还
     // 够得着。落在场地外的座位在下面逐个剔除,多扫一些只是浪费几次循环。
     //
-    // 这是余量,不是保证,差别在整行错位——它把一行的起点最多右移 `along / 2`,负 u
+    // 这是余量,不是保证,差别在整行错位——它把一行的起点最多右移 `pitch / 2`,负 u
     // 那一端就少扫这么多。算过:reach = 7.2111,角度 90 下需要覆盖 h/2 = 6,余量
-    // 1.2111;测试扫到的最大 gap 0.45 只吃掉 0.725。gap 大到 1.4222 才会真的漏一条,
-    // 远在本设计的标定范围之外。
+    // 1.2111;错位最多吃掉半个 pitch,而 pitch 在本设计的标定范围里不到 0.8。
     const reach = Math.hypot(w, h) / 2;
-    for (let v = -reach; v <= reach; v += pitch) {
-        // 整行错位,让相邻两行不是一把梳子。
-        const stagger = rng() < 0.5 ? 0 : along / 2;
-        for (let u = -reach + stagger; u <= reach; u += along) {
-            const ju = u + (rng() - 0.5) * jitter;
-            const jv = v + (rng() - 0.5) * jitter;
-            // 这一抽必须**无条件**抽:座位位置因此与 `cross` 完全无关,两个 cross 值
-            // 跑出来的点阵逐点重合,标定时才是单变量比较。写成 `cross > 0 && rng() < cross`
-            // 会短路掉这一抽,rng 流随 cross 错位,位置全都对不上——变异测过,那样改
-            // 确实会让"位置一个都没动"那条断言红。
-            //
-            // 位置无所谓,倒是真的无所谓:抽在两条剔除之前还是之后都一样。是否剔除只看
-            // ju/jv,与 cross 无关,所以两种写法每个被接受的候选各抽一次、消耗的序列相同。
-            // 这里写在前面只是因为它跟 ju/jv 是同一件事的三次抽签,读起来是一组。
+    let k = 0;                        // 下一辆还没安置的车
+    for (let v = -reach; v <= reach && k < bodies.length; v += pitch) {
+        // 整行错位,让相邻两行不是一把梳子。按 `pitch` 错位:行内步长不再是常数,
+        // 拿它的一半去错位已经没有意义了。
+        const stagger = rng() < 0.5 ? 0 : pitch / 2;
+        for (let u = -reach + stagger; u <= reach && k < bodies.length; ) {
+            const b = bodies[k];
+            // 这一抽必须**无条件**抽,而且抽在两条剔除之前:`extent` 要用它,而 `u`
+            // 不论这个座位收不收都要按 `extent` 推进。写成 `cross > 0 && rng() < cross`
+            // 会短路掉 cross = 0 那一抽,rng 流随 cross 错位——车身是正方形时两档点阵
+            // 本该逐点重合,那样改就对不上了,测试里有一条专门咬这个。
             const turn = rng() < cross;
-            const sx = ju * cos - jv * sin;
-            const sy = ju * sin + jv * cos;
-            if (Math.abs(sx) > w / 2 || Math.abs(sy) > h / 2) continue;
-            // 只拿中心点试,而且试的是没加 pad 的车道:这是个便宜的预筛,不是真正的
-            // 车道回避。真正的那一道在 `pack()` 里,因为只有调用方知道这个座位要坐多大
-            // 的车、场上还有没有隧道。把这里换成按车身试只会白白掐掉本来就不宽裕的座位
-            // 供给——车道边上那些座位是留给小车的,不是该丢掉的。
-            const dot: OBB = { x: sx, y: sy, angle: 0, len: 1e-6, wid: 1e-6 };
-            if (lanes.some((l) => overlapMTV(dot, l))) continue;
-            seats.push({ x: sx, y: sy, angle: turn ? (angle + 90) % 360 : angle });
+            // 横过来的车沿行方向占的是车宽,不是车长。
+            const extent = turn ? b.wid : b.len;
+            const cu = u + extent / 2 + (rng() - 0.5) * jitter;
+            const cv = v + (rng() - 0.5) * jitter;
+            const box: OBB = {
+                x: cu * cos - cv * sin,
+                y: cu * sin + cv * cos,
+                angle: turn ? (angle + 90) % 360 : angle,
+                len: b.len,
+                wid: b.wid,
+            };
+            // 不论收不收都要推进:一辆车绕过车道继续往前找,而不是被丢掉。
+            u += extent + gap;
+            // 两项剔除都拿**车身**做,不是中心点。中心点避开车道是不够的——Task 4 的
+            // Critical 就是这个形状:14%(spine)到 36%(star)的座位会让车身压进车道,
+            // 关系放松在 RELAX_ITERS 内收敛不了,`pack` 返回 [],第 3 关生成出零辆车。
+            if (!insideRect(box, w, h)) continue;
+            if (blocked.some((r) => overlapMTV(box, r))) continue;
+            seats.push({ x: box.x, y: box.y, angle: box.angle });
+            k++;                      // 收下了才换下一辆
         }
     }
     return seats;

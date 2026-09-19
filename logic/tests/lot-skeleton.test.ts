@@ -1,5 +1,5 @@
-import { skeletonShape, skeletonLanes, LANE_W, SkeletonShape, latticeSeats, shuffled } from '../../game/assets/scripts/core/lot-skeleton';
-import { OBB, overlapMTV } from '../../game/assets/scripts/core/geometry';
+import { skeletonShape, skeletonLanes, LANE_W, SkeletonShape, latticeSeats, shuffled, Body } from '../../game/assets/scripts/core/lot-skeleton';
+import { OBB, overlapMTV, insideRect } from '../../game/assets/scripts/core/geometry';
 
 const W = 8, H = 12;
 
@@ -71,9 +71,26 @@ test('米字带斜向车道,回字不带', () => {
   for (const a of ring) expect([0, 90]).toContain(a);
 });
 
+/**
+ * 三种车身,已经乘过 `CAR_SCALE`(见 `types.ts` 的 `CAP_BOX` 与 `CAR_SCALE`)。
+ *
+ * 这两个数就是本任务存在的理由:一个均匀点阵没法同时服务 0.887 和 1.650 两种车长。
+ */
+const SMALL: Body = { len: 0.887, wid: 0.433 };
+const BIG: Body = { len: 1.650, wid: 0.524 };
+
+function same(n: number, b: Body): Body[] {
+  return Array.from({ length: n }, () => b);
+}
+
+function boxOf(s: { x: number; y: number; angle: number }, b: Body): OBB {
+  return { x: s.x, y: s.y, angle: s.angle, len: b.len, wid: b.wid };
+}
+
 test('座位落在场地内,并且是确定的', () => {
-  const a = latticeSeats([], W, H, 0.25, 0.8, seedRng(7), 0);
-  const b = latticeSeats([], W, H, 0.25, 0.8, seedRng(7), 0);
+  const bodies = same(200, SMALL);
+  const a = latticeSeats([], [], W, H, 0.25, seedRng(7), 0, bodies);
+  const b = latticeSeats([], [], W, H, 0.25, seedRng(7), 0, bodies);
   expect(a).toEqual(b);
   expect(a.length).toBeGreaterThan(20);
   for (const s of a) {
@@ -85,68 +102,143 @@ test('座位落在场地内,并且是确定的', () => {
 test('所有座位同一个朝向,而且那个朝向来自骨架', () => {
   // 点阵只有一个基准方向,取自骨架;横过来的那一档是 `cross` 在它之上混的。
   // 这几条断言把 `cross` 钉在 0,量的就是基准方向本身。
-  const spine = latticeSeats(skeletonLanes('spine', W, H), W, H, 0.25, 0.8, seedRng(2), 0);
+  const bodies = same(200, SMALL);
+  const spine = latticeSeats(skeletonLanes('spine', W, H), [], W, H, 0.25, seedRng(2), 0, bodies);
   expect(new Set(spine.map((s) => s.angle)).size).toBe(1);
   expect(spine[0].angle).toBe(90);            // spine 的车道是 90 度
 
-  const cross = latticeSeats(skeletonLanes('cross', W, H), W, H, 0.25, 0.8, seedRng(2), 0);
+  const cross = latticeSeats(skeletonLanes('cross', W, H), [], W, H, 0.25, seedRng(2), 0, bodies);
   expect(new Set(cross.map((s) => s.angle)).size).toBe(1);
   expect(cross[0].angle).toBe(90);            // cross 的第一条车道是 90 度
 
-  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(2), 0);
+  const bare = latticeSeats([], [], W, H, 0.25, seedRng(2), 0, bodies);
   expect(new Set(bare.map((s) => s.angle)).size).toBe(1);
   expect(bare[0].angle).toBe(90);             // 无车道时朝上
 
   // ring 的第一条车道是 0 度,是唯一能区分"读了 lanes"和"写死 90"的形状——没有它,
-  // latticeAngle 直接 return 90 也能让 11 个测试全过。
-  const ring = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(2), 0);
+  // latticeAngle 直接 return 90 也能让这些测试全过。
+  const ring = latticeSeats(skeletonLanes('ring', W, H), [], W, H, 0.25, seedRng(2), 0, bodies);
   expect(new Set(ring.map((s) => s.angle)).size).toBe(1);
   expect(ring[0].angle).toBe(0);
 });
 
-test('没有座位落在车道里', () => {
-  const lanes = skeletonLanes('cross', W, H);
-  const seats = latticeSeats(lanes, W, H, 0.25, 0.8, seedRng(11), 0);
-  // 座位是点,用一个极小的盒子代表它
-  for (const s of seats) {
-    const dot: OBB = { x: s.x, y: s.y, angle: 0, len: 1e-6, wid: 1e-6 };
-    for (const l of lanes) expect(overlapMTV(dot, l)).toBeFalsy();
+// 这条是本任务存在的理由:旧实现步长写死 1.25,两辆大车中心只隔 1.25,必然重叠。
+test('同一行里相邻两辆车不重叠,大车也不重叠', () => {
+  const bodies = same(60, BIG);
+  const seats = latticeSeats([], [], W, H, 0.25, seedRng(3), 0, bodies);
+  expect(seats.length).toBeGreaterThan(20);
+  const boxes = seats.map((s, i) => boxOf(s, bodies[i]));
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      expect(overlapMTV(boxes[i], boxes[j])).toBeFalsy();
+    }
   }
 });
 
+// 步长真的跟着车走:同样的场地,全小车能铺下的数量必须明显多于全大车。
+test('步长按车长,所以小车铺得比大车多', () => {
+  const small = latticeSeats([], [], W, H, 0.25, seedRng(3), 0, same(200, SMALL)).length;
+  const big = latticeSeats([], [], W, H, 0.25, seedRng(3), 0, same(200, BIG)).length;
+  expect(small).toBeGreaterThan(big * 1.4);
+});
+
+// 车身整个在场地内,不只是中心点在。
+test('车身不许探出场地', () => {
+  const bodies = Array.from({ length: 200 }, (_, i) => (i % 2 ? SMALL : BIG));
+  const seats = latticeSeats([], [], W, H, 0.25, seedRng(5), 0.3, bodies);
+  expect(seats.length).toBeGreaterThan(20);
+  seats.forEach((s, i) => {
+    expect(insideRect(boxOf(s, bodies[i]), W, H)).toBe(true);
+  });
+});
+
+// 车身不许压车道 —— 中心点避开是不够的,这正是 Task 4 那个 Critical 的形状。
+test('车身不许压进不能压的地方', () => {
+  const lanes = skeletonLanes('ring', W, H);
+  const bodies = same(200, BIG);
+  const seats = latticeSeats(lanes, lanes, W, H, 0.25, seedRng(7), 0, bodies);
+  expect(seats.length).toBeGreaterThan(20);      // 不能靠一个都不铺来通过
+  seats.forEach((s, i) => {
+    for (const l of lanes) {
+      expect(overlapMTV(boxOf(s, bodies[i]), l)).toBeFalsy();
+    }
+  });
+});
+
+// 铺不下的车不返回,而且返回的是前缀对应关系:第 i 个座位属于第 i 辆车。
+test('返回数组与入参逐位对应,铺不下的不返回', () => {
+  const bodies = same(400, BIG);   // 远多于场地能放的
+  const seats = latticeSeats([], [], W, H, 0.25, seedRng(9), 0, bodies);
+  expect(seats.length).toBeLessThan(bodies.length);
+  expect(seats.length).toBeGreaterThan(20);
+});
+
+// `lanes` 只定方向,`blocked` 才是硬约束——两者分开,是因为无车道而有隧道的关卡不能
+// 拿隧道去定方向。
+test('lanes 只定方向,blocked 才挡车', () => {
+  const lanes = skeletonLanes('cross', W, H);
+  const bodies = same(200, SMALL);
+  const dirOnly = latticeSeats(lanes, [], W, H, 0.25, seedRng(11), 0, bodies);
+  const blocked = latticeSeats(lanes, lanes, W, H, 0.25, seedRng(11), 0, bodies);
+  // 同一个方向、同一个种子,唯一的变量是 blocked。
+  expect(new Set(dirOnly.map((s) => s.angle))).toEqual(new Set(blocked.map((s) => s.angle)));
+  expect(blocked.length).toBeLessThan(dirOnly.length);
+  // 只定方向时车确实压在车道上——否则上面那条"少了"什么都没证明。
+  expect(dirOnly.some((s, i) => lanes.some((l) => overlapMTV(boxOf(s, bodies[i]), l)))).toBe(true);
+  blocked.forEach((s, i) => {
+    for (const l of lanes) expect(overlapMTV(boxOf(s, bodies[i]), l)).toBeFalsy();
+  });
+});
+
 test('间距越大,座位越少——这是密度旋钮', () => {
-  const tight = latticeSeats([], W, H, 0.15, 0.8, seedRng(3), 0).length;
-  const loose = latticeSeats([], W, H, 0.45, 0.8, seedRng(3), 0).length;
+  const bodies = same(300, SMALL);
+  const tight = latticeSeats([], [], W, H, 0.15, seedRng(3), 0, bodies).length;
+  const loose = latticeSeats([], [], W, H, 0.45, seedRng(3), 0, bodies).length;
   expect(loose).toBeLessThan(tight);
 });
 
-test('车道占掉的地方不再有座位', () => {
-  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(5), 0).length;
-  const withLanes = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(5), 0).length;
-  expect(withLanes).toBeLessThan(bare);
-});
-
 test('cross = 1 时每个座位都横过来,cross = 0 时一个都不横', () => {
-  const up = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0);
-  const across = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 1);
+  const bodies = same(200, SMALL);
+  const up = latticeSeats([], [], W, H, 0.25, seedRng(9), 0, bodies);
+  const across = latticeSeats([], [], W, H, 0.25, seedRng(9), 1, bodies);
+  expect(up.length).toBeGreaterThan(20);
+  expect(across.length).toBeGreaterThan(20);
   expect(new Set(up.map((s) => s.angle))).toEqual(new Set([90]));
   expect(new Set(across.map((s) => s.angle))).toEqual(new Set([180]));
 });
 
-// 位置与朝向解耦,是 Task 5 能把 CROSS 当单变量标定的前提:两档跑出来的点阵逐点
-// 重合,分数的差别才只能来自朝向。这条也顺带咬住"cross 抽签必须无条件抽"——写成
-// `cross > 0 && rng() < cross` 会短路掉那一抽,rng 流错位,这条立刻红。
+// 旧契约下这条断言的是"位置与 cross 完全无关":两档点阵逐点重合,`CROSS` 才能当单
+// 变量标定。新契约下**一般情况已经不成立**,而且这是新设计的必然结果,不是退化——
+// 横过来的车沿行方向占的是 `wid` 不是 `len`,它后面那辆车的起点因此真的不同。单变量
+// 标定的前提相应换成"同一组 bodies、同一个种子、只改 cross",Task 5 照此执行。
 //
-// 它咬不住的是抽签的位置:抽在两条剔除之前还是之后,这条都绿,因为是否剔除只看
-// ju/jv,两种写法消耗的序列相同。
-test('横过来的只是朝向,位置一个都没动', () => {
-  const up = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0);
-  const across = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 1);
+// 但那一抽仍然是**无条件**的,而这条不变式还剩一个看得见的地方:车身是正方形时,横
+// 过来既不改变它沿行方向占的长度,也不改变它盖住的那块地,于是位置又逐点重合。写成
+// `cross > 0 && rng() < cross` 会短路掉 cross = 0 那一抽,rng 流整体错位,这条立刻红。
+test('cross 那一抽是无条件的:方形车身下两档位置逐点重合', () => {
+  const square = same(300, { len: 0.6, wid: 0.6 });
+  const up = latticeSeats([], [], W, H, 0.25, seedRng(9), 0, square);
+  const across = latticeSeats([], [], W, H, 0.25, seedRng(9), 1, square);
+  expect(up.length).toBeGreaterThan(20);
   expect(across.map((s) => ({ x: s.x, y: s.y }))).toEqual(up.map((s) => ({ x: s.x, y: s.y })));
+  expect(new Set(up.map((s) => s.angle))).toEqual(new Set([90]));
+  expect(new Set(across.map((s) => s.angle))).toEqual(new Set([180]));
+});
+
+// 上面那条的反面,免得后人把"位置逐点重合"推广回去:车身不是方的,横过来就真的挪动
+// 了它后面的车。它咬住的是"`turn` 真的进了 `extent`";咬不住步长写死成常数——变异
+// 测过,那种实现下两档的剔除结果仍然不同(车身转 90 度后探出场地的位置不一样),
+// 位置数组照样不相等。步长那件事由上面"相邻两辆车不重叠"和"小车铺得比大车多"咬。
+test('车身不是方的时候,横过来会挪动它后面的车', () => {
+  const bodies = same(200, BIG);
+  const up = latticeSeats([], [], W, H, 0.25, seedRng(9), 0, bodies);
+  const across = latticeSeats([], [], W, H, 0.25, seedRng(9), 1, bodies);
+  expect(across.map((s) => ({ x: s.x, y: s.y }))).not.toEqual(up.map((s) => ({ x: s.x, y: s.y })));
 });
 
 test('中间档位是个比例,不是开关', () => {
-  const some = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0.3);
+  const bodies = same(300, SMALL);
+  const some = latticeSeats([], [], W, H, 0.25, seedRng(9), 0.3, bodies);
   const turned = some.filter((s) => s.angle === 180).length / some.length;
   expect(turned).toBeGreaterThan(0.15);
   expect(turned).toBeLessThan(0.45);
