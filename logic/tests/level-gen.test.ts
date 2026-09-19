@@ -852,14 +852,17 @@ test('no band is bigger than the biggest car', () => {
   }
 });
 
-test('排除区里的空地不算洞——一条刻意的车道不是撞出来的空白', () => {
+test('排除整块场地之后一个洞都不剩,所以排除区真的被算进去了', () => {
   const level = shipped(2);
+  // 先证明这一关本来就有洞可数,否则下面那条断言会空过。
   const bare = fillableHoles(level);
-  // 场地正中挖一条竖条当作排除区
-  const strip = [{ x: 0, y: 0, angle: 90, len: LOT.h, wid: 2.0 }];
-  const masked = fillableHoles(level, strip);
-  expect(masked.big + masked.medium + masked.small)
-    .toBeLessThanOrEqual(bare.big + bare.medium + bare.small);
+  expect(bare.big + bare.medium + bare.small).toBeGreaterThan(0);
+
+  // 一块盖住整个场地的排除区。若 `exclude` 被收下却没算进 `taken`,这里会原样返回
+  // `bare`,断言当场失败——上一版写的是 `masked <= bare`,而"多加障碍只会让洞变少"
+  // 是算法的构造性质,参数被忽略时两者恰好相等,`<=` 照样通过。
+  const whole = [{ x: 0, y: 0, angle: 0, len: LOT.w, wid: LOT.h }];
+  expect(fillableHoles(level, whole)).toEqual({ big: 0, medium: 0, small: 0 });
 });
 
 test('不传排除区时行为与从前完全一致', () => {
