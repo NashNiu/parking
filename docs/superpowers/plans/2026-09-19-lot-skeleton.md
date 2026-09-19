@@ -405,7 +405,7 @@ function latticeAngle(lanes: OBB[]): number {
 - [ ] **Step 4: 跑测试,确认全过**
 
 Run: `cd logic && npx jest tests/lot-skeleton.test.ts`
-Expected: PASS,12 个测试(Task 1 的 7 个 + 本任务 5 个)
+Expected: PASS,11 个测试(Task 1 的 6 个 + 本任务 5 个)
 
 - [ ] **Step 5: 提交**
 
