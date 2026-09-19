@@ -89,15 +89,30 @@ test('每种形状的车道数是它的名字所说的那个数', () => {
 });
 
 test('每条车道都在场地内,宽度都是 LANE_W', () => {
+  // 半展长而不是外接半径。外接半径版本两边同时含 r,化简后是 |lane.x| <= W/2,
+  // 而所有车道中心都在 {0, ±w/4} 上,恒成立——那个断言看起来像包含性检查,其实
+  // 什么都没查。
+  //
+  // `<=` 而不是 `<`:spine 与 cross 的车道长度就等于场地边长,它们正好贴边,这是
+  // 对的。
+  const EPS = 1e-9;
   for (const shape of ['spine', 'cross', 'ring', 'star'] as SkeletonShape[]) {
     for (const lane of skeletonLanes(shape, W, H)) {
       expect(lane.wid).toBe(LANE_W);
-      // 车道的四个角都在场地内:用外接半径做保守判断
-      const r = Math.hypot(lane.len, lane.wid) / 2;
-      expect(Math.abs(lane.x) + r).toBeLessThanOrEqual(W / 2 + r);
-      expect(Math.abs(lane.y) + r).toBeLessThanOrEqual(H / 2 + r);
+      const rad = (lane.angle * Math.PI) / 180;
+      const ex = (lane.len * Math.abs(Math.cos(rad)) + lane.wid * Math.abs(Math.sin(rad))) / 2;
+      const ey = (lane.len * Math.abs(Math.sin(rad)) + lane.wid * Math.abs(Math.cos(rad))) / 2;
+      expect(Math.abs(lane.x) + ex).toBeLessThanOrEqual(W / 2 + EPS);
+      expect(Math.abs(lane.y) + ey).toBeLessThanOrEqual(H / 2 + EPS);
     }
   }
+});
+
+test('包含性断言真的会对一条伸出场地的车道失败', () => {
+  // 上面那条断言化简后恒真过一次,所以它需要自证还看得见缺陷。
+  const rogue = { x: 0, y: 0, angle: 0, len: W * 2, wid: LANE_W };
+  const ex = rogue.len / 2;
+  expect(Math.abs(rogue.x) + ex).toBeGreaterThan(W / 2);
 });
 
 test('米字带斜向车道,回字不带', () => {
@@ -264,6 +279,22 @@ test('座位落在场地内,并且是确定的', () => {
   }
 });
 
+test('所有座位同一个朝向,而且那个朝向来自骨架', () => {
+  // 点阵的行距垂直于车身、行内步长平行于车身,所以整片点阵只能有一个方向:
+  // 让某些座位横过来会让车身长边落在按车宽算出来的行距上,大面积重叠。
+  const spine = latticeSeats(skeletonLanes('spine', W, H), W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(spine.map((s) => s.angle)).size).toBe(1);
+  expect(spine[0].angle).toBe(90);            // spine 的车道是 90 度
+
+  const cross = latticeSeats(skeletonLanes('cross', W, H), W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(cross.map((s) => s.angle)).size).toBe(1);
+  expect(cross[0].angle).toBe(90);            // cross 的第一条车道是 90 度
+
+  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(bare.map((s) => s.angle)).size).toBe(1);
+  expect(bare[0].angle).toBe(90);             // 无车道时朝上
+});
+
 test('没有座位落在车道里', () => {
   const lanes = skeletonLanes('cross', W, H);
   const seats = latticeSeats(lanes, W, H, 0.25, 0.8, seedRng(11));
@@ -323,18 +354,30 @@ export function latticeSeats(
     lanes: OBB[], w: number, h: number, gap: number, rowPitch: number, rng: () => number,
 ): { x: number; y: number; angle: number }[] {
     const seats: { x: number; y: number; angle: number }[] = [];
-    const pitch = rowPitch + gap;
-    const along = 1.0 + gap;          // 行内步长:按最常见的小车身长 0.887 向上取整到 1.0
+    const angle = latticeAngle(lanes);
+    const rad = (angle * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    const pitch = rowPitch + gap;     // 垂直于车身:按车宽
+    const along = 1.0 + gap;          // 平行于车身:按最常见的小车身长 0.887 向上取整到 1.0
     const jitter = gap * JITTER_F;
 
-    for (let y = -h / 2 + pitch / 2; y <= h / 2; y += pitch) {
+    // `u` 沿车身方向,`v` 垂直于它。点阵在 (u, v) 里是规整的,再旋到场地坐标系 ——
+    // 直接在 x/y 上排而让车斜着或竖着躺,就是把车长放在按车宽算出的间距上。
+    //
+    // 扫描范围取场地对角线的一半,保证旋转后仍覆盖整块场地;落在场地外的座位在下面
+    // 逐个剔除,所以多扫一些只是浪费几次循环。
+    const reach = Math.hypot(w, h) / 2;
+    for (let v = -reach; v <= reach; v += pitch) {
         // 整行错位,让相邻两行不是一把梳子。
         const stagger = rng() < 0.5 ? 0 : along / 2;
-        for (let x = -w / 2 + along / 2 + stagger; x <= w / 2; x += along) {
-            const sx = x + (rng() - 0.5) * jitter;
-            const sy = y + (rng() - 0.5) * jitter;
+        for (let u = -reach + stagger; u <= reach; u += along) {
+            const ju = u + (rng() - 0.5) * jitter;
+            const jv = v + (rng() - 0.5) * jitter;
+            const sx = ju * cos - jv * sin;
+            const sy = ju * sin + jv * cos;
             if (Math.abs(sx) > w / 2 || Math.abs(sy) > h / 2) continue;
-            const angle = seatAngle(sx, sy, lanes);
             const dot: OBB = { x: sx, y: sy, angle: 0, len: 1e-6, wid: 1e-6 };
             if (lanes.some((l) => overlapMTV(dot, l))) continue;
             seats.push({ x: sx, y: sy, angle });
@@ -343,23 +386,26 @@ export function latticeSeats(
     return seats;
 }
 
-/** 座位的朝向:跟着最近那条车道走;没有车道就朝上。 */
-function seatAngle(x: number, y: number, lanes: OBB[]): number {
-    if (lanes.length === 0) return 90;
-    let best = lanes[0];
-    let bestD = Infinity;
-    for (const l of lanes) {
-        const d = Math.hypot(l.x - x, l.y - y);
-        if (d < bestD) { bestD = d; best = l; }
-    }
-    return best.angle;
+/**
+ * 整片点阵的方向:骨架第一条车道的角度,没有车道就朝上。
+ *
+ * 一个角度而不是每个座位各自取最近的车道,而这一条是本模块最容易写错的地方。行距
+ * 垂直于车身、行内步长平行于车身——两者都是按"车朝哪边"算出来的。让一部分座位横
+ * 过来,它们的车身长边(大车 1.650)就会落在按车宽(0.524)算出来的行距上,重叠一大
+ * 片,然后全部丢给关系放松去救,点阵播种的意义当场归零。
+ *
+ * 代价是全场车身平行。参考图 2 里大部分车本来就是同向的,所以这大概率不是问题;
+ * 真觉得太规整时,要改的是给每个区块各建一套点阵,而不是在这里放宽。
+ */
+function latticeAngle(lanes: OBB[]): number {
+    return lanes.length === 0 ? 90 : lanes[0].angle;
 }
 ```
 
 - [ ] **Step 4: 跑测试,确认全过**
 
 Run: `cd logic && npx jest tests/lot-skeleton.test.ts`
-Expected: PASS,9 个测试(Task 1 的 5 个 + 本任务 4 个)
+Expected: PASS,12 个测试(Task 1 的 7 个 + 本任务 5 个)
 
 - [ ] **Step 5: 提交**
 
