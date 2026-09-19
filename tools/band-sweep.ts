@@ -11,6 +11,17 @@
  * level's cars are in leaving order (`scatter` numbers them along `peel`), so this tool can
  * author any offset's queue from the level file itself for the price of one simulation set.
  *
+ * WHAT TO PICK, and this changed on 2026-09-20: among the cells that are hard AND fair, take
+ * the one with the LARGEST `gap` -- the demand-gap metric, see `demandPressure`. The old rule
+ * was "take a passing offset", and it left most of the dial unused, because `hard` saturates:
+ * at four open stalls every level reads hard at many offsets, and that bit cannot tell a level
+ * that barely bites from one that jams. Measured on the committed level 6, offset 16 and 32 are
+ * both hard-and-fair while their gaps are 0.93 and 1.53 -- same verdict, two thirds more pressure.
+ *
+ * A cell that is hard but NOT fair is not automatically out either: my human partner has said a
+ * level or two may require buying a stall to finish. Those are admissible, deliberately, for at
+ * most one or two ids -- and they must be chosen, never drifted into.
+ *
  * The consequence, and it matters: a row says "which offsets suit THIS packing and painting",
  * not "which offset the generator would settle on". The loop is therefore -- sweep, put the
  * passing offsets in BAND_CURVE, regenerate, sweep again to confirm -- and the second sweep
@@ -19,7 +30,7 @@
  * offset the curve is asking too much of, and the answer is a smaller one.
  */
 import { generateLevel, bandedQueue, bandParams } from '../game/assets/scripts/core/level-gen';
-import { isHardButFair } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { LevelData } from '../game/assets/scripts/core/types';
 
 /** Offsets to try, in rows. 0 is included because it is the measured free end. */
@@ -50,11 +61,13 @@ for (const id of idsToSweep(process.argv.slice(2))) {
             const probe: LevelData = JSON.parse(JSON.stringify(level));
             probe.loop.queue = bandedQueue(level.lot.cars, tunnels, offset, interleave);
             const v = isHardButFair(probe);
+            const g = demandPressure(probe);
             const mark = offset === curve.offset && interleave === curve.interleave ? ' <- curve' : '';
             process.stdout.write(
                 `L${id} offset=${String(offset).padStart(3)} il=${interleave} `
                 + `hard=${v.hard ? 'Y' : 'n'} fair=${v.fair ? 'Y' : 'n'} `
-                + `careless=${v.carelessLoss.toFixed(1)}${mark}\n`,
+                + `careless=${v.carelessLoss.toFixed(1)} `
+                + `gap=${g.gap.toFixed(2)} ring=${g.ring.toFixed(1)} stuck=${g.starved.toFixed(2)}${mark}\n`,
             );
         }
     }
