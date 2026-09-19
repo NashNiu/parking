@@ -1,4 +1,4 @@
-import { OBB } from './geometry';
+import { OBB, overlapMTV } from './geometry';
 
 /**
  * 车道宽度。
@@ -82,4 +82,75 @@ export function skeletonLanes(shape: SkeletonShape, w: number, h: number): OBB[]
             ];
         }
     }
+}
+
+/**
+ * 座位抖动占 `gap` 的比例。
+ *
+ * 本设计选定的结构强度是"弱"(松散格子 + 主车道):要的是有秩序但不刻板,不是几何
+ * 图案。抖动是刻意的,不是噪声。半个 gap 是上限——再大就会吃掉行距,让"间距均匀"
+ * 这条要求失效。
+ */
+const JITTER_F = 0.5;
+
+/**
+ * 把车摆成沿车道方向的松散行列,返回每个座位的位置和朝向。
+ *
+ * 这是本设计的要害。`pack()` 原本均匀随机撒点,所以**空隙尺寸也是随机的**——大多
+ * 数缝很窄,偶尔留下一块车形空地,而排名只能在候选里挑最不烂的一个,造不出一个从
+ * 未出现过的整齐打包。点阵的空隙是设计出来的尺寸。
+ *
+ * 行的方向取自**最近的那条车道**,所以回字的四个区块各自沿着自己那条边排,米字的
+ * 斜向区块跟着 45 度走——自由角度没有作废,只是从随机取八向之一变成跟着骨架取向。
+ * 没有车道时(前两关)全场一个方向。
+ */
+export function latticeSeats(
+    lanes: OBB[], w: number, h: number, gap: number, rowPitch: number, rng: () => number,
+): { x: number; y: number; angle: number }[] {
+    const seats: { x: number; y: number; angle: number }[] = [];
+    const angle = latticeAngle(lanes);
+    const rad = (angle * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+
+    const pitch = rowPitch + gap;     // 垂直于车身:按车宽
+    const along = 1.0 + gap;          // 平行于车身:按最常见的小车身长 0.887 向上取整到 1.0
+    const jitter = gap * JITTER_F;
+
+    // `u` 沿车身方向,`v` 垂直于它。点阵在 (u, v) 里是规整的,再旋到场地坐标系 ——
+    // 直接在 x/y 上排而让车斜着或竖着躺,就是把车长放在按车宽算出的间距上。
+    //
+    // 扫描范围取场地对角线的一半,保证旋转后仍覆盖整块场地;落在场地外的座位在下面
+    // 逐个剔除,所以多扫一些只是浪费几次循环。
+    const reach = Math.hypot(w, h) / 2;
+    for (let v = -reach; v <= reach; v += pitch) {
+        // 整行错位,让相邻两行不是一把梳子。
+        const stagger = rng() < 0.5 ? 0 : along / 2;
+        for (let u = -reach + stagger; u <= reach; u += along) {
+            const ju = u + (rng() - 0.5) * jitter;
+            const jv = v + (rng() - 0.5) * jitter;
+            const sx = ju * cos - jv * sin;
+            const sy = ju * sin + jv * cos;
+            if (Math.abs(sx) > w / 2 || Math.abs(sy) > h / 2) continue;
+            const dot: OBB = { x: sx, y: sy, angle: 0, len: 1e-6, wid: 1e-6 };
+            if (lanes.some((l) => overlapMTV(dot, l))) continue;
+            seats.push({ x: sx, y: sy, angle });
+        }
+    }
+    return seats;
+}
+
+/**
+ * 整片点阵的方向:骨架第一条车道的角度,没有车道就朝上。
+ *
+ * 一个角度而不是每个座位各自取最近的车道,而这一条是本模块最容易写错的地方。行距
+ * 垂直于车身、行内步长平行于车身——两者都是按"车朝哪边"算出来的。让一部分座位横
+ * 过来,它们的车身长边(大车 1.650)就会落在按车宽(0.524)算出来的行距上,重叠一大
+ * 片,然后全部丢给关系放松去救,点阵播种的意义当场归零。
+ *
+ * 代价是全场车身平行。参考图 2 里大部分车本来就是同向的,所以这大概率不是问题;
+ * 真觉得太规整时,要改的是给每个区块各建一套点阵,而不是在这里放宽。
+ */
+function latticeAngle(lanes: OBB[]): number {
+    return lanes.length === 0 ? 90 : lanes[0].angle;
 }

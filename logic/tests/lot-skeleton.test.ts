@@ -1,6 +1,12 @@
-import { skeletonShape, skeletonLanes, LANE_W, SkeletonShape } from '../../game/assets/scripts/core/lot-skeleton';
+import { skeletonShape, skeletonLanes, LANE_W, SkeletonShape, latticeSeats } from '../../game/assets/scripts/core/lot-skeleton';
+import { OBB, overlapMTV } from '../../game/assets/scripts/core/geometry';
 
 const W = 8, H = 12;
+
+function seedRng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+}
 
 test('第 1 关没有骨架,它是手写的教学关', () => {
   expect(skeletonShape(1)).toBe('none');
@@ -63,4 +69,53 @@ test('米字带斜向车道,回字不带', () => {
   expect(star).toContain(135);
   const ring = skeletonLanes('ring', W, H).map((l) => l.angle);
   for (const a of ring) expect([0, 90]).toContain(a);
+});
+
+test('座位落在场地内,并且是确定的', () => {
+  const a = latticeSeats([], W, H, 0.25, 0.8, seedRng(7));
+  const b = latticeSeats([], W, H, 0.25, 0.8, seedRng(7));
+  expect(a).toEqual(b);
+  expect(a.length).toBeGreaterThan(20);
+  for (const s of a) {
+    expect(Math.abs(s.x)).toBeLessThanOrEqual(W / 2);
+    expect(Math.abs(s.y)).toBeLessThanOrEqual(H / 2);
+  }
+});
+
+test('所有座位同一个朝向,而且那个朝向来自骨架', () => {
+  // 点阵的行距垂直于车身、行内步长平行于车身,所以整片点阵只能有一个方向:
+  // 让某些座位横过来会让车身长边落在按车宽算出来的行距上,大面积重叠。
+  const spine = latticeSeats(skeletonLanes('spine', W, H), W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(spine.map((s) => s.angle)).size).toBe(1);
+  expect(spine[0].angle).toBe(90);            // spine 的车道是 90 度
+
+  const cross = latticeSeats(skeletonLanes('cross', W, H), W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(cross.map((s) => s.angle)).size).toBe(1);
+  expect(cross[0].angle).toBe(90);            // cross 的第一条车道是 90 度
+
+  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(bare.map((s) => s.angle)).size).toBe(1);
+  expect(bare[0].angle).toBe(90);             // 无车道时朝上
+});
+
+test('没有座位落在车道里', () => {
+  const lanes = skeletonLanes('cross', W, H);
+  const seats = latticeSeats(lanes, W, H, 0.25, 0.8, seedRng(11));
+  // 座位是点,用一个极小的盒子代表它
+  for (const s of seats) {
+    const dot: OBB = { x: s.x, y: s.y, angle: 0, len: 1e-6, wid: 1e-6 };
+    for (const l of lanes) expect(overlapMTV(dot, l)).toBeFalsy();
+  }
+});
+
+test('间距越大,座位越少——这是密度旋钮', () => {
+  const tight = latticeSeats([], W, H, 0.15, 0.8, seedRng(3)).length;
+  const loose = latticeSeats([], W, H, 0.45, 0.8, seedRng(3)).length;
+  expect(loose).toBeLessThan(tight);
+});
+
+test('车道占掉的地方不再有座位', () => {
+  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(5)).length;
+  const withLanes = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(5)).length;
+  expect(withLanes).toBeLessThan(bare);
 });
