@@ -16,3 +16,4 @@ export * from './checkin';
 export * from './game-core';
 export * from './solvability';
 export * from './home-path';
+export * from './lot-skeleton';
