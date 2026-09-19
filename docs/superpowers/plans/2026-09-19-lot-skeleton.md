@@ -747,7 +747,9 @@ export const CROSS = 0.2;
 
 - [ ] **Step 7: 跑测试**
 
-Run: `cd logic && npx jest tests/lot-skeleton.test.ts && npx jest tests/level-gen.test.ts && npm run typecheck`
+Run: `cd logic && npx jest tests/lot-skeleton.test.ts && npx jest tests/level-gen.test.ts`
+Run: `cd logic && npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.gen.json --noEmit`
+(`logic/package.json` 里**没有** `typecheck` 这个脚本,只有 `typecheck:view`。)
 Expected: `lot-skeleton` 全过;`level-gen` 除了那条 `test.skip` 之外全过
 
 - [ ] **Step 8: 四档探针,确认难度回来了**
