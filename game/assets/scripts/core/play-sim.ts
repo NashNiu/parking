@@ -139,6 +139,23 @@ const TICK_CAP = 4000;
  * tick cap instead of losing, and "lost" would become indistinguishable from "slow".
  */
 export function simulate(level: LevelData, policy: Policy, seed: number): boolean {
+  return play(level, policy, seed).getState() === 'won';
+}
+
+/**
+ * One playthrough, returned as the finished `GameCore` so a caller can ask it anything.
+ *
+ * `watch` runs once per tick, AFTER that tick's taps and BEFORE the loop steps -- the
+ * moment the board is in the state the player would be looking at.
+ *
+ * `simulate` and `demandPressure` share this rather than each keeping a tap loop of their
+ * own; the two had already drifted apart once in a throwaway probe, and the tap loop is
+ * exactly the part where a copy goes quietly wrong (the `unlocked` clamp, the one-tap-per-
+ * stall cap, the `movable` filter that stops a policy taking the same car twice).
+ */
+function play(
+  level: LevelData, policy: Policy, seed: number, watch?: (core: GameCore) => void,
+): GameCore {
   const copy: LevelData = JSON.parse(JSON.stringify(level));
   copy.parking.slots = copy.parking.unlocked;
   const core = new GameCore(copy);
@@ -154,9 +171,66 @@ export function simulate(level: LevelData, policy: Policy, seed: number): boolea
       if (!core.tapCar(id).ok) break;
       movable = movable.filter((m) => m !== id);
     }
+    if (watch) watch(core);
     core.stepLoop();
   }
-  return core.getState() === 'won';
+  return core;
+}
+
+/** 环上的需求和车位能盖住的部分之间的差。见 `demandPressure`。 */
+export interface Pressure {
+  /** 环上平均有几种颜色是车位一个都没在接的。这就是"卡不卡得住"。 */
+  gap: number;
+  /** 环上平均同时有几种颜色。 */
+  ring: number;
+  /** 环上有人、而车位一种颜色都接不上的 tick 占比 —— 真的动不了的时刻。 */
+  starved: number;
+}
+
+/**
+ * 一局里"环上要的"和"车位能给的"差多少,平均每 tick 几种颜色。
+ *
+ * 这个指标存在的理由是 `hard` 已经饱和了。`hard` 只问一行策略输不输,而四个车位下十关
+ * 全部满分、`carelessLoss` 也全是 100%,于是"勉强及格"和"死死卡住"在判据上一模一样 ——
+ * `interleave` 这个真实有效的旋钮就是这么被判成"无效"并钉死在 1 的(见 `BAND_CURVE`)。
+ *
+ * 量的是人类伙伴自己指出来的那件事:能开出去的车颜色可选得多、同时环上颜色也多,于是
+ * 车位几乎总能盖住环上的全部需求,永远不缺"有人要的颜色"。缺口越大,越容易卡住。
+ *
+ * 它对 `BAND_CURVE` 的 offset 有明显响应,而 `hard` 对同一批改动毫无反应 —— 在已提交
+ * 的两关上各重建一次队列量到(H = 一行策略输,F = 细心策略赢):
+ *
+ *     第 2 关   off 0 缺0.40 HF   off 24 缺0.96 HF   off 32 缺1.15 -F
+ *     第 6 关   off 16 缺0.93 HF  off 24 缺3.57 H-   off 32 缺1.53 HF
+ *
+ * 两关都能在**保持 hard 且可通关**的前提下把缺口翻一倍以上。旧的扫描只看 H/F,所以
+ * 在"刚好 H"的那一档就收手了,把这段余量整个留在了桌上。
+ *
+ * 用 `careful` 跑一局,因为要量的是"一个会玩的人也会被卡住"。`keepDistinct` 太蠢,它
+ * 量的是关卡有多容易被套路;`careless` 太随机,量的是运气。
+ */
+export function demandPressure(level: LevelData): Pressure {
+  let ticks = 0;
+  let gap = 0;
+  let ring = 0;
+  let starved = 0;
+  play(level, careful, 1, (core) => {
+    // 只数**环上此刻真有人**的颜色,不用 `reachableColors` —— 后者还算上"空格能让队列
+    // 里挤进来的那几行",那是给死局判定用的预测,对本指标会把还没到场的需求也算成
+    // 压力,把每一 tick 的瞬时紧张度抹平。人类伙伴的原话是"同一时间圆环上的乘客颜色
+    // 种类",指的就是环上。
+    const want = new Set<string>();
+    for (const grp of core.loop.ring) if (grp && grp.count > 0) want.add(grp.color);
+    const have = covered(core);
+    let missing = 0;
+    for (const c of want) if (!have.has(c)) missing++;
+    ticks++;
+    ring += want.size;
+    gap += missing;
+    if (want.size > 0 && missing === want.size) starved++;
+  });
+  if (ticks === 0) return { gap: 0, ring: 0, starved: 0 };
+  return { gap: gap / ticks, ring: ring / ticks, starved: starved / ticks };
 }
 
 /** How many careless seeds to run. Odd, so "most of them" is unambiguous. */

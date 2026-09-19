@@ -1,8 +1,17 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
-  careful, careless, keepDistinct, isHardButFair, simulate,
+  careful, careless, keepDistinct, isHardButFair, simulate, demandPressure,
 } from '../../game/assets/scripts/core/play-sim';
+import { bandedQueue } from '../../game/assets/scripts/core/level-gen';
 import { GameCore } from '../../game/assets/scripts/core/game-core';
 import { LevelData } from '../../game/assets/scripts/core/types';
+
+/** 发出去的那一关,逐字节 —— 设备读的就是这些字节。 */
+function shipped(id: number): LevelData {
+  const p = path.join(__dirname, '../../game/assets/resources/levels', `level-${id}.json`);
+  return JSON.parse(fs.readFileSync(p, 'utf8')) as LevelData;
+}
 
 // One small red car (cap 16) and 16 red passengers: nothing to get wrong.
 function soloLevel(): LevelData {
@@ -117,4 +126,42 @@ test('isHardButFair rejects a level nobody wins', () => {
   const v = isHardButFair(hopelessLevel());
   expect(v.hard).toBe(true);
   expect(v.fair).toBe(false);
+});
+
+describe('demandPressure', () => {
+  // 已提交的第 6 关:环上平均有颜色,车位盖不住其中一部分。
+  const level = (): LevelData => JSON.parse(JSON.stringify(shipped(6)));
+
+  test('环上有需求,而且车位盖不住其中一部分', () => {
+    const r = demandPressure(level());
+    expect(r.ring).toBeGreaterThan(1);
+    expect(r.gap).toBeGreaterThan(0);
+    // 盖不住的颜色不可能比环上有的颜色还多。
+    expect(r.gap).toBeLessThanOrEqual(r.ring);
+  });
+
+  // 这条是防空操作的那一条:把车位开到七个(多过关卡的六色),车位就能盖住环上的一切,
+  // 缺口必须坍到接近零。如果 `demandPressure` 压根没看 `covered`,gap 会等于 ring,
+  // 这里就会失败。反过来,如果它永远返回 0,上面那条 `gap > 0` 会失败 —— 两条一起
+  // 才咬得住,单独哪一条都能被一个常数糊弄过去。
+  test('车位多到盖得住一切时,缺口坍掉', () => {
+    const tight = demandPressure(level());
+    const wide = level();
+    wide.parking.unlocked = wide.parking.slots;
+    const loose = demandPressure(wide);
+    expect(loose.gap).toBeLessThan(tight.gap);
+    // 实测 1.37 -> 0.39,掉了七成。留足余量断言"至少掉四成",而不是断言一个绝对值:
+    // 七个车位也盖不住一切,因为 `covered` 只数还没填满的车位,总有几个正被占着。
+    expect(loose.gap).toBeLessThan(tight.gap * 0.6);
+  });
+
+  test('offset 抬得动缺口,而 hard 对同一批改动没有反应', () => {
+    const at = (off: number) => {
+      const lvl = level();
+      lvl.loop.queue = bandedQueue(lvl.lot.cars, lvl.lot.tunnels ?? [], off, 1);
+      return demandPressure(lvl).gap;
+    };
+    // 已提交的第 6 关:offset 16 -> 0.93,offset 32 -> 1.53,两档都仍然 hard 且可通关。
+    expect(at(32)).toBeGreaterThan(at(16) * 1.3);
+  });
 });

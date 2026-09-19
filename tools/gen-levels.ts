@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
-import { isHardButFair } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
@@ -139,18 +139,22 @@ for (const id of ids) {
     // Cars driving ACROSS the lot rather than off the nearest edge -- the other thing the
     // candidate ranking chooses on, and the one that silently regressed when it did not.
     const inward = `${Math.round(inwardCars(level) / level.lot.cars.length * 100)}%`;
+    // 环上平均有几种颜色是车位一个都没在接的 —— 唯一能分辨"勉强 hard"和"死死卡住"的
+    // 一列。`play` 那一列在四个车位下十关全是 hard,它分不出难度,只分得出有没有崩。
+    // 见 `demandPressure`。
+    const gap = authored ? '-' : demandPressure(level).gap.toFixed(2);
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
-        + ` ${holes.padStart(7)} ${inward.padStart(6)}`
+        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)}`
         + `  ${(authored ? 'AUTHORED' : onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 
