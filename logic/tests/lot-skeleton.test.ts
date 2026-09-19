@@ -96,6 +96,12 @@ test('所有座位同一个朝向,而且那个朝向来自骨架', () => {
   const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(2));
   expect(new Set(bare.map((s) => s.angle)).size).toBe(1);
   expect(bare[0].angle).toBe(90);             // 无车道时朝上
+
+  // ring 的第一条车道是 0 度,是唯一能区分"读了 lanes"和"写死 90"的形状——没有它,
+  // latticeAngle 直接 return 90 也能让 11 个测试全过。
+  const ring = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(2));
+  expect(new Set(ring.map((s) => s.angle)).size).toBe(1);
+  expect(ring[0].angle).toBe(0);
 });
 
 test('没有座位落在车道里', () => {
