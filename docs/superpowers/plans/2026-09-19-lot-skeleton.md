@@ -618,7 +618,7 @@ const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, lanes);
  * 和车道面积一起决定能坐下多少车,保留两个互相矛盾的旋钮只会让它们打架。它仍然是
  * 一个上限,以便乘客预算有硬边界。
  *
- * 0.25 是初值,由 Task 4 的标定扫描定下最终值。
+ * 0.25 是初值,由 Task 5 的标定扫描定下最终值(Task 4 扫的是 `CROSS`)。
  */
 export const GAP = 0.25;
 ```
@@ -797,6 +797,254 @@ cd logic && npm run gen -- --only 2
 git add game/assets/scripts/core/lot-skeleton.ts game/assets/scripts/core/level-gen.ts \
         logic/tests/lot-skeleton.test.ts logic/tests/level-gen.test.ts
 git commit -m "feat(core): the packer seeds on a lattice and packs around lanes"
+```
+
+---
+
+### Task 4b: 行内步长按车长 —— `latticeSeats` 从"撒座位"改成"铺车"
+
+**Files:**
+- Modify: `game/assets/scripts/core/lot-skeleton.ts`(`latticeSeats` 换契约)
+- Modify: `logic/tests/lot-skeleton.test.ts`
+- Modify: `game/assets/scripts/core/level-gen.ts`(`pack` 的播种段)
+- Modify: `logic/tests/level-gen.test.ts`(Task 4 留下的两条 `test.skip`)
+
+**Interfaces:**
+- Consumes: `skeletonLanes`、`skeletonShape`、`shuffled`、`GAP`、`CROSS`
+- Produces: `latticeSeats(lanes, blocked, w, h, gap, rng, cross, bodies)`,`Body`、`Seat` 两个导出类型。`rowPitch` 参数消失(改为从 `bodies` 推导)
+
+#### 为什么要改:这是 spec §2.2 与实现之间的分歧,不是调参
+
+spec §2.2 写的是:
+
+> - **行**垂直于该区块的主车道方向,行距 = `CAP_BOX.big.wid * CAR_SCALE + GAP`
+> - **行内**沿车道方向排布,车距 = `该车 len * CAR_SCALE + GAP`
+
+行距照做了(按最宽的车),**行内没有**:实现写死了 `along = 1.0 + gap` = 1.25。实测三种车的 `packBox` 长度:
+
+| | 车身长 | `packBox` 长 | 与步长 1.250 |
+|---|---|---|---|
+| 小 | 0.887 | 0.995 | 放得下 |
+| 中 | 1.482 | 1.590 | **重叠 0.340** |
+| 大 | 1.650 | 1.758 | **重叠 0.508** |
+
+也就是说**同一行里两辆大车一出生就压在一起**,压掉近三成车身,然后全部丢给关系放松去救。这解释了三件本来各自孤立的事:
+
+1. 第 2 关(无车道)的收敛率只有 **4/20** —— 点阵本该让播种几乎不重叠,结果比随机撒点好不了多少
+2. 加上车道后收敛率变 **0/60**,`generateLevel(3)` 生成出零辆车 —— 车道吃掉腾挪空间,放松再也化解不了这些内生重叠
+3. 座位供给对不上:`GAP = 0.25` 时 star 只有 69 个原始座位,而它要 81 辆车
+
+**一个均匀点阵同时服务三种车长是做不到的**:按小车定步长必然压住大车,按大车定步长要浪费三分之一的地。所以按 spec 的原意改——行内**逐辆按这辆车自己的长度往前走**。
+
+#### 新契约
+
+```ts
+/** 车身尺寸,已经乘过 `CAR_SCALE`。`len` 沿车身,`wid` 垂直于它,与 OBB 一致。 */
+export interface Body { len: number; wid: number }
+
+export interface Seat { x: number; y: number; angle: number }
+```
+
+```ts
+/**
+ * 把 `bodies` 按顺序铺成沿骨架方向的松散行列。
+ *
+ * 返回的第 i 个座位就是 `bodies[i]` 的位置,所以**返回数组与入参逐位对应**;铺不下的
+ * 车不返回,数组因此可能比 `bodies` 短,由调用方决定怎么安置它们。
+ *
+ * 这与"先撒一片座位、再把车填进去"的差别是本模块存在的理由:座位要多长,取决于坐
+ * 它的那辆车有多长,而一个均匀点阵没法同时服务 0.887 和 1.650 两种车身——按小的定
+ * 就压住大的(实测同行两辆大车重叠 0.508),按大的定就浪费三分之一的地。
+ *
+ * `lanes` 只用来定方向(见 `latticeAngle`),`blocked` 是不能压的地方(车道和隧道,
+ * 由调用方膨胀好再传进来)——两者分开,是因为无车道而有隧道的关卡不能拿隧道定方向。
+ */
+export function latticeSeats(
+    lanes: OBB[], blocked: OBB[], w: number, h: number, gap: number,
+    rng: () => number, cross: number, bodies: Body[],
+): Seat[]
+```
+
+算法,逐条都要照做:
+
+1. `angle = latticeAngle(lanes)`,`pitch = max(bodies.map(b => b.wid)) + gap`,`reach = hypot(w, h) / 2`
+2. 在 `(u, v)` 旋转坐标系里,`v` 从 `-reach` 每次走 `pitch`,直到 `> reach` 或车用完
+3. 每行开头照旧掷一次整行错位:`rng() < 0.5 ? 0 : pitch / 2`(**改成按 `pitch` 错位**,因为行内步长不再是常数,拿它的一半错位没有意义)
+4. 行内:`u` 从 `-reach + stagger` 起。取还没安置的那辆车 `bodies[k]`:
+   - 掷 `turn = rng() < cross`(**无条件掷、掷在所有剔除之前**,理由见 `cross` 的注释:位置必须与 `cross` 无关)
+   - 沿行方向占的长度 `extent = turn ? b.wid : b.len`,座位中心在 `u + extent / 2`
+   - 抖动 `gap * JITTER_F` 照旧,加在中心上
+   - 旋到场地坐标得到 `(sx, sy)`,车的 OBB 是 `{ x: sx, y: sy, angle: turn ? (angle + 90) % 360 : angle, len: b.len, wid: b.wid }`
+   - **用车身而不是中心点做两项剔除**:`insideRect(box, w, h)` 必须为真;`blocked.some((r) => overlapMTV(box, r))` 必须为假
+   - 通过就 `push` 这个座位、`k++`;不通过**不要 `k++`**——同一辆车去试这一行的下一个位置
+   - 无论通过与否,`u += extent + gap`
+5. 车用完就返回
+
+第 4 步那个"不通过不推进 `k`"是要害:它让一辆车绕过车道继续往前找,而不是把这辆车丢掉。
+
+#### `pack()` 怎么接
+
+```ts
+    // 尺寸要打散:`caps` 按车长排过序,而行是一行一行铺的,顺着铺会把大车全堆在场
+    // 地的一头,分层到可以一层一层剥掉。打散的是**铺车的顺序**,不是座位——新契约
+    // 下座位和车是绑定的,再去洗座位就把这个对应关系洗掉了。
+    const order = shuffled(caps, rng);
+    const bodies = order.map((c) => ({
+        len: CAP_BOX[c].len * CAR_SCALE, wid: CAP_BOX[c].wid * CAR_SCALE,
+    }));
+    const seats = latticeSeats(lanes, reserved, LOT.w, LOT.h, GAP, rng, CROSS, bodies);
+    const pieces: Piece[] = order.map((cap, i) => {
+        const seat = seats[i];
+        if (seat) return { x: seat.x, y: seat.y, angle: seat.angle, cap };
+        // 这一辆没铺下:退回随机播种,和从前一样。
+        ...原样保留 SEED_TRIES 那段,连同 Task 4 修复轮恢复的注释...
+    });
+```
+
+`pieces` 因此按 `order` 而不是按车长排列,这改变了关系放松扫描车对的顺序。**在 `pack` 的
+文档注释里写明这件事**,并说清为什么可以接受:新播种几乎不自带重叠,放松不再是"把一
+大堆互相压着的车推开",扫描顺序的偏置也就不再是那段注释所描述的那件事。
+
+Task 4 加的那层 `taken` 首次适配**整个删掉**——座位与车一一对应之后,它没有意义了。
+`reserved` 的检查也不必在这里重做一遍:`latticeSeats` 已经拿车身对着 `blocked` 剔过。
+
+- [ ] **Step 1: 改写 `lot-skeleton.test.ts` 里所有 `latticeSeats` 调用,并加新断言**
+
+已有的调用全部要改签名。把"座位数随 gap 变化"这类还成立的断言留着,改掉参数即可;
+断言"所有座位同一朝向"的那几条在 `cross = 0` 下仍然成立。
+
+新增,每条都要经得起"功能变成空操作还会不会过"这一问:
+
+```ts
+const SMALL: Body = { len: 0.887, wid: 0.433 };
+const BIG: Body = { len: 1.650, wid: 0.524 };
+
+// 这条是本任务存在的理由:旧实现步长写死 1.25,两辆大车中心只隔 1.25,必然重叠。
+test('同一行里相邻两辆车不重叠,大车也不重叠', () => {
+  const bodies = Array.from({ length: 60 }, () => BIG);
+  const seats = latticeSeats([], [], W, H, 0.25, seedRng(3), 0, bodies);
+  const boxes = seats.map((s, i) => ({ ...s, len: bodies[i].len, wid: bodies[i].wid }));
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      expect(overlapMTV(boxes[i], boxes[j])).toBeFalsy();
+    }
+  }
+});
+
+// 步长真的跟着车走:同样的场地,全小车能铺下的数量必须明显多于全大车。
+test('步长按车长,所以小车铺得比大车多', () => {
+  const small = latticeSeats([], [], W, H, 0.25, seedRng(3), 0,
+    Array.from({ length: 200 }, () => SMALL)).length;
+  const big = latticeSeats([], [], W, H, 0.25, seedRng(3), 0,
+    Array.from({ length: 200 }, () => BIG)).length;
+  expect(small).toBeGreaterThan(big * 1.4);
+});
+
+// 车身整个在场地内,不只是中心点在。
+test('车身不许探出场地', () => {
+  const bodies = Array.from({ length: 200 }, (_, i) => (i % 2 ? SMALL : BIG));
+  const seats = latticeSeats([], [], W, H, 0.25, seedRng(5), 0.3, bodies);
+  seats.forEach((s, i) => {
+    expect(insideRect({ ...s, len: bodies[i].len, wid: bodies[i].wid }, W, H)).toBe(true);
+  });
+});
+
+// 车身不许压车道 —— 中心点避开是不够的,这正是 Task 4 那个 Critical 的形状。
+test('车身不许压进不能压的地方', () => {
+  const lanes = skeletonLanes('ring', W, H);
+  const bodies = Array.from({ length: 200 }, () => BIG);
+  const seats = latticeSeats(lanes, lanes, W, H, 0.25, seedRng(7), 0, bodies);
+  expect(seats.length).toBeGreaterThan(20);      // 不能靠一个都不铺来通过
+  seats.forEach((s, i) => {
+    for (const l of lanes) {
+      expect(overlapMTV({ ...s, len: bodies[i].len, wid: bodies[i].wid }, l)).toBeFalsy();
+    }
+  });
+});
+
+// 铺不下的车不返回,而且返回的是前缀对应关系:第 i 个座位属于第 i 辆车。
+test('返回数组与入参逐位对应,铺不下的不返回', () => {
+  const bodies = Array.from({ length: 400 }, () => BIG);   // 远多于场地能放的
+  const seats = latticeSeats([], [], W, H, 0.25, seedRng(9), 0, bodies);
+  expect(seats.length).toBeLessThan(bodies.length);
+  expect(seats.length).toBeGreaterThan(20);
+});
+```
+
+`cross` 的两条老断言(全横 / 位置与 cross 无关)要保留并改签名。**位置那一条在新契约
+下会变**:横过来的车沿行方向占 `wid` 而不是 `len`,后面的车位置因此不同。所以那条改成
+只断言**朝向**的比例,并在注释里写明为什么位置不再相同——这是新设计的必然结果,不是
+退化。单变量标定的前提因此换成"同一组 bodies、同一个种子、只改 cross",Task 5 照此执行。
+
+- [ ] **Step 2: 跑测试,确认新的几条失败**
+
+Run: `cd logic && npx jest tests/lot-skeleton.test.ts`
+Expected: FAIL —— 签名不符 / 大车重叠
+
+- [ ] **Step 3: 实现**
+
+按上面的算法改写 `latticeSeats`,删掉 `rowPitch` 参数,导出 `Body` / `Seat`。
+`latticeAngle` 与它的注释**不动**。`JITTER_F` 不动。
+
+- [ ] **Step 4: 跑测试**
+
+Run: `cd logic && npx jest tests/lot-skeleton.test.ts`
+Expected: 全过
+
+- [ ] **Step 5: 接进 `pack()`,跑全量测试**
+
+Run: `cd logic && npx jest tests/level-gen.test.ts`
+Expected: 通过(约 190 秒)。Task 4 留下的两条 `test.skip` 里,`出货用的车数下,每种
+骨架也打得出包` 那条**现在要打开**——它正是本任务的验收。打开后必须真的过;若过不了,
+那就是 Step 7 的止损点。
+
+Run: `cd logic && npx tsc -p tsconfig.json --noEmit && npx tsc -p tsconfig.gen.json --noEmit`
+
+- [ ] **Step 6: 四关真实生成**
+
+各约 2 / 2 / 4.5 / 2 分钟,**放后台**,逐个跑不要并发:
+
+```bash
+cd logic && npm run gen -- --only 2      # 无骨架,对照
+cd logic && npm run gen -- --only 3      # spine
+cd logic && npm run gen -- --only 6      # ring + 隧道
+cd logic && npm run gen -- --only 9      # star,座位最紧的一档
+```
+
+记下四行完整表格。判据:**四关的 `cars` 都要接近它的 `want`,不许是 0 或个位数。**
+
+- [ ] **Step 7: 止损点**
+
+若第 3、6、9 三关里**任何一关**仍然生成出零辆车或个位数车,**停下**,把四行表格、
+`latticeSeats` 在四种骨架下的返回长度、以及各关的 `want` 一起带回。不要自己去改 `GAP`,
+不要去改 `CROSS`,不要去动 spec §2.3 的溢出策略——那三条都是别的任务的,且已经有人
+按不同判据选过值。
+
+- [ ] **Step 8: 重新确认 `CROSS`(最多两跑)**
+
+布局变了,Task 4 在旧点阵上定的 `CROSS = 0.35` 不一定还成立。看 Step 6 里第 2 关那一行:
+
+- `play` 是 `hard` → 保持 0.35,记下新的一行数
+- 是 `FREE` → 把 `CROSS` 提到 0.5 再跑一次第 2 关。仍是 `FREE` 就停下回报,**不要试第三档**
+
+把结论和新的表格写进 `CROSS` 的注释,并注明旧表是在旧点阵上测的、已作废。
+
+- [ ] **Step 9: 还原试跑改写的关卡文件,留下第 2 关**
+
+```bash
+git checkout -- game/assets/resources/levels/level-3.json \
+                game/assets/resources/levels/level-6.json \
+                game/assets/resources/levels/level-9.json
+```
+
+第 2 关留在工作区不提交,人类伙伴要看观感。
+
+- [ ] **Step 10: 提交**
+
+```bash
+git add game/assets/scripts/core/lot-skeleton.ts game/assets/scripts/core/level-gen.ts \
+        logic/tests/lot-skeleton.test.ts logic/tests/level-gen.test.ts
+git commit -F <message file>
 ```
 
 ---
