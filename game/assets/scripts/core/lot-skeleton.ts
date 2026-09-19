@@ -100,12 +100,16 @@ const JITTER_F = 0.5;
  * 数缝很窄,偶尔留下一块车形空地,而排名只能在候选里挑最不烂的一个,造不出一个从
  * 未出现过的整齐打包。点阵的空隙是设计出来的尺寸。
  *
- * 整片点阵只有一个方向,取自骨架的第一条车道,没有车道时朝上——见 `latticeAngle`,
+ * 点阵的基准方向只有一个,取自骨架的第一条车道,没有车道时朝上——见 `latticeAngle`,
  * 那里写了为什么不能按座位各取最近的车道。自由角度没有作废,只是从随机取八向之一
  * 变成跟着骨架取向。
+ *
+ * `cross` 是在这个基准方向之上横过来的座位比例:0 全场同向,1 全场转 90 度,中间
+ * 是比例。它调的是难度不是观感,理由写在 `level-gen.ts` 的 `CROSS` 上。
  */
 export function latticeSeats(
     lanes: OBB[], w: number, h: number, gap: number, rowPitch: number, rng: () => number,
+    cross: number,
 ): { x: number; y: number; angle: number }[] {
     const seats: { x: number; y: number; angle: number }[] = [];
     const angle = latticeAngle(lanes);
@@ -134,12 +138,16 @@ export function latticeSeats(
         for (let u = -reach + stagger; u <= reach; u += along) {
             const ju = u + (rng() - 0.5) * jitter;
             const jv = v + (rng() - 0.5) * jitter;
+            // 这一抽无条件抽,且抽在两条剔除之前:座位位置因此与 `cross` 完全无关,
+            // 两个 cross 值跑出来的点阵逐点重合,标定时才是单变量比较。挪到剔除之后、
+            // 或者用 `cross > 0 &&` 短路掉,都会让 rng 流随 cross 变化而错位。
+            const turn = rng() < cross;
             const sx = ju * cos - jv * sin;
             const sy = ju * sin + jv * cos;
             if (Math.abs(sx) > w / 2 || Math.abs(sy) > h / 2) continue;
             const dot: OBB = { x: sx, y: sy, angle: 0, len: 1e-6, wid: 1e-6 };
             if (lanes.some((l) => overlapMTV(dot, l))) continue;
-            seats.push({ x: sx, y: sy, angle });
+            seats.push({ x: sx, y: sy, angle: turn ? (angle + 90) % 360 : angle });
         }
     }
     return seats;
@@ -149,13 +157,33 @@ export function latticeSeats(
  * 整片点阵的方向:骨架第一条车道的角度,没有车道就朝上。
  *
  * 一个角度而不是每个座位各自取最近的车道,而这一条是本模块最容易写错的地方。行距
- * 垂直于车身、行内步长平行于车身——两者都是按"车朝哪边"算出来的。让一部分座位横
- * 过来,它们的车身长边(大车 1.650)就会落在按车宽(0.524)算出来的行距上,重叠一大
- * 片,然后全部丢给关系放松去救,点阵播种的意义当场归零。
+ * 垂直于车身、行内步长平行于车身——两者都是按"车朝哪边"算出来的。座位各取各的角度,
+ * 整片点阵就没有一套自洽的度量了:一个座位的车身长边(大车 1.650)会落在邻座按车宽
+ * (0.524)算出来的行距上,成片重叠,全部丢给关系放松去救,点阵播种的意义当场归零。
  *
- * 代价是全场车身平行。参考图 2 里大部分车本来就是同向的,所以这大概率不是问题;
- * 真觉得太规整时,要改的是给每个区块各建一套点阵,而不是在这里放宽。
+ * 方向仍然只有一个,但"全场车身平行"这个代价是实测证伪的:第 2 关量到 `rounds` 从
+ * 17 塌到 10,一行策略就能赢——它不是观感问题,是难度问题。所以 `latticeSeats` 的
+ * `cross` 在这一个方向之上再混入垂直的一档。这跟上一段不是一回事:度量还是这一个
+ * 方向算出来的,只有少数座位转 90 度,它们挤开邻座是有数的局部代价,关系放松吃得下,
+ * 而那正是难度要的不规则。让每个座位各取最近的车道那条路仍然是错的,理由不变。
  */
 function latticeAngle(lanes: OBB[]): number {
     return lanes.length === 0 ? 90 : lanes[0].angle;
+}
+
+/**
+ * 同一批元素,顺序打散。用传入的 `rng`,所以同一个种子出同一个顺序。
+ *
+ * 存在的理由在 `pack()` 的调用点:那里的车按车长从大到小排过序,而点阵是一行一行
+ * 生成的,顺次取用会把大车全堆在场地的一头——一个随机播种从来没有的尺寸分层。
+ */
+export function shuffled<T>(items: T[], rng: () => number): T[] {
+    const out = items.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        const t = out[i];
+        out[i] = out[j];
+        out[j] = t;
+    }
+    return out;
 }

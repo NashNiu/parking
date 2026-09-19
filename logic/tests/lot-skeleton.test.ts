@@ -1,4 +1,4 @@
-import { skeletonShape, skeletonLanes, LANE_W, SkeletonShape, latticeSeats } from '../../game/assets/scripts/core/lot-skeleton';
+import { skeletonShape, skeletonLanes, LANE_W, SkeletonShape, latticeSeats, shuffled } from '../../game/assets/scripts/core/lot-skeleton';
 import { OBB, overlapMTV } from '../../game/assets/scripts/core/geometry';
 
 const W = 8, H = 12;
@@ -72,8 +72,8 @@ test('米字带斜向车道,回字不带', () => {
 });
 
 test('座位落在场地内,并且是确定的', () => {
-  const a = latticeSeats([], W, H, 0.25, 0.8, seedRng(7));
-  const b = latticeSeats([], W, H, 0.25, 0.8, seedRng(7));
+  const a = latticeSeats([], W, H, 0.25, 0.8, seedRng(7), 0);
+  const b = latticeSeats([], W, H, 0.25, 0.8, seedRng(7), 0);
   expect(a).toEqual(b);
   expect(a.length).toBeGreaterThan(20);
   for (const s of a) {
@@ -83,30 +83,30 @@ test('座位落在场地内,并且是确定的', () => {
 });
 
 test('所有座位同一个朝向,而且那个朝向来自骨架', () => {
-  // 点阵的行距垂直于车身、行内步长平行于车身,所以整片点阵只能有一个方向:
-  // 让某些座位横过来会让车身长边落在按车宽算出来的行距上,大面积重叠。
-  const spine = latticeSeats(skeletonLanes('spine', W, H), W, H, 0.25, 0.8, seedRng(2));
+  // 点阵只有一个基准方向,取自骨架;横过来的那一档是 `cross` 在它之上混的。
+  // 这几条断言把 `cross` 钉在 0,量的就是基准方向本身。
+  const spine = latticeSeats(skeletonLanes('spine', W, H), W, H, 0.25, 0.8, seedRng(2), 0);
   expect(new Set(spine.map((s) => s.angle)).size).toBe(1);
   expect(spine[0].angle).toBe(90);            // spine 的车道是 90 度
 
-  const cross = latticeSeats(skeletonLanes('cross', W, H), W, H, 0.25, 0.8, seedRng(2));
+  const cross = latticeSeats(skeletonLanes('cross', W, H), W, H, 0.25, 0.8, seedRng(2), 0);
   expect(new Set(cross.map((s) => s.angle)).size).toBe(1);
   expect(cross[0].angle).toBe(90);            // cross 的第一条车道是 90 度
 
-  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(2));
+  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(2), 0);
   expect(new Set(bare.map((s) => s.angle)).size).toBe(1);
   expect(bare[0].angle).toBe(90);             // 无车道时朝上
 
   // ring 的第一条车道是 0 度,是唯一能区分"读了 lanes"和"写死 90"的形状——没有它,
   // latticeAngle 直接 return 90 也能让 11 个测试全过。
-  const ring = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(2));
+  const ring = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(2), 0);
   expect(new Set(ring.map((s) => s.angle)).size).toBe(1);
   expect(ring[0].angle).toBe(0);
 });
 
 test('没有座位落在车道里', () => {
   const lanes = skeletonLanes('cross', W, H);
-  const seats = latticeSeats(lanes, W, H, 0.25, 0.8, seedRng(11));
+  const seats = latticeSeats(lanes, W, H, 0.25, 0.8, seedRng(11), 0);
   // 座位是点,用一个极小的盒子代表它
   for (const s of seats) {
     const dot: OBB = { x: s.x, y: s.y, angle: 0, len: 1e-6, wid: 1e-6 };
@@ -115,13 +115,46 @@ test('没有座位落在车道里', () => {
 });
 
 test('间距越大,座位越少——这是密度旋钮', () => {
-  const tight = latticeSeats([], W, H, 0.15, 0.8, seedRng(3)).length;
-  const loose = latticeSeats([], W, H, 0.45, 0.8, seedRng(3)).length;
+  const tight = latticeSeats([], W, H, 0.15, 0.8, seedRng(3), 0).length;
+  const loose = latticeSeats([], W, H, 0.45, 0.8, seedRng(3), 0).length;
   expect(loose).toBeLessThan(tight);
 });
 
 test('车道占掉的地方不再有座位', () => {
-  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(5)).length;
-  const withLanes = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(5)).length;
+  const bare = latticeSeats([], W, H, 0.25, 0.8, seedRng(5), 0).length;
+  const withLanes = latticeSeats(skeletonLanes('ring', W, H), W, H, 0.25, 0.8, seedRng(5), 0).length;
   expect(withLanes).toBeLessThan(bare);
+});
+
+test('cross = 1 时每个座位都横过来,cross = 0 时一个都不横', () => {
+  const up = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0);
+  const across = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 1);
+  expect(new Set(up.map((s) => s.angle))).toEqual(new Set([90]));
+  expect(new Set(across.map((s) => s.angle))).toEqual(new Set([180]));
+});
+
+// 位置与朝向解耦,是 Task 5 能把 CROSS 当单变量标定的前提:两档跑出来的点阵逐点
+// 重合,分数的差别才只能来自朝向。这条也顺带咬住"cross 抽签必须无条件抽、抽在剔除
+// 之前"——少抽一次,rng 流就错位,位置全都对不上。
+test('横过来的只是朝向,位置一个都没动', () => {
+  const up = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0);
+  const across = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 1);
+  expect(across.map((s) => ({ x: s.x, y: s.y }))).toEqual(up.map((s) => ({ x: s.x, y: s.y })));
+});
+
+test('中间档位是个比例,不是开关', () => {
+  const some = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0.3);
+  const turned = some.filter((s) => s.angle === 180).length / some.length;
+  expect(turned).toBeGreaterThan(0.15);
+  expect(turned).toBeLessThan(0.45);
+});
+
+// 三条断言各挡一种坏实现:不是排列(漏元素/改元素)、原样返回(洗了个寂寞)、
+// 不确定(同种子两次不一样,关卡生成就不可复现了)。
+test('洗牌是同一批元素换个顺序,而且确实换了', () => {
+  const items = Array.from({ length: 200 }, (_, i) => i);
+  const a = shuffled(items, seedRng(4));
+  expect([...a].sort((x, y) => x - y)).toEqual(items);
+  expect(a).not.toEqual(items);
+  expect(shuffled(items, seedRng(4))).toEqual(a);
 });

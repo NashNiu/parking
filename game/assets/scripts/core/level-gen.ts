@@ -10,6 +10,7 @@ import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
 import { LotSystem } from './lot-system';
+import { latticeSeats, shuffled, skeletonLanes, skeletonShape } from './lot-skeleton';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -299,6 +300,47 @@ export interface GenParams {
  *    car on the board is a carful of passengers that has to come round the ring.
  */
 export const CARS_PER_LEVEL = 89;
+
+/**
+ * 点阵的缝宽,本设计唯一的密度旋钮。
+ *
+ * "间距再大一些"调的就是这个数。`CARS_PER_LEVEL` 因此从目标变成了结果——点阵间距
+ * 和车道面积一起决定能坐下多少车,保留两个互相矛盾的旋钮只会让它们打架。它仍然是
+ * 一个上限,以便乘客预算有硬边界。
+ *
+ * 0.25 是初值,由 Task 4 的标定扫描定下最终值。
+ */
+export const GAP = 0.25;
+
+/**
+ * 点阵里横过来的车所占的比例,本设计的第二个旋钮。
+ *
+ * 难度来自车互相挡道,而互相挡道需要朝向不一致。全场同向的停车场整齐,但它没有谜题
+ * ——第一次真实生成量到:第 2 关没有车道,唯一的变量就是点阵加统一朝向,`blocked`
+ * 只从 72 掉到 68,`rounds` 却从 17 塌到 10(89 辆车 10 个回合约等于每轮走九辆,一整
+ * 排一起离场),`play` 从 hard 变成 FREE——一行策略就能赢。
+ *
+ * 横过来的车会把邻座挤开,局部破坏点阵的均匀间距,那正是难度要的不规则。0 到 1 之间
+ * 连续地从"整齐"走到"混乱"。
+ *
+ * 0.35 是第 2 关上扫出来的档位。第 2 关的骨架是 `none`,所以这几跑与车道无关,量的
+ * 纯粹是播种;要动这个数的人需要先看见其他档是什么样子:
+ *
+ *            cars colors blocked/want rounds/min score  pax   holes  inward  packing       play
+ *   旧打包器   89     5      72/71       17/2      289  1896  2/0/0    39%   on target     hard (careless 100%)
+ *   0,不洗牌  89     5      69/71        8/2      256  1968  2/0/5    35%   NEAREST MISS  FREE
+ *   0,洗牌    89     5      69/71        8/2      256  1832  0/1/2    27%   NEAREST MISS  FREE
+ *   0.2,洗牌  89     5      72/71       10/2      268  1888  0/0/13   28%   on target     FREE
+ *   0.35,洗牌 89     5      70/71       11/2      267  1928  1/0/5    22%   on target     hard (careless 100%)
+ *
+ * 三件事各归各:洗牌治的是洞(2/0/5 到 0/1/2),它对难度一点用都没有,两跑的
+ * `blocked`、`rounds`、`score` 一个数都没变;`cross` 才是难度旋钮,0.2 就把 `blocked`
+ * 拉回目标了,但 `play` 还是 FREE;到 0.35 才真的赢回 `hard`。所以两个都要留着。
+ *
+ * 取的是**扫到的最小能 hard 的值**,不是连续意义上的最小——0.2 与 0.35 之间没有扫,
+ * 门槛可能更低。Task 5 与 `GAP` 一起标定时先补这一段。
+ */
+export const CROSS = 0.35;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -1025,27 +1067,31 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * pairs for the next sweep to chase, which is why it is also faster, not just
  * capable: measured success at RELAX_ITERS=60 went from 0/30 to 20/30.
  */
-function pack(rng: () => number, want: number, tunnels: TunnelSpec[]): Piece[] {
-    // The same half-clearance-plus-rounding-slack `packBox` gives a car, applied to the
-    // reservation instead: a settled piece and a tunnel then owe each other the full
-    // CLEARANCE, which is exactly what `validateLevel` measures between the two.
+function pack(
+    rng: () => number, want: number, tunnels: TunnelSpec[], lanes: OBB[],
+): Piece[] {
     const pad = CLEARANCE / 2 + ROUND_MARGIN;
-    const reserved = tunnels.map((t) => inflate(tunnelReservation(t), pad));
+    // 车道和隧道在这里是同一种东西:一块车不能进的地方。隧道已经把这条路走通了。
+    const reserved = [
+        ...tunnels.map((t) => inflate(tunnelReservation(t), pad)),
+        ...lanes.map((l) => inflate(l, pad)),
+    ];
     const caps: Cap[] = [];
     for (let i = 0; i < want; i++) caps.push(pickCap(rng));
     caps.sort((a, b) => CAP_BOX[b].len - CAP_BOX[a].len);
 
-    // Seeded OFF the reservations where a draw or two can manage it. A piece dropped on top
-    // of a tunnel starts the relaxation with a shove it cannot negotiate -- the tunnel will
-    // not move, so the piece has to walk out through whatever is packed around it, dragging
-    // the neighbours it displaces along. Measured on level 7: seeding blind, the packer
-    // settled 7 attempts in 200; resampling here, 42. Eight draws is where it stops paying
-    // (thirty gave the identical run), and a piece that never finds a clear seat is kept
-    // anyway rather than dropped -- the relaxation is still allowed to solve it.
+    // 点阵播种,取代原本的均匀随机。见 `latticeSeats` 的注释:随机撒点的空隙尺寸也
+    // 是随机的,所以必然留下车形大洞,而排名造不出一个从未出现过的整齐打包。
     //
-    // With no tunnels the test is false on the first draw, so the rng sequence, and every
-    // level before the fourth, is unchanged.
-    const pieces: Piece[] = caps.map((cap) => {
+    // 座位可能比车少(车道吃掉了地方),也可能比车多。少了就让剩下的车回到随机播种
+    // ——关系放松仍会把它们安顿好,只是那几辆的间距不受点阵保证;多了就按顺序取用。
+    const rowPitch = CAP_BOX.big.wid * CAR_SCALE;
+    // 座位要打散:上面的 caps 按车长从大到小排过序,而点阵一行一行生成,顺次取用会
+    // 把大车全堆在场地的一头,分层到可以一层一层剥掉。
+    const seats = shuffled(latticeSeats(lanes, LOT.w, LOT.h, GAP, rowPitch, rng, CROSS), rng);
+    const pieces: Piece[] = caps.map((cap, i) => {
+        const seat = seats[i];
+        if (seat) return { x: seat.x, y: seat.y, angle: seat.angle, cap };
         let p: Piece;
         for (let k = 0; ; k++) {
             const angle = (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP;
@@ -1057,6 +1103,7 @@ function pack(rng: () => number, want: number, tunnels: TunnelSpec[]): Piece[] {
         return p;
     });
 
+    // 关系放松以下完全不变。
     for (let iter = 0; iter < RELAX_ITERS; iter++) {
         let moved = false;
         for (let i = 0; i < pieces.length; i++) {
@@ -1320,11 +1367,12 @@ function round4(n: number): number {
  * measured against is only 0.04.
  */
 function scatter(
-    rng: () => number, p: GenParams, tp: TunnelParams,
+    rng: () => number, id: number, p: GenParams, tp: TunnelParams,
 ): { cars: CarSpec[]; tunnels: TunnelSpec[] } {
     const tunnels = placeTunnels(rng, p.colors, tp);
     if (tunnels.length < tp.count) return { cars: [], tunnels: [] };
-    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels);
+    const lanes = skeletonLanes(skeletonShape(id), LOT.w, LOT.h);
+    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, lanes);
     const aimed = aimTunnels(tunnels, pieces);
     const order = peel(rng, pieces, aimed.map(tunnelBox));
     const cars = order.map(({ piece, angle }, i) => ({
@@ -1698,7 +1746,7 @@ export function generateLevel(id: number): LevelData {
 
     for (let attempt = 0; attempt < attempts && onTarget.length < PACKINGS; attempt++) {
         // Seeded from the id, so the same id walks the same attempts in the same order.
-        const { cars, tunnels } = scatter(mulberry32(id * 7919 + attempt), p, tp);
+        const { cars, tunnels } = scatter(mulberry32(id * 7919 + attempt), id, p, tp);
         // Short on either count is short: an attempt that seated the tunnels but not the
         // cars, or the cars but not the tunnels, is not this level.
         if (cars.length < gridCars || tunnels.length < tp.count) continue;
@@ -1777,6 +1825,6 @@ export function generateLevel(id: number): LevelData {
     }
     if (ranked.length > 0) return assemble(id, ranked[0].cars, ranked[0].tunnels);
     if (missed.length > 0) return assemble(id, missed[0].cars, missed[0].tunnels);
-    const fallback = scatter(mulberry32(id * 7919), p, tp);
+    const fallback = scatter(mulberry32(id * 7919), id, p, tp);
     return assemble(id, repair(id, fallback.cars, fallback.tunnels), fallback.tunnels);
 }

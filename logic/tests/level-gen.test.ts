@@ -869,3 +869,18 @@ test('不传排除区时行为与从前完全一致', () => {
   const level = shipped(2);
   expect(fillableHoles(level, [])).toEqual(fillableHoles(level));
 });
+
+// 已提交的关卡 JSON 还是旧打包器(均匀随机撒点)的产物,车道是 Task 4 才加进
+// `pack()` 的,所以这条断言在 Task 8 重新生成关卡之前必然失败——这正是 Task 8
+// 的验收条件之一。此处先用 test.skip 记录下来,Task 8 重新生成关卡后再打开。
+test.skip('车道里没有车,而且车与车道之间还留着 CLEARANCE', () => {
+  for (const id of PACKED) {
+    const level = shipped(id);
+    const lanes = skeletonLanes(skeletonShape(id), LOT.w, LOT.h);
+    for (const lane of lanes) {
+      for (const car of level.lot.cars) {
+        expect(overlapMTV(inflate(carBox(car), CLEARANCE / 2), lane)).toBeFalsy();
+      }
+    }
+  }
+});
