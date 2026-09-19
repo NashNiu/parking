@@ -167,7 +167,7 @@ const RELAX_ITERS = 60;
 const HEADING_STEP = 45;
 const HEADINGS = 360 / HEADING_STEP;
 
-/** Draws a piece gets at finding a seat clear of the tunnel reservations. See `pack`. */
+/** Draws a piece gets at finding a seat clear of the reservations. See `pack`'s fallback. */
 const SEED_TRIES = 8;
 
 /**
@@ -308,7 +308,8 @@ export const CARS_PER_LEVEL = 89;
  * 和车道面积一起决定能坐下多少车,保留两个互相矛盾的旋钮只会让它们打架。它仍然是
  * 一个上限,以便乘客预算有硬边界。
  *
- * 0.25 是初值,由 Task 4 的标定扫描定下最终值。
+ * 0.25 是初值,还没有标定过:Task 4 扫的是 `CROSS`,`GAP` 一次都没动过。它的扫描
+ * 属于 Task 5(spec §4.1),和 `CROSS` 一起。
  */
 export const GAP = 0.25;
 
@@ -316,9 +317,13 @@ export const GAP = 0.25;
  * 点阵里横过来的车所占的比例,本设计的第二个旋钮。
  *
  * 难度来自车互相挡道,而互相挡道需要朝向不一致。全场同向的停车场整齐,但它没有谜题
- * ——第一次真实生成量到:第 2 关没有车道,唯一的变量就是点阵加统一朝向,`blocked`
- * 只从 72 掉到 68,`rounds` 却从 17 塌到 10(89 辆车 10 个回合约等于每轮走九辆,一整
- * 排一起离场),`play` 从 hard 变成 FREE——一行策略就能赢。
+ * ——真实生成量到了:第 2 关没有车道,唯一的变量就是点阵加统一朝向,`blocked` 从 72
+ * 掉到 69,`rounds` 从 17 塌到 8(89 辆车 8 个回合等于每轮走十一辆,一整排一起离场),
+ * `play` 从 hard 变成 FREE——一行策略就能赢。
+ *
+ * (这几个数取自下表的"0,不洗牌"行。更早的一次跑动报的是 68 和 10;那次跑在给
+ * `latticeSeats` 加无条件 `cross` 抽签之前,那一抽把 rng 流整体推移了,所以整张表在
+ * 新代码上重新量过一遍。旧数字已经作废,别拿它们和下表混着读。)
  *
  * 横过来的车会把邻座挤开,局部破坏点阵的均匀间距,那正是难度要的不规则。0 到 1 之间
  * 连续地从"整齐"走到"混乱"。
@@ -333,12 +338,22 @@ export const GAP = 0.25;
  *   0.2,洗牌  89     5      72/71       10/2      268  1888  0/0/13   28%   on target     FREE
  *   0.35,洗牌 89     5      70/71       11/2      267  1928  1/0/5    22%   on target     hard (careless 100%)
  *
- * 三件事各归各:洗牌治的是洞(2/0/5 到 0/1/2),它对难度一点用都没有,两跑的
- * `blocked`、`rounds`、`score` 一个数都没变;`cross` 才是难度旋钮,0.2 就把 `blocked`
- * 拉回目标了,但 `play` 还是 FREE;到 0.35 才真的赢回 `hard`。所以两个都要留着。
+ * 三件事各归各。洗牌治的是洞:`holes` 从 2/0/5 到 0/1/2。这一格不是对照实验——
+ * `shuffled` 从同一个 `rng` 里抽掉约 98 个数,两跑在 `peel` 处就分叉了,用的也是 99
+ * 个座位里不同的 89 个,几何本来就不一样(`holes`、`inward`、`pax` 三列都动了)。
+ * `blocked`、`rounds`、`score` 三列跨这条分叉还逐位相同,惹眼,但那是巧合,不是控住了
+ * 变量。留着洗牌是因为洞确实少了,不是因为这一格证明了什么。
+ *
+ * `cross` 那三格才是单变量比较:座位位置与 `cross` 无关,逐点重合。0.2 就把 `blocked`
+ * 拉回目标了,但 `play` 还是 FREE;到 0.35 才真的赢回 `hard`。
  *
  * 取的是**扫到的最小能 hard 的值**,不是连续意义上的最小——0.2 与 0.35 之间没有扫,
- * 门槛可能更低。Task 5 与 `GAP` 一起标定时先补这一段。
+ * 门槛可能更低。
+ *
+ * **这一档没有通过 spec §4.5 的验收条件 #1**(`fillableHoles.big === 0`):它是 1/0/5,
+ * 而被否掉的 0.2 反倒是 0/0/13。spec §4.1 不许拿一个条件换另一个,所以现在这个状态是
+ * 中间态,不是终态:`GAP` 还钉在未标定的 0.25 上,而那个 big 洞该由 `GAP` 去关,不是
+ * 靠把 `CROSS` 降回打不出 hard 的档位。这是 Task 5 的活。
  */
 export const CROSS = 0.35;
 
@@ -821,7 +836,8 @@ export function trackParams(id: number): TrackParams {
 }
 
 /** mulberry32: a small deterministic PRNG, so a level id always yields the same level. */
-function mulberry32(seed: number): () => number {
+// Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
+export function mulberry32(seed: number): () => number {
     let a = seed >>> 0;
     return () => {
         a = (a + 0x6d2b79f5) | 0;
@@ -855,7 +871,8 @@ function pieceBox(p: Piece): OBB {
  * settled pieces owe each other the full CLEARANCE -- the same arithmetic
  * `validateLevel` uses, so the packer cannot settle on something the check rejects.
  */
-function packBox(p: Piece): OBB {
+// Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
+export function packBox(p: Piece): OBB {
     return inflate(pieceBox(p), CLEARANCE / 2 + ROUND_MARGIN);
 }
 
@@ -1042,13 +1059,25 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * overlapping pairs apart along their minimum translation vector is about thirty
  * lines and is the difference between seating 36 and seating 28.
  *
- * Big bodies come first in the list, which is NOT the head start it looks like: every
- * piece is scattered before any relaxation runs, so nobody gets an emptier board than
- * anybody else. What the sort actually decides is which rng draws map to which capacity,
- * and the `i < j` order the separation sweep walks pairs in -- which biases who gets
- * clamped against a wall when a chain of pushes reaches one. The head-start reading is a
- * leftover from the reject-sampling version this replaced, where placement order was
- * load-bearing.
+ * Big bodies come first in the list, and placement order IS load-bearing again. It was
+ * not, briefly: with uniform-random seeding every piece was scattered before any
+ * relaxation ran, so the sort decided only which rng draws mapped to which capacity and
+ * the `i < j` order the separation sweep walks pairs in. Lattice seeding put the head
+ * start back -- the seats are a finite supply claimed first fit, so the sort decides who
+ * gets first pick of them and who is left seeding at random.
+ *
+ * That cuts the favourable way. Seat supply against `want`, measured: id 2 99/89, id 3
+ * about 89/89, id 5 about 80/85, ids 6-8 about 81/85, ids 9-10 about 71/81 -- so roughly
+ * ten cars on the star levels seed at random. Longest first means those ten are the
+ * SMALLEST cars in the lot, which is the least bad place to lose the lattice's spacing
+ * guarantee: a small body has the most ways to fit whatever the relaxation leaves it.
+ *
+ * SPEC DIVERGENCE, recorded rather than hidden. Spec 2.3 says the overflow should be
+ * DROPPED, with `CARS_PER_LEVEL` acting as a cap. This code falls back to random seeding
+ * and keeps the car instead. Both are defensible -- dropping cars fights the `blocked`
+ * target, which is counted over the cars that are actually there -- but the spec says one
+ * thing and this does the other, and the next person should not have to diff them to find
+ * that out.
  *
  * Every angle is one of the eight compass points -- see HEADING_STEP for why that is the
  * whole set rather than a tidy minority of it.
@@ -1067,9 +1096,13 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * pairs for the next sweep to chase, which is why it is also faster, not just
  * capable: measured success at RELAX_ITERS=60 went from 0/30 to 20/30.
  */
-function pack(
+// Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
+export function pack(
     rng: () => number, want: number, tunnels: TunnelSpec[], lanes: OBB[],
 ): Piece[] {
+    // The same half-clearance-plus-rounding-slack `packBox` gives a car, applied to the
+    // reservation instead: a settled piece and a reservation then owe each other the full
+    // CLEARANCE, which is exactly what `validateLevel` measures between the two.
     const pad = CLEARANCE / 2 + ROUND_MARGIN;
     // 车道和隧道在这里是同一种东西:一块车不能进的地方。隧道已经把这条路走通了。
     const reserved = [
@@ -1089,9 +1122,37 @@ function pack(
     // 座位要打散:上面的 caps 按车长从大到小排过序,而点阵一行一行生成,顺次取用会
     // 把大车全堆在场地的一头,分层到可以一层一层剥掉。
     const seats = shuffled(latticeSeats(lanes, LOT.w, LOT.h, GAP, rowPitch, rng, CROSS), rng);
-    const pieces: Piece[] = caps.map((cap, i) => {
-        const seat = seats[i];
-        if (seat) return { x: seat.x, y: seat.y, angle: seat.angle, cap };
+    const taken = new Array<boolean>(seats.length).fill(false);
+    const pieces: Piece[] = caps.map((cap) => {
+        // 座位是偏好,保留区是硬约束。点阵既不知道这辆车多大,也不知道隧道在哪:它
+        // 只拿中心点避开车道,而车是有身子的。所以这里逐辆拿它自己的车身试,挤不进
+        // 去就往后找下一个空座位 —— 贴着车道的那些座位于是留给后面更小的车。
+        //
+        // 不这么做的后果实测过:14%(spine)到 36%(star)的座位会让车身压进车道,
+        // 关系放松在 RELAX_ITERS 内收敛不了,`pack` 返回 [],200 次尝试全废,第 3 关
+        // 生成出来是零辆车。
+        //
+        // 无车道无隧道时 `reserved` 是空的,`some` 恒假,first-fit 就是顺次取 0、1、
+        // 2 ……——与逐个下标取座位逐字节相同。第 2 关正是这样一关,所以 `CROSS` 上那
+        // 张探针表不受这次改动影响。
+        for (let s = 0; s < seats.length; s++) {
+            if (taken[s]) continue;
+            const seat = seats[s];
+            const p: Piece = { x: seat.x, y: seat.y, angle: seat.angle, cap };
+            if (reserved.some((r) => overlapMTV(packBox(p), r))) continue;
+            taken[s] = true;
+            return p;
+        }
+        // 一个空座位都容不下这辆车:退回随机播种,和从前一样。
+        //
+        // Seeded OFF the reservations where a draw or two can manage it. A piece dropped on
+        // top of a reservation starts the relaxation with a shove it cannot negotiate -- the
+        // reservation will not move, so the piece has to walk out through whatever is packed
+        // around it, dragging the neighbours it displaces along. Measured on level 7: seeding
+        // blind, the packer settled 7 attempts in 200; resampling here, 42. Eight draws is
+        // where it stops paying (thirty gave the identical run), and a piece that never finds
+        // a clear seat is kept anyway rather than dropped -- the relaxation is still allowed
+        // to solve it.
         let p: Piece;
         for (let k = 0; ; k++) {
             const angle = (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP;
@@ -1103,7 +1164,6 @@ function pack(
         return p;
     });
 
-    // 关系放松以下完全不变。
     for (let iter = 0; iter < RELAX_ITERS; iter++) {
         let moved = false;
         for (let i = 0; i < pieces.length; i++) {

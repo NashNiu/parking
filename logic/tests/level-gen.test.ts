@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, packBox, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
@@ -877,10 +877,71 @@ test.skip('车道里没有车,而且车与车道之间还留着 CLEARANCE', () =
   for (const id of PACKED) {
     const level = shipped(id);
     const lanes = skeletonLanes(skeletonShape(id), LOT.w, LOT.h);
+    // 第 2 关的骨架是 'none',一条车道都没有,两层内循环都是空的——不加这道断言,
+    // 那个 id 上这条测试什么都没查却照样绿。第 3 关起才该有车道。
+    if (id > 2) expect(lanes.length).toBeGreaterThan(0);
     for (const lane of lanes) {
       for (const car of level.lot.cars) {
-        expect(overlapMTV(inflate(carBox(car), CLEARANCE / 2), lane)).toBeFalsy();
+        // 整个 CLEARANCE,不是一半。`inflate` 是每边各加 d,所以 CLEARANCE / 2 只
+        // 断言了 0.05 的间隙,而标题和 spec §4.5 #6 说的都是 0.10。`pack` 实际保证的
+        // 是 CLEARANCE + 2 * ROUND_MARGIN,所以这条更强的断言是真的。
+        expect(overlapMTV(inflate(carBox(car), CLEARANCE), lane)).toBeFalsy();
       }
     }
+  }
+});
+
+// C1 的回归测试。原本写的是 want = 85,但那个数字两边都红:座位供给本身就不够
+// (见下面那条 skip),改好改坏都收敛不了,那条断言分不出 C1 修没修。想让它咬住 C1,
+// want 得落在座位供给之内。实测(每格 10 个种子,收敛次数):
+//
+//              want=40  want=60  want=70  want=80  want=89
+//   改之前 spine  9/10     1/10     1/10     0/10     0/10
+//          star   0/10     0/10     0/10     0/10     0/10
+//   改之后 spine  8/10     3/10     2/10     0/10     0/10
+//          star   4/10     0/10     0/10     0/10     0/10
+//
+// star 那一列(0/10 -> 4/10)就是这条测试的牙:不按车身检查保留区,米字骨架一次都
+// 收敛不了。want = 40 因此是故意的,不是图快。
+test('每种骨架都打得出包,而且车身不压进车道', () => {
+  for (const shape of ['spine', 'cross', 'ring', 'star'] as const) {
+    const lanes = skeletonLanes(shape, LOT.w, LOT.h);
+    let settled = 0;
+    for (let seed = 0; seed < 10; seed++) {
+      const pieces = pack(mulberry32(seed * 7919), 40, [], lanes);
+      if (pieces.length === 0) continue;      // [] 的意思是这次尝试没收敛
+      settled++;
+      for (const p of pieces) {
+        for (const l of lanes) {
+          expect(overlapMTV(packBox(p), l)).toBeFalsy();
+        }
+      }
+    }
+    expect(settled).toBeGreaterThan(0);
+  }
+});
+
+// C1 还没修完的那一半,记在这里而不是留成一句口头交代。
+//
+// 按车身检查保留区是对的,也确实有效果(上面那张表),但它治不好真正的病:座位供给
+// 不够。车道吃掉的是面积,米字四条车道吃掉 8x12 里约四分之一,GAP = 0.25 的点阵在
+// 剩下的地方只摆得出 69 个座位,而第 9、10 关要 81 辆车——座位比车少,先到的车占完,
+// 剩下的退回均匀随机播种,关系放松在 RELAX_ITERS 内收拾不了,`pack` 返回 []。
+//
+// 每种骨架的座位数 / 其中车身放得下的(第 3 关的种子,CROSS = 0.35):
+//   none 98 / 98   spine 88 / 78   cross 79 / 67   ring 78 / 58   star 69 / 49
+//
+// 实测后果:`npm run gen -- --only 3` 打出 `cars=0`,整整 200 次尝试全废。
+//
+// 这条测试是那件事修好的验收条件。它属于 `GAP` 的标定(spec §4.1,Task 5)或者
+// spec §2.3 的"多出来的车直接丢掉",两条都不在本轮范围内——所以先 skip,不是先删。
+test.skip('出货用的车数下,每种骨架也打得出包', () => {
+  for (const shape of ['spine', 'cross', 'ring', 'star'] as const) {
+    const lanes = skeletonLanes(shape, LOT.w, LOT.h);
+    let settled = 0;
+    for (let seed = 0; seed < 10; seed++) {
+      if (pack(mulberry32(seed * 7919), 85, [], lanes).length > 0) settled++;
+    }
+    expect(settled).toBeGreaterThan(0);
   }
 });

@@ -138,13 +138,22 @@ export function latticeSeats(
         for (let u = -reach + stagger; u <= reach; u += along) {
             const ju = u + (rng() - 0.5) * jitter;
             const jv = v + (rng() - 0.5) * jitter;
-            // 这一抽无条件抽,且抽在两条剔除之前:座位位置因此与 `cross` 完全无关,
-            // 两个 cross 值跑出来的点阵逐点重合,标定时才是单变量比较。挪到剔除之后、
-            // 或者用 `cross > 0 &&` 短路掉,都会让 rng 流随 cross 变化而错位。
+            // 这一抽必须**无条件**抽:座位位置因此与 `cross` 完全无关,两个 cross 值
+            // 跑出来的点阵逐点重合,标定时才是单变量比较。写成 `cross > 0 && rng() < cross`
+            // 会短路掉这一抽,rng 流随 cross 错位,位置全都对不上——变异测过,那样改
+            // 确实会让"位置一个都没动"那条断言红。
+            //
+            // 位置无所谓,倒是真的无所谓:抽在两条剔除之前还是之后都一样。是否剔除只看
+            // ju/jv,与 cross 无关,所以两种写法每个被接受的候选各抽一次、消耗的序列相同。
+            // 这里写在前面只是因为它跟 ju/jv 是同一件事的三次抽签,读起来是一组。
             const turn = rng() < cross;
             const sx = ju * cos - jv * sin;
             const sy = ju * sin + jv * cos;
             if (Math.abs(sx) > w / 2 || Math.abs(sy) > h / 2) continue;
+            // 只拿中心点试,而且试的是没加 pad 的车道:这是个便宜的预筛,不是真正的
+            // 车道回避。真正的那一道在 `pack()` 里,因为只有调用方知道这个座位要坐多大
+            // 的车、场上还有没有隧道。把这里换成按车身试只会白白掐掉本来就不宽裕的座位
+            // 供给——车道边上那些座位是留给小车的,不是该丢掉的。
             const dot: OBB = { x: sx, y: sy, angle: 0, len: 1e-6, wid: 1e-6 };
             if (lanes.some((l) => overlapMTV(dot, l))) continue;
             seats.push({ x: sx, y: sy, angle: turn ? (angle + 90) % 360 : angle });
