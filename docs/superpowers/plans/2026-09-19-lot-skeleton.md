@@ -455,14 +455,24 @@ import { skeletonShape, skeletonLanes, LANE_W } from '../../game/assets/scripts/
 (该文件已有在中段追加 import 的先例——见 line 515、641——所以加在文件头或就近皆可。)
 
 ```ts
-test('排除区里的空地不算洞——一条刻意的车道不是撞出来的空白', () => {
+test('排除整块场地之后一个洞都不剩,所以排除区真的被算进去了', () => {
   const level = shipped(2);
+  // 先证明这一关本来就有洞可数,否则下面那条断言会空过。
   const bare = fillableHoles(level);
-  // 场地正中挖一条竖条当作排除区
-  const strip = [{ x: 0, y: 0, angle: 90, len: LOT.h, wid: 2.0 }];
-  const masked = fillableHoles(level, strip);
-  expect(masked.big + masked.medium + masked.small)
-    .toBeLessThanOrEqual(bare.big + bare.medium + bare.small);
+  expect(bare.big + bare.medium + bare.small).toBeGreaterThan(0);
+
+  // 一块盖住整个场地的排除区。若 `exclude` 被收下却没算进 `taken`,这里会原样返回
+  // `bare`,断言当场失败。
+  //
+  // 上一版写的是 `masked <= bare`,那是个空壳:"多加障碍只会让洞变少"是算法的构造
+  // 性质,参数被忽略时两者恰好相等,`<=` 照样通过——它分不出"实现了"和"收下就扔"。
+  // 这是本计划里第三个同样形状的断言(另两个:Task 1 的包含性检查、Task 2 的 ring
+  // 角度),所以写测试时要问的那句话是:如果这个功能是个空操作,它还会通过吗。
+  //
+  // OBB 的 `len` 沿 `angle`、`wid` 垂直于它,所以角度 0 时这块盒子横跨 x 方向
+  // `LOT.w`、纵跨 y 方向 `LOT.h`,正好是整个场地。
+  const whole = [{ x: 0, y: 0, angle: 0, len: LOT.w, wid: LOT.h }];
+  expect(fillableHoles(level, whole)).toEqual({ big: 0, medium: 0, small: 0 });
 });
 
 test('不传排除区时行为与从前完全一致', () => {
