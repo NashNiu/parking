@@ -520,12 +520,20 @@ git commit -m "feat(core): fillableHoles can be told which blank is deliberate"
 ### Task 4: 把骨架接进 `pack()`
 
 **Files:**
-- Modify: `game/assets/scripts/core/level-gen.ts`(`pack` 的签名与播种段、`generateLevel` 的调用点 line ~1327)
+- Modify: `game/assets/scripts/core/lot-skeleton.ts`(`latticeSeats` 加 `cross` 参数,新增 `shuffled`)
+- Modify: `logic/tests/lot-skeleton.test.ts`
+- Modify: `game/assets/scripts/core/level-gen.ts`(`pack` 的签名与播种段、`scatter` 与 `generateLevel` 的调用点)
 - Modify: `logic/tests/level-gen.test.ts`
 
 **Interfaces:**
 - Consumes: `skeletonShape`、`skeletonLanes`、`latticeSeats`、`LANE_W` from Tasks 1–2
-- Produces: `pack(rng, want, tunnels, lanes)` 多一个参数;`export const GAP = 0.25`(Task 5 标定后改值)
+- Produces: `pack(rng, want, tunnels, lanes)` 多一个参数;`export const GAP = 0.25` 与
+  `export const CROSS = 0.2`(Task 5 标定后改值);`latticeSeats` 多一个 `cross` 参数;
+  `export function shuffled<T>(items: T[], rng: () => number): T[]`(在 `lot-skeleton.ts`)
+
+**本任务同时修订 Task 2 的 F2 裁定**(见 spec §2.5):点阵只定位置,朝向按 `CROSS` 混入
+一部分转 90° 的车,且座位顺序要打散。Task 2 那条"全场一个朝向"的裁定是实测证伪的——它
+不是观感问题,是难度问题。
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -615,28 +623,177 @@ const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, lanes);
 export const GAP = 0.25;
 ```
 
-- [ ] **Step 4: 跑测试**
+- [ ] **Step 4: 写 `lot-skeleton.ts` 的失败测试**
 
-Run: `cd logic && npx jest tests/lot-skeleton.test.ts && npx jest tests/level-gen.test.ts`
-Expected: `lot-skeleton` 全过;`level-gen` 除了那条 `test.skip` 之外全过
+追加到 `logic/tests/lot-skeleton.test.ts`,并把文件里**已有的每一处** `latticeSeats(...)`
+调用末尾补上 `, 0`(保持原有断言的语义不变:那些测试测的是"不横过来"的点阵):
 
-- [ ] **Step 5: 跑一次真实生成,确认没有把生成器弄崩**
+```ts
+test('cross = 1 时每个座位都横过来,cross = 0 时一个都不横', () => {
+  const up = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0);
+  const across = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 1);
+  expect(new Set(up.map((s) => s.angle))).toEqual(new Set([90]));
+  expect(new Set(across.map((s) => s.angle))).toEqual(new Set([180]));
+});
 
-Run: `cd logic && npm run gen -- --only 2`(约 2 分钟,**放后台**)
-Expected: 正常写出一关并打印表格。记下 `cars / blocked / rounds / holes / packing / play` 六个数,Task 5 要用。
+// 位置与朝向解耦,是 Task 5 能把 CROSS 当单变量标定的前提:两档跑出来的点阵逐点
+// 重合,分数的差别才只能来自朝向。这条也顺带咬住"cross 抽签必须无条件抽、抽在剔除
+// 之前"——少抽一次,rng 流就错位,位置全都对不上。
+test('横过来的只是朝向,位置一个都没动', () => {
+  const up = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0);
+  const across = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 1);
+  expect(across.map((s) => ({ x: s.x, y: s.y }))).toEqual(up.map((s) => ({ x: s.x, y: s.y })));
+});
 
-**若这一步打出 `NO WAY THROUGH` 或生成失败**:停下,不要继续 Task 5。把打印的表格和 `git diff` 带回给人类伙伴——这是 spec §7.1 写明的止损点。
+test('中间档位是个比例,不是开关', () => {
+  const some = latticeSeats([], W, H, 0.25, 0.8, seedRng(9), 0.3);
+  const turned = some.filter((s) => s.angle === 180).length / some.length;
+  expect(turned).toBeGreaterThan(0.15);
+  expect(turned).toBeLessThan(0.45);
+});
 
-- [ ] **Step 6: 还原被这次试跑改写的关卡文件**
-
-```bash
-git checkout -- game/assets/resources/levels/
+// 三条断言各挡一种坏实现:不是排列(漏元素/改元素)、原样返回(洗了个寂寞)、
+// 不确定(同种子两次不一样,关卡生成就不可复现了)。
+test('洗牌是同一批元素换个顺序,而且确实换了', () => {
+  const items = Array.from({ length: 200 }, (_, i) => i);
+  const a = shuffled(items, seedRng(4));
+  expect([...a].sort((x, y) => x - y)).toEqual(items);
+  expect(a).not.toEqual(items);
+  expect(shuffled(items, seedRng(4))).toEqual(a);
+});
 ```
 
-- [ ] **Step 7: 提交**
+- [ ] **Step 5: 跑测试,确认新的四条失败**
+
+Run: `cd logic && npx jest tests/lot-skeleton.test.ts`
+Expected: FAIL —— `shuffled` 未定义,`cross` 参数被忽略
+
+- [ ] **Step 6: 实现 `cross` 与 `shuffled`**
+
+`latticeSeats` 加末位参数,内循环里加一次**无条件**抽签:
+
+```ts
+export function latticeSeats(
+    lanes: OBB[], w: number, h: number, gap: number, rowPitch: number, rng: () => number,
+    cross: number,
+): { x: number; y: number; angle: number }[] {
+```
+
+```ts
+            const ju = u + (rng() - 0.5) * jitter;
+            const jv = v + (rng() - 0.5) * jitter;
+            // 这一抽无条件抽,且抽在两条剔除之前:座位位置因此与 `cross` 完全无关,
+            // 两个 cross 值跑出来的点阵逐点重合,标定时才是单变量比较。挪到剔除之后、
+            // 或者用 `cross > 0 &&` 短路掉,都会让 rng 流随 cross 变化而错位。
+            const turn = rng() < cross;
+            const sx = ju * cos - jv * sin;
+            const sy = ju * sin + jv * cos;
+            if (Math.abs(sx) > w / 2 || Math.abs(sy) > h / 2) continue;
+            const dot: OBB = { x: sx, y: sy, angle: 0, len: 1e-6, wid: 1e-6 };
+            if (lanes.some((l) => overlapMTV(dot, l))) continue;
+            seats.push({ x: sx, y: sy, angle: turn ? (angle + 90) % 360 : angle });
+```
+
+`latticeAngle` 上方那段"代价是全场车身平行"的注释必须改写——它现在描述的是一个被实测
+推翻的设计,留着会误导下一个人把 `CROSS` 当噪声删掉。改成:方向仍然只有一个,`cross`
+在它之上混入垂直的一档,而不是让座位各取最近的车道(那条路仍然是错的,理由不变)。
+
+文件末尾加 `shuffled`:
+
+```ts
+/**
+ * 同一批元素,顺序打散。用传入的 `rng`,所以同一个种子出同一个顺序。
+ *
+ * 存在的理由在 `pack()` 的调用点:那里的车按车长从大到小排过序,而点阵是一行一行
+ * 生成的,顺次取用会把大车全堆在场地的一头——一个随机播种从来没有的尺寸分层。
+ */
+export function shuffled<T>(items: T[], rng: () => number): T[] {
+    const out = items.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        const t = out[i];
+        out[i] = out[j];
+        out[j] = t;
+    }
+    return out;
+}
+```
+
+`CROSS` 加在 `level-gen.ts` 里 `GAP` 的紧后面:
+
+```ts
+/**
+ * 点阵里横过来的车所占的比例,本设计的第二个旋钮。
+ *
+ * 难度来自车互相挡道,而互相挡道需要朝向不一致。全场同向的停车场整齐,但它没有谜题
+ * ——第一次真实生成量到:第 2 关没有车道,唯一的变量就是点阵加统一朝向,`blocked`
+ * 只从 72 掉到 68,`rounds` 却从 17 塌到 10(89 辆车 10 个回合约等于每轮走九辆,一整
+ * 排一起离场),`play` 从 hard 变成 FREE——一行策略就能赢。
+ *
+ * 横过来的车会把邻座挤开,局部破坏点阵的均匀间距,那正是难度要的不规则。0 到 1 之间
+ * 连续地从"整齐"走到"混乱"。0.2 是初值,由 Task 5 与 `GAP` 一起标定。
+ */
+export const CROSS = 0.2;
+```
+
+`pack()` 的播种段里,座位一行改成:
+
+```ts
+    const rowPitch = CAP_BOX.big.wid * CAR_SCALE;
+    // 座位要打散:上面的 caps 按车长从大到小排过序,而点阵一行一行生成,顺次取用会
+    // 把大车全堆在场地的一头,分层到可以一层一层剥掉。
+    const seats = shuffled(latticeSeats(lanes, LOT.w, LOT.h, GAP, rowPitch, rng, CROSS), rng);
+```
+
+- [ ] **Step 7: 跑测试**
+
+Run: `cd logic && npx jest tests/lot-skeleton.test.ts && npx jest tests/level-gen.test.ts && npm run typecheck`
+Expected: `lot-skeleton` 全过;`level-gen` 除了那条 `test.skip` 之外全过
+
+- [ ] **Step 8: 四档探针,确认难度回来了**
+
+第 2 关的骨架是 `none`,所以这四跑与车道无关,量的纯粹是播种。每跑约 2 分钟,**放后台**:
+
+| # | 设置 | 怎么改 |
+|---|---|---|
+| P1 | `CROSS = 0`,不洗牌 | 把 `shuffled(...)` 那层临时去掉 |
+| P2 | `CROSS = 0`,洗牌 | 恢复 `shuffled`,`CROSS = 0` |
+| P3 | `CROSS = 0.2`,洗牌 | |
+| P4 | `CROSS = 0.35`,洗牌 | |
+
+Run: `cd logic && npm run gen -- --only 2`
+每跑记下 `cars / blocked / rounds / score / holes / packing / play` 七列,连同基线一起列表:
+
+```
+        cars  colors  blocked/want  rounds/min  score   pax   holes  inward  packing       play
+旧打包器  89       5       72/71       17/2      289  1896  2/0/0    39%   on target     hard (careless 100%)
+```
+
+P1 是上一轮那次跑动的复现(rounds 10、FREE),它在这里的作用是**对照组**:没有它,后面
+三档的差值不知道该跟谁比。
+
+- [ ] **Step 9: 定档**
+
+取**最小的、能让 `play` 回到 `hard` 的 `CROSS`**,洗牌保留。把 `CROSS` 的值和 Step 8 那
+张表写进它的注释里——下一个人要动这个数时需要看到其他档是什么样子。
+
+**止损点:若 P2/P3/P4 三档全都打不出 `hard`**,停下,不要继续 Task 5。把整张表和
+`git diff` 带回给人类伙伴。这是 spec §7.1 的止损点,不是可选的。
+
+- [ ] **Step 10: 用定下来的档位再跑一次,把关卡文件留在工作区**
 
 ```bash
-git add game/assets/scripts/core/level-gen.ts logic/tests/level-gen.test.ts
+cd logic && npm run gen -- --only 2
+```
+
+这次**不**还原 `game/assets/resources/levels/level-2.json`——留着未提交,人类伙伴要在
+编辑器里看这一关长什么样。下面的 `git add` 逐个点名,所以它不会被带进提交。
+
+- [ ] **Step 11: 提交**
+
+```bash
+git add game/assets/scripts/core/lot-skeleton.ts game/assets/scripts/core/level-gen.ts \
+        logic/tests/lot-skeleton.test.ts logic/tests/level-gen.test.ts
 git commit -m "feat(core): the packer seeds on a lattice and packs around lanes"
 ```
 
@@ -663,6 +820,10 @@ cd logic && npm run gen -- --only 2      # 约 2 分钟,放后台
 - [ ] **Step 2: 选值**
 
 取**满足 `big === 0` 的最小 `GAP`**。最小是因为间距越大难度越低。
+
+`CROSS` 保持 Task 4 定下的档位不动。若选中的 `GAP` 把 `play` 打回 `FREE`,把 `CROSS`
+调高一档(+0.1)再确认一次——分工是 `GAP` 管空、`CROSS` 管难,不要用放宽 `big === 0`
+来换难度。
 
 **同时看 `blocked`**:如果选中那一档的 `blocked` 比基线(89 辆车时 72)掉了超过三成,停下,带着表格回报人类伙伴。这是 spec §7.1 的止损点,不是可选的。
 
