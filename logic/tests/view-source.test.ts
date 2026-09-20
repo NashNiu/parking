@@ -1535,3 +1535,46 @@ test('the badge highlight is sized off the edge and shares its offset', () => {
   expect(src).toContain('hi.setPosition(0, -NODE_LIFT, 0);');
   expect(src).toContain('outline.setPosition(0, -NODE_LIFT, 0);');
 });
+
+/**
+ * EVERY MODAL THAT RISES IN PLAY TAKES THE SETTINGS PANEL DOWN FIRST.
+ *
+ * The stacking rule this HUD relies on was enforced from ONE SIDE ONLY. `syncGear` kills the
+ * gear under the win card, the lose card and the unlock prompt, so the panel cannot be opened
+ * UNDER one of them -- and `handleTap`'s settings branch says as much in prose: "It cannot
+ * currently be raised over the blocked-stall prompt or the win card ... so this branch and
+ * those never contend." The other direction was never closed. The level keeps running while the
+ * panel is up (`update` has no settings gate, deliberately -- a car already pulling out still
+ * lands), so the last passengers board, `onEnd` calls `showWin`, and the card goes up OVER an
+ * open panel.
+ *
+ * What that costs is the whole card. `handleTap` asks `settingsOpen()` first and swallows
+ * everything it does not claim, so `hitsWin` is never reached: the X, 重玩 and 下一关 all answer
+ * nothing, and the only live control on screen is the panel's own X, half-hidden behind the card
+ * that has stopped working. Reported as 「这时候点击关闭按钮，无法关闭」.
+ *
+ * So the invariant is pinned at the RAISE, where it can be enforced once, rather than at the tap,
+ * where every future branch would have to remember the order. All three raisers call
+ * `supersedeSettings` before they touch their own scrim.
+ */
+test('a modal raised in play takes the settings panel down first', () => {
+  const src = stripComments(readSrc('hud-view.ts'));
+  // One helper, so the rule has one statement and one place to change.
+  expect(src).toContain('private supersedeSettings(): void {');
+  expect(src).toContain('this.hideSettings();');
+  // All three raisers, and BEFORE each one raises its own scrim: a call after `active = true`
+  // would still work today and would be the line someone moves while tidying.
+  for (const fn of ['showWin(', 'showLose(', 'showUnlockPrompt(']) {
+    const at = src.indexOf(`    ${fn}`);
+    expect(at).toBeGreaterThanOrEqual(0);
+    const call = src.indexOf('this.supersedeSettings();', at);
+    const raise = src.indexOf('scrim.active = true;', at);
+    expect(call).toBeGreaterThan(at);
+    expect(raise).toBeGreaterThan(call);
+  }
+  // `showUnlockPrompt` returns early when it is already up, and the panel must come down
+  // anyway -- otherwise a prompt that is re-asked over a freshly opened panel keeps the trap.
+  const prompt = src.indexOf('    showUnlockPrompt(');
+  expect(src.indexOf('this.supersedeSettings();', prompt))
+    .toBeLessThan(src.indexOf('if (scrim.active) return;', prompt));
+});

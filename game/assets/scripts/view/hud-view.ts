@@ -1452,6 +1452,7 @@ export class HudView {
      * player's own answers, and all three of them take the prompt down first.
      */
     showUnlockPrompt(cost: UnlockCost): void {
+        this.supersedeSettings();
         if (!this.prompt) this.buildUnlockPrompt();
         const scrim = this.prompt!;
         if (scrim.active) return;
@@ -2127,6 +2128,31 @@ export class HudView {
     }
 
     /**
+     * Take the settings panel down for a modal that is about to rise over it.
+     *
+     * THE OTHER HALF OF `syncGear`, and the half that was missing. `syncGear` stops the panel
+     * being opened UNDER the win card, the lose card or the unlock prompt -- it switches the
+     * gear off while any of them is up. Nothing stopped the reverse, because the level keeps
+     * running while the panel stands: `update` has no settings gate (a car already pulling out
+     * has to land), so the last passengers board under the panel, `onEnd` raises the win card,
+     * and two modals are on screen at once.
+     *
+     * That state cost the player the whole card. `GameController.handleTap` asks
+     * `settingsOpen()` FIRST and swallows every tap it does not claim, so the card on top
+     * answered nothing at all -- its X, its 重玩 and its 下一关 were dead, and the only live
+     * control on screen was the panel's own X behind it. 「这时候点击关闭按钮，无法关闭」.
+     *
+     * Enforced HERE, at the raise, rather than by reordering the tap branches: one modal at a
+     * time is the rule that tap order already assumes, and a rule the raisers keep is one the
+     * next branch added to `handleTap` cannot get wrong. The panel is the one that gives way
+     * because its in-game answers -- 主页, 重玩 and 继续游戏 -- are about a level that has just
+     * ended, and the card that ended it says all three better.
+     */
+    private supersedeSettings(): void {
+        this.hideSettings();
+    }
+
+    /**
      * Advance the clear-save button's two steps, and say whether the caller should now DO it.
      *
      * The first tap arms it and rewrites its label into a question; only the second returns
@@ -2475,6 +2501,7 @@ export class HudView {
      * whatever scale it had got to.
      */
     showWin(stats: WinStats, hasNext: boolean = false): void {
+        this.supersedeSettings();
         if (!this.win) this.buildWinPanel(stats.levelCount);
         const scrim = this.win!;
         // BY NAME, not by index. This read `scrim.children[0]`, which was the panel when it
@@ -2588,6 +2615,7 @@ export class HudView {
      * darker (see WIN_SCRIM) because there is nothing behind IT worth reading.
      */
     showLose(): void {
+        this.supersedeSettings();
         if (!this.lose) this.buildLosePanel();
         const scrim = this.lose!;
         scrim.active = true;

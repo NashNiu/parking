@@ -2597,9 +2597,17 @@ export class GameController extends Component {
             return;
         }
         // The settings panel owns every tap while it is up, and it is asked FIRST because
-        // when it is up it is the topmost thing on screen. It cannot currently be raised
-        // over the blocked-stall prompt or the win card -- the gear goes dead under both
-        // (`HudView.syncGear`) -- so this branch and those never contend.
+        // when it is up it is the topmost thing on screen. Nothing else can be on screen with
+        // it, and that is now true in BOTH directions: the gear goes dead under the win card,
+        // the lose card and the blocked-stall prompt (`HudView.syncGear`), so the panel cannot
+        // be raised under one of them -- and each of those three takes the panel down as it
+        // rises (`HudView.supersedeSettings`), so none of them can be raised over it either.
+        //
+        // THE SECOND HALF IS NOT HYPOTHETICAL. `update` keeps stepping the loop while the panel
+        // stands, so a level that finishes under it used to put the win card on top of a panel
+        // that still owned the tap -- and this branch swallowed the card's own answers, X
+        // included. That is why the rule is kept at the raise: this branch's `return` makes any
+        // second modal dead by construction, so a new one must never be able to rise here.
         if (this.uiCam && this.hud?.settingsOpen()) {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             const hit = this.hud.hitsSettings(ui);
