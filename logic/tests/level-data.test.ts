@@ -297,32 +297,62 @@ test('an empty tunnel is a data error, not a drained one', () => {
   expect(validateLevel(lvl).join(' ')).toContain('tunnel 1 holds no cars');
 });
 
-test('the band curve never asks a later level for less mistiming than an earlier one', () => {
-  // BAND_CURVE is not in GenParams, so the monotonicity test above ("the curve never asks a
-  // later level for less than an earlier one") never touches it -- this is the only thing
-  // that pins the ramp `offset` is calibrated to hold.
+test('the band curve ships only cells the sweep visited, and only level 1 at the free end', () => {
+  // WHAT THIS USED TO SAY, AND WHY IT CANNOT SAY IT ANY MORE. It asserted two things about
+  // BAND_CURVE -- that `offset` never goes down from one level to the next, and that
+  // `interleave` is 1 on every row. Both were overruled on measurement in effbda3, in
+  // writing, and the shipped table contradicts both:
   //
-  // What breaks without it: the docblock over BAND_CURVE itself names a fragile trade -- id
-  // 3 ships on the isolated passing offset 8 instead of its wider, more robust 28-36 run,
-  // purely to stay non-decreasing into level 4's single fixed point (offset 12, the only
-  // value in the whole grid that passes for that level). That trade is only worth paying if
-  // something enforces the ramp it was paid for. Without this test, someone re-picking each
-  // id's own most robust offset (which the docblock explicitly invites doing, and warns
-  // against) inverts the sequence, and nothing else here would notice: `isHardButFair`
-  // judges each generated level independently, so a level that is locally hard-and-fair
-  // still passes even when its offset is smaller than the level before it.
+  //     offset      0  16  32  12  16  20  24   4  32  28
+  //     interleave  1   1   1   1   1   1   1   2   1   3
   //
-  // Lives here, not in level-gen.test.ts, because it must run in the routine fast suite:
-  // `bandParams` is a table lookup, so this needs none of the generator machinery that makes
-  // level-gen.test.ts too slow to run day to day.
-  for (let id = 2; id <= 10; id++) {
-    expect(bandParams(id).offset).toBeGreaterThanOrEqual(bandParams(id - 1).offset);
-  }
-  // Every measurement the docblock cites -- the ramp, the islands, the ids 1/2 exceptions --
-  // was made at depth 1 (see the note on `interleave` above BAND_CURVE). A nonzero row here
-  // would ship a knob nothing has swept, silently invalidating every "X passes" claim above.
+  //  - THE RAMP IS NOT IN `offset`. The old curve was ranked on hard/fair, one bit, and at
+  //    four open stalls that bit is saturated -- many offsets read hard on every level, so
+  //    the sweep stopped at the first passing cell and the ORDER of those cells carried no
+  //    information. Ranked on `demandPressure` instead, id 8's best cell is offset 4 and id
+  //    3's is offset 32: `offset` is a way of REACHING difficulty, not difficulty itself, and
+  //    the relation is not monotone. A non-decreasing sequence was never the property; it was
+  //    a proxy that happened to hold.
+  //  - `interleave` IS SWEPT NOW. It was pinned at 1 because it flipped no hard/fair verdict,
+  //    which was the saturated bit being read as "inert" when it meant "unmeasured". On the
+  //    gap it takes the best cell on three of the ten ids, and the table ships 2 on id 8 and
+  //    3 on id 10.
+  //
+  // THE RAMP ITSELF IS ASSERTED ON THE DEMAND GAP, over the halves of the ten shipped levels,
+  // in level-gen.test.ts ('the second half of the curve is harder than the first'). It cannot
+  // be asserted here and it is not a loss that it is not: the ramp stopped being a property of
+  // this TABLE the moment `offset` stopped being difficulty, and reading it now means playing
+  // a level rather than looking a row up.
+  //
+  // WHAT IS LEFT IS STILL A PROPERTY OF THE TABLE, and each half catches a real way of
+  // breaking it by hand:
+  //
+  //  - EVERY CELL IS ONE THE SWEEP ACTUALLY VISITED. `tools/band-sweep.ts` scans offsets
+  //    {0, 4, ... 40} against interleaves {1, 2, 3}, and every "the only passing cell of 33"
+  //    claim in BAND_CURVE's docblock is a claim about that grid. A hand-typed 18, or a depth
+  //    of 4, would ship a cell nothing has ever measured while reading exactly like a pick.
+  //  - ONLY LEVEL 1 SITS AT THE FREE END. Offset 0 is perfect correspondence between the
+  //    leaving order and the queue, where the level falls to `keepDistinct` -- the one-line
+  //    rule this whole apparatus exists to defeat. Level 1 is the authored teaching level and
+  //    no offset makes it hard anyway; level 2 used to sit here too and was moved off it
+  //    deliberately (gap 1.08 at offset 16 against 0.03 at offset 0). Measured on the shipped
+  //    lots with the queue rebuilt at offset 0, the four ids whose band is doing the most
+  //    work read 0.25, 0.11, 0.42 and 0.72 there against 1.56, 1.32, 1.81 and 0.87 as
+  //    shipped -- so zeroing a row is a real regression and this is what notices it.
+  //
+  // The drift the fast suite really has to catch -- a curve value edited without also running
+  // `npm run gen` -- is caught by the shipped-queue test below, which compares the bytes on
+  // disk against `bandedQueue` at the curve's own cell.
+  const SWEPT_OFFSETS = [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
+  const SWEPT_DEPTHS = [1, 2, 3];
   for (let id = 1; id <= 10; id++) {
-    expect(bandParams(id).interleave).toBe(1);
+    const bp = bandParams(id);
+    expect({
+      id,
+      offsetSwept: SWEPT_OFFSETS.includes(bp.offset),
+      depthSwept: SWEPT_DEPTHS.includes(bp.interleave),
+      freeEnd: bp.offset === 0,
+    }).toEqual({ id, offsetSwept: true, depthSwept: true, freeEnd: id === 1 });
   }
 });
 
