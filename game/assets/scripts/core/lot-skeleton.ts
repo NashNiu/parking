@@ -213,6 +213,170 @@ export function latticeSeats(
 }
 
 /**
+ * 在半轴 `(ra, rb)` 的椭圆上,从 `θ = from` 起走过弧长 `ds` 要转过多少弧度。
+ *
+ * 速度 |dP/dθ| = hypot(ra sinθ, rb cosθ) 在一格之内自己就在变(长短轴比 3:2,两端差
+ * 50%),拿起点的速度直接除会系统性地走短,同一圈里前后两辆车因此压在一起 —— 实测
+ * 过,8 个种子里有 4 个出现相邻两辆重叠。中点修正一次就够:先用起点速度估一个 dθ,
+ * 再用这一格中点的速度重算。剩下的误差是二阶的,量级在千分之一弧度。
+ */
+function arcStep(from: number, ds: number, ra: number, rb: number): number {
+    const v0 = Math.hypot(ra * Math.sin(from), rb * Math.cos(from));
+    const mid = from + ds / v0 / 2;
+    return ds / Math.hypot(ra * Math.sin(mid), rb * Math.cos(mid));
+}
+
+/**
+ * 沿等高线铺座位:一圈套一圈的同心椭圆,每辆车与它所在的那一圈**相切** —— 环岛边上
+ * 停的那一圈车就是这个样子。目前只有 `donut` 走这里,由 `seatsFor` 分派。
+ *
+ * 为什么需要第二个铺法。`latticeSeats` 铺的是矩形点阵:一个基准朝向,一排排平行的行。
+ * 把这样一片点阵裁到一条**弯的**带子上,内外两道弧就各切出一串楔形的碎角 —— 每个碎角
+ * 都窄得坐不下一辆车,又宽得不像"贴边的参差",于是沿着两道边沿各留下一串车形空地。
+ * 实测第 5 关(donut 掩码)在**自己的掩码里面**数出 7 个大洞,同一批参数下 ellipse 是
+ * 0。被退役的旧 `ring` 骨架栽的也是这一跤。
+ *
+ * 弯的带子只能按弯的方式铺。人类伙伴放掉的那条约束是"制作特殊形状的时候,车辆可以摆
+ * 成各个角度,不只局限于 45 度,保持足够间距就行":座位的朝向不再是一个全场常数(以及
+ * 它的 90 度档),而是**每个座位按自己站的位置**算出来的。下游早就吃得下任意角度 ——
+ * `level-gen.ts` 的 `HEADING_STEP` 量化的只是随机兜底播种,`peel` 给一块的是它自己的
+ * 轴或者轴加 180。
+ *
+ * 度量仍然是自洽的,而这正是它跟 `latticeSeats` 里被否掉的"座位各取各的角度"的区别:
+ * 圈距垂直于车身(按车**宽**),圈内步长平行于车身(按车**长**),只不过"垂直"和
+ * "平行"现在是对着等高线说的,不是对着一个全场常数说的。一个座位的邻居仍然只有"同一
+ * 圈的前后两辆"和"里外两圈的对位",三者用的是同一套度量。
+ *
+ * 契约与 `latticeSeats` 完全一样:返回的第 i 个座位就是 `bodies[i]` 的位置,铺不下的车
+ * 不返回,数组因此可能比 `bodies` 短。
+ */
+export function contourSeats(
+    shape: SkeletonShape, blocked: OBB[], w: number, h: number, gap: number,
+    rng: () => number, cross: number, bodies: Body[],
+): Seat[] {
+    const seats: Seat[] = [];
+    // 已经坐下的车身,只为了下面第四条剔除。座位的位置由圈和弧长定死,不受它影响。
+    const placed: OBB[] = [];
+
+    // 圈距按**最宽**的那辆车,与 `latticeSeats` 的 `pitch` 是同一个量、同一条理由:圈是
+    // 沿着车宽一层层摞起来的,按别的车定都会让最宽的那辆压住里外两圈。
+    let widest = 0;
+    for (const b of bodies) if (b.wid > widest) widest = b.wid;
+    const pitch = widest + gap;
+    const jitter = gap * JITTER_F;
+
+    // **两个半轴各自减 `pitch`,而不是整圈按一个归一化半径缩。** 这一条是量出来的,记在
+    // 这里免得后人把它"简化"回去:同心椭圆若按比例缩(半轴同乘一个 t),相邻两圈的法向
+    // 间距在短轴两端是 t 的差乘 w/2、在长轴两端是乘 h/2,8 x 12 上整整差 50% —— 短轴那端
+    // 按 `pitch` 摆好,长轴那端就宽出半个车位,内圈与掩码内沿之间还剩一条 0.49 宽的空带,
+    // 而那正是这次要消掉的楔形碎角换了个地方长出来。半轴各减一个 `pitch` 的那一族,法向
+    // 间距处处是 `pitch`(两端精确,中间实测差 2%),`pitch` 这才真的是"圈距"。
+    //
+    // 代价是这一族的圈彼此不相似,所以内圈会从掩码内沿的短轴那头先穿出去。那不需要特殊
+    // 处理:穿出去的座位由下面的中心点判据逐个剔掉,留下的是贴着内沿的两段弧,而它们填
+    // 的正是"按比例缩"留下的那条空带。
+    //
+    // 最外圈往里缩半个车宽:相切的车横跨的是自己的车宽,圈心离场地边界留这么多,侧面才
+    // 不出界。这是让最外圈不至于整圈被 `insideRect` 剔掉,不是保证 —— 车身仍旧逐个量。
+    let ra = w / 2 - widest / 2;
+    let rb = h / 2 - widest / 2;
+
+    let k = 0;                        // 下一辆还没安置的车
+    // 由外向内。外圈是形状的**轮廓**,玩家看见的就是它;车不够用的时候先把外圈坐满,
+    // 形状还立得住,反过来先铺内圈就只剩一个断了轮廓的环。
+    //
+    // 收圈的判据:这一圈还有没有一点落在掩码里。只问两个轴端就够,不是偷懒 —— 圈上一点
+    // 的归一化半径平方是 A cos²θ + B sin²θ(A、B 是两个轴端的值),它是两端的凸组合,所以
+    // 两端都不在掩码里的时候整圈都不在。
+    for (; k < bodies.length && ra > 0 && rb > 0
+        && (inShape(shape, ra, 0, w, h) || inShape(shape, 0, rb, w, h));
+        ra -= pitch, rb -= pitch) {
+        // 每圈的起点随机转一个相位,免得每圈收尾留下的那点余量对成一条放射状的缝。
+        // 点阵那边的整行错位(`stagger`)是同一件事。
+        const start = rng() * 2 * Math.PI;
+        const end = start + 2 * Math.PI;
+        for (let th = start; k < bodies.length; ) {
+            const b = bodies[k];
+            // 这一抽必须**无条件**抽,而且抽在任何剔除之前,理由与 `latticeSeats` 里那段
+            // 一字不差:`extent` 要用它,而 `th` 不论这个座位收不收都要按 `extent` 推进,
+            // 于是座位的位置与 `cross` 无关,`cross` 才能当一个独立变量去标定。
+            const turn = rng() < cross;
+            // 横过来的车沿弧占的是车宽,车身则伸向半径方向 —— 点阵上 `CROSS` 买到的那点
+            // 不规则,在这里就是"一圈切向车里混几辆头朝外的"。
+            const extent = turn ? b.wid : b.len;
+            // **按弧长走,不是按等角度走**(见 `arcStep`)。把椭圆近似成圆也是同一类错:
+            // 8 x 12 上长短轴比 3:2,误差 50%,不是可以忽略的量级。
+            const dth = arcStep(th, extent + gap, ra, rb);
+            // 一整格(车身加一个 gap)在这一圈上放不下就收圈 —— 让最后一辆压到第一辆身上
+            // 才是"绕回起点"该避免的事。抽签在上面已经抽过了,所以这个 break 不影响"座位
+            // 位置与 `cross` 无关"这条性质。
+            if (th + dth > end) break;
+            // 车心落在光标往前半个车身的地方,与 `latticeSeats` 的 `u + extent / 2` 同构。
+            const tc = th + arcStep(th, extent / 2, ra, rb);
+            const cos = Math.cos(tc);
+            const sin = Math.sin(tc);
+            // 切线方向:dP/dθ = (-ra sinθ, rb cosθ)。
+            const tan = Math.atan2(rb * cos, -ra * sin);
+            // 抖动沿切向和法向各一次,与点阵的 u / v 逐项对应,量也一样(`JITTER_F`)。
+            const js = (rng() - 0.5) * jitter;
+            const jn = (rng() - 0.5) * jitter;
+            const box: OBB = {
+                x: ra * cos + Math.cos(tan) * js - Math.sin(tan) * jn,
+                y: rb * sin + Math.sin(tan) * js + Math.cos(tan) * jn,
+                angle: ((((tan * 180) / Math.PI + (turn ? 90 : 0)) % 360) + 360) % 360,
+                len: b.len,
+                wid: b.wid,
+            };
+            // 前三条剔除与 `latticeSeats` 同一套(那里写了为什么形状只问中心点,而场地和
+            // `blocked` 要问整个车身)。
+            //
+            // 第四条是点阵没有的,而它不是保险起见:**直的车身摆在弯的圈上,两头会拱出
+            // 圈外**。拱出的量是矢高 (len/2)² κ / 2,内圈长轴两端的曲率 κ 量到 0.655,大车
+            // 就是 0.223 —— 比 `gap` 的 0.2 还大,于是里外两圈明明留够了 `pitch`,车角还是
+            // 压在一起。点阵上这一项恒等于零(直的车身摆在直的行上),所以那边不需要这条。
+            //
+            // 剔掉而不是把圈距加厚:`pitch` 是标定过的一个量,为了两端偶尔一辆大车去加厚
+            // 它,整条带子都会松一圈。让那辆车跳过这一格,下一格换一辆车再试。
+            if (insideRect(box, w, h)
+                && inShape(shape, box.x, box.y, w, h)
+                && !blocked.some((r) => overlapMTV(box, r))
+                && !placed.some((q) => overlapMTV(box, q))) {
+                seats.push({ x: box.x, y: box.y, angle: box.angle });
+                placed.push(box);
+                k++;                  // 收下了才换下一辆
+            }
+            // 收不收都往前走一整格:跳过去,不贴着障碍蹭 —— 点阵那边实测过贴着蹭会铺得密
+            // 到关系放松收敛不了,`pack` 返回 [],整关一辆车都生成不出来。
+            th += dth;
+        }
+    }
+    return seats;
+}
+
+/**
+ * 这一关要的那批座位。**哪种形状用哪种铺法,只有这里说了算。**
+ *
+ * 分派放在本模块而不是 `pack()` 里,也不是塞进 `latticeSeats`,两头各有一个理由:
+ *
+ * 塞进 `latticeSeats` 会让那个名字变成假话 —— 它整片只有一个基准朝向,而那不是实现
+ * 细节,是它的度量赖以成立的前提(见那里的注释),测试里有一条专门钉着它。donut 走
+ * 进去会让那条断言变成"看情况",而一条看情况的不变式等于没有。
+ *
+ * 放在 `pack()` 里则会让**分派本身**没法测:要问"donut 到底有没有改用等高线",就只能
+ * 去生成一整关。摆在这里,`pack()` 与测试走的是同一扇门,于是"donut 悄悄退回矩形点阵"
+ * 这个失败模式是一条断言能直接咬住的事 —— 它正是本次改动的空转形态。
+ */
+export function seatsFor(
+    shape: SkeletonShape, blocked: OBB[], w: number, h: number, gap: number,
+    rng: () => number, cross: number, bodies: Body[],
+): Seat[] {
+    // 只有 `donut` 是弯的带子。其余四种形状裁矩形点阵不留楔形碎角,点阵一个字都不用动。
+    return shape === 'donut'
+        ? contourSeats(shape, blocked, w, h, gap, rng, cross, bodies)
+        : latticeSeats(shape, blocked, w, h, gap, rng, cross, bodies);
+}
+
+/**
  * 同一批元素,顺序打散。用传入的 `rng`,所以同一个种子出同一个顺序。
  *
  * 存在的理由在 `pack()` 的调用点:那里的车按车长从大到小排过序,而点阵是一行一行

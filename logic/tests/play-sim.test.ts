@@ -161,7 +161,15 @@ describe('demandPressure', () => {
       lvl.loop.queue = bandedQueue(lvl.lot.cars, lvl.lot.tunnels ?? [], off, 1);
       return demandPressure(lvl).gap;
     };
-    // 已提交的第 6 关:offset 16 -> 0.93,offset 32 -> 1.53,两档都仍然 hard 且可通关。
-    expect(at(32)).toBeGreaterThan(at(16) * 1.3);
+    // 断言的是**整条 offset 轴上的落差**,不是某两档的比值。哪一档最高取决于这一关的
+    // 打包,而打包会变:上一版钉死 offset 16 与 32,第 6 关一改成沿轮廓铺就红了,红得
+    // 毫无道理 —— 那不是 offset 失效,是我把一个随打包漂移的量当成了常数。
+    //
+    // 实测已提交的第 6 关(2026-09-20,沿轮廓铺):
+    //     off0 0.57   off8 1.33   off16 1.67   off24 1.43   off32 1.14   off40 1.39
+    // 最高 1.67 是最低 0.57 的 2.9 倍。断言 1.8 倍,留足余量;而 offset 若真的不起作用,
+    // 这六档会挤在一起,比值奔向 1.0。
+    const spread = [0, 8, 16, 24, 32, 40].map(at);
+    expect(Math.max(...spread)).toBeGreaterThan(Math.min(...spread) * 1.8);
   });
 });

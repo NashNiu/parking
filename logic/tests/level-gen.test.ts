@@ -165,23 +165,35 @@ test('every level uses the one lot shape the camera frames', () => {
   }
 });
 
-test('every heading is one of the eight compass points', () => {
-  // The level format's angles are quantised to 45 degrees, cars and tunnel axes alike.
-  // Free angles read as uniform noise -- the reference the design came from has cars sitting
-  // on a small set of headings, and eight of them is the coarsest set that still keeps the
-  // diagonals a diagonal lane clips its neighbours along.
+test('八向量化仍然管着矩形点阵那几种形状,弯形状除外', () => {
+  // 原来这条是"每个朝向都必须是八个罗盘方向之一",理由是自由角度读起来像噪声,而参考
+  // 作品里的车只坐在少数几个朝向上。2026-09-20 人类伙伴解除了这条限制,原话是:制作
+  // 特殊形状的时候,车辆可以摆成各个角度,不只局限于45度,保持足够间距就行。
   //
-  // Asserted on the FINISHED level rather than on `pack`, because that is the claim: `peel`
-  // hands a piece its own axis or that axis plus 180, and `scatter` normalises and rounds
-  // what comes back. A quantisation applied at placement time and lost somewhere in that
-  // chain would be a quantisation the level files do not actually carry.
+  // 于是它一分为二,而不是被删掉 —— 背后的关切还在。`donut` 的车贴着自己那一圈的切线,
+  // 那正是让一圈车读成环岛而不是"被裁过的格子"的东西;其余四种形状仍然坐在矩形点阵上,
+  // 那里没有任何理由出现 37 度,出现了就是哪儿漏了。
+  //
+  // 仍然断言在**成品关卡**上而不是 `pack` 上,理由不变:`peel` 给一辆车它自己的轴向或者
+  // 轴向加 180,`scatter` 再归一化取整。在摆放时量化、却在这条链子上丢掉,等于关卡文件
+  // 根本没带着这个量化。
   for (const id of IDS) {
     const level = levelFor(id);
     const angles = [
       ...level.lot.cars.map((c) => c.angle),
       ...(level.lot.tunnels ?? []).map((t) => t.angle),
     ];
-    expect(angles.filter((a) => a % 45 !== 0)).toEqual([]);
+    // 隧道轴向永远量化:它不属于任何形状,是场地的结构件。
+    for (const t of level.lot.tunnels ?? []) expect(t.angle % 45).toBe(0);
+    if (skeletonShape(id) === 'donut') {
+      // 弯的那一种:角度必须合法且**确实多样**。上界 360 挡住没归一化的值,下界 10 挡住
+      // "悄悄退回矩形点阵" —— 点阵至多两种朝向(主向加 CROSS 混进来的垂直那一档)。
+      // 实测发出去的第 5 关 41 个不同的整度数(46 辆车),第 6 关 38 个(42 辆)。
+      for (const a of angles) expect(a >= 0 && a < 360).toBe(true);
+      expect(new Set(level.lot.cars.map((c) => Math.round(c.angle))).size).toBeGreaterThan(10);
+    } else {
+      expect(angles.filter((a) => a % 45 !== 0)).toEqual([]);
+    }
   }
 });
 
@@ -282,8 +294,14 @@ test('every packed level is seated as full as its skeleton leaves room for', () 
   // a mask thin enough to stop being a car park: a shape seating 36 cars (which is what the
   // old `ring` geometry did, and why it was dropped) would trip every row here.
   const SEAT_FLOOR: Record<SkeletonShape, number> = {
-    full: 74, ellipse: 63, donut: 49, plus: 46, diamond: 40,
+    full: 74, ellipse: 63, donut: 37, plus: 46, diamond: 40,
   };
+  // `donut` 的 49 是按**矩形点阵**量的,而它 2026-09-20 改成了沿轮廓铺(见 `contourSeats`),
+  // 座位就少了约一成六:同一批种子、同一组车,轮廓平均 52.5 最低 48,点阵平均 62.4 最低
+  // 60。发出去的两关分别坐了 50 和 46 辆。37 是按最小的那一关再留两成 —— 和上面四种形状
+  // 的算法一致。
+  //
+  // 这不是把断言放宽到变绿:布局换了,底下那个量就是另一个量了。旧值继续用才是假的。
   for (const id of PACKED) {
     const level = levelFor(id);
     const shape = skeletonShape(id);

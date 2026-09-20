@@ -10,7 +10,7 @@ import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
 import { LotSystem } from './lot-system';
-import { inShape, latticeSeats, shuffled, SkeletonShape, skeletonShape } from './lot-skeleton';
+import { inShape, seatsFor, shuffled, SkeletonShape, skeletonShape } from './lot-skeleton';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -161,8 +161,14 @@ const RELAX_ITERS = 60;
  * and the four diagonals here keep every bit of that. What goes away is only the
  * distinction between 37 and 41 degrees, which no player can see and no lane cares about.
  *
- * Quantising the AXIS is enough to quantise the heading: `peel` hands a piece its own axis
- * or that axis plus 180, and 45 divides 180.
+ * THAT LAST SENTENCE DOES NOT EXTEND TO SHAPED SEATS, and this constant no longer reaches
+ * them. It quantises the random FALLBACK seeding only; the seats come from `lot-skeleton`,
+ * and `contourSeats` lays a ring of cars ALONG the contour, each one tangent to the ellipse
+ * it sits on. There the distinction between 37 and 41 degrees is exactly what makes a ring
+ * read as a ring rather than as a pile -- quantise those headings and the tangency, which is
+ * the whole content of the layout, is gone. Free angles cost the pipeline nothing: `peel`
+ * hands a piece its own axis or that axis plus 180, so any axis works, and quantising the
+ * AXIS is all this constant ever needed to do for the eight compass points it still serves.
  */
 const HEADING_STEP = 45;
 const HEADINGS = 360 / HEADING_STEP;
@@ -1195,7 +1201,10 @@ export function pack(
         const r = tunnelReservation(t);
         latticeBlocked.push(inflate({ ...r, len: corridor }, pad));
     }
-    const seats = latticeSeats(
+    // `seatsFor` 而不是 `latticeSeats`:哪种形状用哪种铺法是**形状自己的事**,分派写在
+    // `lot-skeleton.ts` 里(那里有为什么不写在这一行、也不写进 `latticeSeats` 的理由)。
+    // 这里只负责问它要座位。目前 `donut` 走等高线铺法,其余四种仍是矩形点阵。
+    const seats = seatsFor(
         shape, latticeBlocked, LOT.w, LOT.h, GAP, rng, CROSS, bodies,
     );
     // 铺不下的车就不存在 —— `CARS_PER_LEVEL` 是上限不是目标,这是 spec §2.3 一开始

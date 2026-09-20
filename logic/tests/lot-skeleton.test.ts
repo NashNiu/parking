@@ -1,4 +1,4 @@
-import { skeletonShape, inShape, SkeletonShape, latticeSeats, shuffled, Body } from '../../game/assets/scripts/core/lot-skeleton';
+import { skeletonShape, inShape, SkeletonShape, latticeSeats, contourSeats, seatsFor, shuffled, Body } from '../../game/assets/scripts/core/lot-skeleton';
 import { OBB, overlapMTV, insideRect } from '../../game/assets/scripts/core/geometry';
 import { GAP, CROSS, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { CAP_BOX, CAR_SCALE, Cap } from '../../game/assets/scripts/core/types';
@@ -305,4 +305,78 @@ test('洗牌是同一批元素换个顺序,而且确实换了', () => {
   expect([...a].sort((x, y) => x - y)).toEqual(items);
   expect(a).not.toEqual(items);
   expect(shuffled(items, seedRng(4))).toEqual(a);
+});
+
+describe('contourSeats —— 沿轮廓铺的那一族', () => {
+  const bodies = (n: number) => mixBodies(seedRng(5), n);
+
+  // 这条是本功能唯一值得担心的失败方式:甜甜圈悄悄退回用矩形点阵。那种失败在生成表格
+  // 上几乎看不出来(洞只多一点),只有角度能出卖它 —— 点阵全场一个朝向(加上 CROSS
+  // 混进来的垂直那一档,至多两种),而沿轮廓铺的车每辆都贴着自己那一点的切线。
+  test('甜甜圈的车朝向各不相同,点阵形状至多两种', () => {
+    // **走 `seatsFor`,不是直接叫 `contourSeats`。** 分派本身才是这次改动会空转的地方:
+    // 直接调等高线函数只能证明"那个函数是对的",证不了"甜甜圈真的用了它"。第一版就是
+    // 这么写的,于是把派发点改回点阵之后 22 条测试全绿 —— 门留好了,我绕过去了。
+    const ring = seatsFor('donut', [], W, H, GAP, seedRng(7), 0, bodies(200));
+    const grid = seatsFor('diamond', [], W, H, GAP, seedRng(7), 0, bodies(200));
+    const round1 = (a: number) => Math.round(a);
+    expect(new Set(grid.map((s) => round1(s.angle))).size).toBeLessThanOrEqual(2);
+    // 实测 40 辆车取到 30 个不同的整度数。断言 10,留足余量:圈数、抖动和车长分布都会
+    // 影响这个数,而"退回点阵"会把它打到 1 或 2,离 10 远得很。
+    expect(new Set(ring.map((s) => round1(s.angle))).size).toBeGreaterThan(10);
+  });
+
+  // 角度对不对,不看"有多少种",看每辆车是不是真的贴着它所在那一点的切线。椭圆在
+  // (x, y) 处的切线方向是 atan2(y / rb^2 * ... ) —— 这里直接用参数化:一个点若在
+  // 半轴 (ra, rb) 的椭圆上,它的参数角 t 满足 cos t = x / ra、sin t = y / rb,切线
+  // 方向就是 atan2(rb cos t, -ra sin t)。ra / rb 未知,但**比值**可由点本身定出来。
+  test('每辆车贴着它自己那一点的切线,而不是某个写死的角度', () => {
+    const seats = seatsFor('donut', [], W, H, GAP, seedRng(11), 0, bodies(200));
+    expect(seats.length).toBeGreaterThan(20);
+    let worst = 0;
+    for (const s of seats) {
+      // 该点所在等距圈的半轴:两个半轴各减同一个量 k,所以 k 由该点反解。
+      // (x/(W/2-k))^2 + (y/(H/2-k))^2 = 1 —— 用二分法解 k,再取切线。
+      let lo = 0, hi = W / 2 - 1e-6;
+      for (let i = 0; i < 60; i++) {
+        const k = (lo + hi) / 2;
+        const ra = W / 2 - k, rb = H / 2 - k;
+        const v = (s.x / ra) ** 2 + (s.y / rb) ** 2;
+        // v(k) 随 k 单调增(半轴变小,同一个点相对越靠外),所以 v > 1 说明 k 取大了。
+        if (v > 1) hi = k; else lo = k;
+      }
+      const k = (lo + hi) / 2;
+      const ra = W / 2 - k, rb = H / 2 - k;
+      const t = Math.atan2(s.y / rb, s.x / ra);
+      const tan = (Math.atan2(rb * Math.cos(t), -ra * Math.sin(t)) * 180) / Math.PI;
+      // 车身是条线段,掉头 180 度是同一个姿势,所以误差取模 180。
+      let d = Math.abs(((s.angle - tan) % 180 + 180) % 180);
+      if (d > 90) d = 180 - d;
+      worst = Math.max(worst, d);
+    }
+    // 实测最差 3.69 度,来自抖动:抖动把车心挪出它下笔时那一圈,于是这里反解出来的
+    // 圈和当时那一圈不完全是同一个,切线方向就差了一点。断言 15 度,四倍余量 —— 而
+    // 退回点阵会让最差值跳到 83 度(我改坏之后量的),离 15 远得很。
+    expect(worst).toBeLessThan(15);
+  });
+
+  test('圈与圈、车与车都不叠', () => {
+    const bs = bodies(200);
+    const seats = contourSeats('donut', [], W, H, GAP, seedRng(3), 0, bs);
+    expect(seats.length).toBeGreaterThan(20);
+    const boxes: OBB[] = seats.map((s, i) => ({ ...s, len: bs[i].len, wid: bs[i].wid }));
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        expect(overlapMTV(boxes[i], boxes[j])).toBeFalsy();
+      }
+    }
+  });
+
+  test('中间那个洞是空的,而同一个种子的满场会往里坐', () => {
+    const seats = contourSeats('donut', [], W, H, GAP, seedRng(9), 0, bodies(200));
+    const inHole = (s: { x: number; y: number }) => (s.x / (W / 2)) ** 2 + (s.y / (H / 2)) ** 2 < 0.20;
+    expect(seats.filter(inHole).length).toBe(0);
+    const full = latticeSeats('full', [], W, H, GAP, seedRng(9), 0, bodies(200));
+    expect(full.filter(inHole).length).toBeGreaterThan(5);
+  });
 });
