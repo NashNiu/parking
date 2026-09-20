@@ -10,7 +10,7 @@ import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
 import { LotSystem } from './lot-system';
-import { laneTight, latticeSeats, shuffled, skeletonLanes, skeletonShape } from './lot-skeleton';
+import { inShape, latticeSeats, shuffled, SkeletonShape, skeletonShape } from './lot-skeleton';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -1146,19 +1146,17 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * pairs for the next sweep to chase, which is why it is also faster, not just
  * capable: measured success at RELAX_ITERS=60 went from 0/30 to 20/30.
  */
-// Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
+// Exported for the skeleton-packing regression test in logic/tests/level-gen.test.ts.
 export function pack(
-    rng: () => number, want: number, tunnels: TunnelSpec[], lanes: OBB[], tight: boolean,
+    rng: () => number, want: number, tunnels: TunnelSpec[], shape: SkeletonShape,
 ): Piece[] {
     // The same half-clearance-plus-rounding-slack `packBox` gives a car, applied to the
     // reservation instead: a settled piece and a reservation then owe each other the full
     // CLEARANCE, which is exactly what `validateLevel` measures between the two.
     const pad = CLEARANCE / 2 + ROUND_MARGIN;
-    // 车道和隧道在这里是同一种东西:一块车不能进的地方。隧道已经把这条路走通了。
-    const reserved = [
-        ...tunnels.map((t) => inflate(tunnelReservation(t), pad)),
-        ...lanes.map((l) => inflate(l, pad)),
-    ];
+    // 只有隧道。骨架从前也在这张表里(车道是"车不能进的地方"),而正掩码下的骨架不是
+    // 一块区域,是一个判据 —— 它沿着 `shape` 传给 `latticeSeats`,不进碰撞表。
+    const reserved = tunnels.map((t) => inflate(tunnelReservation(t), pad));
     const caps: Cap[] = [];
     for (let i = 0; i < want; i++) caps.push(pickCap(rng));
     caps.sort((a, b) => CAP_BOX[b].len - CAP_BOX[a].len);
@@ -1174,17 +1172,14 @@ export function pack(
     const bodies = order.map((c) => ({
         len: CAP_BOX[c].len * CAR_SCALE, wid: CAP_BOX[c].wid * CAR_SCALE,
     }));
-    // `lanes` 定方向,`latticeBlocked` 挡车身,而它比 `reserved` 又厚了一个 pad ——
-    // 这一层是实测出来的,不是保险起见:
+    // `latticeBlocked` 挡车身,而它比 `reserved` 又厚了一个 pad —— 这一层是实测出来
+    // 的,不是保险起见:
     //
     // `latticeSeats` 拿的是**裸车身**,而关系放松拿的是 `packBox`,也就是车身再膨胀
     // 一个 pad;它对的又是已经膨胀过 pad 的 `reserved`。两边各膨胀一次,所以车身对
-    // 车道欠的是 **2 x pad**,不是 pad。只传 `reserved` 的话,贴着车道停下的每一辆车
-    // 都恰好差一个 pad,放松去推它、它推邻居,整片连锁,`pack` 在 RELAX_ITERS 内收
-    // 敛不了,返回 [] —— 回字关和米字关会生成出零辆车。
-    //
-    // 这个错在"放不下就跳过一整格"的年代不发作,因为车很少正好停在边界上;改成贴着
-    // 障碍蹭之后,每一辆挨着车道的车都踩在这条线上,它立刻就现形了。
+    // 保留区欠的是 **2 x pad**,不是 pad。只传 `reserved` 的话,贴着保留区停下的每一
+    // 辆车都恰好差一个 pad,放松去推它、它推邻居,整片连锁,`pack` 在 RELAX_ITERS 内
+    // 收敛不了,返回 [] —— 整关生成出零辆车。
     const latticeBlocked = reserved.map((r) => inflate(r, pad));
     // 再给每条隧道留一条**出去的走廊**。`tunnelReservation` 只包到"车能探出车头"为止,
     // 而 `canExit` 要的是一路开出场地 —— 从前随机撒点会随机留缝,点阵是密排的,于是
@@ -1201,16 +1196,16 @@ export function pack(
         latticeBlocked.push(inflate({ ...r, len: corridor }, pad));
     }
     const seats = latticeSeats(
-        lanes, latticeBlocked, LOT.w, LOT.h, GAP, rng, CROSS, bodies, tight,
+        shape, latticeBlocked, LOT.w, LOT.h, GAP, rng, CROSS, bodies,
     );
     // 铺不下的车就不存在 —— `CARS_PER_LEVEL` 是上限不是目标,这是 spec §2.3 一开始
-    // 就写下的,只是直到这里才真的执行。
+    // 就写下的,只是直到这里才真的执行。正掩码下这句话是每一关的常态而不是例外:形状
+    // 越瘦,铺得下的越少,而那是形状本身,不是这次尝试没发挥好。
     //
-    // 从前这里把溢出的车退回随机播种,而那正是骨架关卡一辆车都生成不出来的原因:车道
-    // 吃掉面积之后,米字关的点阵只铺得下八十一辆里的三十几辆,剩下几十辆撒进一个已经
-    // 满了的场地,关系放松在 RELAX_ITERS 内永远收不了,`pack` 返回 [],两百次尝试全废。
-    // 实测每关铺得下多少(GAP 0.25,十个种子平均,want 89):无骨架 85.6,spine 67.1,
-    // cross 54.7,ring 44.2,star 35.6。
+    // 从前这里把溢出的车退回随机播种,而那正是骨架关卡一辆车都生成不出来的原因:几十
+    // 辆车撒进一个已经满了的场地,关系放松在 RELAX_ITERS 内永远收不了,`pack` 返回 [],
+    // 两百次尝试全废。实测每种形状铺得下多少(GAP 0.20,8 个种子):full 93,ellipse
+    // 79,donut 62,plus 58,diamond 51。
     const pieces: Piece[] = seats.map((seat, i) => (
         { x: seat.x, y: seat.y, angle: seat.angle, cap: order[i] }
     ));
@@ -1482,9 +1477,7 @@ function scatter(
 ): { cars: CarSpec[]; tunnels: TunnelSpec[] } {
     const tunnels = placeTunnels(rng, p.colors, tp);
     if (tunnels.length < tp.count) return { cars: [], tunnels: [] };
-    const shape = skeletonShape(id);
-    const lanes = skeletonLanes(shape, LOT.w, LOT.h);
-    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, lanes, laneTight(shape));
+    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, skeletonShape(id));
     const aimed = aimTunnels(tunnels, pieces);
     const order = peel(rng, pieces, aimed.map(tunnelBox));
     const cars = order.map(({ piece, angle }, i) => ({
@@ -1698,7 +1691,19 @@ const HOLE_STEP = 0.1;
 /** Holes a lot has room for, counted by the largest car each one would take. */
 export interface Holes { big: number; medium: number; small: number }
 
-export function fillableHoles(level: LevelData, exclude: OBB[] = []): Holes {
+/**
+ * `within` 把扫描限制在**这一关的形状**里面,而这与 `exclude` 是同一条理由的另一半。
+ *
+ * 这个指标数的是"一辆车还塞得进去的空地"。正掩码下形状外面**整片**都是这样的空地,
+ * 照直数的话每一关都会报成一个巨大的洞,而菱形关的四个角是**故意**空着的 —— 那不是
+ * 打包器撞出来的,那就是这一关的样子。`exclude` 从前替车道讲的就是这句话(见下面那
+ * 段注释),形状只是把同一句话讲给一整片背景听。
+ *
+ * 不传就与从前逐位相同:`within` 缺省是"处处都算",扫描一个格子都不跳。
+ */
+export function fillableHoles(
+    level: LevelData, exclude: OBB[] = [], within?: (x: number, y: number) => boolean,
+): Holes {
     const pad = CLEARANCE / 2;
     const taken: OBB[] = level.lot.cars.map((c) => inflate(carBox(c), pad));
     for (const t of level.lot.tunnels ?? []) taken.push(inflate(tunnelReservation(t), pad));
@@ -1716,6 +1721,10 @@ export function fillableHoles(level: LevelData, exclude: OBB[] = []): Holes {
             seated = false;
             for (let x = -level.lot.w / 2; x <= level.lot.w / 2 && !seated; x += HOLE_STEP) {
                 for (let y = -level.lot.h / 2; y <= level.lot.h / 2 && !seated; y += HOLE_STEP) {
+                    // 形状外面的空地不是洞。判据跟着车的**中心点**走,与 `latticeSeats`
+                    // 收不收一个座位用的是同一条 —— 两边必须是同一个判据,否则这个指标
+                    // 会把打包器刻意不去坐的每一个位置都数成一个洞。
+                    if (within && !within(x, y)) continue;
                     for (const angle of [0, 45, 90, 135]) {
                         const cand = inflate(
                             { x, y, angle, len: box.len * CAR_SCALE, wid: box.wid * CAR_SCALE },
@@ -1733,6 +1742,18 @@ export function fillableHoles(level: LevelData, exclude: OBB[] = []): Holes {
         }
     }
     return found;
+}
+
+/**
+ * 这一关的形状判据,按场地坐标问 —— `fillableHoles` 的 `within` 要的就是这个。
+ *
+ * 一个函数而不是三份 `(x, y) => inShape(skeletonShape(id), x, y, LOT.w, LOT.h)`:
+ * 候选排名、离线工具那一列、测试,三处问的必须是同一个判据,否则排名按一个形状选、
+ * 表格按另一个形状打印,而两者都不会报错。
+ */
+export function levelMask(id: number): (x: number, y: number) => boolean {
+    const shape = skeletonShape(id);
+    return (x, y) => inShape(shape, x, y, LOT.w, LOT.h);
 }
 
 /** A candidate packing, with the two things `generateLevel` chooses between them on. */
@@ -1938,10 +1959,14 @@ export function generateLevel(id: number): LevelData {
     // because best-of-three out of a spread running 1 to 8 holes was worth only about half
     // of the spread. What ranking cannot do is manufacture a tidy packing the attempts never
     // found; it can only decline the untidy ones it was going to take by arrival order.
+    const mask = levelMask(id);
     const rank = (cs: { cars: CarSpec[]; tunnels: TunnelSpec[] }[]): Ranked[] => cs
         .map((c) => {
             const level = assemble(id, c.cars, c.tunnels);
-            return { ...c, holes: fillableHoles(level), inward: inwardCars(level) };
+            // 形状外面的空地不算洞,见 `fillableHoles` 的 `within`。不传的话菱形关
+            // 的四个角会被数成一堆 big 洞,而每个候选的四个角都一样空 —— 排名于是
+            // 只剩噪声可比。
+            return { ...c, holes: fillableHoles(level, [], mask), inward: inwardCars(level) };
         })
         .sort(better);
 

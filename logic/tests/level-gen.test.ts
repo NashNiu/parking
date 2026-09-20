@@ -1,15 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, packBox, mulberry32 } from '../../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, inwardCars, levelMask, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
 import { isHardButFair, demandPressure } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
 import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
-import { carBox } from '../../game/assets/scripts/core/move-solver';
-import { OBB, overlapMTV, inflate } from '../../game/assets/scripts/core/geometry';
-import { CLEARANCE } from '../../game/assets/scripts/core/types';
-import { laneTight, skeletonShape, skeletonLanes, LANE_W } from '../../game/assets/scripts/core/lot-skeleton';
+import { inShape, SkeletonShape, skeletonShape } from '../../game/assets/scripts/core/lot-skeleton';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -261,26 +258,32 @@ test('every packed level is seated as full as its skeleton leaves room for', () 
   // file notices it.
   //
   // So the floor survives, PER SKELETON, because the skeleton is what sets the seat supply
-  // and one global floor would have to be set by the star levels -- and would then see
+  // and one global floor would have to be set by the thinnest mask -- and would then see
   // nothing at all if level 2 fell from 89 cars to 60.
   //
-  //     shape   shipped      floor   10-seed average, no tunnel, want 85 (LANE_TIGHT docblock)
-  //     none    89           71      85
-  //     spine   84, 81       64      74
-  //     cross   67, 61, 60   48      60
-  //     star    55, 51, 51   40      52
+  // The masks replace the lanes as of 2026-09-20 (see SkeletonShape): the shape is made OF
+  // cars now rather than carved out of them, so the seat supply is what the mask's area
+  // holds. Measured at the shipped GAP over 8 seeds, and confirmed end to end through `pack`
+  // at want 89:
   //
-  // THE MARGIN IS 20% BELOW THE SMALLEST SHIPPED LEVEL OF EACH SHAPE, and it is that wide on
-  // purpose: these counts are the output of a stochastic search, and a single per-shape knob
-  // is worth more than the margin -- LANE_TIGHT's `cross` row took level 6 from 75 cars to 59
-  // (-21%) and the level stayed on target and hard. A floor nearer today's numbers would fail
-  // the next regeneration for no reason.
+  //     shape     supply   floor
+  //     full        93       74
+  //     ellipse     79       63
+  //     donut       62       49
+  //     plus        58       46
+  //     diamond     51       40
   //
-  // It is still a floor that can fire. The empty-lot failure clears it by a factor of ten in
-  // the wrong direction, and so does the one geometry this design actually rejected: `ring`
-  // seats about 36 cars at a quarter coverage, which is why it left SHAPE_CURVE, and putting
-  // it back on a star id would trip the 40 here.
-  const SEAT_FLOOR: Record<string, number> = { none: 71, spine: 64, cross: 48, star: 40 };
+  // THE MARGIN IS 20% BELOW THE MEASURED SUPPLY, and it is that wide on purpose: these counts
+  // are the output of a stochastic search and swing about ten cars across seeds. A floor
+  // nearer today's numbers would fail the next regeneration for no reason.
+  //
+  // It is still a floor that can fire, and the failure it exists for is the EMPTY LOT named
+  // above -- that one clears it by a factor of ten in the wrong direction. It also fires on
+  // a mask thin enough to stop being a car park: a shape seating 36 cars (which is what the
+  // old `ring` geometry did, and why it was dropped) would trip every row here.
+  const SEAT_FLOOR: Record<SkeletonShape, number> = {
+    full: 74, ellipse: 63, donut: 49, plus: 46, diamond: 40,
+  };
   for (const id of PACKED) {
     const level = levelFor(id);
     const shape = skeletonShape(id);
@@ -304,11 +307,11 @@ test('the car mix keeps the bodies big: the capacity draw has not drifted small'
   // but it fell for a reason the metric cannot see, so moving the floor would have been the
   // wrong repair in either direction.
   //
-  // The skeleton's lanes take 11.2 (spine) to 19.3 (star) of the lot's 96 square units, and
-  // the cars that no longer fit are not created. Coverage of the LOT therefore measures the
-  // SKELETON now, not the mix: level 2 (no lanes) reads 0.528 and level 9 (star) 0.239, and
-  // both are correct. Excluding the lane area does not rescue it either -- 0.528 against
-  // 0.299 -- because lanes do not merely subtract area, they fragment what is left.
+  // The skeleton only lets cars sit inside its MASK, and the cars that find no seat are not
+  // created. Coverage of the LOT therefore measures the SKELETON now, not the mix: level 2
+  // (`full`) reads 0.528 and the thinnest mask about half of that, and both are correct.
+  // Dividing by the mask's own area does not rescue it either -- a mask does not merely
+  // subtract area, it fragments what is left.
   //
   // THE MIX IS WHAT THE TEST WAS AFTER, and its own comment said so: "this one is really
   // about the capacity mix. It fails if CAP_MIX shifts toward small bodies, or if CAR_SCALE
@@ -986,98 +989,143 @@ test('不传排除区时行为与从前完全一致', () => {
   expect(fillableHoles(level, [])).toEqual(fillableHoles(level));
 });
 
-// 这条从 2026-09-19 起一直 skip 着,理由是"已提交的 JSON 还是旧打包器的产物,车道
-// 是后加进 `pack()` 的,所以在重新生成之前必然失败"。2026-09-20 的全量重生成让它成
-// 立了,于是它打开 —— 九关十六条车道,零次车身重叠、零次间距不足。
+// `within` 与 `exclude` 是同一条理由的两半,所以它也要有同一种自证:一个被完全忽略的
+// 参数照样能让"多加约束只会让洞变少"式的断言通过。这里用的是**相等**和**不相等**,
+// 不是 `<=`。
 //
-// 它守的是整套骨架设计存在的理由:车道得是**车道**,不是一条画在地上、照样停满车的
-// 线。这个性质没有别的测试在看,而生成器里任何一处改动都可能悄悄毁掉它。
-test('车道里没有车,而且车与车道之间还留着 CLEARANCE', () => {
-  for (const id of PACKED) {
-    const level = shipped(id);
-    const lanes = skeletonLanes(skeletonShape(id), LOT.w, LOT.h);
-    // 第 2 关的骨架是 'none',一条车道都没有,两层内循环都是空的——不加这道断言,
-    // 那个 id 上这条测试什么都没查却照样绿。第 3 关起才该有车道。
-    if (id > 2) expect(lanes.length).toBeGreaterThan(0);
-    for (const lane of lanes) {
-      for (const car of level.lot.cars) {
-        // 整个 CLEARANCE,不是一半。`inflate` 是每边各加 d,所以 CLEARANCE / 2 只
-        // 断言了 0.05 的间隙,而标题和 spec §4.5 #6 说的都是 0.10。`pack` 实际保证的
-        // 是 CLEARANCE + 2 * ROUND_MARGIN,所以这条更强的断言是真的。
-        expect(overlapMTV(inflate(carBox(car), CLEARANCE), lane)).toBeFalsy();
-      }
-    }
-  }
+// 第 3 关是椭圆。椭圆盖不住场地的四个角,而那四个角是空的沥青 —— 正是这个指标不该
+// 去数的东西:实测不带 `within` 时它报 8 个 big 洞,带上之后 0 个。那 8 个洞不是打包
+// 器撞出来的,它们就是这一关的样子。
+test('within 把形状外面的空地排除掉了,而"处处都算"与不传等价', () => {
+  const level = shipped(3);
+  const bare = fillableHoles(level);
+  expect(bare.big).toBeGreaterThan(0);        // 先证明这一关本来就有 big 洞可数
+  const masked = fillableHoles(level, [], levelMask(3));
+  expect(masked.big).toBe(0);
+  expect(masked).not.toEqual(bare);
+  // 反过来:一个处处为真的 `within` 必须与不传逐位相同。这条挡的是把判据写反了的
+  // 实现 —— 写反之后上面三条还是全绿的。
+  expect(fillableHoles(level, [], () => true)).toEqual(bare);
 });
 
-// C1 的回归测试。原本写的是 want = 85,但那个数字两边都红:座位供给本身就不够
-// (见下面那条 skip),改好改坏都收敛不了,那条断言分不出 C1 修没修。想让它咬住 C1,
-// want 得落在座位供给之内。实测(每格 10 个种子,收敛次数):
-//
-//              want=40  want=60  want=70  want=80  want=89
-//   改之前 spine  9/10     1/10     1/10     0/10     0/10
-//          star   0/10     0/10     0/10     0/10     0/10
-//   改之后 spine  8/10     3/10     2/10     0/10     0/10
-//          star   4/10     0/10     0/10     0/10     0/10
-//
-// star 那一列(0/10 -> 4/10)就是这条测试的牙:不按车身检查保留区,米字骨架一次都
-// 收敛不了。want = 40 因此是故意的,不是图快。
-test('每种骨架都打得出包,而且车身不压进车道', () => {
-  for (const shape of ['spine', 'cross', 'ring', 'star'] as const) {
-    const lanes = skeletonLanes(shape, LOT.w, LOT.h);
+/**
+ * 一个点离形状还有多远,以场地单位计。在形状里就是 0。
+ *
+ * 判据是个谓词而不是一块几何,所以距离只能问出来:围着这个点画一圈半径越来越大的
+ * 环,第一个碰到形状的半径就是距离。步长 0.05、每圈 32 个方向,对下面那条 1.5 的门
+ * 槛来说够细了。
+ */
+function shapeDistance(shape: SkeletonShape, x: number, y: number): number {
+  if (inShape(shape, x, y, LOT.w, LOT.h)) return 0;
+  for (let r = 0.05; r <= 6; r += 0.05) {
+    for (let k = 0; k < 32; k++) {
+      const a = (k / 32) * 2 * Math.PI;
+      if (inShape(shape, x + r * Math.cos(a), y + r * Math.sin(a), LOT.w, LOT.h)) return r;
+    }
+  }
+  return Infinity;
+}
+
+/** 这批车里有多大比例的中心点落在形状内。 */
+function insideShare(shape: SkeletonShape, pts: { x: number; y: number }[]): number {
+  return pts.filter((p) => inShape(shape, p.x, p.y, LOT.w, LOT.h)).length / pts.length;
+}
+
+/**
+ * 场上的车必须真的摆成这一关的形状 —— 整套设计存在的理由,而且仍然只有这一条测试在守它。
+ *
+ * 取代 2026-09-19 写下的 `车道里没有车,而且车与车道之间还留着 CLEARANCE`。车道没有了
+ * (骨架从负掩码翻成了正掩码,见 `SkeletonShape`),但它守的那件事一点没变:形状得是
+ * 形状,不是一句声称。
+ *
+ * **允许一圈边缘,而且那是量出来的不是让出来的。** 座位一定在形状里(lot-skeleton.test.ts
+ * 咬这一条),但关系放松之后车会被挤出去一点 —— 形状边上的车外侧没有邻居顶回来。实测
+ * 8 个种子 x 4 种带形状的掩码:跑到形状外的车占 3%-8.5%,中位数离形状 0.15-0.22 个单位,
+ * 最远的一辆 0.93。所以门槛是 1.5(最远那辆的 1.6 倍,也是一个车身长左右 —— 一辆车整个
+ * 挪到形状外面,那就不是边缘了),内部占比的下限是 0.85(实测 0.915-0.970)。
+ *
+ * **第三条断言是防 stub 的那条。** 把 `inShape` 写成 `return true`,上面两条对每种形状
+ * 都还是绿的(`full` 的打包天然有 85% 的车落在椭圆里,离椭圆也从不超过 1.3)。所以这里
+ * 再问一次差值:同样的种子按 `full` 打出来的包,落在该形状内的比例必须明显更低。判据被
+ * 忽略时两者是同一个包,差值恰好为 0。实测差值 0.12(ellipse)到 0.37(diamond)。
+ */
+test('场上每一辆车都摆在这一关的形状里,至多探出一圈边缘', () => {
+  const FRINGE = 1.5;
+  for (const shape of ['ellipse', 'donut', 'plus', 'diamond'] as SkeletonShape[]) {
+    const own: { x: number; y: number }[] = [];
+    const flat: { x: number; y: number }[] = [];
     let settled = 0;
-    for (let seed = 0; seed < 10; seed++) {
-      const pieces = pack(mulberry32(seed * 7919), 40, [], lanes, laneTight(shape));
-      if (pieces.length === 0) continue;      // [] 的意思是这次尝试没收敛
+    for (let seed = 0; seed < 8; seed++) {
+      const pieces = pack(mulberry32(seed * 7919), 89, [], shape);
+      if (pieces.length === 0) continue;       // [] 的意思是这次尝试没收敛
       settled++;
-      for (const p of pieces) {
-        for (const l of lanes) {
-          expect(overlapMTV(packBox(p), l)).toBeFalsy();
-        }
-      }
+      own.push(...pieces);
+      flat.push(...pack(mulberry32(seed * 7919), 89, [], 'full'));
     }
-    expect(settled).toBeGreaterThan(0);
+    // 不能靠一次都收敛不了来通过。
+    expect({ shape, settled: settled > 0 }).toEqual({ shape, settled: true });
+    let worst = 0;
+    for (const p of own) worst = Math.max(worst, shapeDistance(shape, p.x, p.y));
+    expect({ shape, worst: worst <= FRINGE }).toEqual({ shape, worst: true });
+    expect({ shape, share: insideShare(shape, own) >= 0.85 }).toEqual({ shape, share: true });
+    expect({ shape, gained: insideShare(shape, own) - insideShare(shape, flat) > 0.08 })
+      .toEqual({ shape, gained: true });
   }
 });
 
-// C1 还没修完的那一半,记在这里而不是留成一句口头交代。
-//
-// Task 4b 把行内步长改成按车长之后,这条**仍然打不出来,但病因换掉了一半**。
-//
-// 治好的那一半是播种自带的重叠:行内步长曾经写死 1.25 而大车含留白 1.758,同一行
-// 两辆大车一出生就压掉 0.508。拿掉它之后,无车道的那一档从 4/20 变成 10/10。
-//
-// 剩下的那一半是座位供给,而它一点没动:车道吃掉的是面积。每种骨架下 `latticeSeats`
-// 的返回长度(10 个种子的均值,`reserved` 已按 pad 膨胀,CROSS = 0.35):
-//
-//   want=85  none 84.1   spine 65.9   cross 52.2   ring 48.4   star 35.7
-//   want=89  none 85.6   spine 67.1   cross 54.7   ring 44.2   star 35.6
-//
-// 对应的 settle 率(10 个种子):
-//
-//            none    spine   cross   ring    star
-//   want=40  10/10   8/10    7/10    5/10    3/10
-//   want=60  10/10   8/10    1/10    0/10    0/10
-//   want=70   8/10   4/10    0/10    0/10    0/10
-//   want=85  10/10   0/10    0/10    0/10    0/10
-//
-// 米字骨架只供得出约 36 个座位,而第 9、10 关要 81 辆车:四十多辆退回均匀随机播种,
-// 撒在一个已经铺满的场地上,关系放松在 RELAX_ITERS 内收拾不了,`pack` 返回 []。
-//
-// 座位供给比 Task 4 那次量的还低(旧表 star 69 个座位里 49 个放得下车身),这是意料
-// 之中的:旧的 69 个是拿中心点数出来的,其中两成是同一行里互相重叠的大车,本来就不
-// 是能坐的座位。新的 36 个每一个都真的坐得下。
-//
-// 这条测试仍然是那件事修好的验收条件。它属于 `GAP` 的标定(spec §4.1,Task 5)或者
-// spec §2.3 的"多出来的车直接丢掉",两条都不在 Task 4b 的范围内——所以仍然 skip,
-// 不是删。
-test.skip('出货用的车数下,每种骨架也打得出包', () => {
-  for (const shape of ['spine', 'cross', 'ring', 'star'] as const) {
-    const lanes = skeletonLanes(shape, LOT.w, LOT.h);
-    let settled = 0;
-    for (let seed = 0; seed < 10; seed++) {
-      if (pack(mulberry32(seed * 7919), 85, [], lanes, laneTight(shape)).length > 0) settled++;
-    }
-    expect(settled).toBeGreaterThan(0);
+/**
+ * 同一条性质,问在**真正发出去的文件**上 —— 上面那条问的是 `pack()`,而玩家看到的是
+ * 这些 JSON。
+ *
+ * 只问第 3、5 两关,因为只有这两关是在正掩码下重新生成的。另外八个文件还是负掩码年代
+ * 的产物,它们当然不成形状 —— 那是文件旧,不是代码坏。**全量重新生成之后,这里要改成
+ * `PACKED`**,和 2026-09-19 那条测试当初等来的是同一件事。
+ */
+const MASK_REGENERATED = [3, 5];
+
+test('重新生成过的关卡,车确实摆成了它的形状', () => {
+  for (const id of MASK_REGENERATED) {
+    const level = shipped(id);
+    const shape = skeletonShape(id);
+    const cars = level.lot.cars;
+    expect(cars.length).toBeGreaterThan(20);
+    let worst = 0;
+    for (const c of cars) worst = Math.max(worst, shapeDistance(shape, c.x, c.y));
+    expect({ id, shape, worst: worst <= 1.5 }).toEqual({ id, shape, worst: true });
+    expect({ id, shape, share: insideShare(shape, cars) >= 0.85 })
+      .toEqual({ id, shape, share: true });
   }
 });
+
+// C1 的回归测试,以及从 2026-09-19 起一直 skip 着的那条 —— 正掩码之后两条合成了一条。
+//
+// 旧的那对是分开的,因为它们分得开:want = 40 那条能咬住 C1(按车身而不是按中心点检查
+// 保留区),want = 85 那条咬的是座位供给,而负掩码下供给根本不够 —— 米字骨架只供得出
+// 约 36 个座位,第 9、10 关却要 81 辆车,`pack` 必然返回 [],所以它只能 skip 着。
+//
+// 正掩码把那半条治好了,而且不是靠调参:车道是在一个满场里**截断每一行**,一条贯穿的
+// 车道每截一次就按"跳过一整个车位"的规则白扔一个车身长;掩码不截断任何东西,它只是把
+// 行的两端收进来。同一个 GAP 下五种形状在出货车数上的收敛率(10 个种子,不带隧道):
+//
+//              want=40   want=85
+//   full        10/10      8/10
+//   ellipse     10/10      7/10
+//   donut       10/10     10/10
+//   plus        10/10     10/10
+//   diamond     10/10     10/10
+//
+// 对照负掩码那张表(spine 在 want=85 上 0/10,star 在 want=40 上 3/10),这一列才是
+// "每种形状都打得出包"第一次真的成立。
+test('每种形状在出货的车数下都打得出包', () => {
+  for (const shape of ['full', 'ellipse', 'donut', 'plus', 'diamond'] as SkeletonShape[]) {
+    let settled = 0;
+    for (let seed = 0; seed < 10; seed++) {
+      if (pack(mulberry32(seed * 7919), 85, [], shape).length > 0) settled++;
+    }
+    // 十个种子里至少一半 —— 不是 `> 0`。`generateLevel` 每关跑几百次尝试,所以单看
+    // "至少有一次收敛"分不出"健康"和"一百次里撞上一次";旧的 `> 0` 只能写成那样,
+    // 是因为当时最好的一档也只有 4/10。
+    expect({ shape, settled, enough: settled >= 5 }).toEqual({ shape, settled, enough: true });
+  }
+});
+

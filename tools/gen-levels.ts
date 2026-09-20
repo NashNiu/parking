@@ -15,7 +15,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
 import { demandPressure, isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
@@ -131,7 +131,9 @@ for (const id of ids) {
     // car-shaped patch of bare asphalt in it -- which is a bug you can only see. See
     // `fillableHoles`; the search ranks its candidates on this, so this column is how you
     // check the ranking is doing anything.
-    const h = fillableHoles(level);
+    // 与候选排名同一个判据(`levelMask`):形状外面的空地不是洞。不带它的话,菱形关
+    // 这一列会把四个**故意**空着的角打印成一串 big 洞,而排名看到的根本不是这个数。
+    const h = fillableHoles(level, [], levelMask(id));
     // big/medium/small, in that order, because they do not read the same: one BIG hole is a
     // car-shaped rectangle of bare asphalt and looks broken, while three small ones look
     // like a car park with room in it. The search ranks on exactly this order.
