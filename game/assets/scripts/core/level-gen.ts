@@ -4,7 +4,7 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { isHardButFair } from './play-sim';
+import { demandPressure, isHardButFair } from './play-sim';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -1181,6 +1181,20 @@ export function pack(
     // 这个错在"放不下就跳过一整格"的年代不发作,因为车很少正好停在边界上;改成贴着
     // 障碍蹭之后,每一辆挨着车道的车都踩在这条线上,它立刻就现形了。
     const latticeBlocked = reserved.map((r) => inflate(r, pad));
+    // 再给每条隧道留一条**出去的走廊**。`tunnelReservation` 只包到"车能探出车头"为止,
+    // 而 `canExit` 要的是一路开出场地 —— 从前随机撒点会随机留缝,点阵是密排的,于是
+    // 隧道口被封成了系统性结果:实测第 4、5 关的 mouth 车第一下就动不了(`welded`)。
+    //
+    // 这条走廊只加进**点阵的避让表**,不进 `reserved`:后者是碰撞与 `validateLevel` 的
+    // 依据,往里塞一块并不真的禁止停车的区域会让那两件事说谎。点阵绕开它,关系放松仍
+    // 然可以把车推进来 —— 要的是"别一开始就堵死",不是"永远空着"。
+    //
+    // 沿隧道轴向取场地对角线的长度,所以两端都够得着边界;宽度就是隧道自己的宽度。
+    const corridor = Math.hypot(LOT.w, LOT.h);
+    for (const t of tunnels) {
+        const r = tunnelReservation(t);
+        latticeBlocked.push(inflate({ ...r, len: corridor }, pad));
+    }
     const seats = latticeSeats(
         lanes, latticeBlocked, LOT.w, LOT.h, GAP, rng, CROSS, bodies, tight,
     );
@@ -1553,6 +1567,25 @@ const PAINTINGS = 400;
 const PACKINGS = 6;
 
 /**
+ * 找到几个 hard 且 fair 的配色之后就停,取其中缺口最大的那个。
+ *
+ * 从前这里是"撞上第一个就返回",而那让整条流水线在两个不同的目标上各优化一半:配色
+ * 搜索优化 hard∧fair,BAND_CURVE 的扫描在一个**固定**配色上优化缺口,两者不复合。
+ * 症状是 2026-09-20 那次全量重生成——扫描说第 10 关能到 2.19,重新生成实得 1.48,
+ * 四个被改过 offset 的关卡无一例外地低于预测,比例 0.6 到 0.8。offset 一变,配色就在
+ * 新 offset 上重搜,落到另一个"第一个碰上的"解。
+ *
+ * 能挑的余地是有限的,而且按颜色数急剧变化:400 个候选里能打赢一行策略的,四色 0 个、
+ * 五色 0 到 2 个、六色 4 到 7 个。所以五色关卡基本没得挑(第 3 关的缺口低,多半不是
+ * 没挑好,是只有那一个),而六色关卡——第 5 到 10 关全是六色——是真有得挑的。
+ *
+ * 4 是按上面那组数定的:六色的可行解就 4 到 7 个,取到 4 个已经覆盖大半,再往上就是
+ * 拿几百次模拟去换一两个候选。命中一个之后仍然继续扫,直到凑满 4 个或者 `PAINTINGS`
+ * 用尽 —— 这是本函数唯一变贵的地方,而它只在六色关卡上真的变贵。
+ */
+const PAINTING_PICKS = 4;
+
+/**
  * Repaint `cars` until the level is hard but fair, or return null if the search runs out.
  *
  * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
@@ -1578,13 +1611,24 @@ function choosePainting(
     if (p.colors <= UNLOCKED) return null;
     const rand = mulberry32(id * 104729 + 17);
     let tried = 0;
+    let best: CarSpec[] | null = null;
+    let bestGap = -1;
+    let found = 0;
     for (const assign of paintings(cars.length, p.colors, rand)) {
-        if (tried++ >= PAINTINGS) return null;
+        if (tried++ >= PAINTINGS) break;
         const painted = repaint(cars, assign);
-        const verdict = isHardButFair(assemble(id, painted, tunnels));
-        if (verdict.hard && verdict.fair) return painted;
+        const level = assemble(id, painted, tunnels);
+        const verdict = isHardButFair(level);
+        if (!verdict.hard || !verdict.fair) continue;
+        const gap = demandPressure(level).gap;
+        found++;
+        if (gap > bestGap) {
+            bestGap = gap;
+            best = painted;
+        }
+        if (found >= PAINTING_PICKS) break;
     }
-    return null;
+    return best;
 }
 
 /**
