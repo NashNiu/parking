@@ -664,11 +664,13 @@ export function tunnelParams(id: number): TunnelParams {
  * already at or above 12, so requiring id 5 >= id 4 excludes no option it would otherwise have
  * taken.
  *
- * ZERO ON THE TEACHING LEVELS, deliberately. Measured over the ten shipped levels: at offset
- * 0 every one of them falls to `keepDistinct`, the one-line rule ("keep the stalls all
- * different colours") the whole difficulty apparatus exists to defeat. Perfect correspondence
- * is the free end of this dial -- which is exactly what levels 1 and 2 want and what nothing
- * after them may have.
+ * ZERO ONLY ON LEVEL 1 now. At offset 0 a level falls to `keepDistinct`, the one-line rule
+ * ("keep the stalls all different colours") this whole apparatus exists to defeat -- perfect
+ * correspondence is the free end of the dial. Level 1 is the authored teaching level and no
+ * offset makes it hard anyway, by construction. Level 2 used to sit here too, on the argument
+ * that the second level should still be free; my human partner has since said the opposite in
+ * so many words -- 即使从第二关开始难度就一直很高,也可以 -- and level 2 at offset 16 is
+ * hard, winnable, and carries a demand gap of 1.08 against 0.03 at offset 0.
  *
  * `interleave` was swept alongside offset over ids 5-8, the full OFFSETS grid, depths {1, 2, 3}
  * (`tools/band-sweep.ts`, sweep-interleave.txt). It is not inert: comparing each offset's
@@ -680,29 +682,37 @@ export function tunnelParams(id: number): TunnelParams {
  * 6's offset 20 goes hard=Y to hard=n at il=2, then back to hard=Y at il=3, which is
  * non-monotone rather than a trend worth following. So the knob does move difficulty -- it holds
  * a car's stall occupied across several laps instead of releasing its whole band at once -- but
- * it moves no verdict that BAND_CURVE currently depends on. It stays pinned at 1: giving any id
- * a nonzero depth would mean re-searching that id's painting at the new depth and re-running
- * the regeneration this task is explicitly scoped not to trigger, to chase a change that is
- * inconsistent in direction and measured on 4 of the 10 ids. What would make it earn a place on
- * the curve is a bay sized for the longer occupancy it creates, and that is named out of scope
- * in the plan.
+ * it moved no verdict that BAND_CURVE depended on, and it was pinned at 1 on that evidence.
  *
- * Of the ten shipped offsets, id 6's 20 is the one sensitive to this knob: it passes at depth
- * 1, fails at depth 2, and passes again at depth 3 (the non-monotone flip named above). Whoever
- * turns `interleave` on for real should re-sweep id 6 first, before any other id, on exactly
- * that account.
+ * THAT EVIDENCE WAS THE WRONG MEASUREMENT, and the 2026-09-20 sweep says so. hard/fair is one
+ * bit, and at four open stalls it is saturated: many offsets read hard on every level, so a
+ * knob that changes how hard without flipping the bit is indistinguishable from an inert one.
+ * Ranked by `demandPressure` instead, `interleave` takes the best cell on three of the ten ids
+ * -- 7 at il=2, 8 at il=2, 10 at il=3 -- and it is no longer pinned.
+ *
+ * THE RAMP LIVES IN THE GAP, NOT IN THE OFFSET. The old table was non-decreasing in `offset`
+ * and said so in every row, because `offset` was the only dial there was a reason to believe in.
+ * It is not difficulty; it is a way of reaching difficulty, and the relation is not monotone --
+ * id 8's best cell is offset 4 and id 3's is offset 32. What ramps is the gap: about 1.0 to 1.1
+ * across ids 2-4, then a plateau of 1.8 to 2.4 across 5-10. Two tiers, an on-ramp and a high
+ * plateau, which is what my human partner asked for.
+ *
+ * Ids 6 and 7 have EXACTLY ONE passing cell each in the whole 33-cell grid. They are not chosen,
+ * they are forced, and a regeneration that moves their packing can take even that away.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    { offset: 0, interleave: 1 },    // 1  teaching level; no offset passes for it, by construction
-    { offset: 0, interleave: 1 },    // 2  teaching level; 0 and 4 both pass
-    { offset: 8, interleave: 1 },    // 3  8, 28-36 pass; 8 is an ISLAND (12-24 fail) -- taken over the run to stay non-decreasing into level 4's fixed 12
-    { offset: 12, interleave: 1 },   // 4  the only offset in the grid that passes at all
-    { offset: 16, interleave: 1 },   // 5  12, 16 pass; 16 is taken over 12 so the ramp keeps climbing past level 4
-    { offset: 20, interleave: 1 },   // 6  20-40 pass; 20 is the low edge, keeping the +4 step from level 5's 16
-    { offset: 24, interleave: 1 },   // 7  0, 4, 12, 20, 24, 28, 32 pass; 24 is near the middle of the 20-32 run, above the low outliers
-    { offset: 28, interleave: 1 },   // 8  8, 12, 28 pass; 28 is an ISLAND -- 24 and 32 fail
-    { offset: 32, interleave: 1 },   // 9  16, 28-36 pass; 32 is the middle of the 28-36 run
-    { offset: 36, interleave: 1 },   // 10 8, 12, 36 pass; 36 is an ISLAND -- 32 and 40 fail
+    // 每行末尾是 2026-09-20 扫描里这一格的 demand gap。选法:hard ∧ fair 的格子里取缺口
+    // 最大的那个;并列时取 interleave 小的,因为它是较少动过的那一档。
+    { offset: 0, interleave: 1 },    // 1  authored teaching level; no cell is hard, by construction
+    { offset: 16, interleave: 1 },   // 2  gap 1.08, against 0.03 at the old offset 0
+    { offset: 32, interleave: 1 },   // 3  gap 1.09; il=3 reads 1.13 but within the noise of one run
+    { offset: 12, interleave: 1 },   // 4  gap 1.02; still the ONLY passing offset in the grid
+    { offset: 16, interleave: 1 },   // 5  gap 2.38, the highest on the curve
+    { offset: 20, interleave: 1 },   // 6  gap 1.93; the only passing cell of 33 -- forced, not chosen
+    { offset: 24, interleave: 1 },   // 7  gap 1.85; likewise the only passing cell of 33
+    { offset: 4, interleave: 2 },    // 8  gap 2.33; interleave earns its place here
+    { offset: 32, interleave: 1 },   // 9  gap 1.84
+    { offset: 28, interleave: 3 },   // 10 gap 2.19
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
