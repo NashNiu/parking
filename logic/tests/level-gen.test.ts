@@ -986,10 +986,13 @@ test('不传排除区时行为与从前完全一致', () => {
   expect(fillableHoles(level, [])).toEqual(fillableHoles(level));
 });
 
-// 已提交的关卡 JSON 还是旧打包器(均匀随机撒点)的产物,车道是 Task 4 才加进
-// `pack()` 的,所以这条断言在 Task 8 重新生成关卡之前必然失败——这正是 Task 8
-// 的验收条件之一。此处先用 test.skip 记录下来,Task 8 重新生成关卡后再打开。
-test.skip('车道里没有车,而且车与车道之间还留着 CLEARANCE', () => {
+// 这条从 2026-09-19 起一直 skip 着,理由是"已提交的 JSON 还是旧打包器的产物,车道
+// 是后加进 `pack()` 的,所以在重新生成之前必然失败"。2026-09-20 的全量重生成让它成
+// 立了,于是它打开 —— 九关十六条车道,零次车身重叠、零次间距不足。
+//
+// 它守的是整套骨架设计存在的理由:车道得是**车道**,不是一条画在地上、照样停满车的
+// 线。这个性质没有别的测试在看,而生成器里任何一处改动都可能悄悄毁掉它。
+test('车道里没有车,而且车与车道之间还留着 CLEARANCE', () => {
   for (const id of PACKED) {
     const level = shipped(id);
     const lanes = skeletonLanes(skeletonShape(id), LOT.w, LOT.h);

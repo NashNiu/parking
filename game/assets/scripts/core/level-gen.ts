@@ -701,18 +701,23 @@ export function tunnelParams(id: number): TunnelParams {
  * they are forced, and a regeneration that moves their packing can take even that away.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    // 每行末尾是 2026-09-20 扫描里这一格的 demand gap。选法:hard ∧ fair 的格子里取缺口
-    // 最大的那个;并列时取 interleave 小的,因为它是较少动过的那一档。
+    // 每行末尾的 gap 是**发出去的那一关实测**的 `demandPressure().gap`,不是扫描里那一
+    // 格的读数。两者是不同的量,混用会让人拿一个从不成立的数去对账:扫描是"在一个固定
+    // 配色上换队列",而生成是"在新 offset 上重搜配色"。以前预测高于实得(配色搜索只找
+    // hard ∧ fair,撞上哪个算哪个);`choosePainting` 改成挑缺口最大的之后,预测反而
+    // 常常低于实得 —— 第 8 关这一格扫描读 1.23,发出去是 2.02。
+    //
+    // 选法:hard ∧ fair 的格子里取扫描缺口最大的那个,改完重新生成,再拿实测回填这里。
     { offset: 0, interleave: 1 },    // 1  authored teaching level; no cell is hard, by construction
-    { offset: 16, interleave: 1 },   // 2  gap 1.08, against 0.03 at the old offset 0
-    { offset: 32, interleave: 1 },   // 3  gap 1.09; il=3 reads 1.13 but within the noise of one run
-    { offset: 12, interleave: 1 },   // 4  gap 1.02; still the ONLY passing offset in the grid
-    { offset: 16, interleave: 1 },   // 5  gap 2.38, the highest on the curve
-    { offset: 20, interleave: 1 },   // 6  gap 1.93; the only passing cell of 33 -- forced, not chosen
-    { offset: 24, interleave: 1 },   // 7  gap 1.85; likewise the only passing cell of 33
-    { offset: 4, interleave: 2 },    // 8  gap 2.33; interleave earns its place here
-    { offset: 32, interleave: 1 },   // 9  gap 1.84
-    { offset: 28, interleave: 3 },   // 10 gap 2.19
+    { offset: 16, interleave: 1 },   // 2  gap 1.56, against 0.03 at the old offset 0
+    { offset: 32, interleave: 1 },   // 3  gap 1.09; five colours, so the painting search has almost no choice
+    { offset: 12, interleave: 1 },   // 4  gap 1.32; still the ONLY passing offset in the grid
+    { offset: 16, interleave: 1 },   // 5  gap 1.95
+    { offset: 20, interleave: 1 },   // 6  gap 1.81; the only passing cell of 33 -- forced, not chosen
+    { offset: 24, interleave: 1 },   // 7  gap 2.04; likewise the only passing cell of 33
+    { offset: 12, interleave: 2 },   // 8  gap 2.02; interleave earns its place here
+    { offset: 32, interleave: 1 },   // 9  gap 1.74
+    { offset: 28, interleave: 3 },   // 10 gap 1.94
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
