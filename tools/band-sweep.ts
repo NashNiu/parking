@@ -37,7 +37,7 @@
  * offset the curve is asking too much of, and the answer is a smaller one.
  */
 import { generateLevel, bandedQueue, bandParams } from '../game/assets/scripts/core/level-gen';
-import { demandPressure, isHardButFair } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, judge } from '../game/assets/scripts/core/play-sim';
 import { LevelData } from '../game/assets/scripts/core/types';
 
 /** Offsets to try, in rows. 0 is included because it is the measured free end. */
@@ -67,16 +67,16 @@ for (const id of idsToSweep(process.argv.slice(2))) {
         for (const interleave of INTERLEAVES) {
             const probe: LevelData = JSON.parse(JSON.stringify(level));
             probe.loop.queue = bandedQueue(level.lot.cars, tunnels, offset, interleave);
-            const v = isHardButFair(probe);
+            const v = judge(probe);
             const g = demandPressure(probe);
             const mark = offset === curve.offset && interleave === curve.interleave ? ' <- curve' : '';
             process.stdout.write(
                 `L${id} offset=${String(offset).padStart(3)} il=${interleave} `
-                + `hard=${v.hard ? 'Y' : 'n'} fair=${v.fair ? 'Y' : 'n'} `
-                + `careless=${v.carelessLoss.toFixed(1)} `
-                // 难度列。hard/fair 是两个饱和的 bit,gap 量的是结构,只有这个量的是
-                // "一个偶尔手滑的玩家会不会输"。见 `forgiveness`。
-                + `forgive=${v.forgive.toFixed(2)} `
+                // 三星拿不拿得到(完美打买了几个车位),以及错一步值多少钱。`dead` 是
+                // 七个车位全开还卡死 —— 那是关卡坏了,不是难。见 `judge`。
+                + `${v.dead ? 'DEAD  ' : v.perfect === null ? 'STALLS'
+                    : v.perfect > 0 ? `no3★ ` : '3★ ok '} `
+                + `cost=${v.cost.toFixed(1)} width=${v.width.toFixed(2)} `
                 + `gap=${g.gap.toFixed(2)} ring=${g.ring.toFixed(1)} stuck=${g.starved.toFixed(2)}${mark}\n`,
             );
         }

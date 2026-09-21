@@ -4,7 +4,7 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { judge } from './play-sim';
+import { judge, exitFrontiers, frontierWidth } from './play-sim';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -696,41 +696,50 @@ export function tunnelParams(id: number): TunnelParams {
  * Ranked by `demandPressure` instead, `interleave` takes the best cell on three of the ten ids
  * -- 7 at il=2, 8 at il=2, 10 at il=3 -- and it is no longer pinned.
  *
- * THE RAMP IS NOT IN THE OFFSET, AND IT TURNED OUT NOT TO BE IN THE GAP EITHER. The oldest
- * table was non-decreasing in `offset` and said so in every row, because `offset` was the only
- * dial there was a reason to believe in. It is not difficulty; it is a way of reaching it, and
- * the relation is not monotone -- id 8's best cell is offset 4 and id 3's is offset 32. The gap
- * replaced it and was a real improvement over a saturated bit, but it is a structural property
- * of the bay, not a statement about the player. On the levels shipped 2026-09-21 the gap runs
- * 1.56, 1.27, 0.78, 1.20, 2.02, 1.85, 1.63, 1.42, 1.80 across ids 2-10 -- no order at all --
- * while `forgive` runs 89, 78, 56, 56, 44, 33, 33, 22, 22. What ramps is how many mistakes the
- * level forgives, and that is now what both this table and `choosePainting` are picked on.
- * See `FORGIVE_CURVE` and `forgiveness`.
+ * WHAT THE RAMP IS MADE OF, AFTER THREE WRONG ANSWERS. It is not `offset`: that is a way of
+ * reaching difficulty, not difficulty itself, and the relation is not monotone -- id 8's best
+ * cell is offset 4 and id 3's is offset 32. It is not the demand gap either: that is a
+ * structural property of the bay, and on the levels shipped 2026-09-21 it ran 1.56, 1.27,
+ * 0.78, 1.20, 2.02, 1.85, 1.63, 1.42, 1.80 across ids 2-10, in no order at all. And it is not
+ * the share of clumsy playthroughs won, which was the next answer and reads well until you
+ * notice what it was counting: a loss in a game that cannot be lost.
+ *
+ * All three were measured against a bay clamped to `unlocked`, where a jam is a loss. A
+ * device never shows that state -- `GameCore.declineUnlock` is called by nothing -- so a jam
+ * is a bill and the level goes on. Played that way, all ten levels shipped under the third
+ * answer came back CLEARED BY A WEAK BOT HAVING BOUGHT NOTHING, full marks, level 10
+ * included, which is what my human partner found by playing level 4 with two stalls.
+ *
+ * So the ramp is made of what a mistake COSTS, in the only resource the game meters: stalls
+ * opened, which is what `GameCore.stars` is spent from. See `COST_CURVE` and `judge`.
  *
  * Ids 6 and 7 have EXACTLY ONE passing cell each in the whole 33-cell grid. They are not chosen,
  * they are forced, and a regeneration that moves their packing can take even that away.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    // 每行末尾的 forgive 是**发出去的那一关实测**的 `forgiveness()`,不是扫描里那一格的
-    // 读数;括号里是 `FORGIVE_CURVE` 要的目标。两者是不同的量,混用会让人拿一个从不成立
-    // 的数去对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重搜配色"。
+    // 每行末尾的 cost 是**发出去的那一关实测**的 `judge().cost`(手滑 10% 时被迫买下的
+    // 车位数),括号里是 `COST_CURVE` 要的目标。扫描读数和实得是两个量,混用会让人拿一
+    // 个从不成立的数去对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重
+    // 搜配色"。
     //
-    // 选法:hard 的格子里取扫描 forgive 最接近目标的那个 —— 和 `choosePainting` 同一个
-    // 目标函数,这是它们能复合的前提。改完重新生成,再拿实测回填这里。
+    // 选法:`dead` 和 `perfect !== 0` 之外的格子里,取扫描 cost 最接近目标的那个 —— 和
+    // `choosePainting` 同一个目标函数,这是它们能复合的前提。改完重新生成,再拿实测回填。
     //
-    // 2026-09-21 实测:九关全部落在一格种子(1/9 ≈ 11%)以内,单调不升。唯一明显的偏差
-    // 是第 4 关 56% 对目标 65%,比要求的还狠 —— 它是五色关卡,400 个候选里能打赢一行
-    // 策略的只有 0 到 2 个,落在哪档就是哪档,没得挑。
-    { offset: 0, interleave: 1 },    // 1  authored teaching level; no cell is hard, by construction
-    { offset: 16, interleave: 1 },   // 2  forgive 89 (85)
-    { offset: 32, interleave: 1 },   // 3  forgive 78 (75); five colours, so the painting search has almost no choice
-    { offset: 12, interleave: 1 },   // 4  forgive 56 (65); five colours too, and it undershoots -- harder than asked
-    { offset: 16, interleave: 1 },   // 5  forgive 56 (55)
-    { offset: 20, interleave: 1 },   // 6  forgive 44 (45)
-    { offset: 24, interleave: 1 },   // 7  forgive 33 (35)
-    { offset: 12, interleave: 2 },   // 8  forgive 33 (30); interleave earns its place here
-    { offset: 32, interleave: 1 },   // 9  forgive 22 (25)
-    { offset: 28, interleave: 3 },   // 10 forgive 22 (20)
+    // 2026-09-21 实测:前段(2、3、4)均值 0.27,后段(8、9、10)均值 1.20,坡度出来了。
+    // 后半段普遍低于目标,天花板在 1.6 上下,而**顶住天花板的是参考玩家而不是关卡** ——
+    // `perfect === 0` 这道闸门问的是"三星拿不拿得到",用一组弱策略去问,它们打不干净的
+    // 配色就全被丢掉了。目标值特意留在天花板之上:够不到时搜索会退化成"取最贵的那个",
+    // 这是对的行为,而一旦参考玩家变强,余量立刻用得上。
+    { offset: 0, interleave: 1 },    // 1  authored teaching level; nothing is searched here
+    { offset: 16, interleave: 1 },   // 2  cost 0.2 (0.2)
+    { offset: 32, interleave: 1 },   // 3  cost 0.4 (0.4); five colours, so the search has almost no choice
+    { offset: 12, interleave: 1 },   // 4  cost 0.2 (0.6); five colours too, and it cannot reach the target
+    { offset: 16, interleave: 1 },   // 5  cost 0.4 (0.8)
+    { offset: 20, interleave: 1 },   // 6  cost 1.0 (1.0)
+    { offset: 24, interleave: 1 },   // 7  cost 1.4 (1.2); overshoots, and that is allowed
+    { offset: 12, interleave: 2 },   // 8  cost 0.8 (1.4); the worst miss of the ten
+    { offset: 32, interleave: 1 },   // 9  cost 1.2 (1.6)
+    { offset: 28, interleave: 3 },   // 10 cost 1.6 (1.8)
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
@@ -740,31 +749,31 @@ export function bandParams(id: number): { offset: number; interleave: number } {
 }
 
 /**
- * 每一关该有多宽容 —— `forgiveness` 的目标值,也就是"一个偶尔手滑的玩家能赢几成"。
+ * 每一关"错一步"该值多少钱 —— `judge().cost` 的目标值,单位是**被迫买下的车位数**。
  *
- * 这条曲线取代 `demandPressure().gap` 成为配色搜索的目标。改的理由是把 ε-careful 跑在
- * 已发出去的九关上量出来的(slip 0.1,九个种子):
+ * 这条曲线取代 `FORGIVE_CURVE`(胜率)成为配色搜索的目标,而后者取代的是 `demandPressure`
+ * 的缺口。两次都换对了方向、都没换到底,理由同一个:它们量的都是"一个永远不能开车位的
+ * 玩家会不会输",而真机上没有这个玩家。按真机的方式打(卡住就开车位),2026-09-21 发出去
+ * 的十关全部是 `careful` 零消耗满星通关 —— 包括第 10 关。人类伙伴的试玩先说了这件事:
+ * 第 4 关两个车位就够,根本用不到四个。
  *
- *     关卡     2     3     4     5     6     7     8     9    10
- *     容错   89%   44%   89%  100%   11%  100%   44%   44%   89%
- *     缺口  1.56  1.09  1.32  1.95  1.81  2.04  2.02  1.74  1.94
+ * 现在的单位是游戏自己在计的那一笔:`GameCore.stars()` = 满星减去开过的车位数。判据也
+ * 直接是人类伙伴的原话 —— **在每步都不能错的情况下,可以拿到 3 星**:
  *
- * 两件事同时成立:一是**完全没有坡度**,最宽容的是第 4 关、最狠的是第 6 关;二是缺口
- * 和容错基本不相关,第 7 关缺口全场最高却一次都没输过。缺口量的是车位盖不盖得住环上的
- * 需求(一个结构属性),容错量的是人会不会输。
+ *   - 完美打(`careful`)必须**买 0 个**车位,否则 3 星根本拿不到,这一关不能要;
+ *   - 每十步错一步(`slip` 0.1)平均要买下面这么多个,这就是"错一步的代价";
+ *   - 七个车位全开还卡死的,是关卡坏了,不是难。
  *
- * 数值是按"第一关教学、第二关就开始有代价、后半段真的会输"排的,人类伙伴说过"即使从
- * 第二关开始难度就一直很高也可以"。第 1 关不参与搜索(四色关卡 `choosePainting` 直接
- * 返回 null),那个 1.00 只是占位。
- *
- * 一格种子是 1/9 ≈ 0.11,所以相邻两关之间至少差一格,这条曲线才量得出来。
+ * 数值按 5 个种子的粒度(0.2)排。第 10 关的 1.8 是量出来能到的:同一关按 run=5 重新
+ * 上色,五个种子买了 2 0 1 2 1 个,均值 1.2,而更窄的上色还能更贵——但 run≥6 就开始
+ * 真死局了,那是过头,`dead` 会挡住。
  */
-const FORGIVE_CURVE = [1.00, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.30, 0.25, 0.20];
+const COST_CURVE = [0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8];
 
-/** This level's forgiveness target, clamped past both ends of FORGIVE_CURVE. */
-export function forgiveTarget(id: number): number {
-    const i = Math.min(Math.max(1, Math.trunc(id)), FORGIVE_CURVE.length) - 1;
-    return FORGIVE_CURVE[i];
+/** This level's target price for a mistake, clamped past both ends of COST_CURVE. */
+export function costTarget(id: number): number {
+    const i = Math.min(Math.max(1, Math.trunc(id)), COST_CURVE.length) - 1;
+    return COST_CURVE[i];
 }
 
 /** Placement draws before a tunnel is written off and the whole attempt with it. */
@@ -1570,14 +1579,24 @@ function repaint(cars: CarSpec[], assign: string[]): CarSpec[] {
  * colours are within reach at each moment, not which corner they sit in.
  *
  * Runs first, shortest to longest: a run of `k` means the outermost layer holds one colour
- * for `k` cars at a time, and run 1 is exactly the round-robin. Runs alone are a cliff
- * rather than a dial (measured: at six colours a run of 4 beats the one-line rule and a
- * careful player still wins, while a run of 6 is unwinnable for every policy tried), which
- * is why they are only the opening moves and the rest are seeded shuffles. Every painting
- * uses each colour a near-equal number of times, so no colour can starve.
+ * for `k` cars at a time, and run 1 is exactly the round-robin. THE RUN IS THE DIAL that
+ * sets how many colours can leave at once -- measured on level 10's packing, run 1 gives an
+ * `exitWidth` of 3.98 and run 12 gives 1.98, walking down smoothly through 2.90 at run 5.
+ *
+ * It used to stop at 6, on a measurement that said a run of 6 was "unwinnable for every
+ * policy tried". That was read under the old gate, where a level you cannot clear WITHOUT
+ * OPENING A STALL counted as unwinnable and was thrown away. On a device those levels are
+ * the ones that cost you a star, which is the whole thing the curve is now made of, so the
+ * cliff the old range was avoiding is where the range now has to reach. `judge().dead`
+ * catches the paintings that are genuinely unclearable, and it is exact: every stall open
+ * and the board still frozen.
+ *
+ * The shuffles that follow are the diversity the runs cannot give -- a run paints the
+ * leaving order in blocks, and nothing else does. Every painting uses each colour a
+ * near-equal number of times, so no colour can starve.
  */
 function* paintings(n: number, colors: number, rand: () => number): Generator<string[]> {
-    for (let run = 1; run <= 6; run++) {
+    for (let run = 1; run <= 16; run++) {
         yield Array.from({ length: n }, (_, i) => PALETTE[Math.floor(i / run) % colors]);
     }
     for (;;) {
@@ -1609,32 +1628,29 @@ const PAINTINGS = 400;
 const PACKINGS = 6;
 
 /**
- * 命中目标容错率多近就算够近,可以收工。
+ * 命中目标代价多近就算够近,可以收工。
  *
- * 一格种子是 1/9 ≈ 0.111,所以 0.06 的意思是"离目标不到半格",再准也是噪声。搜索一
- * 撞上这个就停,否则扫满 `PAINTINGS` 取最接近的那个 —— 和从前"凑满 4 个 hard∧fair
- * 就停"不同,这是个**求近**而不是求极值的目标,提前停在第 4 个候选上没有道理。
- *
- * 能挑的余地按颜色数急剧变化:400 个候选里能打赢一行策略的,四色 0 个、五色 0 到 2 个、
- * 六色 4 到 7 个。所以五色关卡(第 3、4 关)基本没得挑,它落在哪个容错率上就是哪个,
- * 曲线对不上也只能认;六色关卡 —— 第 5 到 10 关 —— 才是这条曲线真正能调的地方。
+ * 一格种子是 1/5 = 0.2,所以 0.1 的意思是"离目标不到半格",再准也是噪声。
  */
-const FORGIVE_TOL = 0.06;
+const COST_TOL = 0.1;
 
 /**
- * `careful` 打不通的配色要罚多少,才可能被选中。
+ * 真正下场跑模拟的配色个数。
  *
- * 不是 Infinity,因为人类伙伴明确说过"偶尔一两关必须通过增加车位才能过关也可以"。
- * 从前 `fair` 是硬门槛,于是流水线不是"允许"关卡简单,而是在**要求**每一关都能被一句
- * 话的规则打通,打不通的全部丢弃 —— 这就是难度的天花板本身。
+ * 看是看四百个,跑只跑这四十个。`frontierWidth` 不用跑任何一局(见 `exitFrontiers`:
+ * 谁能开出去只跟车停在哪有关,跟它是什么颜色无关,所以一个打包的 frontier 只算一次),
+ * 于是第一遍可以把四百个候选全部按"同时能开出去几种颜色"排一遍,第二遍只对取样出来
+ * 的这四十个花模拟。一个候选要跑 6 局(1 局完美 + 5 局手滑),40 × 6 = 240 局。
  *
- * 0.15 的意思是"比一格种子多一点":一个不 fair 的配色容错率必然接近 0,只有当目标本来
- * 就很低、而所有 fair 的候选都离目标更远时它才赢得过。后半段的关卡才有机会碰上。
+ * **取样是跨整个宽度区间等距取的,不是取最窄的四十个**,而这不是讲究是必须的:窄就是
+ * 贵,而 `COST_CURVE` 的前几关要的是**便宜**,它们需要的宽候选全都排在列表末尾。只取
+ * 最窄的那一批,第 2 关会永远够不到自己的目标,而且是静默地够不到 —— 它只会挑到一个
+ * 远超目标的候选,看上去还挺正常。
  */
-const UNFAIR_COST = 0.15;
+const SIM_BUDGET = 40;
 
 /**
- * Repaint `cars` until the level forgives about as much as its place in the curve says it
+ * Repaint `cars` until a mistake costs about what this level's place in the curve says it
  * should, or return null if the search runs out.
  *
  * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
@@ -1642,13 +1658,20 @@ const UNFAIR_COST = 0.15;
  * `validateLevel`. The lot's geometry -- the blocked count and solver rounds the curve was
  * tuned against -- is untouched.
  *
- * Skipped outright below `UNLOCKED` colours, and that is not an optimisation: at four open
- * stalls a four-colour level cannot be beaten by any painting (see `levelParams`), so the
- * search would burn 400 simulations to fail. Those levels take the round-robin and are
- * teaching levels.
+ * WHAT A PAINTING CONTROLS is which colours can leave at the same moment, and my human
+ * partner named that as the dial: 同一时间，能驶出停车场的不同颜色的车辆数量越少，难度越大.
+ * On the levels shipped before this change that number sat at 3.1 to 4.3 against four open
+ * stalls, so something useful always fitted and there was no choice to get wrong. Painting
+ * the leaving order in long runs of one colour is what narrows it, and `paintings` opens
+ * with exactly those runs.
  *
- * `tunnels` is carried through only so `assemble` builds the WHOLE level for `isHardButFair`
- * to play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
+ * Skipped outright below `UNLOCKED` colours, and that is not an optimisation: at four open
+ * stalls a four-colour level cannot be made to cost anything (see `levelParams` and the law
+ * in core/play-sim.ts), so the search would burn its whole budget to fail. Those ids are
+ * teaching levels and take the round-robin.
+ *
+ * `tunnels` is carried through only so `assemble` builds the WHOLE level for `judge` to
+ * play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
  * verdict reached without them is a verdict about a different level. The tunnel cars are not
  * themselves repainted: they are not in the leaving order (when they come out is the player's
  * choice, not `peel`'s) and `bandedQueue` derives the queue from whatever colours they carry, so
@@ -1658,25 +1681,52 @@ function choosePainting(
     id: number, cars: CarSpec[], tunnels: TunnelSpec[], p: GenParams,
 ): CarSpec[] | null {
     if (p.colors <= UNLOCKED) return null;
-    const target = forgiveTarget(id);
+    const target = costTarget(id);
     const rand = mulberry32(id * 104729 + 17);
+
+    // Pass one costs no simulation at all. The frontiers belong to the packing, so they are
+    // computed once and every painting is scored by counting colours over them.
+    const frontiers = exitFrontiers(assemble(id, cars, tunnels));
+    const seen: { painted: CarSpec[]; width: number }[] = [];
     let tried = 0;
-    let best: CarSpec[] | null = null;
-    let bestErr = Infinity;
     for (const assign of paintings(cars.length, p.colors, rand)) {
         if (tried++ >= PAINTINGS) break;
+        // A long run stops using the last colours outright once `n < run * colors`, and
+        // that ships a level with fewer colours than the curve asked for -- level 6 came
+        // out with five of its six this way, silently. The colour count is a contract the
+        // rest of the curve leans on (`levelParams`, and the law at the top of play-sim.ts
+        // that ties difficulty to colours against open stalls), so a painting that drops
+        // one is not a candidate.
+        if (new Set(assign).size < p.colors) continue;
         const painted = repaint(cars, assign);
-        const level = assemble(id, painted, tunnels);
-        const verdict = judge(level);
-        // `hard` stays a hard floor: a level the one-line rule wins is not a puzzle at any
-        // slip rate, and `forgive` is not even measured on one.
-        if (!verdict.hard) continue;
-        const err = Math.abs(verdict.forgive - target) + (verdict.fair ? 0 : UNFAIR_COST);
+        seen.push({
+            painted,
+            width: frontierWidth(frontiers, new Map(painted.map((c) => [c.id, c.color]))),
+        });
+    }
+    seen.sort((x, y) => x.width - y.width);
+
+    // Pass two plays a sample spanning the whole width range, narrow to wide, and takes the
+    // one whose price of a mistake fits the curve.
+    const step = Math.max(1, Math.floor(seen.length / SIM_BUDGET));
+    const probe: typeof seen = [];
+    for (let i = 0; i < seen.length && probe.length < SIM_BUDGET; i += step) probe.push(seen[i]);
+    let best: CarSpec[] | null = null;
+    let bestErr = Infinity;
+    for (const c of probe) {
+        const v = judge(assemble(id, c.painted, tunnels));
+        // Broken, not hard: every stall open and the board still frozen.
+        if (v.dead) continue;
+        // Three stars have to be reachable by a clean run. This is the human partner's own
+        // rule for the curve -- 在每步都不能错的情况下,可以拿到 3 星 -- and it is the gate
+        // that stops "narrow the choice" from running away into levels nobody can clear.
+        if (v.perfect !== 0) continue;
+        const err = Math.abs(v.cost - target);
         if (err < bestErr) {
             bestErr = err;
-            best = painted;
+            best = c.painted;
         }
-        if (bestErr <= FORGIVE_TOL) break;
+        if (bestErr <= COST_TOL) break;
     }
     return best;
 }

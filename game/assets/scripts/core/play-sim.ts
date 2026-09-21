@@ -1,4 +1,5 @@
 import { GameCore } from './game-core';
+import { LotSystem } from './lot-system';
 import { LevelData } from './types';
 
 /**
@@ -126,6 +127,29 @@ export const careful: Policy = (core, movable) => {
 };
 
 /**
+ * `careful`, but it will not sit on an empty stall once nothing is coming to relieve it.
+ *
+ * `careful` declines when no visible row matches anything it could bring out, and that is
+ * right as far as it goes -- an empty stall beats a car that cannot fill. Held FOREVER it
+ * stops being a policy and becomes a way of not finishing: measured on level 10 repainted in
+ * runs of six or more, `careful` neither won nor jammed, it circled to the tick cap. That
+ * matters because a level is now graded on what a jam COSTS (see `playOut`), and a jam is
+ * detected by the bay being full. A reference player who never fills the bay never triggers
+ * the prompt, so a narrow painting reads as "never finishes" rather than "expensive" -- and
+ * gets thrown out for the opposite of its actual defect.
+ *
+ * The condition is the honest one: hold while any ring cell is free, because a free cell is
+ * a row still to come and therefore a reason to wait. With the ring solid, nothing will
+ * change by waiting, and a player would park something.
+ */
+export const decisive: Policy = (core, movable, rand) => {
+  const pick = careful(core, movable, rand);
+  if (pick >= 0) return pick;
+  for (const grp of core.loop.ring) if (grp === null || grp.count === 0) return -1;
+  return movable.length > 0 ? movable[0] : -1;
+};
+
+/**
  * `policy`, except that a share `eps` of its taps are random instead -- a player who knows
  * what to do and occasionally does something else.
  *
@@ -200,6 +224,41 @@ export function simulate(level: LevelData, policy: Policy, seed: number): boolea
   return play(level, policy, seed).getState() === 'won';
 }
 
+/** A playthrough of the level the way the shipped game plays it. See `playOut`. */
+export interface Playout {
+  /** The level was cleared. */
+  won: boolean;
+  /** Stalls the player had to open. This is what the star rating is spent from. */
+  bought: number;
+  /** Every stall open and the board still frozen: the level is genuinely unwinnable. */
+  dead: boolean;
+}
+
+/**
+ * Play the level THE WAY THE SHIPPED GAME PLAYS IT, and report what it cost.
+ *
+ * `simulate` clamps the bay to `unlocked` and calls a jam a loss. That baseline described a
+ * game nobody plays. `GameCore.declineUnlock` is never called by anything (its own docblock
+ * says so), so on a device a jam is not a loss: the game offers a stall, the player takes it,
+ * and the level goes on. A level only truly ends when all `slots` are open and the board is
+ * still frozen. Measured on the ten levels shipped 2026-09-21, played this way, `careful`
+ * cleared every one of them having bought NOTHING -- full marks on all ten, including the
+ * last. The pipeline had been grading a difficulty the player never meets.
+ *
+ * So this counts stalls instead of wins. Stalls are the only resource the game meters
+ * (`GameCore.stars` is full marks minus stalls opened), which makes them the only honest
+ * unit difficulty can be stated in -- and it is the unit my human partner reached for
+ * unprompted: 只需要 2 个车位就能过关.
+ */
+export function playOut(level: LevelData, policy: Policy, seed: number): Playout {
+  const core = play(level, policy, seed, undefined, true);
+  return {
+    won: core.getState() === 'won',
+    bought: core.parking.unlocksUsed(),
+    dead: core.getState() === 'deadlock',
+  };
+}
+
 /**
  * One playthrough, returned as the finished `GameCore` so a caller can ask it anything.
  *
@@ -213,15 +272,19 @@ export function simulate(level: LevelData, policy: Policy, seed: number): boolea
  */
 function play(
   level: LevelData, policy: Policy, seed: number, watch?: (core: GameCore) => void,
+  buy: boolean = false,
 ): GameCore {
   const copy: LevelData = JSON.parse(JSON.stringify(level));
-  copy.parking.slots = copy.parking.unlocked;
+  // Without `buy` the bay can never grow, which is the never-unlocking baseline `simulate`
+  // describes above. With it, the level is played the way a device plays it.
+  if (!buy) copy.parking.slots = copy.parking.unlocked;
   const core = new GameCore(copy);
   const rand = rng(seed);
   for (let tick = 0; tick < TICK_CAP && core.getState() === 'playing'; tick++) {
     let movable: number[] | null = null;
     // At most one tap per stall: the bay cannot take more than that in a tick anyway.
-    for (let k = 0; k < copy.parking.unlocked; k++) {
+    // Read off the bay rather than off `unlocked`, because with `buy` the bay grows.
+    for (let k = 0; k < core.parking.parked.length; k++) {
       if (!core.parking.hasFreeSlot()) break;
       if (movable === null) movable = core.lot.movableCarIds();
       const id = policy(core, movable, rand);
@@ -231,6 +294,10 @@ function play(
     }
     if (watch) watch(core);
     core.stepLoop();
+    // Exactly what the shipped prompt offers, and the player takes it: a jam is a bill,
+    // not an ending. `needsUnlock` is false while the ring is still filling, so this
+    // cannot fire on an opening position that merely looks tight.
+    if (buy && core.needsUnlock()) core.unlockSlot();
   }
   return core;
 }
@@ -297,68 +364,151 @@ export function demandPressure(level: LevelData): Pressure {
   return { gap: gap / ticks, ring: ring / ticks, starved: starved / ticks };
 }
 
-/** How many careless seeds to run. Odd, so "most of them" is unambiguous. */
-const CARELESS_SEEDS = 5;
+/**
+ * The exitable set at every step of the lot's own unwinding, as car ids.
+ *
+ * Policy-free on purpose, and that is the whole reason this exists. Every other measure here
+ * plays the level, so every one of them is a statement about `careful` as much as about the
+ * level -- and `careful` turned out to be far weaker than a person (it needs four stalls on
+ * level 4, where my human partner passed with two). This asks the board a question the board
+ * can answer by itself: at each moment, WHICH CARS COULD LEAVE. Peeling always takes the
+ * first exitable id, so the sequence is a property of the packing alone.
+ */
+export function exitFrontiers(level: LevelData): number[][] {
+  const lot = new LotSystem(
+    { w: level.lot.w, h: level.lot.h },
+    JSON.parse(JSON.stringify(level.lot.cars)),
+    // The tunnels are BUILT, not dropped: they stand on the board and block, so a frontier
+    // computed without them is wider than the one the player meets -- and seven of the ten
+    // levels have them. Their mouth cars are not part of the grid and carry no id in the
+    // level file, so they are filtered out below rather than counted or peeled.
+    JSON.parse(JSON.stringify(level.lot.tunnels ?? [])),
+  );
+  const grid = new Set(level.lot.cars.map((c) => c.id));
+  const frontiers: number[][] = [];
+  for (let step = 0; step < level.lot.cars.length; step++) {
+    const ids = lot.movableCarIds().filter((id) => grid.has(id));
+    if (ids.length === 0) break;
+    frontiers.push(ids);
+    lot.removeCar(ids[0]);
+  }
+  return frontiers;
+}
+
+/**
+ * HOW MANY DIFFERENT COLOURS CAN LEAVE AT ONCE, averaged over the lot's unwinding.
+ *
+ * My human partner named this as the dial: 同一时间，能驶出停车场的不同颜色的车辆数量越少，
+ * 难度越大. It is the width of the player's choice. When four colours are always available
+ * against four stalls, there is no choice to get wrong -- something useful always fits, and
+ * the level plays itself however it is packed or ordered.
+ *
+ * Measured on the levels shipped 2026-09-21: 3.1 to 4.3, with the LAST level among the
+ * widest. Repainting level 10's cars in runs of five along the leaving order takes it to
+ * 2.90, and that is the painting where a clean run still earns full marks while a tenth of
+ * taps going astray costs one or two stalls.
+ *
+ * Reads off `exitFrontiers`, so it costs no simulation at all -- which is what lets the
+ * painting search use it as a filter before spending playthroughs on a candidate.
+ */
+export function exitWidth(level: LevelData): number {
+  return frontierWidth(
+    exitFrontiers(level), new Map(level.lot.cars.map((c) => [c.id, c.color])),
+  );
+}
+
+/**
+ * `exitWidth` over frontiers computed once, for a caller that is about to ask it of many
+ * paintings of the SAME packing.
+ *
+ * The frontiers depend only on where the cars are, never on what colour they are, so the
+ * painting search computes them once per packing and then scores four hundred paintings by
+ * counting over this -- no lot rebuilt, no game played. That is what makes it affordable to
+ * look at every candidate and play only the narrowest.
+ */
+export function frontierWidth(frontiers: number[][], color: Map<number, string>): number {
+  if (frontiers.length === 0) return 0;
+  let total = 0;
+  for (const ids of frontiers) {
+    const seen = new Set<string>();
+    for (const id of ids) {
+      const c = color.get(id);
+      if (c !== undefined) seen.add(c);
+    }
+    total += seen.size;
+  }
+  return total / frontiers.length;
+}
+
+/** Playthroughs behind `Verdict.cost`. Odd and small; each one is a full game. */
+const COST_SEEDS = 5;
 
 export interface Verdict {
-  /** The one-line rule loses. */
-  hard: boolean;
-  /** A policy the player could actually arrive at wins. */
-  fair: boolean;
-  /** Share of careless playthroughs lost, 0 to 1. Reported, not gated on. */
-  carelessLoss: number;
+  /** Distinct colours that can leave at once. See `exitWidth`. */
+  width: number;
   /**
-   * `forgiveness` at `SLIP_RATE`: the share of slightly-clumsy playthroughs won. This is
-   * the number the curve is built on; `hard` and `fair` survive as floor and ceiling.
-   * Reported as 1 on a level that fails `hard`, which is not a measurement -- such a level
-   * is rejected before anything asks how forgiving it is.
+   * Stalls a clean run has to buy, or `null` if `careful` never finishes at all.
+   *
+   * ZERO IS THE REQUIREMENT, not a good score: my human partner's rule for the curve is
+   * 在每步都不能错的情况下，可以拿到3星, and three stars means nothing was bought.
    */
-  forgive: number;
+  perfect: number | null;
+  /**
+   * Mean stalls bought at `SLIP_RATE` -- THE PRICE OF A MISTAKE, and the number the curve
+   * is steered by. A run that never finishes is priced at everything the level had to sell,
+   * so a painting that leaves the reference player circling cannot look cheap.
+   */
+  cost: number;
+  /** Every stall open and the board still frozen. The level is unwinnable; reject it. */
+  dead: boolean;
 }
 
 /**
- * What the generator knows about a candidate level: two bits and two rates.
+ * What the generator needs to know about a candidate, in the units the game already meters.
  *
- * `hard` means `keepDistinct` loses and `fair` means `careful` wins. These used to be the
- * whole test, and jointly requiring them is what capped the game's difficulty: the pipeline
- * was not permitting easy levels, it was REQUIRING every shipped level to be beatable by a
- * rule you can say in one sentence. `fair` is still measured, and still worth most of a
- * level's ranking, but `choosePainting` prices it instead of demanding it -- one or two
- * levels in the curve may need a stall bought to pass.
+ * This replaces `isHardButFair`, whose two bits asked "can a one-line rule win" and "can a
+ * careful player win" -- both answered against a bay that could never grow. On a device the
+ * bay does grow, so both questions were about a game that is not this one, and under the
+ * real rules all ten shipped levels came back free: cleared by `careful`, nothing bought,
+ * full marks, level 10 included.
  *
- * `forgive` is the graded difficulty number and the one the curve is now steered by; see
- * `forgiveness`. It is measured whenever `hard` holds, including on unfair candidates,
- * because the interesting unfair candidate is the one a clumsy player still sometimes wins.
+ * The three things that matter now, in order:
  *
- * `carelessLoss` is measured but NOT gated on, because it is the wrong shape for a gate:
- * random play failing is what an unforgiving level and a fair one have in common, and
- * requiring it would push the curve towards levels that punish speed rather than choice.
- * It is here so the generation log can show the spread.
+ *  - `dead`  a level that cannot be finished with every stall open is not hard, it is broken.
+ *
+ * Played by `decisive` rather than `careful`, for the reason that policy's docblock gives:
+ * a reference player who holds an empty stall forever never triggers the game's own jam
+ * prompt, and so reads as "never finishes" on exactly the paintings worth keeping.
+ *  - `perfect === 0`  a clean run must still earn three stars.
+ *  - `cost`  and a run that is not clean must not.
  */
-export function isHardButFair(level: LevelData): Verdict {
-  const v = judge(level);
-  let lost = 0;
-  if (v.hard && v.fair) {
-    for (let s = 1; s <= CARELESS_SEEDS; s++) {
-      if (!simulate(level, careless, s * 977)) lost++;
-    }
+export function judge(level: LevelData): Verdict {
+  const width = exitWidth(level);
+  // `perfect` is an EXISTENCE claim -- my human partner's rule is that a player who makes no
+  // mistake can take three stars, not that this particular bot can. So ask a small panel and
+  // keep the best line any of them finds. One policy alone made the gate far too strict in
+  // the wrong direction: `decisive` is much weaker than a person (it needs four stalls on
+  // level 4, where my human partner passed with two), so every painting IT could not clear
+  // cleanly was thrown away, and the reachable difficulty was capped by the bot rather than
+  // by the level.
+  let clean: Playout = { won: false, bought: 0, dead: false };
+  let dead = false;
+  for (const pol of [decisive, careful, keepDistinct]) {
+    const r = playOut(level, pol, 1);
+    dead = dead || r.dead;
+    if (r.won && (!clean.won || r.bought < clean.bought)) clean = r;
   }
-  return { ...v, carelessLoss: lost / CARELESS_SEEDS };
-}
-
-/**
- * Everything `isHardButFair` decides on, without the careless sample it only reports.
- *
- * Split out because `choosePainting` calls this once per candidate painting, hundreds of
- * times per level, and `carelessLoss` costs five full playthroughs for a number nothing
- * gates on. Measured at about 0.37s per playthrough, that is a third of the generator's
- * wall-clock spent filling in a log column.
- */
-export function judge(level: LevelData): Omit<Verdict, 'carelessLoss'> {
-  const hard = !simulate(level, keepDistinct, 1);
-  // `careful` is deterministic, so one run settles it -- but only run it when it can
-  // change the answer, since it is the expensive half of the gate.
-  const fair = hard ? simulate(level, careful, 1) : true;
-  const forgive = hard ? forgiveness(level) : 1;
-  return { hard, fair, forgive };
+  const forSale = level.parking.slots - level.parking.unlocked;
+  let total = 0;
+  for (let s = 1; s <= COST_SEEDS; s++) {
+    const r = playOut(level, slip(decisive, SLIP_RATE), s * 977);
+    dead = dead || r.dead;
+    total += r.won ? r.bought : forSale;
+  }
+  return {
+    width,
+    perfect: clean.won ? clean.bought : null,
+    cost: total / COST_SEEDS,
+    dead,
+  };
 }

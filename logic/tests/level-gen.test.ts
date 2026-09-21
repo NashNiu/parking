@@ -3,7 +3,7 @@ import * as path from 'path';
 import { generateLevel, levelParams, inwardCars, levelMask, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
-import { judge, forgiveness, demandPressure } from '../../game/assets/scripts/core/play-sim';
+import { judge, exitWidth, demandPressure } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
 import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
 import { inShape, SkeletonShape, skeletonShape } from '../../game/assets/scripts/core/lot-skeleton';
@@ -470,50 +470,45 @@ test('a later level is harder although it is SMALLER', () => {
     .toBeGreaterThan(first.blocked / onBoard(firstLvl) - 1 / onBoard(lastLvl));
 });
 
-test('every level above the colour floor beats the one-line rule', () => {
-  // The contract of the painting search, and the reason it exists. "Keep the four stalls
-  // all different colours" used to win all ten shipped levels -- a rule a player states in
-  // one sentence, against a generator that was painting colours round-robin over the
-  // leaving order and so handing that rule over by construction.
+test('a clean run earns three stars on every level', () => {
+  // 人类伙伴给这条曲线定的规则,逐字:在每步都不能错的情况下,可以拿到 3 星。
+  // 三星就是一个车位都没买(`GameCore.stars`),所以这条等价于 `perfect === 0`。
   //
-  // Below the floor this is not assertable: a bay that covers every colour cannot jam, so
-  // at UNLOCKED open stalls a level of that many colours or fewer is won by the one-line
-  // rule whatever the generator does. Those ids are teaching levels and this asserts
-  // nothing about them -- see levelParams.
+  // 它同时是"把选择压窄"这个方向的刹车:窄下去难度就上来,窄过头关卡就没法打了,
+  // 而这一条从另一头顶住。`dead` 挡的是更糟的那一端 —— 七个车位全开还卡死。
   //
-  // `fair` USED TO BE ASSERTED HERE TOO, and dropping it is the point of the change that
-  // removed it. Requiring `careful` to win every shipped level did not stop easy levels
-  // from shipping; it GUARANTEED that every level could be beaten by a one-sentence plan,
-  // and it silently discarded every harder candidate the search found. The fairness bound
-  // that replaced it is two tests below -- a count, not a blanket.
+  // 四色以下不断言:车位盖得住全部颜色的关卡不可能卡住,不管怎么生成(见 play-sim 的
+  // 模块开头那条法则)。那些是教学关。
   for (const id of IDS) {
     if (levelParams(id).colors <= 4) continue;
-    expect({ id, hard: judge(levelFor(id)).hard }).toEqual({ id, hard: true });
+    const v = judge(levelFor(id));
+    expect({ id, dead: v.dead, perfect: v.perfect }).toEqual({ id, dead: false, perfect: 0 });
   }
+}, 600000);
+
+test('a mistake costs more at the back of the game than at the front', () => {
+  // 整条改动的验收条件。单位是**被迫买下的车位数**,也就是游戏自己在计的那一笔。
+  //
+  // 在它之前的两版难度列都量的是"一个永远不能开车位的玩家会不会输",而真机上没有这个
+  // 玩家:`GameCore.declineUnlock` 从没被调用过,卡住只会提示开车位。按真机的方式打,
+  // 上一版发出去的十关全部零消耗满星 —— 十关读数完全相同,这才是曲线一直压不出坡度的
+  // 原因,而不是目标值没调好。
+  //
+  // 钉的是**两端的均值**而不是逐关单调:五色关卡(第 3、4 关)可挑的配色极少,落在哪
+  // 就是哪,强行要求逐关递增会把一条本来正确的曲线判成红。
+  const mean = (ids: number[]) => ids.reduce((n, id) => n + judge(levelFor(id)).cost, 0) / ids.length;
+  expect(mean([8, 9, 10])).toBeGreaterThan(mean([2, 3, 4]) + 0.4);
+}, 900000);
+
+test('the choice the board offers narrows towards the back of the game', () => {
+  // 人类伙伴点名的那个旋钮:同一时间,能驶出停车场的不同颜色的车辆数量越少,难度越大。
+  //
+  // 不跑任何一局 —— 这是它最大的用处。别的每一个指标都要先派一个参考玩家下场,于是量
+  // 出来的有一半是那个玩家的水平;而那个玩家被证明比人弱得多(它在第 4 关要四个车位,
+  // 人类伙伴用两个就过了)。这一条只问棋盘。
+  const mean = (ids: number[]) => ids.reduce((n, id) => n + exitWidth(levelFor(id)), 0) / ids.length;
+  expect(mean([8, 9, 10])).toBeLessThan(mean([2, 3, 4]));
 });
-
-test('the curve gets less forgiving from the front of the game to the back', () => {
-  // 整条改动的验收条件,也是人类伙伴反复说的那件事:难度得有坡度。
-  //
-  // 量的是 `forgiveness` —— 一个偶尔手滑(slip 0.1)的玩家赢几成。旧判据 hard/fair 是
-  // 两个 bit 且已饱和,在九关上读数完全相同;`demandPressure().gap` 量的是结构,和会不
-  // 会输只是弱相关(改这条之前第 7 关缺口全场最高,却一次都没输过)。
-  //
-  // 钉的是**两端的均值**,不是逐关单调。五色关卡(第 3、4 关)可挑的配色只有 0 到 2 个,
-  // 它落在哪个容错率上就是哪个,强行要求逐关递减会把一条本来正确的曲线判成红。
-  const mean = (ids: number[]) => ids.reduce((n, id) => n + forgiveness(levelFor(id)), 0) / ids.length;
-  const front = mean([2, 3, 4]);
-  const back = mean([8, 9, 10]);
-  expect(back).toBeLessThan(front - 0.15);
-}, 300000);
-
-test('a level that needs a stall bought is allowed, but not the whole game', () => {
-  // `choosePainting` 给 `careful` 打不通的配色记一笔 `UNFAIR_COST` 的罚分而不是丢弃,
-  // 因为人类伙伴说过"偶尔一两关必须通过增加车位才能过关也可以"。这条测的是"偶尔":
-  // 罚分若失效,后半段会整段倒向不 fair,那不是难,那是这个模式的关卡没得玩。
-  const unfair = PACKED.filter((id) => levelParams(id).colors > 4 && !judge(levelFor(id)).fair);
-  expect(unfair.length).toBeLessThanOrEqual(3);
-}, 300000);
 
 test('the curve brackets the blocked-car count from both sides', () => {
   // The contract levelParams makes, and it is TWO-SIDED rather than a single distance.

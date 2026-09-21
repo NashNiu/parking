@@ -15,9 +15,9 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, forgiveTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, costTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
-import { demandPressure, isHardButFair } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, judge } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
@@ -118,18 +118,17 @@ for (const id of ids) {
     // it. The holes and inward columns are meaningless for one too -- a deliberately sparse
     // lot is all holes -- and this word is what says so.
     const authored = authoredLevel(id) !== null;
-    // Played, not inferred. `hard` means the one-line rule ("keep the stalls all different")
-    // loses; `fair` means a policy a player could actually arrive at wins. A level below the
-    // colour floor cannot be hard whatever the generator does, and prints `teach` instead of
-    // failing -- that is a curve decision, not a generation miss. See core/play-sim.ts.
-    const v = isHardButFair(level);
+    // Played the way a device plays it: a jam is a bill, not an ending. `perfect` is what a
+    // clean run has to buy and MUST be 0, or three stars are out of reach; `cost` is what a
+    // run with one tap in ten going astray buys, which is the price of a mistake and the
+    // thing the curve is made of. A level below the colour floor cannot be made to cost
+    // anything, and prints `teach` instead of failing. See core/play-sim.ts.
+    const v = judge(level);
     const play = want.colors <= 4 ? 'teach'
-        : v.hard && v.fair ? `hard  (careless ${Math.round(v.carelessLoss * 100)}%)`
-        // No longer a failure, and no longer rare by accident: `choosePainting` PRICES
-        // unfairness instead of rejecting it, so a late level may ship needing a stall
-        // bought. Two or three of these in ten is the intent; ten of them is a bug.
-        : v.hard ? 'needs a stall bought'
-        : 'FREE: the one-line rule wins';
+        : v.dead ? 'BROKEN: no way through with every stall open'
+        : v.perfect === null ? 'NEVER FINISHES'
+        : v.perfect > 0 ? `NO 3-STAR RUN (a clean run buys ${v.perfect})`
+        : `3-star clean, a slip costs ${v.cost.toFixed(1)}`;
     // Holes, because a level can hit every difficulty number and still ship with a
     // car-shaped patch of bare asphalt in it -- which is a bug you can only see. See
     // `fillableHoles`; the search ranks its candidates on this, so this column is how you
@@ -148,23 +147,26 @@ for (const id of ids) {
     // 一列。`play` 那一列在四个车位下十关全是 hard,它分不出难度,只分得出有没有崩。
     // 见 `demandPressure`。
     const gap = authored ? '-' : demandPressure(level).gap.toFixed(2);
-    // 一个偶尔手滑的玩家(slip 0.1)能赢几成,以及曲线要求几成。这是**难度列** —— 上面
-    // 那个 `play` 十关全是 hard,分不出难度;`gap` 量的是结构,和会不会输只是弱相关
-    // (第 7 关缺口最高却一次没输过)。见 `forgiveness` 和 `FORGIVE_CURVE`。
-    const forgive = want.colors <= 4 ? '  -  '
-        : `${Math.round(v.forgive * 100)}/${Math.round(forgiveTarget(id) * 100)}`.padStart(5);
+    // 错一步值多少钱,以及曲线要的是多少 —— 单位是被迫买下的车位数。这是**难度列**。
+    // 在它之前的每一版难度列量的都是"一个永远不能开车位的玩家会不会输",而真机上没有
+    // 这个玩家;按真机的方式打,上一版发出去的十关全部零消耗满星。见 `judge`。
+    // 同时能开出去几种颜色 —— 人类伙伴点名的那个旋钮,越小越难。配色搜索先按它筛
+    // 候选(不用跑模拟),再对最窄的那批花模拟。见 `exitWidth`。
+    const width = v.width.toFixed(2).padStart(5);
+    const cost = want.colors <= 4 ? '  -  '
+        : `${v.cost.toFixed(1)}/${costTarget(id).toFixed(1)}`.padStart(7);
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
-        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${forgive}`
+        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${width} ${cost}`
         + `  ${(authored ? 'AUTHORED' : onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap forgive  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width    cost  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 

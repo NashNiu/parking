@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  careful, careless, keepDistinct, isHardButFair, judge, simulate, demandPressure,
+  careful, careless, keepDistinct, decisive, judge, simulate, demandPressure, playOut,
+  exitWidth, exitFrontiers, frontierWidth,
   slip, forgiveness, SLIP_RATE, Policy,
 } from '../../game/assets/scripts/core/play-sim';
 import { bandedQueue } from '../../game/assets/scripts/core/level-gen';
@@ -119,15 +120,6 @@ test('careful cannot see past a channel lookahead', () => {
   expect(careful(a, [1, 2, 3], () => 0)).toBe(careful(b, [1, 2, 3], () => 0));
 });
 
-test('isHardButFair rejects a level everybody wins', () => {
-  expect(isHardButFair(soloLevel()).hard).toBe(false);
-});
-
-test('isHardButFair rejects a level nobody wins', () => {
-  const v = isHardButFair(hopelessLevel());
-  expect(v.hard).toBe(true);
-  expect(v.fair).toBe(false);
-});
 
 describe('forgiveness', () => {
   test('the dial really is the share of taps the policy does not make', () => {
@@ -172,24 +164,91 @@ describe('forgiveness', () => {
   }, 300000);
 });
 
-describe('judge', () => {
-  test('it agrees with isHardButFair on the bits, minus the careless sample', () => {
-    const level = hopelessLevel();
-    const j = judge(level);
-    const v = isHardButFair(level);
-    expect(j.hard).toBe(v.hard);
-    expect(j.fair).toBe(v.fair);
-    expect(j.forgive).toBe(v.forgive);
-    expect(j).not.toHaveProperty('carelessLoss');
+describe('playOut', () => {
+  test('a jam is a bill, not an ending', () => {
+    // hopelessLevel 有一个锁着的车位。`simulate` 把它夹死,于是判为输;真机上卡住会
+    // 提示开那个车位,关卡继续 —— 这一条钉的就是两者的区别,因为整条难度曲线量错了
+    // 一年就是错在这里。开完仍然赢不了(三辆绿车对一队红乘客),但它是**买过之后**
+    // 才结束的,而且账单记了下来。
+    expect(simulate(hopelessLevel(), decisive, 1)).toBe(false);
+    const r = playOut(hopelessLevel(), decisive, 1);
+    expect(r.bought).toBe(hopelessLevel().parking.slots - hopelessLevel().parking.unlocked);
+    expect(r.won).toBe(false);
+    expect(r.dead).toBe(true);
   });
 
-  test('forgiveness is not measured on a level the one-line rule wins', () => {
-    // soloLevel 不 hard,`forgive` 报 1 是个哨兵而不是测量值 —— 这一关在任何人问它
-    // 宽不宽容之前就已经被 `choosePainting` 丢掉了。钉住它是为了防止有人把这个 1
-    // 当成"最宽容"读进排序里。
+  test('a level that plays itself costs nothing', () => {
+    expect(playOut(soloLevel(), decisive, 1)).toEqual({ won: true, bought: 0, dead: false });
+  });
+
+  test('the reference player does not sit on an empty stall for ever', () => {
+    // `careful` 在没有匹配颜色时永远不点,于是车位永远不满,于是游戏那个"开个车位吧"
+    // 的提示永远不触发 —— 一局既不赢也不卡死,空转到上限。判据要量的是"卡住值多少钱",
+    // 而这种局在账面上是 0。`decisive` 只在环上还有空位时才等。
+    const idle = playOut(hopelessLevel(), careful, 1);
+    expect(idle).toEqual({ won: false, bought: 0, dead: false });
+    expect(playOut(hopelessLevel(), decisive, 1).dead).toBe(true);
+  });
+
+  test('it does not mutate the level it is handed', () => {
+    const level = shipped(6);
+    const before = JSON.stringify(level);
+    playOut(level, careful, 1);
+    expect(JSON.stringify(level)).toBe(before);
+  });
+});
+
+describe('exitWidth', () => {
+  test('one colour everywhere is a width of one, however many cars can leave', () => {
+    const level = shipped(6);
+    const flat: LevelData = JSON.parse(JSON.stringify(level));
+    for (const c of flat.lot.cars) c.color = 'red';
+    expect(exitWidth(flat)).toBeCloseTo(1, 6);
+    // 而真正发出去的那一关必须明显更宽 —— 否则这个指标根本没在看颜色。
+    expect(exitWidth(level)).toBeGreaterThan(2);
+  });
+
+  test('it never claims more colours than the frontier holds cars', () => {
+    const level = shipped(6);
+    const frontiers = exitFrontiers(level);
+    expect(frontiers.length).toBeGreaterThan(20);
+    const color = new Map(level.lot.cars.map((c) => [c.id, c.color]));
+    for (const ids of frontiers) {
+      const seen = new Set(ids.map((id) => color.get(id)));
+      expect(seen.size).toBeLessThanOrEqual(ids.length);
+    }
+    expect(frontierWidth(frontiers, color)).toBeCloseTo(exitWidth(level), 6);
+  });
+
+  test('the frontiers belong to the packing, not to the painting', () => {
+    // 这是配色搜索省下四百次重建的那条性质:谁能开出去只跟车停在哪有关。它一旦不成立,
+    // 第一遍筛出来的"最窄的候选"就是用别人的 frontier 算的,整个搜索静默地看错东西。
+    const level = shipped(6);
+    const repainted: LevelData = JSON.parse(JSON.stringify(level));
+    repainted.lot.cars.forEach((c, i) => { c.color = i % 2 === 0 ? 'red' : 'blue'; });
+    expect(exitFrontiers(repainted)).toEqual(exitFrontiers(level));
+  });
+});
+
+describe('judge', () => {
+  test('a level that plays itself is clean and costs nothing', () => {
     const v = judge(soloLevel());
-    expect(v.hard).toBe(false);
-    expect(v.forgive).toBe(1);
+    expect(v.perfect).toBe(0);
+    expect(v.cost).toBe(0);
+    expect(v.dead).toBe(false);
+  });
+
+  test('a level with no way through is dead, and dead is not the same as expensive', () => {
+    // hopelessLevel 是三辆绿车对一队红乘客:车位全开也接不上。这必须读成 `dead`,
+    // 因为 `choosePainting` 靠它把"窄过头"的配色挡回去 —— 而在账面上它同时也是最
+    // 贵的,所以只看 `cost` 的搜索会把它当成最好的候选。
+    const v = judge(hopelessLevel());
+    expect(v.dead).toBe(true);
+  });
+
+  test('width comes straight off exitWidth', () => {
+    const level = shipped(6);
+    expect(judge(level).width).toBeCloseTo(exitWidth(level), 6);
   });
 });
 
