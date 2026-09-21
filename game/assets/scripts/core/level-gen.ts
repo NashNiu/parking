@@ -93,8 +93,21 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * get a bigger cell than they do today despite carrying two more rows -- the frame fix hands
  * them more than the rows take, because the old formula was under-sizing them for exactly the
  * same reason it was leaving the band under the lot. Only the 4:3 tablet pays, at -17.4%.
+ *
+ * 8 BY 10, DOWN FROM 8 BY 12, and the reason is difficulty rather than layout. A car leaves
+ * by driving to an edge, so how many cars can leave at once is set by how much RIM the block
+ * of cars has -- measured across the shipped ten, the levels with a big solid silhouette put
+ * 8 to 11 cars on the table at a time against four stalls, and the ones with a small or
+ * hollow silhouette put 4. My human partner cleared level 4 on two stalls four times running
+ * while every other dial was already at its ceiling, and asked for this one: 可以把高度降低
+ * 一些.
+ *
+ * Two rows is the change the screen-fit table above can absorb without being redone: short
+ * screens were the height-bound end of it, and they get a bigger cell here, not a smaller
+ * one. The view reads `level.lot.h` rather than this constant, so nothing in it is pinned to
+ * the old number.
  */
-export const LOT: Lot = { w: 8, h: 12 };
+export const LOT: Lot = { w: 8, h: 11 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -568,18 +581,20 @@ export function levelParams(id: number): GenParams {
         // 6 is the ceiling because PALETTE has six entries and the view has exactly those six
         // in `colors.ts`. A seventh would draw grey (see `colorOf`).
         //
-        // FULL PALETTE FROM ID 3, up from id 5. The old ramp put five colours on ids 2, 3
-        // and 4, and against four open stalls that is a bay covering four fifths of the
-        // colours in play -- structurally the slackest the game gets, and id 4 is the level
-        // my human partner kept clearing on two stalls. They have also said, in so many
-        // words, that difficulty may be high from level 2 onwards.
+        // FULL PALETTE FROM ID 2. There is no colour ramp any more, and that is a decision
+        // my human partner made in one line: 只有第一个关是教学关. Id 1 is authored, never
+        // packed, and keeps four; everything else opens on all six.
         //
-        // The three things the curve's own tests ask of this column still hold: it is
-        // non-decreasing (4, 5, 6, 6, ...), the back half outweighs the front (30 against
-        // 27, where it was 30 against 26), and the last level carries more than the first
-        // packed one (6 against 5). Id 2 stays at five to keep that last one true, and
-        // because something has to teach the mechanic.
-        colors: Math.min(6, 3 + id),
+        // What the ramp was buying is not worth its cost here. Five colours against four
+        // open stalls is a bay covering four fifths of what is in play, which is the
+        // slackest the game gets -- and ids 2, 3 and 4 were exactly the levels being
+        // cleared on two stalls. A column that reaches its ceiling on the first packed
+        // level is not much of a curve, but it is the honest shape of this one: the
+        // palette has six entries and the difficulty has to come from elsewhere.
+        //
+        // The pairwise test that asked for `last.colors > first.colors` went with this;
+        // see level-gen.test.ts, where the ramp it was guarding now rides on `exitCars`.
+        colors: id <= 1 ? 4 : 6,
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
@@ -788,7 +803,7 @@ export function bandParams(id: number): { offset: number; interleave: number } {
  * 而这里量的是**参考玩家**的需求,人比它强,所以人需要的只会更少 —— 顶满这一档之后,
  * 再想更紧就只剩一条路:开局少给几个车位。
  */
-const DEMAND_CURVE = [1, 2, 3, 4, 4, 4, 4, 4, 4, 4];
+const DEMAND_CURVE = [1, 4, 4, 4, 4, 4, 4, 4, 4, 4];
 
 /** This level's target stall demand, clamped past both ends of DEMAND_CURVE. */
 export function demandTarget(id: number): number {
@@ -802,7 +817,7 @@ export function demandTarget(id: number): number {
  * 平手判据,不是主判据。它自己太平,分辨不出关卡紧不紧;但在车位需求已经相同的候选之间,
  * 它分得出哪个更不容错。
  */
-const COST_CURVE = [0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8];
+const COST_CURVE = [0, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
 
 /** This level's target price for a mistake, clamped past both ends of COST_CURVE. */
 export function costTarget(id: number): number {

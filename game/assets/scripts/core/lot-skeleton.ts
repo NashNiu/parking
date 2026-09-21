@@ -34,14 +34,14 @@ export type SkeletonShape = 'full' | 'plus' | 'diamond' | 'ellipse' | 'donut';
  */
 const SHAPE_CURVE: readonly SkeletonShape[] = [
     'full',      // 1  手写教学关,根本不走打包器
-    'full',      // 2  第一关有难度的,先不加形状
-    'ellipse',   // 3
-    'ellipse',   // 4
+    'donut',     // 2
+    'plus',      // 3
+    'diamond',   // 4
     'donut',     // 5
-    'donut',     // 6
-    'plus',      // 7
-    'plus',      // 8
-    'diamond',   // 9
+    'plus',      // 6
+    'diamond',   // 7
+    'donut',     // 8
+    'plus',      // 9
     'diamond',   // 10
 ];
 

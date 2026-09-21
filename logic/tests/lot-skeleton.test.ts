@@ -15,18 +15,24 @@ function seedRng(seed: number): () => number {
 
 test('骨架曲线是每关一行,并且向两端钳制', () => {
   const got = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(skeletonShape);
-  // 坡度是 满 → 椭圆 → 回字 → 十字 → 菱形,每种两关。前两关不加形状:第 1 关是手写
-  // 教学关,第 2 关是颜色刚够咬人的那一关。
+  // 2026-09-22:三种紧形状轮替,`full` 只剩第 1 关那个手写教学关在用,`ellipse` 退场。
+  //
+  // 换掉的理由是量出来的,不是审美:同时能开出去几辆车由这堆车有多少**贴边**决定,而
+  // 实心的大轮廓边太长。发出去的十关上,`full`/`ellipse` 那几关一次能开出去 8 到 10 辆
+  // 车(对着四个车位),`donut`/`plus`/`diamond` 只有 3 到 5 辆。人类伙伴连着四次用两个
+  // 车位打通第 4 关,而那时配色和队列顺序两个旋钮都已经顶到头了。
+  //
+  // 轮替而不是每种连着两关,是为了相邻两关不撞形状。
   expect(got).toEqual([
-    'full', 'full', 'ellipse', 'ellipse', 'donut',
-    'donut', 'plus', 'plus', 'diamond', 'diamond',
+    'full', 'donut', 'plus', 'diamond', 'donut',
+    'plus', 'diamond', 'donut', 'plus', 'diamond',
   ]);
   // 钳制:表外的 id 落在两端,而不是抛错或给 undefined
   expect(skeletonShape(0)).toBe('full');
   expect(skeletonShape(-5)).toBe('full');
   expect(skeletonShape(11)).toBe('diamond');
   expect(skeletonShape(200)).toBe('diamond');
-  expect(skeletonShape(4.5)).toBe('ellipse');   // 截断到 4
+  expect(skeletonShape(4.5)).toBe('diamond');   // 截断到 4
 });
 
 test('判据认得场地的四角和正中,而且五种形状的答案各不相同', () => {

@@ -6,7 +6,7 @@ import {
   exitWidth, exitFrontiers, frontierWidth,
   slip, forgiveness, SLIP_RATE, Policy,
 } from '../../game/assets/scripts/core/play-sim';
-import { bandedQueue } from '../../game/assets/scripts/core/level-gen';
+import { bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
 import { GameCore } from '../../game/assets/scripts/core/game-core';
 import { LevelData } from '../../game/assets/scripts/core/types';
 
@@ -247,19 +247,29 @@ describe('judge', () => {
   });
 
   test('demand sees what cost cannot', () => {
-    // 这一条钉的是换指标的理由本身。把发出去的第 4 关按 run=1 和 run=8 重新上色,它需要
-    // 的开局车位从 1 涨到 3,而 `mistakeCost` 两边都在 0.0-0.4 之间 —— 纯噪声。按 cost
-    // 排的搜索于是挑了个两个车位就能过的关卡,还报告说命中目标。
+    // 这一条钉的是换指标的理由本身,两半一起钉:同一关的两种配色,车位需求差两个,而
+    // `mistakeCost` 读数**完全相同**。按 cost 排的搜索于是挑了个松的还报告命中目标。
+    //
+    // 量之前先把车位放开到 slots。`stallDemand` 最多数到 unlocked,而 2026-09-22 之后
+    // 每一关都顶到 4 —— 截顶之后两种配色读数一样,这条就只能量到"都是 4",什么也证明
+    // 不了。放开之后散配色掉到 2,差别是真的。
     const palette = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
-    const paint = (run: number): LevelData => {
-      const lvl: LevelData = JSON.parse(JSON.stringify(shipped(4)));
-      const colors = new Set(lvl.lot.cars.map((c) => c.color)).size;
-      lvl.lot.cars.forEach((c, i) => { c.color = palette[Math.floor(i / run) % colors]; });
-      lvl.loop.queue = bandedQueue(lvl.lot.cars, lvl.lot.tunnels ?? [], 12, 1);
-      return lvl;
+    const wide = (id: number, roundRobin: boolean): LevelData => {
+      const l: LevelData = JSON.parse(JSON.stringify(shipped(id)));
+      l.parking.unlocked = l.parking.slots;
+      if (roundRobin) {
+        const colors = new Set(l.lot.cars.map((c) => c.color)).size;
+        l.lot.cars.forEach((c, i) => { c.color = palette[i % colors]; });
+        const b = bandParams(id);
+        l.loop.queue = bandedQueue(l.lot.cars, l.lot.tunnels ?? [], b.offset, b.interleave);
+      }
+      return l;
     };
-    expect(stallDemand(paint(8))).toBeGreaterThan(stallDemand(paint(1)));
-  }, 300000);
+    // 第 2 关,不是第 4 关:第 4 关的形状已经把活干完了,两种配色都要四个车位,拿它当
+    // 例子会把"配色无关"错读成"指标无效"。
+    expect(stallDemand(wide(2, true))).toBeLessThan(stallDemand(wide(2, false)));
+    expect(mistakeCost(wide(2, true))).toBe(mistakeCost(wide(2, false)));
+  }, 600000);
 
   test('a level with no way through is dead, and dead is not the same as expensive', () => {
     // hopelessLevel 是三辆绿车对一队红乘客:车位全开也接不上。这必须读成 `dead`,
@@ -318,6 +328,10 @@ describe('demandPressure', () => {
     // 最高 1.67 是最低 0.57 的 2.9 倍。断言 1.8 倍,留足余量;而 offset 若真的不起作用,
     // 这六档会挤在一起,比值奔向 1.0。
     const spread = [0, 8, 16, 24, 32, 40].map(at);
-    expect(Math.max(...spread)).toBeGreaterThan(Math.min(...spread) * 1.8);
+    // 1.5,从 1.8 放宽,而放宽的量是实测的:2026-09-22 的形状曲线把第 6 关换成了十字
+    // 形、场地也矮了一行,同一组 offset 量到 1.24/1.38/1.67/1.24/1.39/1.99,比值 1.61。
+    // offset 仍然抬得动缺口,只是这个更紧的打包上余地小了 —— 1.5 留在 1.61 下面一点,
+    // 旋钮真失效时(比值奔向 1.0)仍然会红。
+    expect(Math.max(...spread)).toBeGreaterThan(Math.min(...spread) * 1.5);
   });
 });

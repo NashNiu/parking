@@ -3,7 +3,7 @@ import * as path from 'path';
 import { generateLevel, levelParams, inwardCars, levelMask, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
-import { judge, exitWidth, demandPressure } from '../../game/assets/scripts/core/play-sim';
+import { judge, exitCars, demandPressure } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
 import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
 import { inShape, SkeletonShape, skeletonShape } from '../../game/assets/scripts/core/lot-skeleton';
@@ -294,7 +294,14 @@ test('every packed level is seated as full as its skeleton leaves room for', () 
   // a mask thin enough to stop being a car park: a shape seating 36 cars (which is what the
   // old `ring` geometry did, and why it was dropped) would trip every row here.
   const SEAT_FLOOR: Record<SkeletonShape, number> = {
-    full: 74, ellipse: 63, donut: 37, plus: 46, diamond: 40,
+    // 2026-09-22 在 8x11 上重量的 —— 场地从 8x12 矮了一行,同时形状曲线换成三种紧形状
+    // 轮替,所以每一个数都变了。实测各关座位数:donut 49/46/47,plus 49/49/43,
+    // diamond 49/39/46;取各自最小值再留两成余量。
+    //
+    // `full` 和 `ellipse` 的数还是 8x12 量的,而现在**没有任何一关用它们**(第 1 关是
+    // 手写的,不走打包器)。留着是为了让 `SEAT_FLOOR[shape] > 0` 那条守卫仍然有值可查,
+    // 但谁要把这两种形状放回曲线,必须重新量 —— 矮一行之后它们必然也不是这个数。
+    full: 74, ellipse: 63, donut: 36, plus: 34, diamond: 31,
   };
   // `donut` 的 49 是按**矩形点阵**量的,而它 2026-09-20 改成了沿轮廓铺(见 `contourSeats`),
   // 座位就少了约一成六:同一批种子、同一组车,轮廓平均 52.5 最低 48,点阵平均 62.4 最低
@@ -463,7 +470,10 @@ test('a later level is harder although it is SMALLER', () => {
   const first = estimateDifficulty(firstLvl);
   const last = estimateDifficulty(lastLvl);
   expect(last.cars).toBeLessThan(first.cars);
-  expect(last.colors).toBeGreaterThan(first.colors);
+  // 颜色**不再**是坡度的一部分,而这一行是把这件事钉住,不是把它删掉。2026-09-22 起
+  // 第 2 关就开满六色(人类伙伴:只有第一个关是教学关),调色板只有六个,所以第 10 关
+  // 无处可涨。谁要是哪天让它重新爬坡,得先经过这一行。
+  expect({ first: first.colors, last: last.colors }).toEqual({ first: 6, last: 6 });
   expect((lastLvl.lot.tunnels ?? []).length)
     .toBeGreaterThan((firstLvl.lot.tunnels ?? []).length);
   expect(last.blocked / onBoard(lastLvl))
@@ -488,28 +498,37 @@ test('three stars are reachable on the bay every level ships with', () => {
   }
 }, 900000);
 
-test('the back of the game asks for more of the bay than the front', () => {
+test('every packed level asks for the whole bay', () => {
   // 整条改动的验收条件,单位是**开局车位里最少要用几个**。人类伙伴一直在报的就是这个
   // 数:只用了三个车位,感觉甚至两个车位都可以。
   //
   // 在它之前的三版难度列都量不出这件事。最近那一版量"被迫买下几个车位",而把第 4 关的
   // 上色压窄时,它需要的车位从 1 涨到 3,那个数却全程在 0.0 到 0.4 之间抖 —— 于是按它
-  // 排的搜索挑了个两个车位就能过的,还报告说命中目标。改版前实测九关是 1、2、2、2、4、
-  // 4、2、4、4:五关最多只用到一半车位。
+  // 排的搜索挑了个两个车位就能过的,还报告说命中目标。
   //
-  // 钉的是**两端的均值**而不是逐关单调:五色关卡可挑的配色极少,落在哪就是哪。
-  const mean = (ids: number[]) => ids.reduce((n, id) => n + judge(levelFor(id)).demand, 0) / ids.length;
-  expect(mean([8, 9, 10])).toBeGreaterThan(mean([2, 3, 4]) + 0.6);
+  // 这条原来问的是"后段比前段要得多",而 2026-09-22 起**每一关都顶满**,前后段一样高,
+  // 那条断言自己就失效了。改成问平线本身,因为平线是人类伙伴要的:只有第一个关是教学关。
+  // 改版前实测九关是 1、2、2、2、4、4、2、4、4,五关最多只用到一半车位。
+  for (const id of PACKED) {
+    const lvl = levelFor(id);
+    expect({ id, demand: judge(lvl).demand }).toEqual({ id, demand: lvl.parking.unlocked });
+  }
 }, 900000);
 
-test('the choice the board offers narrows towards the back of the game', () => {
-  // 人类伙伴点名的那个旋钮:同一时间,能驶出停车场的不同颜色的车辆数量越少,难度越大。
+test('no level puts more than a handful of cars on the table at once', () => {
+  // 人类伙伴点名的那个旋钮,原话两条:同一时间,能驶出停车场的不同颜色的车辆数量越少,
+  // 难度越大;以及 可以调整下车位,让更多的车辆被挡住。
   //
   // 不跑任何一局 —— 这是它最大的用处。别的每一个指标都要先派一个参考玩家下场,于是量
   // 出来的有一半是那个玩家的水平;而那个玩家被证明比人弱得多(它在第 4 关要四个车位,
   // 人类伙伴用两个就过了)。这一条只问棋盘。
-  const mean = (ids: number[]) => ids.reduce((n, id) => n + exitWidth(levelFor(id)), 0) / ids.length;
-  expect(mean([8, 9, 10])).toBeLessThan(mean([2, 3, 4]));
+  //
+  // 问的是**上限**不是坡度,因为坡度已经没有了(见上一条)。6.5 的来历:实心大轮廓的
+  // 那几关一次摆出 8.3 到 10.7 辆车对着四个车位,换成紧形状轮替之后是 3.0 到 5.8。
+  // 6.5 卡在两者中间,松形状回来就会红。
+  for (const id of PACKED) {
+    expect({ id, crowded: exitCars(levelFor(id)) > 6.5 }).toEqual({ id, crowded: false });
+  }
 });
 
 test('the curve brackets the blocked-car count from both sides', () => {
@@ -609,11 +628,17 @@ test('the second half of the curve is harder than the first, by what the curve s
   // separately rather than summed into the gap -- they are different units, and adding them
   // would let a collapse in one be paid for by the other. 4, 5, 5, 5, 6 against 6, 6, 6, 6, 6:
   // 25 in front against 30 behind, a fifth of headroom.
-  const gap = IDS.map((id) => demandPressure(levelFor(id)).gap);
-  const colors = IDS.map((id) => estimateDifficulty(levelFor(id)).colors);
+  // 2026-09-22:缺口和颜色都不再沿曲线爬坡了,所以这里改问**还在爬的那一项**。
+  //
+  // 颜色从第 2 关就开满六色,缺口在紧形状轮替之后按关乱序分布(实测 2.92、3.84、1.53、
+  // 1.43、1.35、3.95、2.06、0.37、1.54)。这不是回归:难度现在是"每一关都要用满整个
+  // 车位区",而那是一条平线,人类伙伴要的就是平的。
+  //
+  // 隧道是唯一还有坡度的项,而它是真坡度 —— 前半 0、0、1、1、1,后半 2、2、2、2,而且
+  // 隧道是难度项不是装饰:它把车关在里面一辆一辆放出来,玩家选不了顺序。
+  const tunnels = IDS.map((id) => (levelFor(id).lot.tunnels ?? []).length);
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
-  expect(sum(gap.slice(5))).toBeGreaterThan(sum(gap.slice(0, 5)) * 1.2);
-  expect(sum(colors.slice(5))).toBeGreaterThan(sum(colors.slice(0, 5)));
+  expect(sum(tunnels.slice(5))).toBeGreaterThan(sum(tunnels.slice(0, 5)));
 });
 
 test('a level is short enough to finish: passengers stay within the budget', () => {
@@ -842,11 +867,16 @@ test('CARS_PER_LEVEL is a cap, and a tunnel spends it rather than adding to it',
   // number no level approaches. Level 2 carries no skeleton, so it is the level whose seat
   // supply is the lattice alone, and it seats 89 of 89.
   //
-  // The floor for that is 85, four cars under, and it is measured rather than tidy: GAP's own
-  // sweep table says the lattice seats 89 at spacings 0.10, 0.15 and 0.20 and 78 at 0.25, so
-  // 85 fires on one notch of density regression and clears the three settings that produce a
-  // full lot. Written as "the fullest packed level", not "level 2", so it survives SHAPE_CURVE
-  // being re-ordered.
+  // 85 WAS THE FLOOR WHILE A PACKED LEVEL COULD BE `full`, and none can any more. Since the
+  // 2026-09-22 shape cycle every packed id carries `donut`, `plus` or `diamond`, and on the
+  // 8x11 lot those seat 39 to 49 -- so 85 stopped measuring a density regression and started
+  // measuring the shape curve, which is pinned in lot-skeleton.test.ts and not this test's
+  // business.
+  //
+  // 36 is four cars under the smallest shipped level, the same margin the old number had
+  // against the lot it was measured on. It still catches the failure this line exists for,
+  // a packing that quietly stops filling its skeleton -- and the per-shape floors next door
+  // catch it more sharply, shape by shape.
   //
   // The degeneracy floor -- no level may come out EMPTY -- is not here; it is per skeleton,
   // in 'every packed level is seated as full as its skeleton leaves room for'.
@@ -860,7 +890,7 @@ test('CARS_PER_LEVEL is a cap, and a tunnel spends it rather than adding to it',
   for (const { id, total } of seated) {
     expect({ id, withinCap: total <= CARS_PER_LEVEL }).toEqual({ id, withinCap: true });
   }
-  expect(Math.max(...seated.map((x) => x.total))).toBeGreaterThanOrEqual(85);
+  expect(Math.max(...seated.map((x) => x.total))).toBeGreaterThanOrEqual(36);
 });
 
 test('no tunnel is welded shut at the start', () => {
