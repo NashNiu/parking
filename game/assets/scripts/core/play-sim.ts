@@ -440,6 +440,26 @@ export function frontierWidth(frontiers: number[][], color: Map<number, string>)
   return total / frontiers.length;
 }
 
+/**
+ * HOW MANY CARS CAN LEAVE AT ONCE, averaged over the lot's unwinding.
+ *
+ * `exitWidth`'s sibling, and the blunter of the two: that one counts colours on the frontier,
+ * this counts cars. Both are policy-free, and this one is the one that does not saturate --
+ * `stallDemand` tops out at the four stalls the bay opens with, and every level was already
+ * there while my human partner was still clearing them on two.
+ *
+ * Measured on the levels shipped 2026-09-21: 8.6, 10.7, 8.3, 6.2, 5.8, 4.4, 4.9, 4.2, 4.3
+ * across ids 2-10. Level 3 put ten cars on the table at a time, eighteen at the opening
+ * position, against four stalls -- and the blocked-car share was a flat 0.80 to 0.86
+ * throughout, so the share is not what this is. A bigger board yields more exits at the same
+ * share.
+ */
+export function exitCars(level: LevelData): number {
+  const frontiers = exitFrontiers(level);
+  if (frontiers.length === 0) return 0;
+  return frontiers.reduce((n, ids) => n + ids.length, 0) / frontiers.length;
+}
+
 /** Playthroughs behind `mistakeCost`. Odd and small; each one is a full game. */
 const COST_SEEDS = 5;
 

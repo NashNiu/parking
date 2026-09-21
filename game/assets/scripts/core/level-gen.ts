@@ -4,7 +4,7 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { judge, mistakeCost, exitFrontiers, frontierWidth } from './play-sim';
+import { judge, mistakeCost, exitFrontiers, frontierWidth, exitCars } from './play-sim';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -1905,14 +1905,44 @@ export function levelMask(id: number): (x: number, y: number) => boolean {
     return (x, y) => inShape(shape, x, y, LOT.w, LOT.h);
 }
 
-/** A candidate packing, with the two things `generateLevel` chooses between them on. */
-interface Ranked { cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward: number }
+/** A candidate packing, with the things `generateLevel` chooses between them on. */
+interface Ranked {
+    cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward: number; exits: number;
+}
 
 /**
- * Order for `generateLevel`'s candidates: fewest CAR-SHAPED holes, then most cars facing
- * inward, then fewest small holes.
+ * Order for `generateLevel`'s candidates: fewest CAR-SHAPED holes, then FEWEST CARS ABLE TO
+ * LEAVE AT ONCE, then most cars facing inward, then fewest small holes.
  *
- * Lexicographic, and the order of the three keys is the whole content of this function.
+ * Lexicographic, and the order of the four keys is the whole content of this function.
+ *
+ * EXITS IS THE NEW KEY. This used to rank on looks alone -- difficulty entered only as a
+ * filter, through the blocked-car target -- and the result is what my human partner kept
+ * running into: level 4 offered 8.3 cars at a time, thirteen of them on the opening position,
+ * against four stalls. With that much on the table something useful always fits, and no
+ * colouring or queue order can make the choice bite. They asked for it in one line: 可以调整
+ * 下车位,让更多的车辆被挡住.
+ *
+ * It is a property of the PACKING, so nothing else can supply it. Painting cannot -- the cars
+ * that can leave are the cars that can leave, whatever colour they are -- and the queue order
+ * cannot either. Both of those were pushed to their ceiling first, and neither moved the bay
+ * the level actually needed below four.
+ *
+ * IT IS WEIGHED AGAINST THE HOLES RATHER THAN ORDERED AGAINST THEM, and both orderings were
+ * tried first, on the whole ten, because neither failure is visible from the code.
+ *
+ * Exits first takes a shortcut: the cheapest way to have few cars able to leave is to have
+ * few cars. Level 7 came back with 37 cars where it had 52 and its big holes went from 1 to
+ * 19; level 8's went from 2 to 11. That is not more cars blocked, it is less car park.
+ *
+ * Holes first makes the key inert. Candidates almost never tie on holes, so the exit count is
+ * never reached -- the ten came back byte-identical to the ranking that had no such key.
+ *
+ * Summed, a sparse packing pays for its emptiness in the gaps it cannot help leaving, and the
+ * measured pair both resolve the right way:
+ *
+ *     level 7   dense 4.4 exits + 1 hole = 9.8    sparse 2.7 + 19 = 24.4   dense wins
+ *     level 5   old   6.2 exits + 7 holes = 19.4  new    3.7 + 10 = 17.4   new wins
  *
  * BIG AND MEDIUM TOGETHER FIRST, summed, because the failure being ranked out is a hole the
  * eye reads as a MISSING CAR rather than as space, and both sizes do that: a medium body is
@@ -1930,14 +1960,28 @@ interface Ranked { cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward:
  * SMALL HOLES LAST, where they belong -- worth breaking a tie on, not worth spending
  * anything else on.
  *
- * All three are free. Every candidate here already hits the difficulty target and cost a
+ * All four are free. Every candidate here already hits the blocked-car target and cost a
  * packing that was paid for; this only decides which of them ships.
  */
 function better(a: Ranked, b: Ranked): number {
-    return (a.holes.big + a.holes.medium) - (b.holes.big + b.holes.medium)
+    return tangle(a) - tangle(b)
         || b.inward - a.inward
         || a.holes.small - b.holes.small;
 }
+
+/** `better`'s first key: cars on the table, priced against the gaps they leave behind. */
+function tangle(r: Ranked): number {
+    return r.exits * HOLE_WEIGHT + r.holes.big + r.holes.medium;
+}
+
+/**
+ * How many car-shaped holes one more car on the table is worth.
+ *
+ * A judgement, and the only one in `better`. Two says a hole is half as bad as a car's worth
+ * of choice, which is what makes both of the measured failures come out right -- see the
+ * table in `better`'s docblock.
+ */
+const HOLE_WEIGHT = 2;
 
 /**
  * The blocked-car count the curve asks of `id`.
@@ -2115,7 +2159,12 @@ export function generateLevel(id: number): LevelData {
             // 形状外面的空地不算洞,见 `fillableHoles` 的 `within`。不传的话菱形关
             // 的四个角会被数成一堆 big 洞,而每个候选的四个角都一样空 —— 排名于是
             // 只剩噪声可比。
-            return { ...c, holes: fillableHoles(level, [], mask), inward: inwardCars(level) };
+            return {
+                ...c,
+                holes: fillableHoles(level, [], mask),
+                inward: inwardCars(level),
+                exits: exitCars(level),
+            };
         })
         .sort(better);
 

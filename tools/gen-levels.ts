@@ -17,7 +17,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, demandTarget, costTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
-import { demandPressure, judge, mistakeCost } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, judge, mistakeCost, exitCars } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
@@ -153,6 +153,10 @@ for (const id of ids) {
     // 同时能开出去几种颜色 —— 人类伙伴点名的那个旋钮,越小越难。配色搜索先按它筛
     // 候选(不用跑模拟),再对最窄的那批花模拟。见 `exitWidth`。
     const width = v.width.toFixed(2).padStart(5);
+    // 同时能开出去几辆车 —— 人类伙伴要的"让更多的车辆被挡住"。纯结构,而且不会像
+    // `stalls` 那样在 4 就饱和:配色和队列顺序顶到头时,每关都已经是 4/4,而他还是
+    // 两个车位就过。见 `exitCars` 和 `better`。
+    const exits = v.width === 0 ? '  -  ' : exitCars(level).toFixed(1).padStart(5);
     // 开局给四个车位,这一关最少用几个就能过 —— 人类伙伴一直在报的那个数。四个里只要
     // 两个,另外两个就是摆设。这是**难度列**;`cost` 是同一档里的平手判据。
     const stalls = want.colors <= 4 ? '  -  '
@@ -164,13 +168,13 @@ for (const id of ids) {
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
-        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${width} ${stalls} ${slip}`
+        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${width} ${exits} ${stalls} ${slip}`
         + `  ${(authored ? 'AUTHORED' : onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width stalls    slip  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width exits stalls    slip  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 
