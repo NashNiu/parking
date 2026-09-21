@@ -37,7 +37,7 @@
  * offset the curve is asking too much of, and the answer is a smaller one.
  */
 import { generateLevel, bandedQueue, bandParams } from '../game/assets/scripts/core/level-gen';
-import { demandPressure, judge } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, judge, mistakeCost } from '../game/assets/scripts/core/play-sim';
 import { LevelData } from '../game/assets/scripts/core/types';
 
 /** Offsets to try, in rows. 0 is included because it is the measured free end. */
@@ -74,9 +74,9 @@ for (const id of idsToSweep(process.argv.slice(2))) {
                 `L${id} offset=${String(offset).padStart(3)} il=${interleave} `
                 // 三星拿不拿得到(完美打买了几个车位),以及错一步值多少钱。`dead` 是
                 // 七个车位全开还卡死 —— 那是关卡坏了,不是难。见 `judge`。
-                + `${v.dead ? 'DEAD  ' : v.perfect === null ? 'STALLS'
-                    : v.perfect > 0 ? `no3★ ` : '3★ ok '} `
-                + `cost=${v.cost.toFixed(1)} width=${v.width.toFixed(2)} `
+                + `${v.dead ? 'DEAD ' : v.demand > probe.parking.unlocked ? 'no3★' : '3★ ok'} `
+                + `stalls=${v.demand} cost=${mistakeCost(probe).toFixed(1)} `
+                + `width=${v.width.toFixed(2)} `
                 + `gap=${g.gap.toFixed(2)} ring=${g.ring.toFixed(1)} stuck=${g.starved.toFixed(2)}${mark}\n`,
             );
         }

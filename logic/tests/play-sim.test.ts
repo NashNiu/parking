@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  careful, careless, keepDistinct, decisive, judge, simulate, demandPressure, playOut,
+  careful, careless, keepDistinct, decisive, judge, stallDemand, mistakeCost,
+  simulate, demandPressure, playOut,
   exitWidth, exitFrontiers, frontierWidth,
   slip, forgiveness, SLIP_RATE, Policy,
 } from '../../game/assets/scripts/core/play-sim';
@@ -231,17 +232,39 @@ describe('exitWidth', () => {
 });
 
 describe('judge', () => {
-  test('a level that plays itself is clean and costs nothing', () => {
+  test('a level that plays itself asks for one stall and costs nothing', () => {
     const v = judge(soloLevel());
-    expect(v.perfect).toBe(0);
-    expect(v.cost).toBe(0);
+    expect(v.demand).toBe(1);
     expect(v.dead).toBe(false);
+    expect(mistakeCost(soloLevel())).toBe(0);
   });
+
+  test('stall demand counts up, and says so when the whole bay is not enough', () => {
+    // soloLevel 是一辆车四个车位 —— 一个就够。hopelessLevel 四个也不够,报 unlocked + 1,
+    // 那是 `choosePainting` 用来判"这一关三星拿不到"的哨兵,不是一个可比的车位数。
+    expect(stallDemand(soloLevel())).toBe(1);
+    expect(stallDemand(hopelessLevel())).toBe(hopelessLevel().parking.unlocked + 1);
+  });
+
+  test('demand sees what cost cannot', () => {
+    // 这一条钉的是换指标的理由本身。把发出去的第 4 关按 run=1 和 run=8 重新上色,它需要
+    // 的开局车位从 1 涨到 3,而 `mistakeCost` 两边都在 0.0-0.4 之间 —— 纯噪声。按 cost
+    // 排的搜索于是挑了个两个车位就能过的关卡,还报告说命中目标。
+    const palette = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
+    const paint = (run: number): LevelData => {
+      const lvl: LevelData = JSON.parse(JSON.stringify(shipped(4)));
+      const colors = new Set(lvl.lot.cars.map((c) => c.color)).size;
+      lvl.lot.cars.forEach((c, i) => { c.color = palette[Math.floor(i / run) % colors]; });
+      lvl.loop.queue = bandedQueue(lvl.lot.cars, lvl.lot.tunnels ?? [], 12, 1);
+      return lvl;
+    };
+    expect(stallDemand(paint(8))).toBeGreaterThan(stallDemand(paint(1)));
+  }, 300000);
 
   test('a level with no way through is dead, and dead is not the same as expensive', () => {
     // hopelessLevel 是三辆绿车对一队红乘客:车位全开也接不上。这必须读成 `dead`,
-    // 因为 `choosePainting` 靠它把"窄过头"的配色挡回去 —— 而在账面上它同时也是最
-    // 贵的,所以只看 `cost` 的搜索会把它当成最好的候选。
+    // 因为 `choosePainting` 靠它把"窄过头"的配色挡回去 —— 而在账面上它同时还是车位
+    // 需求最高的,所以只看 `demand` 的搜索会把它当成最好的候选。
     const v = judge(hopelessLevel());
     expect(v.dead).toBe(true);
   });

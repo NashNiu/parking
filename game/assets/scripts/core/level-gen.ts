@@ -4,7 +4,7 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { judge, exitFrontiers, frontierWidth } from './play-sim';
+import { judge, mistakeCost, exitFrontiers, frontierWidth } from './play-sim';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -717,29 +717,31 @@ export function tunnelParams(id: number): TunnelParams {
  * they are forced, and a regeneration that moves their packing can take even that away.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    // 每行末尾的 cost 是**发出去的那一关实测**的 `judge().cost`(手滑 10% 时被迫买下的
-    // 车位数),括号里是 `COST_CURVE` 要的目标。扫描读数和实得是两个量,混用会让人拿一
-    // 个从不成立的数去对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重
-    // 搜配色"。
+    // 每行末尾的 stalls 是**发出去的那一关实测**的 `judge().demand` —— 开局四个车位里
+    // 最少要用几个才能不买车位通关;括号里是 `DEMAND_CURVE` 要的目标,后面是错一步要
+    // 买几个(`mistakeCost`)。扫描读数和实得是两个量,混用会让人拿一个从不成立的数去
+    // 对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重搜配色"。
     //
-    // 选法:`dead` 和 `perfect !== 0` 之外的格子里,取扫描 cost 最接近目标的那个 —— 和
-    // `choosePainting` 同一个目标函数,这是它们能复合的前提。改完重新生成,再拿实测回填。
+    // 选法:`dead` 和"三星拿不到"之外的格子里,取扫描 demand 最接近目标的那个,同档再
+    // 比 cost —— 和 `choosePainting` 同一个目标函数,这是它们能复合的前提。
     //
-    // 2026-09-21 实测:前段(2、3、4)均值 0.27,后段(8、9、10)均值 1.20,坡度出来了。
-    // 后半段普遍低于目标,天花板在 1.6 上下,而**顶住天花板的是参考玩家而不是关卡** ——
-    // `perfect === 0` 这道闸门问的是"三星拿不拿得到",用一组弱策略去问,它们打不干净的
-    // 配色就全被丢掉了。目标值特意留在天花板之上:够不到时搜索会退化成"取最贵的那个",
-    // 这是对的行为,而一旦参考玩家变强,余量立刻用得上。
+    // 2026-09-21 改判据前后的实测对照(这一列就是人类伙伴一直在报的那个数):
+    //
+    //     关卡      2   3   4   5   6   7   8   9   10
+    //     改之前    1   2   2   2   4   4   2   4   4
+    //     改之后    2   3   3   4   4   4   3   4   4
+    //
+    // 改之前第 2 关八十九辆车一个车位就打完了,九关里五关最多只用到一半车位。
     { offset: 0, interleave: 1 },    // 1  authored teaching level; nothing is searched here
-    { offset: 16, interleave: 1 },   // 2  cost 0.2 (0.2)
-    { offset: 32, interleave: 1 },   // 3  cost 0.4 (0.4); five colours, so the search has almost no choice
-    { offset: 12, interleave: 1 },   // 4  cost 0.2 (0.6); five colours too, and it cannot reach the target
-    { offset: 16, interleave: 1 },   // 5  cost 0.4 (0.8)
-    { offset: 20, interleave: 1 },   // 6  cost 1.0 (1.0)
-    { offset: 24, interleave: 1 },   // 7  cost 1.4 (1.2); overshoots, and that is allowed
-    { offset: 12, interleave: 2 },   // 8  cost 0.8 (1.4); the worst miss of the ten
-    { offset: 32, interleave: 1 },   // 9  cost 1.2 (1.6)
-    { offset: 28, interleave: 3 },   // 10 cost 1.6 (1.8)
+    { offset: 16, interleave: 1 },   // 2  stalls 2 (2), slip 0.2
+    { offset: 32, interleave: 1 },   // 3  stalls 3 (3), slip 0.4
+    { offset: 12, interleave: 1 },   // 4  stalls 3 (4), slip 0.2; five colours AND a tunnel -- least room of the ten
+    { offset: 16, interleave: 1 },   // 5  stalls 4 (4), slip 0.2
+    { offset: 20, interleave: 1 },   // 6  stalls 4 (4), slip 1.0
+    { offset: 24, interleave: 1 },   // 7  stalls 4 (4), slip 1.4
+    { offset: 12, interleave: 2 },   // 8  stalls 3 (4), slip 0.8; the other miss
+    { offset: 32, interleave: 1 },   // 9  stalls 4 (4), slip 1.2
+    { offset: 28, interleave: 3 },   // 10 stalls 4 (4), slip 1.6
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
@@ -749,24 +751,40 @@ export function bandParams(id: number): { offset: number; interleave: number } {
 }
 
 /**
- * 每一关"错一步"该值多少钱 —— `judge().cost` 的目标值,单位是**被迫买下的车位数**。
+ * 每一关最少该逼玩家用几个开局车位 —— `judge().demand` 的目标值。
  *
- * 这条曲线取代 `FORGIVE_CURVE`(胜率)成为配色搜索的目标,而后者取代的是 `demandPressure`
- * 的缺口。两次都换对了方向、都没换到底,理由同一个:它们量的都是"一个永远不能开车位的
- * 玩家会不会输",而真机上没有这个玩家。按真机的方式打(卡住就开车位),2026-09-21 发出去
- * 的十关全部是 `careful` 零消耗满星通关 —— 包括第 10 关。人类伙伴的试玩先说了这件事:
- * 第 4 关两个车位就够,根本用不到四个。
+ * 这是人类伙伴一直在报的那个数,原话:只用了三个车位,感觉甚至两个车位都可以。开局给
+ * 四个而只需要两个,那另外两个就是摆设,颜色怎么排都救不回来。
  *
- * 现在的单位是游戏自己在计的那一笔:`GameCore.stars()` = 满星减去开过的车位数。判据也
- * 直接是人类伙伴的原话 —— **在每步都不能错的情况下,可以拿到 3 星**:
+ * 它取代 `COST_CURVE`(被迫买下的车位数),而后者取代的是胜率、再往前是需求缺口。前三
+ * 个都量不出这件事:把第 4 关的上色压窄,它需要的车位从 1 个涨到 3 个,而同一批候选的
+ * cost 全程在 0.0 到 0.4 之间抖 —— 纯噪声。按 cost 排的搜索于是挑了个两个车位就能过的,
+ * 还报告说命中目标。
  *
- *   - 完美打(`careful`)必须**买 0 个**车位,否则 3 星根本拿不到,这一关不能要;
- *   - 每十步错一步(`slip` 0.1)平均要买下面这么多个,这就是"错一步的代价";
- *   - 七个车位全开还卡死的,是关卡坏了,不是难。
+ * 2026-09-21 实测,九关是 1、2、2、2、4、4、2、4、4:五关最多只用到一半车位,第 2 关
+ * 八十九辆车一个车位就打完了。
  *
- * 数值按 5 个种子的粒度(0.2)排。第 10 关的 1.8 是量出来能到的:同一关按 run=5 重新
- * 上色,五个种子买了 2 0 1 2 1 个,均值 1.2,而更窄的上色还能更贵——但 run≥6 就开始
- * 真死局了,那是过头,`dead` 会挡住。
+ * 只有 1 到 4 四档(`UNLOCKED` 是 4),细的部分交给 `COST_CURVE` 在同一档里做平手判据。
+ * 人类伙伴说过"即使从第二关开始难度就一直很高也可以",所以第 4 关起就顶满。
+ *
+ * 4 就是这个设计的天花板,而且是算出来的不是调出来的:开局给 `UNLOCKED` 个车位,又要求
+ * 三星拿得到(也就是不买车位就能通关),那么"最少需要几个"最多只能等于 `UNLOCKED`。
+ * 而这里量的是**参考玩家**的需求,人比它强,所以人需要的只会更少 —— 顶满这一档之后,
+ * 再想更紧就只剩一条路:开局少给几个车位。
+ */
+const DEMAND_CURVE = [1, 2, 3, 4, 4, 4, 4, 4, 4, 4];
+
+/** This level's target stall demand, clamped past both ends of DEMAND_CURVE. */
+export function demandTarget(id: number): number {
+    const i = Math.min(Math.max(1, Math.trunc(id)), DEMAND_CURVE.length) - 1;
+    return DEMAND_CURVE[i];
+}
+
+/**
+ * 同一档车位需求下,再按"错一步要买几个车位"挑 —— `mistakeCost` 的目标值。
+ *
+ * 平手判据,不是主判据。它自己太平,分辨不出关卡紧不紧;但在车位需求已经相同的候选之间,
+ * 它分得出哪个更不容错。
  */
 const COST_CURVE = [0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8];
 
@@ -1681,7 +1699,7 @@ function choosePainting(
     id: number, cars: CarSpec[], tunnels: TunnelSpec[], p: GenParams,
 ): CarSpec[] | null {
     if (p.colors <= UNLOCKED) return null;
-    const target = costTarget(id);
+    const target = demandTarget(id);
     const rand = mulberry32(id * 104729 + 17);
 
     // Pass one costs no simulation at all. The frontiers belong to the packing, so they are
@@ -1714,19 +1732,28 @@ function choosePainting(
     let best: CarSpec[] | null = null;
     let bestErr = Infinity;
     for (const c of probe) {
-        const v = judge(assemble(id, c.painted, tunnels));
+        const level = assemble(id, c.painted, tunnels);
+        const v = judge(level);
         // Broken, not hard: every stall open and the board still frozen.
         if (v.dead) continue;
-        // Three stars have to be reachable by a clean run. This is the human partner's own
-        // rule for the curve -- 在每步都不能错的情况下,可以拿到 3 星 -- and it is the gate
-        // that stops "narrow the choice" from running away into levels nobody can clear.
-        if (v.perfect !== 0) continue;
-        const err = Math.abs(v.cost - target);
+        // Three stars have to be reachable on the bay the level ships with. This is the
+        // human partner's own rule -- 在每步都不能错的情况下,可以拿到 3 星 -- and it is
+        // the gate that stops "narrow the choice" running away into levels nobody clears.
+        if (v.demand > UNLOCKED) continue;
+        // Whole stalls first, and only then the price of a mistake. Ranking them the other
+        // way round is what shipped a level 4 that yields to two stalls: `cost` reads the
+        // same 0.0 to 0.4 whether the level needs one stall or three.
+        // Whole stalls dominate, so a candidate whose demand alone is already further off
+        // than the best so far cannot win, and its five slip playthroughs are not worth
+        // buying. This is most of them.
+        const whole = Math.abs(v.demand - target) * 10;
+        if (whole >= bestErr) continue;
+        const err = whole + Math.min(Math.abs(mistakeCost(level) - costTarget(id)), 9) / 10;
         if (err < bestErr) {
             bestErr = err;
             best = c.painted;
         }
-        if (bestErr <= COST_TOL) break;
+        if (bestErr <= COST_TOL / 10) break;
     }
     return best;
 }

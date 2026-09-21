@@ -470,34 +470,36 @@ test('a later level is harder although it is SMALLER', () => {
     .toBeGreaterThan(first.blocked / onBoard(firstLvl) - 1 / onBoard(lastLvl));
 });
 
-test('a clean run earns three stars on every level', () => {
+test('three stars are reachable on the bay every level ships with', () => {
   // 人类伙伴给这条曲线定的规则,逐字:在每步都不能错的情况下,可以拿到 3 星。
-  // 三星就是一个车位都没买(`GameCore.stars`),所以这条等价于 `perfect === 0`。
+  // 三星就是一个车位都没买(`GameCore.stars`),所以这条等价于"开局那几个车位就够"。
   //
-  // 它同时是"把选择压窄"这个方向的刹车:窄下去难度就上来,窄过头关卡就没法打了,
+  // 它同时是"把选择压窄"这个方向的刹车:窄下去车位需求就上来,窄过头关卡就没法打了,
   // 而这一条从另一头顶住。`dead` 挡的是更糟的那一端 —— 七个车位全开还卡死。
   //
   // 四色以下不断言:车位盖得住全部颜色的关卡不可能卡住,不管怎么生成(见 play-sim 的
   // 模块开头那条法则)。那些是教学关。
   for (const id of IDS) {
     if (levelParams(id).colors <= 4) continue;
-    const v = judge(levelFor(id));
-    expect({ id, dead: v.dead, perfect: v.perfect }).toEqual({ id, dead: false, perfect: 0 });
+    const lvl = levelFor(id);
+    const v = judge(lvl);
+    expect({ id, dead: v.dead, over: v.demand > lvl.parking.unlocked })
+      .toEqual({ id, dead: false, over: false });
   }
-}, 600000);
+}, 900000);
 
-test('a mistake costs more at the back of the game than at the front', () => {
-  // 整条改动的验收条件。单位是**被迫买下的车位数**,也就是游戏自己在计的那一笔。
+test('the back of the game asks for more of the bay than the front', () => {
+  // 整条改动的验收条件,单位是**开局车位里最少要用几个**。人类伙伴一直在报的就是这个
+  // 数:只用了三个车位,感觉甚至两个车位都可以。
   //
-  // 在它之前的两版难度列都量的是"一个永远不能开车位的玩家会不会输",而真机上没有这个
-  // 玩家:`GameCore.declineUnlock` 从没被调用过,卡住只会提示开车位。按真机的方式打,
-  // 上一版发出去的十关全部零消耗满星 —— 十关读数完全相同,这才是曲线一直压不出坡度的
-  // 原因,而不是目标值没调好。
+  // 在它之前的三版难度列都量不出这件事。最近那一版量"被迫买下几个车位",而把第 4 关的
+  // 上色压窄时,它需要的车位从 1 涨到 3,那个数却全程在 0.0 到 0.4 之间抖 —— 于是按它
+  // 排的搜索挑了个两个车位就能过的,还报告说命中目标。改版前实测九关是 1、2、2、2、4、
+  // 4、2、4、4:五关最多只用到一半车位。
   //
-  // 钉的是**两端的均值**而不是逐关单调:五色关卡(第 3、4 关)可挑的配色极少,落在哪
-  // 就是哪,强行要求逐关递增会把一条本来正确的曲线判成红。
-  const mean = (ids: number[]) => ids.reduce((n, id) => n + judge(levelFor(id)).cost, 0) / ids.length;
-  expect(mean([8, 9, 10])).toBeGreaterThan(mean([2, 3, 4]) + 0.4);
+  // 钉的是**两端的均值**而不是逐关单调:五色关卡可挑的配色极少,落在哪就是哪。
+  const mean = (ids: number[]) => ids.reduce((n, id) => n + judge(levelFor(id)).demand, 0) / ids.length;
+  expect(mean([8, 9, 10])).toBeGreaterThan(mean([2, 3, 4]) + 0.6);
 }, 900000);
 
 test('the choice the board offers narrows towards the back of the game', () => {

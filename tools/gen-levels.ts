@@ -15,9 +15,9 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, costTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, demandTarget, costTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
-import { demandPressure, judge } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, judge, mistakeCost } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
 import { CAP_SIZE } from '../game/assets/scripts/core/types';
 
@@ -124,11 +124,11 @@ for (const id of ids) {
     // thing the curve is made of. A level below the colour floor cannot be made to cost
     // anything, and prints `teach` instead of failing. See core/play-sim.ts.
     const v = judge(level);
+    const cost = want.colors <= 4 ? 0 : mistakeCost(level);
     const play = want.colors <= 4 ? 'teach'
         : v.dead ? 'BROKEN: no way through with every stall open'
-        : v.perfect === null ? 'NEVER FINISHES'
-        : v.perfect > 0 ? `NO 3-STAR RUN (a clean run buys ${v.perfect})`
-        : `3-star clean, a slip costs ${v.cost.toFixed(1)}`;
+        : v.demand > level.parking.unlocked ? 'NO 3-STAR RUN: the bay it ships with is not enough'
+        : `needs ${v.demand} of ${level.parking.unlocked} stalls, a slip costs ${cost.toFixed(1)}`;
     // Holes, because a level can hit every difficulty number and still ship with a
     // car-shaped patch of bare asphalt in it -- which is a bug you can only see. See
     // `fillableHoles`; the search ranks its candidates on this, so this column is how you
@@ -153,20 +153,24 @@ for (const id of ids) {
     // 同时能开出去几种颜色 —— 人类伙伴点名的那个旋钮,越小越难。配色搜索先按它筛
     // 候选(不用跑模拟),再对最窄的那批花模拟。见 `exitWidth`。
     const width = v.width.toFixed(2).padStart(5);
-    const cost = want.colors <= 4 ? '  -  '
-        : `${v.cost.toFixed(1)}/${costTarget(id).toFixed(1)}`.padStart(7);
+    // 开局给四个车位,这一关最少用几个就能过 —— 人类伙伴一直在报的那个数。四个里只要
+    // 两个,另外两个就是摆设。这是**难度列**;`cost` 是同一档里的平手判据。
+    const stalls = want.colors <= 4 ? '  -  '
+        : `${v.demand}/${demandTarget(id)}`.padStart(5);
+    const slip = want.colors <= 4 ? '  -  '
+        : `${cost.toFixed(1)}/${costTarget(id).toFixed(1)}`.padStart(7);
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
-        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${width} ${cost}`
+        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${width} ${stalls} ${slip}`
         + `  ${(authored ? 'AUTHORED' : onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width    cost  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width stalls    slip  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 

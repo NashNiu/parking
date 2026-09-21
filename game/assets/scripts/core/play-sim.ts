@@ -440,25 +440,38 @@ export function frontierWidth(frontiers: number[][], color: Map<number, string>)
   return total / frontiers.length;
 }
 
-/** Playthroughs behind `Verdict.cost`. Odd and small; each one is a full game. */
+/** Playthroughs behind `mistakeCost`. Odd and small; each one is a full game. */
 const COST_SEEDS = 5;
+
+/**
+ * The policies a level is asked about, best line kept.
+ *
+ * Every question here is an EXISTENCE claim -- can the level be cleared with two stalls, can
+ * three stars be taken -- and none of these bots is a good player, so asking one of them is
+ * asking the wrong question. Asking several and keeping the best line is the closest cheap
+ * approximation to "is there a way", which is what the claims are actually about.
+ */
+const PANEL: Policy[] = [decisive, careful, keepDistinct];
 
 export interface Verdict {
   /** Distinct colours that can leave at once. See `exitWidth`. */
   width: number;
   /**
-   * Stalls a clean run has to buy, or `null` if `careful` never finishes at all.
+   * FEWEST OPENING STALLS THE LEVEL STILL CLEARS WITH, buying nothing. `unlocked + 1` means
+   * it cannot be cleared on the bay it ships with at all.
    *
-   * ZERO IS THE REQUIREMENT, not a good score: my human partner's rule for the curve is
-   * 在每步都不能错的情况下，可以拿到3星, and three stars means nothing was bought.
+   * This is the number my human partner has been reporting all along, in their own words:
+   * 只用了三个车位，感觉甚至两个车位都可以. A level that ships four stalls and needs two is
+   * half decoration -- nothing is ever tight, and no amount of colour ordering changes that.
+   * Measured on the levels shipped 2026-09-21 it ran 1, 2, 2, 2, 4, 4, 2, 4, 4 across ids
+   * 2-10: five of the nine never needed more than half the bay, and level 2 cleared its
+   * eighty-nine cars on ONE stall.
+   *
+   * It is what `cost` could not see. Narrowing level 4's painting moves this from 1 to 3
+   * while `cost` stays at 0.0 to 0.4 throughout -- noise -- so a search ranked on `cost`
+   * picked the slack level and called it done.
    */
-  perfect: number | null;
-  /**
-   * Mean stalls bought at `SLIP_RATE` -- THE PRICE OF A MISTAKE, and the number the curve
-   * is steered by. A run that never finishes is priced at everything the level had to sell,
-   * so a painting that leaves the reference player circling cannot look cheap.
-   */
-  cost: number;
+  demand: number;
   /** Every stall open and the board still frozen. The level is unwinnable; reject it. */
   dead: boolean;
 }
@@ -466,49 +479,56 @@ export interface Verdict {
 /**
  * What the generator needs to know about a candidate, in the units the game already meters.
  *
- * This replaces `isHardButFair`, whose two bits asked "can a one-line rule win" and "can a
- * careful player win" -- both answered against a bay that could never grow. On a device the
- * bay does grow, so both questions were about a game that is not this one, and under the
- * real rules all ten shipped levels came back free: cleared by `careful`, nothing bought,
- * full marks, level 10 included.
+ * `demand` is the difficulty. `dead` is the floor under it: narrowing the choice is what
+ * raises demand, and taken too far it stops being a puzzle, which is a thing to reject
+ * rather than a thing to score.
  *
- * The three things that matter now, in order:
- *
- *  - `dead`  a level that cannot be finished with every stall open is not hard, it is broken.
- *
- * Played by `decisive` rather than `careful`, for the reason that policy's docblock gives:
- * a reference player who holds an empty stall forever never triggers the game's own jam
- * prompt, and so reads as "never finishes" on exactly the paintings worth keeping.
- *  - `perfect === 0`  a clean run must still earn three stars.
- *  - `cost`  and a run that is not clean must not.
+ * Neither is measured against a bay clamped to `unlocked` in the old sense. `demand` asks
+ * about a SMALLER bay on purpose -- what the level would still yield to -- while `dead` asks
+ * the opposite question with every stall bought, the way a device would.
  */
 export function judge(level: LevelData): Verdict {
-  const width = exitWidth(level);
-  // `perfect` is an EXISTENCE claim -- my human partner's rule is that a player who makes no
-  // mistake can take three stars, not that this particular bot can. So ask a small panel and
-  // keep the best line any of them finds. One policy alone made the gate far too strict in
-  // the wrong direction: `decisive` is much weaker than a person (it needs four stalls on
-  // level 4, where my human partner passed with two), so every painting IT could not clear
-  // cleanly was thrown away, and the reachable difficulty was capped by the bot rather than
-  // by the level.
-  let clean: Playout = { won: false, bought: 0, dead: false };
+  const demand = stallDemand(level);
+  // A level that clears on SOME bay having bought nothing cannot be dead, so the expensive
+  // question is only worth asking of the levels that failed the cheap one.
   let dead = false;
-  for (const pol of [decisive, careful, keepDistinct]) {
-    const r = playOut(level, pol, 1);
-    dead = dead || r.dead;
-    if (r.won && (!clean.won || r.bought < clean.bought)) clean = r;
+  if (demand > level.parking.unlocked) {
+    dead = true;
+    for (const pol of PANEL) if (playOut(level, pol, 1).won) { dead = false; break; }
   }
+  return { width: exitWidth(level), demand, dead };
+}
+
+/**
+ * Fewest opening stalls that still clear `level` with nothing bought.
+ *
+ * Counts up from one and stops at the first bay that works, so a slack level is cheap to
+ * spot and only a tight one pays for the whole scan. Reported as `unlocked + 1` when even
+ * the full bay is not enough -- such a level needs a stall bought and cannot be three-starred.
+ */
+export function stallDemand(level: LevelData): number {
+  for (let n = 1; n <= level.parking.unlocked; n++) {
+    const probe: LevelData = JSON.parse(JSON.stringify(level));
+    probe.parking.unlocked = n;
+    // `simulate` clamps `slots` to `unlocked`, which is exactly the no-buying rule here.
+    for (const pol of PANEL) if (simulate(probe, pol, 1)) return n;
+  }
+  return level.parking.unlocked + 1;
+}
+
+/**
+ * Mean stalls bought at `SLIP_RATE`: what a mistake costs once the bay is tight.
+ *
+ * Secondary to `demand`, and only ever a tie-break between candidates that demand the same
+ * bay. On its own it is far too flat to steer by -- across level 4's paintings it reads 0.0
+ * to 0.4 while the bay the level needs goes from one stall to three.
+ */
+export function mistakeCost(level: LevelData): number {
   const forSale = level.parking.slots - level.parking.unlocked;
   let total = 0;
   for (let s = 1; s <= COST_SEEDS; s++) {
     const r = playOut(level, slip(decisive, SLIP_RATE), s * 977);
-    dead = dead || r.dead;
     total += r.won ? r.bought : forSale;
   }
-  return {
-    width,
-    perfect: clean.won ? clean.bought : null,
-    cost: total / COST_SEEDS,
-    dead,
-  };
+  return total / COST_SEEDS;
 }
