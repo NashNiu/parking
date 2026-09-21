@@ -125,6 +125,64 @@ export const careful: Policy = (core, movable) => {
   return best;
 };
 
+/**
+ * `policy`, except that a share `eps` of its taps are random instead -- a player who knows
+ * what to do and occasionally does something else.
+ *
+ * This is the only policy here that is not a description of a kind of player. It is a dial,
+ * and what it dials is the one thing the other three cannot see. `careless` loses every
+ * level and `careful` wins every level, so between them they report the same two numbers on
+ * a level that plays itself and on a level that is brutal. Every real player is somewhere in
+ * the band between, and until this existed nothing in the pipeline had ever looked there.
+ */
+export function slip(policy: Policy, eps: number): Policy {
+  return (core, movable, rand) => (
+    rand() < eps ? careless(core, movable, rand) : policy(core, movable, rand)
+  );
+}
+
+/**
+ * The slip rate difficulty is reported at: one tap in ten goes astray.
+ *
+ * Measured over the nine packed levels at 0.05, 0.1, 0.2 and 0.4, this is the smallest rate
+ * that separates them. At 0.05 six of the nine still win 89% or more; at 0.4 the noise
+ * swamps the level and two of them win 0% regardless of design. At 0.1 the same nine spread
+ * from 11% to 100% -- the levels are told apart by their own structure, not by the dial.
+ */
+export const SLIP_RATE = 0.1;
+
+/**
+ * Playthroughs per forgiveness measurement. Odd and small: each one is a full game, and this
+ * runs inside the painting search, which is the generator's hot loop.
+ */
+const SLIP_SEEDS = 9;
+
+/**
+ * Share of slightly-clumsy playthroughs won: HOW MANY MISTAKES THIS LEVEL FORGIVES.
+ *
+ * The difficulty number. `hard` and `fair` are single bits, and once a level is through the
+ * painting search both are saturated on it: `fair` because it was REQUIRED to be true, and
+ * `hard` because a chosen level reads hard at nearly every offset the band sweep tries (see
+ * `BAND_CURVE`, where that is what made `interleave` look inert). So the pair reported the
+ * same two values on a level that barely holds together and one that cannot be lost.
+ * `demandPressure().gap` was the first attempt at a graded replacement and it is only
+ * weakly predictive: level 7 carries the largest gap of the ten (2.04) and is the most
+ * forgiving level in the game (100% at this slip rate), while level 3 carries nearly the
+ * smallest (1.09) and forgives 44%. The gap measures a structural property of the bay; this
+ * measures whether a person loses.
+ *
+ * Read it as a win rate, so it runs the same direction as "easy": 1.0 forgives everything,
+ * 0.0 forgives nothing.
+ */
+export function forgiveness(
+  level: LevelData, eps: number = SLIP_RATE, seeds: number = SLIP_SEEDS,
+): number {
+  const policy = slip(careful, eps);
+  let won = 0;
+  for (let s = 0; s < seeds; s++) if (simulate(level, policy, s * 977 + 1)) won++;
+  return won / seeds;
+}
+
 /** Ticks before a simulated game is called a loss. Ten times the longest real playthrough. */
 const TICK_CAP = 4000;
 
@@ -208,6 +266,12 @@ export interface Pressure {
  *
  * 用 `careful` 跑一局,因为要量的是"一个会玩的人也会被卡住"。`keepDistinct` 太蠢,它
  * 量的是关卡有多容易被套路;`careless` 太随机,量的是运气。
+ *
+ * 它**不再是配色搜索的目标**,`forgiveness` 是。把 ε-careful 跑在发出去的九关上之后,
+ * 这两个数几乎不相关:第 7 关缺口 2.04 全场最高,却在 slip 0.1 下一次都没输过;第 3 关
+ * 缺口 1.09 接近最低,只赢了 44%。缺口量的是车位盖不盖得住环上的需求 —— 一个结构属性,
+ * 也正是我当初从人类伙伴的诊断里直接翻译过来的那一个。它没量错,但它不是难度:难度是
+ * 人会不会输。留着它做汇报列,因为"为什么难"仍然要靠它来读。
  */
 export function demandPressure(level: LevelData): Pressure {
   let ticks = 0;
@@ -243,12 +307,28 @@ export interface Verdict {
   fair: boolean;
   /** Share of careless playthroughs lost, 0 to 1. Reported, not gated on. */
   carelessLoss: number;
+  /**
+   * `forgiveness` at `SLIP_RATE`: the share of slightly-clumsy playthroughs won. This is
+   * the number the curve is built on; `hard` and `fair` survive as floor and ceiling.
+   * Reported as 1 on a level that fails `hard`, which is not a measurement -- such a level
+   * is rejected before anything asks how forgiving it is.
+   */
+  forgive: number;
 }
 
 /**
- * The generator's acceptance test: hard means `keepDistinct` loses, fair means `careful`
- * wins. Both are needed and neither is enough -- a level that only the first rejects is
- * free, and one that only the second rejects is a level with no way through.
+ * What the generator knows about a candidate level: two bits and two rates.
+ *
+ * `hard` means `keepDistinct` loses and `fair` means `careful` wins. These used to be the
+ * whole test, and jointly requiring them is what capped the game's difficulty: the pipeline
+ * was not permitting easy levels, it was REQUIRING every shipped level to be beatable by a
+ * rule you can say in one sentence. `fair` is still measured, and still worth most of a
+ * level's ranking, but `choosePainting` prices it instead of demanding it -- one or two
+ * levels in the curve may need a stall bought to pass.
+ *
+ * `forgive` is the graded difficulty number and the one the curve is now steered by; see
+ * `forgiveness`. It is measured whenever `hard` holds, including on unfair candidates,
+ * because the interesting unfair candidate is the one a clumsy player still sometimes wins.
  *
  * `carelessLoss` is measured but NOT gated on, because it is the wrong shape for a gate:
  * random play failing is what an unforgiving level and a fair one have in common, and
@@ -256,15 +336,29 @@ export interface Verdict {
  * It is here so the generation log can show the spread.
  */
 export function isHardButFair(level: LevelData): Verdict {
-  const hard = !simulate(level, keepDistinct, 1);
-  // `careful` is deterministic, so one run settles it -- but only run it when it can
-  // change the answer, since it is the expensive half of the gate.
-  const fair = hard ? simulate(level, careful, 1) : true;
+  const v = judge(level);
   let lost = 0;
-  if (hard && fair) {
+  if (v.hard && v.fair) {
     for (let s = 1; s <= CARELESS_SEEDS; s++) {
       if (!simulate(level, careless, s * 977)) lost++;
     }
   }
-  return { hard, fair, carelessLoss: lost / CARELESS_SEEDS };
+  return { ...v, carelessLoss: lost / CARELESS_SEEDS };
+}
+
+/**
+ * Everything `isHardButFair` decides on, without the careless sample it only reports.
+ *
+ * Split out because `choosePainting` calls this once per candidate painting, hundreds of
+ * times per level, and `carelessLoss` costs five full playthroughs for a number nothing
+ * gates on. Measured at about 0.37s per playthrough, that is a third of the generator's
+ * wall-clock spent filling in a log column.
+ */
+export function judge(level: LevelData): Omit<Verdict, 'carelessLoss'> {
+  const hard = !simulate(level, keepDistinct, 1);
+  // `careful` is deterministic, so one run settles it -- but only run it when it can
+  // change the answer, since it is the expensive half of the gate.
+  const fair = hard ? simulate(level, careful, 1) : true;
+  const forgive = hard ? forgiveness(level) : 1;
+  return { hard, fair, forgive };
 }

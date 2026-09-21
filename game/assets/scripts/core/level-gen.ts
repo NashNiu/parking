@@ -4,7 +4,7 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { demandPressure, isHardButFair } from './play-sim';
+import { judge } from './play-sim';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -696,40 +696,75 @@ export function tunnelParams(id: number): TunnelParams {
  * Ranked by `demandPressure` instead, `interleave` takes the best cell on three of the ten ids
  * -- 7 at il=2, 8 at il=2, 10 at il=3 -- and it is no longer pinned.
  *
- * THE RAMP LIVES IN THE GAP, NOT IN THE OFFSET. The old table was non-decreasing in `offset`
- * and said so in every row, because `offset` was the only dial there was a reason to believe in.
- * It is not difficulty; it is a way of reaching difficulty, and the relation is not monotone --
- * id 8's best cell is offset 4 and id 3's is offset 32. What ramps is the gap: about 1.0 to 1.1
- * across ids 2-4, then a plateau of 1.8 to 2.4 across 5-10. Two tiers, an on-ramp and a high
- * plateau, which is what my human partner asked for.
+ * THE RAMP IS NOT IN THE OFFSET, AND IT TURNED OUT NOT TO BE IN THE GAP EITHER. The oldest
+ * table was non-decreasing in `offset` and said so in every row, because `offset` was the only
+ * dial there was a reason to believe in. It is not difficulty; it is a way of reaching it, and
+ * the relation is not monotone -- id 8's best cell is offset 4 and id 3's is offset 32. The gap
+ * replaced it and was a real improvement over a saturated bit, but it is a structural property
+ * of the bay, not a statement about the player. On the levels shipped 2026-09-21 the gap runs
+ * 1.56, 1.27, 0.78, 1.20, 2.02, 1.85, 1.63, 1.42, 1.80 across ids 2-10 -- no order at all --
+ * while `forgive` runs 89, 78, 56, 56, 44, 33, 33, 22, 22. What ramps is how many mistakes the
+ * level forgives, and that is now what both this table and `choosePainting` are picked on.
+ * See `FORGIVE_CURVE` and `forgiveness`.
  *
  * Ids 6 and 7 have EXACTLY ONE passing cell each in the whole 33-cell grid. They are not chosen,
  * they are forced, and a regeneration that moves their packing can take even that away.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    // 每行末尾的 gap 是**发出去的那一关实测**的 `demandPressure().gap`,不是扫描里那一
-    // 格的读数。两者是不同的量,混用会让人拿一个从不成立的数去对账:扫描是"在一个固定
-    // 配色上换队列",而生成是"在新 offset 上重搜配色"。以前预测高于实得(配色搜索只找
-    // hard ∧ fair,撞上哪个算哪个);`choosePainting` 改成挑缺口最大的之后,预测反而
-    // 常常低于实得 —— 第 8 关这一格扫描读 1.23,发出去是 2.02。
+    // 每行末尾的 forgive 是**发出去的那一关实测**的 `forgiveness()`,不是扫描里那一格的
+    // 读数;括号里是 `FORGIVE_CURVE` 要的目标。两者是不同的量,混用会让人拿一个从不成立
+    // 的数去对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重搜配色"。
     //
-    // 选法:hard ∧ fair 的格子里取扫描缺口最大的那个,改完重新生成,再拿实测回填这里。
+    // 选法:hard 的格子里取扫描 forgive 最接近目标的那个 —— 和 `choosePainting` 同一个
+    // 目标函数,这是它们能复合的前提。改完重新生成,再拿实测回填这里。
+    //
+    // 2026-09-21 实测:九关全部落在一格种子(1/9 ≈ 11%)以内,单调不升。唯一明显的偏差
+    // 是第 4 关 56% 对目标 65%,比要求的还狠 —— 它是五色关卡,400 个候选里能打赢一行
+    // 策略的只有 0 到 2 个,落在哪档就是哪档,没得挑。
     { offset: 0, interleave: 1 },    // 1  authored teaching level; no cell is hard, by construction
-    { offset: 16, interleave: 1 },   // 2  gap 1.56, against 0.03 at the old offset 0
-    { offset: 32, interleave: 1 },   // 3  gap 1.09; five colours, so the painting search has almost no choice
-    { offset: 12, interleave: 1 },   // 4  gap 1.32; still the ONLY passing offset in the grid
-    { offset: 16, interleave: 1 },   // 5  gap 1.95
-    { offset: 20, interleave: 1 },   // 6  gap 1.81; the only passing cell of 33 -- forced, not chosen
-    { offset: 24, interleave: 1 },   // 7  gap 2.04; likewise the only passing cell of 33
-    { offset: 12, interleave: 2 },   // 8  gap 2.02; interleave earns its place here
-    { offset: 32, interleave: 1 },   // 9  gap 1.74
-    { offset: 28, interleave: 3 },   // 10 gap 1.94
+    { offset: 16, interleave: 1 },   // 2  forgive 89 (85)
+    { offset: 32, interleave: 1 },   // 3  forgive 78 (75); five colours, so the painting search has almost no choice
+    { offset: 12, interleave: 1 },   // 4  forgive 56 (65); five colours too, and it undershoots -- harder than asked
+    { offset: 16, interleave: 1 },   // 5  forgive 56 (55)
+    { offset: 20, interleave: 1 },   // 6  forgive 44 (45)
+    { offset: 24, interleave: 1 },   // 7  forgive 33 (35)
+    { offset: 12, interleave: 2 },   // 8  forgive 33 (30); interleave earns its place here
+    { offset: 32, interleave: 1 },   // 9  forgive 22 (25)
+    { offset: 28, interleave: 3 },   // 10 forgive 22 (20)
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
 export function bandParams(id: number): { offset: number; interleave: number } {
     const i = Math.min(Math.max(1, Math.trunc(id)), BAND_CURVE.length) - 1;
     return BAND_CURVE[i];
+}
+
+/**
+ * 每一关该有多宽容 —— `forgiveness` 的目标值,也就是"一个偶尔手滑的玩家能赢几成"。
+ *
+ * 这条曲线取代 `demandPressure().gap` 成为配色搜索的目标。改的理由是把 ε-careful 跑在
+ * 已发出去的九关上量出来的(slip 0.1,九个种子):
+ *
+ *     关卡     2     3     4     5     6     7     8     9    10
+ *     容错   89%   44%   89%  100%   11%  100%   44%   44%   89%
+ *     缺口  1.56  1.09  1.32  1.95  1.81  2.04  2.02  1.74  1.94
+ *
+ * 两件事同时成立:一是**完全没有坡度**,最宽容的是第 4 关、最狠的是第 6 关;二是缺口
+ * 和容错基本不相关,第 7 关缺口全场最高却一次都没输过。缺口量的是车位盖不盖得住环上的
+ * 需求(一个结构属性),容错量的是人会不会输。
+ *
+ * 数值是按"第一关教学、第二关就开始有代价、后半段真的会输"排的,人类伙伴说过"即使从
+ * 第二关开始难度就一直很高也可以"。第 1 关不参与搜索(四色关卡 `choosePainting` 直接
+ * 返回 null),那个 1.00 只是占位。
+ *
+ * 一格种子是 1/9 ≈ 0.11,所以相邻两关之间至少差一格,这条曲线才量得出来。
+ */
+const FORGIVE_CURVE = [1.00, 0.85, 0.75, 0.65, 0.55, 0.45, 0.35, 0.30, 0.25, 0.20];
+
+/** This level's forgiveness target, clamped past both ends of FORGIVE_CURVE. */
+export function forgiveTarget(id: number): number {
+    const i = Math.min(Math.max(1, Math.trunc(id)), FORGIVE_CURVE.length) - 1;
+    return FORGIVE_CURVE[i];
 }
 
 /** Placement draws before a tunnel is written off and the whole attempt with it. */
@@ -1574,26 +1609,33 @@ const PAINTINGS = 400;
 const PACKINGS = 6;
 
 /**
- * 找到几个 hard 且 fair 的配色之后就停,取其中缺口最大的那个。
+ * 命中目标容错率多近就算够近,可以收工。
  *
- * 从前这里是"撞上第一个就返回",而那让整条流水线在两个不同的目标上各优化一半:配色
- * 搜索优化 hard∧fair,BAND_CURVE 的扫描在一个**固定**配色上优化缺口,两者不复合。
- * 症状是 2026-09-20 那次全量重生成——扫描说第 10 关能到 2.19,重新生成实得 1.48,
- * 四个被改过 offset 的关卡无一例外地低于预测,比例 0.6 到 0.8。offset 一变,配色就在
- * 新 offset 上重搜,落到另一个"第一个碰上的"解。
+ * 一格种子是 1/9 ≈ 0.111,所以 0.06 的意思是"离目标不到半格",再准也是噪声。搜索一
+ * 撞上这个就停,否则扫满 `PAINTINGS` 取最接近的那个 —— 和从前"凑满 4 个 hard∧fair
+ * 就停"不同,这是个**求近**而不是求极值的目标,提前停在第 4 个候选上没有道理。
  *
- * 能挑的余地是有限的,而且按颜色数急剧变化:400 个候选里能打赢一行策略的,四色 0 个、
- * 五色 0 到 2 个、六色 4 到 7 个。所以五色关卡基本没得挑(第 3 关的缺口低,多半不是
- * 没挑好,是只有那一个),而六色关卡——第 5 到 10 关全是六色——是真有得挑的。
- *
- * 4 是按上面那组数定的:六色的可行解就 4 到 7 个,取到 4 个已经覆盖大半,再往上就是
- * 拿几百次模拟去换一两个候选。命中一个之后仍然继续扫,直到凑满 4 个或者 `PAINTINGS`
- * 用尽 —— 这是本函数唯一变贵的地方,而它只在六色关卡上真的变贵。
+ * 能挑的余地按颜色数急剧变化:400 个候选里能打赢一行策略的,四色 0 个、五色 0 到 2 个、
+ * 六色 4 到 7 个。所以五色关卡(第 3、4 关)基本没得挑,它落在哪个容错率上就是哪个,
+ * 曲线对不上也只能认;六色关卡 —— 第 5 到 10 关 —— 才是这条曲线真正能调的地方。
  */
-const PAINTING_PICKS = 4;
+const FORGIVE_TOL = 0.06;
 
 /**
- * Repaint `cars` until the level is hard but fair, or return null if the search runs out.
+ * `careful` 打不通的配色要罚多少,才可能被选中。
+ *
+ * 不是 Infinity,因为人类伙伴明确说过"偶尔一两关必须通过增加车位才能过关也可以"。
+ * 从前 `fair` 是硬门槛,于是流水线不是"允许"关卡简单,而是在**要求**每一关都能被一句
+ * 话的规则打通,打不通的全部丢弃 —— 这就是难度的天花板本身。
+ *
+ * 0.15 的意思是"比一格种子多一点":一个不 fair 的配色容错率必然接近 0,只有当目标本来
+ * 就很低、而所有 fair 的候选都离目标更远时它才赢得过。后半段的关卡才有机会碰上。
+ */
+const UNFAIR_COST = 0.15;
+
+/**
+ * Repaint `cars` until the level forgives about as much as its place in the curve says it
+ * should, or return null if the search runs out.
  *
  * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
  * cars (`bandedQueue`), so every painting is colour-balanced by construction and cannot fail
@@ -1616,24 +1658,25 @@ function choosePainting(
     id: number, cars: CarSpec[], tunnels: TunnelSpec[], p: GenParams,
 ): CarSpec[] | null {
     if (p.colors <= UNLOCKED) return null;
+    const target = forgiveTarget(id);
     const rand = mulberry32(id * 104729 + 17);
     let tried = 0;
     let best: CarSpec[] | null = null;
-    let bestGap = -1;
-    let found = 0;
+    let bestErr = Infinity;
     for (const assign of paintings(cars.length, p.colors, rand)) {
         if (tried++ >= PAINTINGS) break;
         const painted = repaint(cars, assign);
         const level = assemble(id, painted, tunnels);
-        const verdict = isHardButFair(level);
-        if (!verdict.hard || !verdict.fair) continue;
-        const gap = demandPressure(level).gap;
-        found++;
-        if (gap > bestGap) {
-            bestGap = gap;
+        const verdict = judge(level);
+        // `hard` stays a hard floor: a level the one-line rule wins is not a puzzle at any
+        // slip rate, and `forgive` is not even measured on one.
+        if (!verdict.hard) continue;
+        const err = Math.abs(verdict.forgive - target) + (verdict.fair ? 0 : UNFAIR_COST);
+        if (err < bestErr) {
+            bestErr = err;
             best = painted;
         }
-        if (found >= PAINTING_PICKS) break;
+        if (bestErr <= FORGIVE_TOL) break;
     }
     return best;
 }

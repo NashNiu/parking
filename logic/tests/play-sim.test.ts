@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  careful, careless, keepDistinct, isHardButFair, simulate, demandPressure,
+  careful, careless, keepDistinct, isHardButFair, judge, simulate, demandPressure,
+  slip, forgiveness, SLIP_RATE, Policy,
 } from '../../game/assets/scripts/core/play-sim';
 import { bandedQueue } from '../../game/assets/scripts/core/level-gen';
 import { GameCore } from '../../game/assets/scripts/core/game-core';
@@ -126,6 +127,70 @@ test('isHardButFair rejects a level nobody wins', () => {
   const v = isHardButFair(hopelessLevel());
   expect(v.hard).toBe(true);
   expect(v.fair).toBe(false);
+});
+
+describe('forgiveness', () => {
+  test('the dial really is the share of taps the policy does not make', () => {
+    // 两端都钉死,而且钉的是"有没有问过策略",不是最终胜负 —— 胜负在简单关卡上两边
+    // 都一样,测不出实现是否真的在两支之间切换。
+    const never: Policy = () => { throw new Error('policy consulted'); };
+    expect(() => simulate(soloLevel(), slip(never, 1), 1)).not.toThrow();
+    expect(() => simulate(soloLevel(), slip(never, 0), 1)).toThrow('policy consulted');
+  });
+
+  test('at zero slip it is the policy, on a level where that decides the game', () => {
+    for (const seed of [1, 977, 1954]) {
+      expect(simulate(shipped(6), slip(careful, 0), seed))
+        .toBe(simulate(shipped(6), careful, seed));
+    }
+  });
+
+  test('a level with no way through forgives nothing', () => {
+    expect(forgiveness(hopelessLevel())).toBe(0);
+  });
+
+  test('a level that plays itself forgives everything', () => {
+    expect(forgiveness(soloLevel())).toBe(1);
+  });
+
+  test('it is a rate, and it is measured at the documented slip', () => {
+    expect(SLIP_RATE).toBeGreaterThan(0);
+    expect(SLIP_RATE).toBeLessThan(1);
+    const f = forgiveness(shipped(6));
+    expect(f).toBeGreaterThanOrEqual(0);
+    expect(f).toBeLessThanOrEqual(1);
+    expect(forgiveness(shipped(6), SLIP_RATE)).toBe(f);
+  });
+
+  test('it tells the shipped levels apart, which hard and fair do not', () => {
+    // 这条测的是**判据本身有没有分辨力**,不是某一关的具体数值。旧判据 hard/fair 是两
+    // 个 bit,在发出去的九关上全部相同 —— 于是"勉强能过"和"闭着眼也能过"读数一样,
+    // 难度曲线就是这么被压平的。新判据必须至少把这九关分成三档以上,否则换它没有意义。
+    const seen = new Set<number>();
+    for (let id = 2; id <= 10; id++) seen.add(forgiveness(shipped(id)));
+    expect(seen.size).toBeGreaterThanOrEqual(3);
+  }, 300000);
+});
+
+describe('judge', () => {
+  test('it agrees with isHardButFair on the bits, minus the careless sample', () => {
+    const level = hopelessLevel();
+    const j = judge(level);
+    const v = isHardButFair(level);
+    expect(j.hard).toBe(v.hard);
+    expect(j.fair).toBe(v.fair);
+    expect(j.forgive).toBe(v.forgive);
+    expect(j).not.toHaveProperty('carelessLoss');
+  });
+
+  test('forgiveness is not measured on a level the one-line rule wins', () => {
+    // soloLevel 不 hard,`forgive` 报 1 是个哨兵而不是测量值 —— 这一关在任何人问它
+    // 宽不宽容之前就已经被 `choosePainting` 丢掉了。钉住它是为了防止有人把这个 1
+    // 当成"最宽容"读进排序里。
+    const v = judge(soloLevel());
+    expect(v.hard).toBe(false);
+    expect(v.forgive).toBe(1);
+  });
 });
 
 describe('demandPressure', () => {

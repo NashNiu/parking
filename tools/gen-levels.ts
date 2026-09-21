@@ -15,7 +15,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
+import { generateLevel, levelParams, blockedTarget, fillableHoles, inwardCars, authoredLevel, levelMask, forgiveTarget, BLOCKED_TOLERANCE } from '../game/assets/scripts/core/level-gen';
 import { estimateDifficulty } from '../game/assets/scripts/core/solvability';
 import { demandPressure, isHardButFair } from '../game/assets/scripts/core/play-sim';
 import { validateLevel, validateTrack } from '../game/assets/scripts/core/level-data';
@@ -125,7 +125,10 @@ for (const id of ids) {
     const v = isHardButFair(level);
     const play = want.colors <= 4 ? 'teach'
         : v.hard && v.fair ? `hard  (careless ${Math.round(v.carelessLoss * 100)}%)`
-        : v.hard ? 'NO WAY THROUGH'
+        // No longer a failure, and no longer rare by accident: `choosePainting` PRICES
+        // unfairness instead of rejecting it, so a late level may ship needing a stall
+        // bought. Two or three of these in ten is the intent; ten of them is a bug.
+        : v.hard ? 'needs a stall bought'
         : 'FREE: the one-line rule wins';
     // Holes, because a level can hit every difficulty number and still ship with a
     // car-shaped patch of bare asphalt in it -- which is a bug you can only see. See
@@ -145,18 +148,23 @@ for (const id of ids) {
     // 一列。`play` 那一列在四个车位下十关全是 hard,它分不出难度,只分得出有没有崩。
     // 见 `demandPressure`。
     const gap = authored ? '-' : demandPressure(level).gap.toFixed(2);
+    // 一个偶尔手滑的玩家(slip 0.1)能赢几成,以及曲线要求几成。这是**难度列** —— 上面
+    // 那个 `play` 十关全是 hard,分不出难度;`gap` 量的是结构,和会不会输只是弱相关
+    // (第 7 关缺口最高却一次没输过)。见 `forgiveness` 和 `FORGIVE_CURVE`。
+    const forgive = want.colors <= 4 ? '  -  '
+        : `${Math.round(v.forgive * 100)}/${Math.round(forgiveTarget(id) * 100)}`.padStart(5);
     rows.push(
         `${String(id).padStart(3)} ${String(got.cars).padStart(5)} ${String(got.colors).padStart(7)}`
         + ` ${String(got.blocked).padStart(8)}/${String(target).padEnd(3)}`
         + ` ${String(got.rounds).padStart(7)}/${String(want.minRounds).padEnd(3)}`
         + ` ${String(got.score).padStart(6)} ${String(pax).padStart(5)} ${tun.padStart(5)}`
-        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)}`
+        + ` ${holes.padStart(7)} ${inward.padStart(6)} ${gap.padStart(5)} ${forgive}`
         + `  ${(authored ? 'AUTHORED' : onTarget ? 'on target' : 'NEAREST MISS').padEnd(13)} ${play}`,
     );
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap forgive  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 
