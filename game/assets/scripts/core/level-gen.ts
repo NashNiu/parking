@@ -567,7 +567,19 @@ export function levelParams(id: number): GenParams {
         //
         // 6 is the ceiling because PALETTE has six entries and the view has exactly those six
         // in `colors.ts`. A seventh would draw grey (see `colorOf`).
-        colors: Math.min(6, 4 + Math.ceil((id - 1) / 3)),
+        //
+        // FULL PALETTE FROM ID 3, up from id 5. The old ramp put five colours on ids 2, 3
+        // and 4, and against four open stalls that is a bay covering four fifths of the
+        // colours in play -- structurally the slackest the game gets, and id 4 is the level
+        // my human partner kept clearing on two stalls. They have also said, in so many
+        // words, that difficulty may be high from level 2 onwards.
+        //
+        // The three things the curve's own tests ask of this column still hold: it is
+        // non-decreasing (4, 5, 6, 6, ...), the back half outweighs the front (30 against
+        // 27, where it was 30 against 26), and the last level carries more than the first
+        // packed one (6 against 5). Id 2 stays at five to keep that last one true, and
+        // because something has to teach the mechanic.
+        colors: Math.min(6, 3 + id),
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
@@ -727,19 +739,23 @@ const BAND_CURVE: { offset: number; interleave: number }[] = [
     //
     // 2026-09-21 改判据前后的实测对照(这一列就是人类伙伴一直在报的那个数):
     //
-    //     关卡      2   3   4   5   6   7   8   9   10
-    //     改之前    1   2   2   2   4   4   2   4   4
-    //     改之后    2   3   3   4   4   4   3   4   4
+    //     关卡            2   3   4   5   6   7   8   9   10
+    //     换判据前        1   2   2   2   4   4   2   4   4
+    //     换判据后        2   3   3   4   4   4   3   4   4
+    //     再扫 offset 后  2   3   4   4   4   4   4   4   4
     //
-    // 改之前第 2 关八十九辆车一个车位就打完了,九关里五关最多只用到一半车位。
+    // 最早那一版第 2 关八十九辆车一个车位就打完了,九关里五关最多只用到一半车位。
+    // 最后那一步只动了第 4、8 两关的 offset —— 三个旋钮里它最有力,而且是最后才发现的:
+    // 同一个打包上,offset 能把车位需求从 1 推到 4,比配色本身的影响还大。
     { offset: 0, interleave: 1 },    // 1  authored teaching level; nothing is searched here
     { offset: 16, interleave: 1 },   // 2  stalls 2 (2), slip 0.2
     { offset: 32, interleave: 1 },   // 3  stalls 3 (3), slip 0.4
-    { offset: 12, interleave: 1 },   // 4  stalls 3 (4), slip 0.2; five colours AND a tunnel -- least room of the ten
+    { offset: 36, interleave: 1 },   // 4  stalls 4 (4), slip 0.4; offset 12 could only reach 3
     { offset: 16, interleave: 1 },   // 5  stalls 4 (4), slip 0.2
     { offset: 20, interleave: 1 },   // 6  stalls 4 (4), slip 1.0
     { offset: 24, interleave: 1 },   // 7  stalls 4 (4), slip 1.4
-    { offset: 12, interleave: 2 },   // 8  stalls 3 (4), slip 0.8; the other miss
+    { offset: 28, interleave: 2 },   // 8  stalls 4 (4), slip 0.2; the sweep said no cell reached 4, and was wrong -- it
+                                     //    re-bands ONE painting, and moving the offset re-searches the painting
     { offset: 32, interleave: 1 },   // 9  stalls 4 (4), slip 1.2
     { offset: 28, interleave: 3 },   // 10 stalls 4 (4), slip 1.6
 ];
@@ -1646,13 +1662,6 @@ const PAINTINGS = 400;
 const PACKINGS = 6;
 
 /**
- * 命中目标代价多近就算够近,可以收工。
- *
- * 一格种子是 1/5 = 0.2,所以 0.1 的意思是"离目标不到半格",再准也是噪声。
- */
-const COST_TOL = 0.1;
-
-/**
  * 真正下场跑模拟的配色个数。
  *
  * 看是看四百个,跑只跑这四十个。`frontierWidth` 不用跑任何一局(见 `exitFrontiers`:
@@ -1743,17 +1752,28 @@ function choosePainting(
         // Whole stalls first, and only then the price of a mistake. Ranking them the other
         // way round is what shipped a level 4 that yields to two stalls: `cost` reads the
         // same 0.0 to 0.4 whether the level needs one stall or three.
-        // Whole stalls dominate, so a candidate whose demand alone is already further off
-        // than the best so far cannot win, and its five slip playthroughs are not worth
-        // buying. This is most of them.
-        const whole = Math.abs(v.demand - target) * 10;
+        // Three terms, in strict order of authority, and the order is the whole point.
+        //
+        //  - whole stalls, because that is what my human partner reports playing;
+        //  - then WIDTH, because that is the dial they named -- 同一时间,能驶出停车场的
+        //    不同颜色的车辆数量越少,难度越大 -- and narrower is simply better inside a
+        //    demand bucket, so it needs no curve of its own;
+        //  - then the price of a mistake, which is too flat to lead but does break ties.
+        //
+        // Width used to be a FILTER here and nothing more: it chose which candidates got
+        // played, and the ranking was demand then cost. Demand is four integers, so it
+        // could not tell a painting of width 3.96 from one of width 3.06, and the cost
+        // tie-break then sent level 4 to the SCATTERED one -- the very thing the dial was
+        // named to avoid. The shipped level 4 opened `g y r p b r r y g b p b ...`.
+        const whole = Math.abs(v.demand - target) * 100 + v.width * 10;
+        // `mistakeCost` is five playthroughs, and its term is bounded by 9, so a candidate
+        // already this far behind cannot win no matter what it costs.
         if (whole >= bestErr) continue;
-        const err = whole + Math.min(Math.abs(mistakeCost(level) - costTarget(id)), 9) / 10;
+        const err = whole + Math.min(Math.abs(mistakeCost(level) - costTarget(id)), 9);
         if (err < bestErr) {
             bestErr = err;
             best = c.painted;
         }
-        if (bestErr <= COST_TOL / 10) break;
     }
     return best;
 }
