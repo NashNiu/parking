@@ -36,6 +36,7 @@ import { GROUND } from './palette';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
+import { MusicManager } from './music';
 import { vibrate } from './haptics';
 
 const { ccclass, property } = _decorator;
@@ -595,6 +596,7 @@ export class GameController extends Component {
     /** The footprint overlay while it is shown. See `toggleDebugOverlay`. */
     private debugOverlay: Node | null = null;
     private sfx: SfxManager | null = null;
+    private music: MusicManager | null = null;
     /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
     private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
     /**
@@ -742,6 +744,7 @@ export class GameController extends Component {
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
+        this.music = new MusicManager(this.node);
         this.applySettings();
         this.setupCamera();
         const canvas = find('Canvas');
@@ -2335,6 +2338,13 @@ export class GameController extends Component {
      * the tap side closed: a control answering input it should not be able to hear.
      */
     private onPressStart(e: EventTouch | EventMouse): void {
+        // BEFORE the screen gate, and it is the only line in this method that runs on every
+        // screen. On web the browser will not let a page play audio until it has seen a
+        // gesture; this is the gesture, and `MusicManager.kick` is a boolean check unless the
+        // track is wanted and silent. Putting it after the `return` below would have meant the
+        // music only ever recovered on the lobby, which is not where a player who opened
+        // straight into a level is standing.
+        this.music?.kick();
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
         if (this.hud?.settingsOpen()) return;
         const p = e.getLocation();
@@ -2386,9 +2396,14 @@ export class GameController extends Component {
      *
      * The sound is gated at play time inside `SfxManager` and the buzz in `haptics`, so
      * neither has to be told twice and turning something back on is immediate.
+     *
+     * THE MUSIC IS THE ODD ONE OUT and `MusicManager.setEnabled` says why: a loop has no play
+     * time to be gated at, so its switch starts and stops the source itself. Same call shape
+     * here, different mechanism behind it -- which is the point of all three being setters.
      */
     private applySettings(): void {
         this.sfx?.setEnabled(this.settings.sfx);
+        this.music?.setEnabled(this.settings.music);
         setHaptics(this.settings.haptics);
     }
 
@@ -2399,10 +2414,12 @@ export class GameController extends Component {
      * the player sees is what the game is actually doing -- a panel that remembers its own
      * state is a second answer to the same question.
      */
-    private toggleSetting(which: 'sfx' | 'haptics'): void {
+    private toggleSetting(which: 'sfx' | 'music' | 'haptics'): void {
         this.settings = { ...this.settings, [which]: !this.settings[which] };
         this.applySettings();
-        this.hud?.paintSwitches(this.settings.sfx, this.settings.haptics);
+        this.hud?.paintSwitches(
+            this.settings.sfx, this.settings.music, this.settings.haptics,
+        );
         saveSettingsText(serializeSettings(this.settings));
         // AFTER applying, so switching the sound ON is confirmed by a sound and switching it
         // off is confirmed by silence -- the tap is the demonstration.
@@ -2532,7 +2549,9 @@ export class GameController extends Component {
                 // something else on the same card is a trap.
                 if (hit !== null && hit !== 'wipe') this.hud.disarmWipe();
                 if (hit === 'close') this.hud.hideSettings();
-                else if (hit === 'sfx' || hit === 'haptics') this.toggleSetting(hit);
+                else if (hit === 'sfx' || hit === 'music' || hit === 'haptics') {
+                    this.toggleSetting(hit);
+                }
                 // Two taps, and `confirmWipe` counts them: the first one only changes the
                 // button's label into a question. 'home' and 'replay' cannot arrive here --
                 // `hitsSettings` gates them on the lobby flag, because the nodes are switched
@@ -2550,7 +2569,9 @@ export class GameController extends Component {
             }
             if (this.home.hitsGear(ui)) {
                 this.sfx?.play('tap');
-                this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
+                this.hud?.showSettings(
+                    this.settings.sfx, this.settings.music, this.settings.haptics, true,
+                );
                 return;
             }
             // The check-in place, below the gear and answering on the same terms.
@@ -2618,7 +2639,7 @@ export class GameController extends Component {
             } else if (hit === 'replay') {
                 this.hud.hideSettings();
                 this.switchTo(this.levelName);
-            } else if (hit === 'sfx' || hit === 'haptics') {
+            } else if (hit === 'sfx' || hit === 'music' || hit === 'haptics') {
                 this.toggleSetting(hit);
             }
             return;   // anything else on this screen is swallowed
@@ -2673,7 +2694,9 @@ export class GameController extends Component {
                 this.sfx?.play('tap');
                 // `false`: this is the in-game card, which keeps its 主页 and 重玩 answers
                 // and has no clear-save button on it.
-                this.hud.showSettings(this.settings.sfx, this.settings.haptics, false);
+                this.hud.showSettings(
+                    this.settings.sfx, this.settings.music, this.settings.haptics, false,
+                );
                 return;
             }
         }

@@ -303,10 +303,16 @@ test('the lobby column is sized from one scale step', () => {
  * put an irreversible action under a 588-wide strip of card. The asymmetry is deliberate and is
  * asserted here so that deleting it fails.
  *
- * THE CARD GREW BY EXACTLY ONE ROW PITCH for the third row, and the two-row case is placed by
- * the same `rowY` rather than by a second pair of constants -- a page that centres two rows and
- * a page that centres three are one piece of arithmetic, and the version with constants for
- * each is the version where one of them is retuned and the other is not.
+ * THE CARD GREW BY EXACTLY ONE ROW PITCH for the third row, and by one more when 音乐 arrived
+ * -- see SET_H. The short case is placed by the same `rowY` rather than by a second set of
+ * constants: a page that centres three rows and a page that centres four are one piece of
+ * arithmetic, and the version with constants for each is the version where one of them is
+ * retuned and the other is not.
+ *
+ * THE NUMBERS BELOW WERE RE-STATED WHEN 音乐 BECAME A ROW, not relaxed. This guard's job is to
+ * fail when the page's shape changes, so a change to that shape has to come back here and say
+ * what the shape is now -- the failure is the feature. Four rows on the lobby's card, three in
+ * play, the clear-save row last at rowY(3, 4).
  */
 test('clear-save is a row on the settings page, and only its button answers', () => {
   const src = stripComments(readSrc('hud-view.ts'));
@@ -317,16 +323,56 @@ test('clear-save is a row on the settings page, and only its button answers', ()
   expect(src).not.toContain('SET_WIPE_W');
   expect(src).not.toContain('SET_WIPE_Y');
   // One page height, one raise, one row-placing rule.
-  expect(src).toMatch(/^const SET_H = 1060;$/m);
+  expect(src).toMatch(/^const SET_H = 1292;$/m);
   expect(src).toMatch(/^const SET_ROW_PITCH = 232;$/m);
   expect(src).not.toContain('SET_RAISE_WIPE');
   expect(src).toContain('panel.setPosition(0, SET_RAISE, 0);');
-  expect(src).toContain('const rows = lobby ? 3 : 2;');
+  expect(src).toContain('const rows = lobby ? 4 : 3;');
   expect(src).toContain('this.sfxSwitch!.row.setPosition(0, rowY(0, rows), 0);');
-  expect(src).toContain('this.setWipeRow!.setPosition(0, rowY(2, 3), 0);');
+  expect(src).toContain('this.setWipeRow!.setPosition(0, rowY(3, 4), 0);');
   // The row is what hides on the in-game card -- hiding the button alone would leave an icon
   // and a label naming an action with nothing to press.
   expect(src).toContain('this.setWipeRow!.active = lobby;');
+});
+
+/**
+ * The music switch STARTS AND STOPS the loop, and the browser's autoplay gate is answered
+ * before the screen gate.
+ *
+ * TWO THINGS THAT FAIL SILENTLY, which is the only reason they are pinned here.
+ *
+ * The first: `SfxManager` gates at PLAY time -- it keeps a boolean and checks it inside
+ * `play` -- and copying that shape into `MusicManager` would leave a loop running with its
+ * switch off, because a loop has no play time to be gated at. The tidy-up that makes the two
+ * classes look alike is the bug, so the guard names the calls that must be there.
+ *
+ * The second: `onPressStart` returns early on every screen but the lobby. `kick` exists to
+ * catch the case where the browser refused the first `play()` until a gesture, and a player
+ * who opened straight into a level never touches the lobby -- so a `kick` placed after that
+ * return is a `kick` that never runs for them, and the symptom is silence nobody can
+ * reproduce. It has to sit above the gate, and it is asserted as the FIRST statement in the
+ * method rather than merely present somewhere in the file.
+ */
+test('music starts and stops on the switch, and the autoplay kick clears the screen gate', () => {
+  const music = stripComments(readSrc('music.ts'));
+  // The switch acts on the source itself, both ways.
+  expect(music).toContain('this.src.stop();');
+  expect(music).toContain('this.src.play();');
+  // And `play()` restarts a running source, so every start is guarded by `playing`.
+  expect(music).toContain('if (!this.clip || this.src.playing) return;');
+  expect(music).toContain('if (!this.wanted || this.src.playing) return;');
+  // It loops, which is the one property a background track cannot be missing.
+  expect(music).toContain('this.src.loop = true;');
+
+  const ctrl = stripComments(readSrc('GameController.ts'));
+  const opens = ctrl.indexOf('private onPressStart(e: EventTouch | EventMouse): void {');
+  const kick = ctrl.indexOf('this.music?.kick();', opens);
+  const gate = ctrl.indexOf(
+    "if (this.screen !== 'home' || !this.uiCam || !this.home) return;", opens,
+  );
+  expect(opens).toBeGreaterThanOrEqual(0);
+  expect(kick).toBeGreaterThan(opens);
+  expect(kick).toBeLessThan(gate);
 });
 
 /**

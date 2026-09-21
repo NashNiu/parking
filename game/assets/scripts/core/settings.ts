@@ -12,22 +12,32 @@
  * haptics flag is junk would turn the SOUND back on, which is the outcome a player would
  * notice and not understand.
  *
- * No music switch, because there is no music: nothing in this project plays a track, and a
- * control that toggles nothing is worse than no control.
+ * `music` IS A SWITCH OF ITS OWN AND NOT A SECOND USE OF `sfx`, because the two are wanted
+ * apart far more often than together: a player on a bus wants the track off and the taps
+ * still there, and a player who has muted the phone wants neither. One switch for both would
+ * make the common case impossible to ask for.
+ *
+ * THE VERSION DID NOT MOVE WHEN `music` WAS ADDED. `parseSettings` discards any file whose
+ * version it does not recognise, so a bump would have reset every saved preference in the
+ * field -- including a sound the player had deliberately switched OFF, which is the one they
+ * would notice. An added field needs no bump: an old file says nothing about it and gets the
+ * default, the same answer a new player gets. The version is for a change that makes an old
+ * file MEAN something different, and adding a switch is not one.
  */
 
 export interface Settings {
     version: number;
     sfx: boolean;
+    music: boolean;
     haptics: boolean;
 }
 
 export const SETTINGS_VERSION = 1;
 
 export function defaultSettings(): Settings {
-    // Both ON. A game that starts silent reads as broken, and the player who wants quiet is
-    // the one who will go looking for the switch.
-    return { version: SETTINGS_VERSION, sfx: true, haptics: true };
+    // All three ON. A game that starts silent reads as broken, and the player who wants quiet
+    // is the one who will go looking for the switch.
+    return { version: SETTINGS_VERSION, sfx: true, music: true, haptics: true };
 }
 
 export function parseSettings(raw: string | null): Settings {
@@ -40,9 +50,12 @@ export function parseSettings(raw: string | null): Settings {
         return out;
     }
     if (typeof data !== 'object' || data === null || Array.isArray(data)) return out;
-    const obj = data as { version?: unknown; sfx?: unknown; haptics?: unknown };
+    const obj = data as {
+        version?: unknown; sfx?: unknown; music?: unknown; haptics?: unknown;
+    };
     if (obj.version !== SETTINGS_VERSION) return out;
     if (typeof obj.sfx === 'boolean') out.sfx = obj.sfx;
+    if (typeof obj.music === 'boolean') out.music = obj.music;
     if (typeof obj.haptics === 'boolean') out.haptics = obj.haptics;
     return out;
 }

@@ -603,6 +603,56 @@ export function binSprite(name: string, d: number, color: Color): Node {
     return holder;
 }
 
+/**
+ * Two beamed eighth notes. The icon for the settings card's 音乐 row.
+ *
+ * COMPOSED FROM ROUNDED PLATES like the bin above, and for the same reason: a pair of
+ * noteheads, two stems and a beam is five rectangles with rounded corners, which is what
+ * `roundedSprite` already draws exactly. The speaker and the buzzer beside it are painted
+ * per-pixel because they are single silhouettes with notches and arcs; this is not one.
+ *
+ * BEAMED RATHER THAN A SINGLE NOTE WITH A FLAG. A flag is a curve, which is the one thing
+ * this construction cannot make, and a lone quaver at 116 units reads as a comma. Two heads
+ * under a straight beam is unmistakably music at any size a row will ever give it.
+ *
+ * THE HEADS ARE UPRIGHT CIRCLES, not the slanted ovals engraving uses. A rotated node would
+ * have bought a more correct glyph and a node whose box no longer matches its ink, in a
+ * holder every caller positions by the box; at this size nobody reads the tilt and everybody
+ * would have read a glyph sitting a few units off its row's centre.
+ *
+ * Proportions are of `d`, so it scales with whatever row it lands in: the beam's top reaches
+ * 0.35d and the lower head's bottom -0.365d, inside the 0.5d the box allows on each side.
+ */
+export function noteSprite(name: string, d: number, color: Color): Node {
+    const holder = new Node(name);
+    holder.layer = Layers.Enum.UI_2D;
+    holder.addComponent(UITransform).setContentSize(d, d);
+    const headD = d * 0.27;
+    const headY = -d * 0.23;
+    const stemW = d * 0.055;
+    const stemTop = d * 0.35;
+    // Each stem stands on the RIGHT edge of its own head, which is where engraving puts it
+    // for a note below the middle line -- and is also what leaves room for the beam between
+    // the two of them rather than over the left head.
+    const stemX = (headX: number) => headX + headD / 2 - stemW / 2;
+    const xs = [-d * 0.20, d * 0.20];
+    for (const headX of xs) {
+        const head = roundedSprite('head', headD, headD, color, headD / 2);
+        holder.addChild(head);
+        head.setPosition(headX, headY, 0);
+        const stem = roundedSprite('stem', stemW, stemTop - headY, color, stemW / 2);
+        holder.addChild(stem);
+        stem.setPosition(stemX(headX), (headY + stemTop) / 2, 0);
+    }
+    const beamH = d * 0.095;
+    const left = stemX(xs[0]) - stemW / 2;
+    const right = stemX(xs[1]) + stemW / 2;
+    const beam = roundedSprite('beam', right - left, beamH, color, Math.round(beamH / 2));
+    holder.addChild(beam);
+    beam.setPosition((left + right) / 2, stemTop - beamH / 2, 0);
+    return holder;
+}
+
 export const speakerSprite = iconSprite('speaker', speakerCoverage);
 /** A shaking phone `d` units across, tinted `color`. */
 export const buzzSprite = iconSprite('buzz', buzzCoverage);

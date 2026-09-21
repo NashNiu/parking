@@ -1,7 +1,7 @@
 import { Node, Label, Sprite, UITransform, Color, Layers, UIOpacity, Vec3, tween, Tween } from 'cc';
 import {
     roundedSprite, dotSprite, starSprite, burstSprite, gearSprite, speakerSprite, buzzSprite,
-    binSprite,
+    binSprite, noteSprite,
     liftedPill, PILL_INK, PILL_LIFT,
 } from './ui-shapes';
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
@@ -318,30 +318,32 @@ const PROMPT_REPLAY_Y = -240;
  * it is. The panel node is raised by SET_RAISE so that the card and the button row TOGETHER
  * centre on the screen; without it the composition hangs low by half a button.
  *
- *   card    y  651 .. -409  (SET_H 1060: CARD_HEAD 210 + an 808-tall page + CARD_RIM 42,
+ *   card    y  767 .. -525  (SET_H 1292: CARD_HEAD 210 + a 1040-tall page + CARD_RIM 42,
  *                            centred on SET_RAISE 121)
- *   buttons y -451 .. -651   (SET_BTN_GAP_Y 42 below the card, so the composition spans
- *                            651 .. -651 and is symmetric about the middle of the screen)
+ *   buttons y -567 .. -767   (SET_BTN_GAP_Y 42 below the card, so the composition spans
+ *                            767 .. -767 and is symmetric about the middle of the screen)
  *
  * THE PREVIOUS VERSION OF THOSE TWO LINES READ `536 .. 122` for the card, which is not a span
  * this arithmetic produces from any frame -- the card's own half was 414 and the panel's raise
  * 121, so it ran 535 .. -293. The buttons' line was right. Recomputed rather than adjusted.
  *
- * IT GREW BY EXACTLY ONE ROW PITCH, from 828, when 清除进度 became a row on this page instead
- * of a button under it -- 「这个清除进度的设置能否放到设置里面，作为设置的一项」. 232 is the
- * pitch and 232 is what the card gained, which is why the clearances below are unchanged
- * rather than merely close.
+ * IT HAS GROWN BY EXACTLY ONE ROW PITCH TWICE. From 828 to 1060 when 清除进度 became a row on
+ * this page instead of a button under it -- 「这个清除进度的设置能否放到设置里面，作为设置的
+ * 一项」-- and from 1060 to 1292 when 音乐 joined 音效 and 震动. 232 is the pitch and 232 is
+ * what the card gained each time, which is why the clearances below are unchanged rather than
+ * merely close.
  */
-const SET_H = 1060;
+const SET_H = 1292;
 /**
- * The rows, in page coordinates: 196 tall each, 232 apart, on an 808-tall page.
+ * The rows, in page coordinates: 196 tall each, 232 apart, on a 1040-tall page.
  *
- * THE PAGE HOLDS THREE ROWS OR TWO, depending on which screen raised the card, and `rowY`
- * centres whichever it is. Three (the lobby: sound, buzz, clear) sit at 232 / 0 / -232, leaving
- * 74 clear above the first and below the last and 36 between them -- the same three numbers the
- * two-row page had at 576 tall, which is what "grew by exactly one pitch" buys. Two (in play:
- * sound, buzz) sit at 116 / -116 with 190 clear top and bottom, a roomier card rather than a
- * card with a hole in it where the third row would have been.
+ * THE PAGE HOLDS FOUR ROWS OR THREE, depending on which screen raised the card, and `rowY`
+ * centres whichever it is. Four (the lobby: sound, music, buzz, clear) sit at 348 / 116 /
+ * -116 / -348, leaving 74 clear above the first and below the last and 36 between them -- the
+ * same three numbers the three-row page had at 808 tall, which is what "grew by exactly one
+ * pitch" buys. Three (in play: sound, music, buzz) sit at 232 / 0 / -232 with 190 clear top
+ * and bottom, a roomier card rather than a card with a hole in it where the last row would
+ * have been.
  *
  * A SHORTER CARD IN PLAY WAS THE OTHER OPTION AND IS NOT AVAILABLE: `buildCard` takes its
  * height once, at build time, and this panel is built once and raised from both screens.
@@ -437,19 +439,19 @@ const SET_BTN_GAP_Y = 42;
 const SET_BTN_Y = -(SET_H / 2 + SET_BTN_GAP_Y + PROMPT_BTN_H / 2);
 const SET_RAISE = (SET_BTN_GAP_Y + PROMPT_BTN_H) / 2;
 /**
- * The clear-save control: a RED button in the third row's control slot, and only on the card
+ * The clear-save control: a RED button in the LAST row's control slot, and only on the card
  * the lobby opens. See `buildWipeRow` for why it is red and `confirmWipe` for the two taps.
  *
  * IT USED TO BE A BUTTON UNDER THE CARD, on a row of its own below the three answers, and it
  * moved on instruction: 「这个清除进度的设置能否放到设置里面，作为设置的一项」. What it is now is
- * a settings ROW -- icon, label, control -- exactly like 音效 and 震动 above it, which is also
- * the honest description of what it always was. The answers below the card are about the LEVEL
- * (go home, replay, carry on); clearing the save is not one of those and never sat well among
- * them.
+ * a settings ROW -- icon, label, control -- exactly like 音效, 音乐 and 震动 above it, which is
+ * also the honest description of what it always was. The answers below the card are about the
+ * LEVEL (go home, replay, carry on); clearing the save is not one of those and never sat well
+ * among them.
  *
  * IT TAKES THE SWITCHES' SLOT EXACTLY, `SET_SW_W` x `SET_SW_H` at `SET_SW_X`, because every row
- * on this page puts its control in the same box and a third row that put its control somewhere
- * else would stop the three reading as a list. Type at 56: the longer of the two strings is
+ * on this page puts its control in the same box, and a row that put its control somewhere else
+ * would stop them reading as a list. Type at 56: the longer of the two strings is
  * 「确定?」 at three glyphs, about 168 wide inside 268.
  */
 const SET_WIPE_SIZE = 56;
@@ -1021,6 +1023,7 @@ export class HudView {
      */
     private setWipeRow: Node | null = null;
     private sfxSwitch: SwitchParts | null = null;
+    private musicSwitch: SwitchParts | null = null;
     private hapticSwitch: SwitchParts | null = null;
     /**
      * This card was opened from the LOBBY, where three of its controls have nothing to act on.
@@ -1882,13 +1885,14 @@ export class HudView {
      * throws a level away. A panel asks, and it has room for the switches the corner had
      * nowhere to put.
      *
-     * WHAT IS ON THE PAGE, in page coordinates, for the lobby's three-row case. In play the
-     * third row is switched off and `rowY` centres the other two instead -- see SET_ROW_H.
+     * WHAT IS ON THE PAGE, in page coordinates, for the lobby's four-row case. In play the
+     * last row is switched off and `rowY` centres the other three instead -- see SET_ROW_H.
      *
-     *   page spans      404 .. -404   (808 tall: SET_H 1060 less CARD_HEAD 210 and CARD_RIM 42)
-     *   音效     row y   232 +/- 98   ->  330..134    (74 clear of the page's top edge)
-     *   震动     row y     0 +/- 98   ->   98..-98    (36 clear of the row above)
-     *   清除进度 row y  -232 +/- 98   -> -134..-330   (36 clear above, 74 below)
+     *   page spans      520 .. -520   (1040 tall: SET_H 1292 less CARD_HEAD 210 and CARD_RIM 42)
+     *   音效     row y   348 +/- 98   ->  446..250    (74 clear of the page's top edge)
+     *   音乐     row y   116 +/- 98   ->  214..18     (36 clear of the row above)
+     *   震动     row y  -116 +/- 98   ->  -18..-214   (36 clear of the row above)
+     *   清除进度 row y  -348 +/- 98   -> -250..-446   (36 clear above, 74 below)
      *
      * The title is not on this page at all -- it sits on the card's RIM, in the band `CARD_HEAD`
      * leaves above the page -- and neither are the answers, which sit below the whole card (see
@@ -1900,8 +1904,11 @@ export class HudView {
      * and nothing brought it along; the rules it lists were never drawn at all. Recomputed from
      * the constants rather than adjusted from those numbers.
      *
-     * NO MUSIC ROW: nothing in this project plays a track, and a switch that toggles nothing
-     * is worse than no switch.
+     * THE MUSIC ROW ARRIVED WITH THE MUSIC. This docblock used to say there was no music row
+     * because nothing in this project played a track, and a switch that toggles nothing is
+     * worse than no switch. The second half of that is still the rule; it is the first half
+     * that stopped being true -- `view/music.ts` loops a track now, so the switch has
+     * something to switch.
      */
     private buildSettings(): void {
         const { w, h } = canvasSize(this.canvas);
@@ -1922,8 +1929,11 @@ export class HudView {
         this.setClose = close;
 
         this.sfxSwitch = this.buildSwitch(page, 'Sfx', '音效', speakerSprite);
+        // BETWEEN the two, not after them: 音效 and 音乐 are both sound, and a player reaching
+        // for one has to find the other beside it. 震动 is a different sense and sits below.
+        this.musicSwitch = this.buildSwitch(page, 'Music', '音乐', noteSprite);
         this.hapticSwitch = this.buildSwitch(page, 'Buzz', '震动', buzzSprite);
-        // The third row, built with the card rather than on demand so the page has one shape
+        // The last row, built with the card rather than on demand so the page has one shape
         // for its whole life. `showSettings` only ever switches it on or off and places the
         // rows for whichever count is showing.
         const wipe = this.buildWipeRow(page);
@@ -2031,11 +2041,11 @@ export class HudView {
      * as a warning graphic rather than as a button.
      *
      * A BUTTON AND NOT A SWITCH, because this is not a setting with two states -- it is an
-     * action, and an action that cannot be undone. A third knob on this page would have said
+     * action, and an action that cannot be undone. A fourth knob on this page would have said
      * the save could be cleared and un-cleared.
      *
      * THE CAPSULE'S RADIUS IS THE TRACK'S, `SET_SW_H / 2`, rather than the cards' `PROMPT_BTN_R`.
-     * It sits in the slot two switch tracks also sit in, directly under one of them, and a
+     * It sits in the slot three switch tracks also sit in, directly under one of them, and a
      * different corner radius in that column reads as a mistake at a glance.
      */
     private buildWipeRow(page: Node): { row: Node; btn: Node; label: Label } {
@@ -2057,19 +2067,19 @@ export class HudView {
     }
 
     /**
-     * Raise the settings panel. `sfx` and `haptics` are the caller's current values -- the
-     * panel draws them and reports taps; it does not remember them, because the thing that
-     * has to be right is what the game is actually doing, not what a panel thinks.
+     * Raise the settings panel. `sfx`, `music` and `haptics` are the caller's current values
+     * -- the panel draws them and reports taps; it does not remember them, because the thing
+     * that has to be right is what the game is actually doing, not what a panel thinks.
      *
      * `lobby` says which screen raised it, and it is not cosmetic. The lobby has no level to
      * go home from or replay, and it is the only screen where clearing the save makes sense,
      * so three of this card's controls swap places between the two callers. It is passed on
      * every raise rather than set once because one HudView serves both screens.
      */
-    showSettings(sfx: boolean, haptics: boolean, lobby: boolean): void {
+    showSettings(sfx: boolean, music: boolean, haptics: boolean, lobby: boolean): void {
         if (!this.settings) this.buildSettings();
         const scrim = this.settings!;
-        this.paintSwitches(sfx, haptics);
+        this.paintSwitches(sfx, music, haptics);
         this.setLobby = lobby;
         // `setHome` and `setReplay` are `Node | null`, not a wrapper with a `.node` -- these
         // are the nodes themselves. Switching them off is HALF of what makes them go away;
@@ -2077,13 +2087,14 @@ export class HudView {
         this.setHome!.active = !lobby;
         this.setReplay!.active = !lobby;
         this.setWipeRow!.active = lobby;
-        // WHERE THE ROWS SIT DEPENDS ON HOW MANY THERE ARE. Three on the lobby's card, two in
+        // WHERE THE ROWS SIT DEPENDS ON HOW MANY THERE ARE. Four on the lobby's card, three in
         // play, centred either way -- see `rowY`. Written on every raise for the same reason
         // the three controls above are: one panel serves both screens.
-        const rows = lobby ? 3 : 2;
+        const rows = lobby ? 4 : 3;
         this.sfxSwitch!.row.setPosition(0, rowY(0, rows), 0);
-        this.hapticSwitch!.row.setPosition(0, rowY(1, rows), 0);
-        this.setWipeRow!.setPosition(0, rowY(2, 3), 0);
+        this.musicSwitch!.row.setPosition(0, rowY(1, rows), 0);
+        this.hapticSwitch!.row.setPosition(0, rowY(2, rows), 0);
+        this.setWipeRow!.setPosition(0, rowY(3, 4), 0);
         // A raise is a fresh card: whatever the red button was asking last time, it is not
         // asking now. `hideSettings` does this too -- both ends, because a panel can be taken
         // down by `setPlayVisible` without either being called.
@@ -2106,10 +2117,11 @@ export class HudView {
             .start();
     }
 
-    /** Repaint both switches. Called on every raise and on every toggle. */
-    paintSwitches(sfx: boolean, haptics: boolean): void {
+    /** Repaint all three switches. Called on every raise and on every toggle. */
+    paintSwitches(sfx: boolean, music: boolean, haptics: boolean): void {
         if (!this.settings) return;
         this.paintSwitch(this.sfxSwitch!, sfx);
+        this.paintSwitch(this.musicSwitch!, music);
         this.paintSwitch(this.hapticSwitch!, haptics);
     }
 
@@ -2196,7 +2208,9 @@ export class HudView {
      * that hits nothing is SWALLOWED rather than closing the panel, because the board behind
      * it is mid-level and a stray tap there would move a car.
      */
-    hitsSettings(ui: Vec3): 'close' | 'home' | 'replay' | 'sfx' | 'haptics' | 'wipe' | null {
+    hitsSettings(
+        ui: Vec3,
+    ): 'close' | 'home' | 'replay' | 'sfx' | 'music' | 'haptics' | 'wipe' | null {
         if (!this.settingsOpen()) return null;
         const c = this.setClose!.worldPosition;
         const r = CARD_X_D / 2 + 12;
@@ -2211,13 +2225,13 @@ export class HudView {
         // and it is the one answer here that cannot be undone.
         //
         // The other three answers are NOT gated, because they are true on both cards: the X
-        // and 继续游戏 both mean close, and the two switches act on settings rather than on a
+        // and 继续游戏 both mean close, and the three switches act on settings rather than on a
         // level. See the class's `setLobby` for the field itself.
         if (!this.setLobby
             && this.inBox(ui, this.setHome!, SET_SIDE_W, PROMPT_BTN_H)) return 'home';
         if (!this.setLobby
             && this.inBox(ui, this.setReplay!, SET_SIDE_W, PROMPT_BTN_H)) return 'replay';
-        // THE BUTTON, NOT THE ROW, and that asymmetry with the two switches below is the point.
+        // THE BUTTON, NOT THE ROW, and that asymmetry with the three switches below is the point.
         // A switch's whole row answers because widening the target of a two-state control costs
         // nothing -- a mis-tap toggles the sound and the player toggles it back. This row holds
         // the one action on this HUD that cannot be undone, so its target is the thing that
@@ -2231,6 +2245,7 @@ export class HudView {
         // every button here uses -- the arithmetic it replaces measured out from the track
         // and reached past the card, so a tap on the scrim beside the panel toggled the sound.
         if (this.inBox(ui, this.sfxSwitch!.row, CARD_PAGE_W, SET_ROW_H)) return 'sfx';
+        if (this.inBox(ui, this.musicSwitch!.row, CARD_PAGE_W, SET_ROW_H)) return 'music';
         if (this.inBox(ui, this.hapticSwitch!.row, CARD_PAGE_W, SET_ROW_H)) return 'haptics';
         return null;
     }
