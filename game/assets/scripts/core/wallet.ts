@@ -226,13 +226,10 @@ export function parseWallet(raw: string | null): WalletLoad {
         log.push(e);
     }
 
-    // Fold an over-long log down through the same path a normal append uses, so there is one
-    // implementation of the cap rather than two that can drift.
+    // Replayed through `append` itself, so the cap has exactly one implementation -- not a
+    // second copy of the eviction rule that could drift from the one `earn`/`spend` use.
     let w: Wallet = { version: WALLET_VERSION, opening, log: [] };
-    let carried = opening;
-    const kept = log.slice();
-    while (kept.length > LEDGER_MAX) carried += kept.shift()!.n;
-    w = { version: WALLET_VERSION, opening: carried, log: kept };
+    for (const e of log) w = append(w, e);
 
     // A negative balance cannot have come from `spend`, which refuses to create one, so a save
     // showing it has been edited and is not trustworthy enough to keep any part of.
