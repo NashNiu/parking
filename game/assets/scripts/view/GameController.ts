@@ -10,7 +10,7 @@ import {
     unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
     backfilledWallet, balance, canClaim, Checkin, claim as claimCheckin, coinsForClear,
     earn, emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin,
-    serializeWallet, todayKey, Wallet,
+    serializeWallet, spend, todayKey, unlockPrice, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -548,6 +548,14 @@ export class GameController extends Component {
      */
     private levelPassengers = 0;
     /**
+     * Coins spent on stalls in the level being played, for the win card's tally.
+     *
+     * Reset by `loadLevel`, not accumulated across a session: the card answers "was this run
+     * worth it", and a figure carried over from the previous level would answer a question
+     * nobody asked.
+     */
+    private spentThisLevel = 0;
+    /**
      * The level's own id, from its JSON -- which is what the win card names and what the
      * progress bar counts to. Not parsed out of `levelName`: the id is the level's own
      * statement about where it sits in the series, and it is what the HUD's title plate
@@ -1042,6 +1050,7 @@ export class GameController extends Component {
             resetParticleBudget();
             this.core = new GameCore(level);
             this.levelPassengers = level.loop.queue.reduce((sum, g) => sum + g.count, 0);
+            this.spentThisLevel = 0;
             this.levelIdNum = level.id;
             this.buildBoard(level);
             this.hud?.setLevel(level.id);
@@ -1768,12 +1777,16 @@ export class GameController extends Component {
      */
     private syncUnlockUrge(): void {
         if (!this.core?.needsUnlock() || this.busy || this.arriving > 0) return;
+        const price = unlockPrice(this.core.parking.unlocksUsed());
+        const coins = balance(this.wallet);
         this.hud?.showUnlockPrompt({
             left: this.core.parking.locked(),
             // At one star there is nothing left to lose, and a prompt that keeps threatening
             // a star it cannot take is a prompt the player learns to stop reading.
             losesStar: this.core.stars() > 1,
-        });
+            price,
+            affordable: coins >= price,
+        }, coins);
     }
 
     /**
@@ -2968,19 +2981,32 @@ export class GameController extends Component {
     /**
      * Open the next locked stall, on a tap on it.
      *
-     * Free, for now: the button says "tap me" with a play triangle because that is where a
-     * rewarded video goes, but nothing is being asked for yet. When an ad is wired in, this
-     * is the one place that changes -- everything below it already treats an unlock as a
-     * thing that either happened or did not.
+     * CHARGED NOW, and the charge comes FIRST. `spend` returns null when the balance will not
+     * cover it, and this returns on that -- so a refused payment cannot open a stall. Doing it
+     * the other way round (open, then try to pay) would leave the two able to disagree, and the
+     * one that shows on screen is the stall.
      *
-     * Core decides WHICH stall opens (always the leftmost locked one, see
-     * ParkingSystem.unlock) and the view is told the index, so the two counts cannot drift.
-     * A refusal is silent: the only way to get one is to tap a stall that no longer exists,
-     * which the hit test already rules out.
+     * The write to the device is immediate rather than deferred to the end of the level. It is
+     * a synchronous call, but this is a deliberate tap with a full-screen prompt already up, at
+     * most three times a level -- nowhere near a per-frame path. Deferring it would mean a
+     * player who kills the app mid-level keeps the stall and the coins both.
+     *
+     * Core decides WHICH stall opens (always the leftmost locked one, see ParkingSystem.unlock)
+     * and the view is told the index, so the two counts cannot drift.
      */
     private unlockNextSlot(): void {
+        if (!this.core!.parking.canUnlock()) return;
+        const price = unlockPrice(this.core!.parking.unlocksUsed());
+        const paid = spend(this.wallet, 'unlock', price, this.levelIdNum, Date.now());
+        if (paid === null) return;
         const slot = this.core!.unlockSlot();
+        // Belt and braces against a future caller: `canUnlock` was checked above, so this cannot
+        // fire -- but if it ever did, returning here leaves the coins unspent because `paid` has
+        // not been committed to `this.wallet` yet.
         if (slot < 0) return;
+        this.wallet = paid;
+        saveWalletText(serializeWallet(this.wallet));
+        this.spentThisLevel += price;
         this.sfx?.play('tap');
         vibrate('light');
         this.parkingView!.openSlot(slot);

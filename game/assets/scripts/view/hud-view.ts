@@ -54,6 +54,10 @@ export interface UnlockCost {
     left: number;
     /** Whether opening one would actually cost a star, or the rating has already bottomed. */
     losesStar: boolean;
+    /** What this one costs in coins. Rises within a level -- see `UNLOCK_PRICES`. */
+    price: number;
+    /** Whether the balance covers `price` right now. */
+    affordable: boolean;
 }
 
 /**
@@ -1065,6 +1069,16 @@ export class HudView {
     private chkCells: { face: Node; rim: Node; tick: Node }[] = [];
     /** Whether 领取 is live. `hitsCheckin` reads it; see `paintCheckin` for why it is a field. */
     private chkClaimable = false;
+    /** The balance last handed to `showUnlockPrompt`, for the shortfall line. */
+    private promptBalance = 0;
+    /**
+     * Whether the prompt's buy button is live.
+     *
+     * Same rule as `chkClaimable`: a greyed control must not answer taps, and the hit test is
+     * geometry only -- it cannot see a colour. Without this the button looks spent and still
+     * spends.
+     */
+    private promptAffordable = true;
 
     /** The wipe button's own label, which is the only thing that shows its armed state. */
     private setWipeLabel: Label | null = null;
@@ -1467,8 +1481,9 @@ export class HudView {
      * frees itself while this is up. The only things that change these numbers are the
      * player's own answers, and all three of them take the prompt down first.
      */
-    showUnlockPrompt(cost: UnlockCost): void {
+    showUnlockPrompt(cost: UnlockCost, coins: number): void {
         this.supersedeSettings();
+        this.promptBalance = coins;
         if (!this.prompt) this.buildUnlockPrompt();
         const scrim = this.prompt!;
         if (scrim.active) return;
@@ -1477,13 +1492,24 @@ export class HudView {
         // later siblings than anything built in the constructor. Same reason as the banner.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
         this.syncGear();
-        // Both halves of the price, because either one alone reads as a smaller decision than
-        // it is: how many are left, and what this one takes off the rating. At one star the
-        // rating has bottomed out and there is nothing left to lose, so saying so is more
-        // honest than repeating a threat that no longer applies.
-        this.promptCost!.string = cost.losesStar
-            ? `还能开 ${cost.left} 个 · 少一颗星`
-            : `还能开 ${cost.left} 个 · 星级已到底`;
+        // Three facts, because any two of them read as a smaller decision than it is: what this
+        // costs, how many are left, and what it takes off the rating. At one star the rating has
+        // bottomed out and there is nothing left to lose, so saying so is more honest than
+        // repeating a threat that no longer applies.
+        //
+        // When it cannot be afforded the price line becomes the SHORTFALL instead. A greyed
+        // button with the ordinary price above it says what is on offer but not why it is out of
+        // reach, and the player is one tap from concluding the game is broken.
+        const tail = cost.losesStar ? ' · 少一颗星' : ' · 星级已到底';
+        this.promptCost!.string = cost.affordable
+            ? `还能开 ${cost.left} 个 · ${cost.price} 币${tail}`
+            : `金币不足 · 还差 ${cost.price - this.promptBalance}`;
+        const btn = this.promptBtn!;
+        btn.getChildByName('face')!.getComponent(Sprite)!.color =
+            cost.affordable ? PROMPT_BTN : CHK_BTN_DONE;
+        btn.getChildByName('base')!.getComponent(Sprite)!.color =
+            cost.affordable ? PROMPT_BTN_BASE : CHK_BTN_DONE_BASE;
+        this.promptAffordable = cost.affordable;
         // By name, for the reason `showWin` now does: this happens to be children[0] today,
         // and would quietly become whatever decoration is added in front of it tomorrow.
         // Here the failure would be milder than showWin's -- the panel still shows, because
@@ -1528,7 +1554,11 @@ export class HudView {
         if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'home';
         const b = this.promptBtn!.worldPosition;
         if (Math.abs(ui.x - b.x) <= PROMPT_BTN_W / 2 + 8
-            && Math.abs(ui.y - b.y) <= PROMPT_BTN_H / 2 + 8) return 'unlock';
+            && Math.abs(ui.y - b.y) <= PROMPT_BTN_H / 2 + 8) {
+            // Swallowed, not passed through: the tap landed on a control, it just cannot be
+            // taken. Returning null here would let it fall to whatever is behind the scrim.
+            return this.promptAffordable ? 'unlock' : null;
+        }
         const p = this.promptReplay!.worldPosition;
         if (Math.abs(ui.x - p.x) <= TEXT_BTN_W / 2
             && Math.abs(ui.y - p.y) <= TEXT_BTN_H / 2) return 'replay';
