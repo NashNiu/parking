@@ -8,9 +8,9 @@ import {
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
     bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
     unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
-    addCoins, backfilledWallet, canClaim, Checkin, claim as claimCheckin, coinsForClear,
-    emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin, serializeWallet,
-    todayKey, Wallet,
+    backfilledWallet, balance, canClaim, Checkin, claim as claimCheckin, coinsForClear,
+    earn, emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin,
+    serializeWallet, todayKey, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -499,6 +499,15 @@ export class GameController extends Component {
     private wallet: Wallet = emptyWallet();
 
     /**
+     * Whether the wallet came off the device as a v1 save.
+     *
+     * Kept as a field because the two halves of the migration happen at different times: the
+     * save is read in `start`, and the level count the backfill needs is not known until
+     * `finishLoading`. Nothing else reads it, and nothing sets it back to true.
+     */
+    private walletFromLegacy = false;
+
+    /**
      * The daily check-in streak, read once on the boot path beside the wallet.
      *
      * A SAVE OF ITS OWN rather than a field on the wallet, for the reason `core/checkin`
@@ -737,7 +746,9 @@ export class GameController extends Component {
         this.settings = parseSettings(loadSettingsText());
         // Beside the progress, and on the same terms: `parseWallet` cannot throw either, so a
         // corrupt balance costs the player their coins and not their game.
-        this.wallet = parseWallet(loadWalletText());
+        const loaded = parseWallet(loadWalletText());
+        this.wallet = loaded.wallet;
+        this.walletFromLegacy = loaded.fromLegacy;
         // Same contract and the same reason: `parseCheckin` cannot throw either, so a
         // corrupt streak costs the player a day rather than the boot.
         this.checkin = parseCheckin(loadCheckinText());
@@ -893,7 +904,7 @@ export class GameController extends Component {
         this.home?.setProgress(this.progress);
         // Every return to the lobby repaints the balance, which is what makes a clear's payout
         // show up: the bar is standing and was drawn long before the coins were earned.
-        this.home?.setCoins(this.wallet.coins);
+        this.home?.setCoins(balance(this.wallet));
         // On every return, not only on the first build: a player who came back after
         // midnight has a claim waiting that was not there when the bar was drawn.
         this.paintCheckinDot();
@@ -917,43 +928,34 @@ export class GameController extends Component {
     }
 
     /**
-     * Catch the wallet up to a save whose stars predate it: a player who cleared levels
-     * before the wallet subsystem existed has a balance stuck at 0 (or wherever it was when
-     * the subsystem landed) even though `this.progress` already earned more than that.
-     * `coinsForClear` cannot pay that out itself -- it pays the difference at the moment of a
-     * clear, and there is no clear happening here to attach a payout to -- so `backfilledWallet`
-     * derives the total and this wires the result into storage and the coin pill.
+     * Pay a v1 save what its stars already earned, ONCE.
      *
-     * THE DECISION IS NOT MADE HERE, deliberately. Raising-but-never-lowering is the one
-     * property this feature rests on, and it used to be three lines in this method -- in the
-     * view layer, which has no test environment, so the safest-sounding half of the feature was
-     * the untested half. `core/wallet`'s `backfilledWallet` owns it and jest pins it. What is
-     * left here is wiring: ask, and if the answer is a different object, persist it.
+     * GATED ON `walletFromLegacy`, AND THAT GATE IS THE WHOLE POINT. This used to run on every
+     * boot, which was sound while coins could only come in: a balance below the derived figure
+     * could only mean the wallet had not existed yet. Now that a stall costs coins, a balance
+     * below the derived figure is the normal state of anyone who has bought one -- and running
+     * this would hand the money back. `core/wallet`'s `backfilledWallet` says the same thing
+     * from its end; neither note is safe to read alone.
      *
-     * This does not reopen the "clear -> wipe -> clear again" farm that kept coins out of
-     * `Progress` in the first place: `wipeProgress` clears the wallet and the progress
-     * TOGETHER (see `clearWalletText`'s call site), so the next load derives 0 from an empty
-     * save, not the balance the player wiped away. Nothing here runs a second time on the same
-     * clear either -- once raised, the stored balance is no longer below its own derived
-     * figure, so a later load is a no-op.
-     *
-     * Runs from `finishLoading`, not from `start`'s load path alongside `parseWallet`: it
-     * needs `countLevels()`, which needs the resources bundle index, and that index is not
-     * ready any earlier than this (see `finishLoading`'s own docblock). `showHome` already
-     * painted the pre-backfill balance on the very first frame, so a change here has to
-     * repaint the pill again, not just persist it.
+     * The flag is cleared before the write, not after, so a failing `saveWalletText` cannot
+     * leave this armed to run again on the next boot and pay twice.
      */
     private backfillWallet(levelCount: number): void {
-        // The raise-or-leave decision lives in `core/wallet`, not here, and the identity check
-        // below is why that is worth a function call: `backfilledWallet` hands back the SAME
-        // object when nothing is owed, so "did anything change" is one `===` rather than a
-        // second copy of the comparison it just made. This layer has no tests; that one does.
-        const next = backfilledWallet(this.wallet, this.progress, levelCount);
-        if (next === this.wallet) return;
+        if (!this.walletFromLegacy) return;
+        this.walletFromLegacy = false;
+        const next = backfilledWallet(this.wallet, this.progress, levelCount, Date.now());
+        // Same `===` contract as before: unchanged means nothing is owed, so nothing is written.
+        if (next === this.wallet) {
+            // Still write once, to replace the v1 payload on the device with a v2 one. Leave it
+            // and the next boot reads v1 again, sets the flag again, and re-derives forever --
+            // harmless while nothing has been spent, and a refund the moment something has.
+            saveWalletText(serializeWallet(this.wallet));
+            return;
+        }
         this.wallet = next;
         saveWalletText(serializeWallet(this.wallet));
-        this.home?.setCoins(this.wallet.coins);
-        console.log(`[Game] wallet backfilled to ${this.wallet.coins} coins`);
+        this.home?.setCoins(balance(this.wallet));
+        console.log(`[Game] wallet backfilled to ${balance(this.wallet)} coins`);
     }
 
     /** Leave the home screen for `name`. The inverse of `showHome`. */
@@ -2224,9 +2226,12 @@ export class GameController extends Component {
             // nothing to save. The balance is repainted by `showHome`, not here -- the bar is
             // not on screen while this card is up.
             if (earned > 0) {
-                this.wallet = addCoins(this.wallet, earned);
+                // `rating` goes in as `extra`: the ledger panel prints the star rating, and it
+                // cannot be recovered from `earned`, which is a DIFFERENCE.
+                this.wallet = earn(this.wallet, 'clear', earned, this.levelIdNum,
+                    Date.now(), rating);
                 saveWalletText(serializeWallet(this.wallet));
-                console.log(`[Game] earned ${earned} coins, balance ${this.wallet.coins}`);
+                console.log(`[Game] earned ${earned} coins, balance ${balance(this.wallet)}`);
             }
             // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
@@ -2465,10 +2470,10 @@ export class GameController extends Component {
         if (!canClaim(this.checkin, today)) return;
         const { checkin, coins } = claimCheckin(this.checkin, today);
         this.checkin = checkin;
-        this.wallet = addCoins(this.wallet, coins);
+        this.wallet = earn(this.wallet, 'checkin', coins, this.checkin.day, Date.now());
         saveCheckinText(serializeCheckin(this.checkin));
         saveWalletText(serializeWallet(this.wallet));
-        this.home?.setCoins(this.wallet.coins);
+        this.home?.setCoins(balance(this.wallet));
         this.hud?.paintCheckin(this.checkin, today);
         this.paintCheckinDot();
         this.sfx?.play('tap');
