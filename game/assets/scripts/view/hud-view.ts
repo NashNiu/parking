@@ -1566,12 +1566,19 @@ export class HudView {
     }
 
     /**
-     * Build the check-in card once. Seven cells, a close button, and 领取 hung underneath.
+     * Build the check-in card once: a weekday header, forty-two grid cells, a month label, a
+     * close button, and 领取 hung underneath.
+     *
+     * ALL 42 CELLS ARE BUILT HERE, whatever today's month needs -- see CAL_ROWS's docblock for
+     * why the grid is sized for six rows always. Building only the days a month has would tie
+     * the node list to whichever month was open when the card was first raised, and the card is
+     * built once and reused: the next month opened would have nowhere to draw the days that
+     * fell outside this month's shorter grid.
      *
      * Nothing about the SAVE is read here -- the cells are drawn blank and `paintCheckin` writes
      * every one of them on every raise. That split is the same one `buildSettings` /
-     * `paintSwitches` keeps, and it is what stops a reused card showing yesterday's row: there is
-     * no cell state that survives a raise, because there is no cell state a raise does not
+     * `paintSwitches` keeps, and it is what stops a reused card showing last month's grid: there
+     * is no cell state that survives a raise, because there is no cell state a raise does not
      * overwrite.
      */
     private buildCheckin(): void {
@@ -1669,7 +1676,7 @@ export class HudView {
     }
 
     /**
-     * Raise the check-in card and write today's row into it.
+     * Raise the check-in card and write today's grid into it.
      *
      * `today` is handed in rather than read from a clock here, for the reason every other date in
      * this feature is handed in: `core/checkin` owns what a day is, and a view calling
