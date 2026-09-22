@@ -133,17 +133,28 @@ export function isClaimed(c: Checkin, month: string, day: number): boolean {
  * decide whether to show a claimable button at all, and a second silent check here would be a
  * second place that rule could drift.
  *
- * The days are kept SORTED rather than appended in claim order. Nothing in the payout depends on
- * it -- the reward reads `days.length` -- but the calendar draws from this array, and a clock
- * wound backwards or a hand-edited save can otherwise leave it out of order.
+ * PRICED THROUGH `nextCount`, not from `days.length` after appending. `nextCount` is the one
+ * function that decides which check-in of the month this is -- the card highlights that same
+ * count -- so pricing any other way would be a second, silently different answer to "which day
+ * is this" free to drift from the one the card shows.
+ *
+ * A day already in `days` is KEPT AS-IS rather than appended again. The caller is supposed to
+ * gate on `canClaim` first, but this has no way to enforce that, and `parseCheckin` rejects a
+ * duplicate day outright -- so appending one here would write a save that reads back as
+ * corrupt on the next boot, costing the player the whole month's record over a call that
+ * should have been a no-op.
+ *
+ * The days are kept SORTED rather than appended in claim order. The calendar draws from this
+ * array, and a clock wound backwards or a hand-edited save can otherwise leave it out of order.
  */
 export function claim(c: Checkin, today: string): { checkin: Checkin; coins: number } {
     const month = monthOf(today);
     const d = dayOf(today);
-    const days = (month === c.month ? c.days.concat(d) : [d]).sort((a, b) => a - b);
+    const kept = month === c.month ? c.days : [];
+    const days = kept.includes(d) ? kept.slice() : kept.concat(d).sort((a, b) => a - b);
     return {
         checkin: { version: CHECKIN_VERSION, month, days },
-        coins: CHECKIN_REWARDS[(days.length - 1) % CHECKIN_REWARDS.length],
+        coins: CHECKIN_REWARDS[(nextCount(c, today) - 1) % CHECKIN_REWARDS.length],
     };
 }
 

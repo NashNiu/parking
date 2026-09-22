@@ -1249,15 +1249,16 @@ test('the check-in claim button is gated on being claimable, not just repainted'
 });
 
 /**
- * The card and the payout read the landing day from the SAME function.
+ * The card and the payout read the landing count from the SAME function.
  *
  * `claim` records it, `nextReward` prices it, and `paintCheckin` highlights it; all three go
- * through `nextDay`. The failure this prevents is silent and slow: a card that computed the cell
- * as `day + 1` would be right until the first broken streak and would then highlight a day the
- * payout does not pay. Inferring it from `nextReward` fails sooner and even more quietly -- days
- * 1 and 2 both pay 20.
+ * through `nextCount`. The failure this prevents is silent and slow: a card that computed the
+ * running count itself -- from `days.length`, say -- would agree with the payout right up until
+ * the two computations drifted, and would then highlight a cell the payout does not pay.
+ * Inferring it from `nextReward` fails sooner and even more quietly -- the first two check-ins
+ * of a month both pay 20.
  */
-test('claim, nextReward and the card all read the landing day from nextDay', () => {
+test('claim, nextReward and the card all read the landing count from nextCount', () => {
   const core = readCore('checkin.ts');
   for (const fn of ['claim', 'nextReward']) {
     const at = core.indexOf('export function ' + fn + '(');
@@ -1265,7 +1266,7 @@ test('claim, nextReward and the card all read the landing day from nextDay', () 
     // The function's own body, up to the next top-level export.
     const next = core.indexOf('\nexport ', at + 1);
     const body = next === -1 ? core.slice(at) : core.slice(at, next);
-    expect(body).toContain('nextDay(c, today)');
+    expect(body).toContain('nextCount(c, today)');
   }
   expect(readSrc('hud-view.ts')).toContain('const landing = nextDay(c, today);');
 });
