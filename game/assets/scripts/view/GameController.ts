@@ -2798,8 +2798,8 @@ export class GameController extends Component {
         // runtime, and a diagnostic you switched on that stays silent is worse than none.
         if (this.debugOverlay) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
-            this.playDriveToSlot(id, angle, res.slotIndex);
-            this.syncTunnels();
+            // The emergence waits for the mouth to be clear; see `syncTunnels`.
+            this.syncTunnels(this.playDriveToSlot(id, angle, res.slotIndex));
         } else if (res.reason === 'full') {
             this.playLotFull(id);
         } else {
@@ -2807,10 +2807,21 @@ export class GameController extends Component {
         }
     }
 
-    private playDriveToSlot(id: number, angle: number, slotIndex: number): void {
-        const parkScale = this.stallScale(id); // before detachCar drops the car's size
+    /**
+     * Drive a tapped car out of the lot and into its stall, and report HOW LONG THE SPOT
+     * IT LEAVES STAYS OCCUPIED -- the time it needs to travel its own length.
+     *
+     * That number is only interesting for a car that came out of a tunnel, and it is
+     * returned rather than used because this method does not know whether it did. See
+     * `syncTunnels`, which does.
+     */
+    private playDriveToSlot(id: number, angle: number, slotIndex: number): number {
+        const body = this.gridView!.getCarSize(id); // before detachCar drops the car's size
+        const parkScale = this.stallScale(id);
         const node = this.gridView!.detachCar(id);
-        if (!node) return;
+        // No node, no drive, so nothing is standing in the mouth either: zero, not a
+        // wait the arrival would sit through for a car that is not there.
+        if (!node) return 0;
         node.setParent(this.boardRoot!, true); // keep world position
 
         const start = node.position.clone();
@@ -2866,6 +2877,7 @@ export class GameController extends Component {
                 this.syncSeatCounts();
             },
         });
+        return body && speed > 0 ? body.len / speed : 0;
     }
 
     /**
@@ -2877,11 +2889,19 @@ export class GameController extends Component {
      * tunnel the departing car came from, which means the view keeping its own copy of a
      * mapping core already has.
      *
-     * The arrival starts at the same moment the departing car pulls away, not after it. `busy`
-     * is already holding taps off for the drive, and a mouth that stays visibly empty for a
-     * second and a half reads as the tunnel having jammed.
+     * `clear` is how long the spot outside the mouth stays occupied by the car that just
+     * left it -- the time it needs to drive its own length, handed over by `playDriveToSlot`.
+     * The arrival waits exactly that long and no longer.
+     *
+     * IT USED TO START AT THE SAME MOMENT the departing car pulled away, on the argument that
+     * a mouth standing visibly empty reads as a jam. The argument holds; the timing did not.
+     * The new car is grown IN PLACE at the position core chose, which is the position the
+     * departing car is still standing on for the first stretch of its drive, so its colour
+     * came up underneath the car that was still leaving -- reported as 上一个车还没完全出去
+     * 的时候,后面的车身颜色已经出来了. Waiting for the whole drive would bring the jam back,
+     * so it waits for the only part of it that overlaps.
      */
-    private syncTunnels(): void {
+    private syncTunnels(clear: number = 0): void {
         if (!this.core || !this.gridView) return;
         for (const t of this.core.lot.tunnels) {
             this.hud?.setTunnelCount(t.id, this.core.lot.remainingIn(t.id));
@@ -2897,8 +2917,15 @@ export class GameController extends Component {
             // Grown in place, not slid out of the tunnel: the arch is solid now and a slide
             // would pass through its front wall. See EMERGE_SCALE for why there is no position
             // left to animate.
+            // Hidden rather than merely small for the wait: at EMERGE_SCALE it is 55% of a
+            // car and plainly visible under the one still driving off, which is the whole
+            // defect. `active` also keeps it out of the raycast, which `activateCar` below
+            // would otherwise have to undo.
+            node.active = false;
             node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE);
             tween(node)
+                .delay(clear / this.speed)
+                .call(() => { if (node.isValid) node.active = true; })
                 // A fresh Vec3, not `Vec3.ONE`: handing a shared engine constant to a tween
                 // as its target value is one in-place lerp away from corrupting it globally.
                 .to(EMERGE_TIME / this.speed, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })

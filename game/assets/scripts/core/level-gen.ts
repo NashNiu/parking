@@ -825,6 +825,60 @@ export function costTarget(id: number): number {
     return COST_CURVE[i];
 }
 
+/**
+ * The most cars an attempt may put on the table at once and still count as on target.
+ *
+ * A FILTER, not a ranking term -- `better` already prefers the tighter of two candidates,
+ * and that is worth nothing when every candidate in the pool is loose. Level 6 shipped at
+ * 6.5 the first time the tunnels drew mixed bodies, for no reason worse than a different
+ * random stream, and the ceiling was a line in a test rather than a thing the generator
+ * maintained.
+ *
+ * 6.5 is where the two silhouette families separate: the solid ones (`full`, `ellipse`) put
+ * 8.3 to 10.7 cars in reach at once against four stalls, the hollow and narrow ones 2.8 to
+ * 5.8. Anything above this is a lot that plays like the ones my human partner was clearing
+ * on two stalls.
+ *
+ * It has to be in BOTH the gate and the miss metric, and the first version was only in the
+ * gate. Level 6 came back byte-identical: the gate did reject every candidate, `onTarget`
+ * emptied, and the level fell through to the nearest miss -- which ranked on blocked cars
+ * alone and handed back the very packing the gate had just refused. A ceiling that only the
+ * front door checks is not a ceiling.
+ */
+const EXIT_CEILING = 6.5;
+
+/**
+ * The fewest cars a packing attempt may hold and still be a candidate.
+ *
+ * THIS IS THE EMPTY-LOT GUARD, and it was missing. `blockedTarget` is computed from the
+ * attempt's OWN car count, so a lot with no cars in it asks for one blocked car, delivers
+ * zero, lands inside `BLOCKED_TOLERANCE`, and is accepted as on target. Nothing downstream
+ * notices: `isSolvable` is trivially true of an empty board and `weldedMouths` finds no
+ * welded mouth where there is no car.
+ *
+ * What it cost was not one bad level, it was the SEARCH. Measured on level 6: of 173
+ * attempts that got as far as being scored, seven passed the gate and SIX OF THEM WERE
+ * EMPTY. Those six filled `PACKINGS`, so the loop stopped at attempt 173 of an allowed
+ * 4000, and the one real candidate it had found shipped unopposed -- which is why neither
+ * the exit ceiling nor the miss penalty could move that level. There was nothing to move it
+ * to.
+ *
+ * 20 is well under the smallest shape's real supply on this lot -- the shipped ten seat 37
+ * to 54 -- and far above the degenerate case. It is a guard, not a target; the count is
+ * still a result (see `blockedTarget`).
+ */
+const MIN_CARS = 20;
+
+/**
+ * What one car per tick over `EXIT_CEILING` costs in the nearest-miss metric, in units of
+ * blocked cars.
+ *
+ * 4, so half a car of overshoot outweighs two blocked cars off target. The two are not
+ * commensurable and no weight makes them so; what this has to do is stop a level settling on
+ * a loose lot to buy a blocked count it could have missed by one.
+ */
+const EXIT_PENALTY = 4;
+
 /** Placement draws before a tunnel is written off and the whole attempt with it. */
 const PLACE_TRIES = 200;
 
@@ -843,6 +897,17 @@ const PLACE_TRIES = 200;
  * Colours are drawn flat from the level's palette. There is no cleverness to add: the queue
  * is derived from the cars (`bandedQueue`), so any draw is colour-balanced by construction, and
  * "mixed, and you only see the one at the mouth" is the mechanic rather than a compromise.
+ *
+ * BODIES ARE DRAWN FROM `CAP_MIX` TOO, where they used to all be `small`. My human partner
+ * asked for it having noticed: 现在隧道出车好像都是小车，可以通过小车和大车的长度不同，来挡住
+ * 或者放开车辆通行. A car that comes out of a tunnel is an ordinary lot car from the moment it
+ * stands at the mouth -- it blocks its neighbours by its own length like any other -- so a
+ * tunnel that only ever produced the shortest body was spending its whole run on the piece
+ * least able to change the board.
+ *
+ * It costs room rather than correctness: `tunnelReservation` is sized off the LONGEST car the
+ * tunnel holds, so a draw with a big body reserves more lot and is likelier to fail to place.
+ * That failure is already handled -- the attempt returns nothing and the caller retries.
  *
  * Unlike the cars, `x`/`y`/`angle` here never pass through `round4` -- verified harmless
  * (JSON round-trips a float bit-exactly, and angle stays inside [0, 360) unrounded), but
@@ -866,7 +931,7 @@ function placeTunnels(rng: () => number, colors: number, tp: TunnelParams): Tunn
                 angle: (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP,
                 cars: Array.from({ length: tp.cars }, () => ({
                     color: PALETTE[Math.floor(rng() * colors)],
-                    cap: 'small' as Cap,
+                    cap: pickCap(rng),
                 })),
             };
             const box = inflate(tunnelReservation(t), pad);
@@ -2128,13 +2193,17 @@ export function generateLevel(id: number): LevelData {
         // 里的三十几辆,而那是几何,不是这次尝试没发挥好。
         if (tunnels.length < tp.count) continue;
         const wantBlocked = blockedTarget(id, cars.length, tunnels.length);
+        // Before `isSolvable`, which is trivially true of an empty board and would let a
+        // degenerate attempt through to be scored. See MIN_CARS.
+        if (cars.length < MIN_CARS) continue;
         const level = assemble(id, cars, tunnels);
         if (!isSolvable(level)) continue;
         const welded = weldedMouths(level);
         const d = estimateDifficulty(level);
         if (welded === 0
             && Math.abs(d.blocked - wantBlocked) <= BLOCKED_TOLERANCE
-            && d.rounds >= p.minRounds) {
+            && d.rounds >= p.minRounds
+            && exitCars(level) <= EXIT_CEILING) {
             onTarget.push({ cars, tunnels });
             continue;
         }
@@ -2143,6 +2212,7 @@ export function generateLevel(id: number): LevelData {
         // strictly better miss clears the list, because difficulty outranks tidiness.
         const miss = Math.abs(d.blocked - wantBlocked)
             + Math.max(0, p.minRounds - d.rounds)
+            + Math.max(0, exitCars(level) - EXIT_CEILING) * EXIT_PENALTY
             + welded * WELDED_PENALTY;
         if (miss < bestMiss) {
             bestMiss = miss;

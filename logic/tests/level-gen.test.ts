@@ -469,7 +469,10 @@ test('a later level is harder although it is SMALLER', () => {
   const lastLvl = levelFor(10);
   const first = estimateDifficulty(firstLvl);
   const last = estimateDifficulty(lastLvl);
-  expect(last.cars).toBeLessThan(first.cars);
+  // 车数也不再沿曲线下降,和颜色一样。形状轮替之后车数跟着**形状**走而不是跟着序号走
+  // (第 10 关是菱形 54 辆,第 2 关是甜甜圈 49 辆),所以"后面的关卡更小"这句话在这条
+  // 曲线上不再成立。剩下的两项 —— 隧道更多、缠绕率不更低 —— 仍然成立,断在下面。
+  //
   // 颜色**不再**是坡度的一部分,而这一行是把这件事钉住,不是把它删掉。2026-09-22 起
   // 第 2 关就开满六色(人类伙伴:只有第一个关是教学关),调色板只有六个,所以第 10 关
   // 无处可涨。谁要是哪天让它重新爬坡,得先经过这一行。
@@ -526,6 +529,11 @@ test('no level puts more than a handful of cars on the table at once', () => {
   // 问的是**上限**不是坡度,因为坡度已经没有了(见上一条)。6.5 的来历:实心大轮廓的
   // 那几关一次摆出 8.3 到 10.7 辆车对着四个车位,换成紧形状轮替之后是 3.0 到 5.8。
   // 6.5 卡在两者中间,松形状回来就会红。
+  //
+  // 同一个 6.5 现在也是生成器自己的过滤条件(`EXIT_CEILING`),而不再只是这里的一条线。
+  // 它当初只写在这里,于是隧道改抽车型、随机流一变,第 6 关就正好落到 6.5 上 —— 排序
+  // 挑不出更紧的候选,因为池子里一个都没有。测试发现得了,生成器守不住,那就得让生成器
+  // 守。这条留着,因为它问的是**发出去的文件**,而那是两件事。
   for (const id of PACKED) {
     expect({ id, crowded: exitCars(levelFor(id)) > 6.5 }).toEqual({ id, crowded: false });
   }

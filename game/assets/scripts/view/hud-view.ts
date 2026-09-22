@@ -803,10 +803,23 @@ const SPEED_INK = new Color(255, 255, 255);
  * out, is the passenger count (the old two-colour level 1 and the new four-colour one both
  * read 744). A stale package is invisible, so it gets mistaken for a bug in the new code.
  *
- * Dim on purpose: legible if you go looking, ignorable otherwise. To drop it before release,
- * delete `setBuildTag` and its one call.
+ * Dim on purpose: legible if you go looking, ignorable otherwise.
  */
 const TAG_INK = new Color(90, 100, 125, 130);
+
+/**
+ * Whether that line is drawn at all. FALSE: it is a line of build id, frame rate and tick
+ * cost sitting across the bottom of a shipping screen, and it was asked to go.
+ *
+ * A switch rather than a deletion, the same discipline as SPEED_BUTTON and PICK_ROW, and for
+ * the reason the tag was written in the first place: a stale package on a device is
+ * invisible, so it gets mistaken for a bug in the new code. Flipping this back is how the
+ * next "is the phone running the build I just made" gets answered in one look.
+ *
+ * `setBuildTag` reads THIS constant and builds nothing when it is false, so the label is not
+ * created rather than created and hidden -- there is no node left to reappear.
+ */
+const BUILD_TAG_ROW = false;
 
 /**
  * The level picker: a row of numbered chips along the bottom, tapped to jump straight to a
@@ -2315,6 +2328,7 @@ export class HudView {
      * anchor is the thing that had to move.
      */
     setBuildTag(tag: string): void {
+        if (!BUILD_TAG_ROW) return;
         if (!this.buildTag) {
             const { w, h } = canvasSize(this.canvas);
             const margin = w * PILL_MARGIN;
