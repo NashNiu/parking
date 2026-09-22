@@ -510,7 +510,7 @@ export class GameController extends Component {
     private walletFromLegacy = false;
 
     /**
-     * The daily check-in streak, read once on the boot path beside the wallet.
+     * The daily check-in calendar, read once on the boot path beside the wallet.
      *
      * A SAVE OF ITS OWN rather than a field on the wallet, for the reason `core/checkin`
      * gives: coins are what it pays out, not what it is. It goes in the wipe with the
@@ -760,7 +760,7 @@ export class GameController extends Component {
         this.wallet = loaded.wallet;
         this.walletFromLegacy = loaded.fromLegacy;
         // Same contract and the same reason: `parseCheckin` cannot throw either, so a
-        // corrupt streak costs the player a day rather than the boot.
+        // corrupt save costs the player this month's check-in record rather than the boot.
         this.checkin = parseCheckin(loadCheckinText());
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
@@ -2450,19 +2450,32 @@ export class GameController extends Component {
     /**
      * Raise the check-in card. The bar's live entry does exactly this and nothing else.
      *
-     * `todayKey(new Date())` is read here and handed down, so the card and the row it draws
+     * `todayKey(new Date())` is read here and handed down, so the card and the grid it draws
      * agree with each other. THAT IS NOT A GUARANTEE ABOUT THE PAYOUT, and an earlier version
      * of this comment claimed it was. `claimCheckinToday` reads the clock again, so a card
-     * opened at 23:59:58 and claimed at 00:00:01 is TWO reads: the streak `last` was
-     * continuing is now the day before yesterday, the claim restarts at day 1, and the cell
-     * that lit up said 40 while the player is paid 20.
+     * opened before midnight and claimed after it is TWO reads -- but what that buys the
+     * player is a much smaller risk than it was under the streak, and a differently-shaped one.
+     *
+     * WITHIN A MONTH, crossing midnight between the two reads changes nothing: `nextCount`
+     * prices off `c.days.length + 1` on both sides, because neither yesterday's date nor
+     * today's is in `days` until a claim actually writes one of them. There is no streak to
+     * reset any more, so there is nothing for the two reads to disagree about.
+     *
+     * ACROSS A MONTH BOUNDARY the same shape of gap survives, roughly THIRTY TIMES RARER than
+     * the old nightly one: a card opened at 23:59 on a month's last day shows that month's
+     * running count and figure, and a claim landing at 00:00:01 is the NEW month's 1st,
+     * paying 20 regardless of what the old month's count had reached. There is also a version
+     * the streak card could never have had, because it had no dates: the cell that lit up is
+     * TODAY'S DATE cell, so a card left open across midnight highlights yesterday's square
+     * while a tap on it would claim today's.
      *
      * That is left as it is, deliberately. The PAYOUT is always right for the day it happens
      * on -- the clock the wallet is written from is the last one read -- and `paintCheckin`
-     * repaints the row immediately after, so what the player is looking at a second later
-     * agrees with what they were paid. The alternative is a card that re-raises itself
-     * under the player's thumb at midnight, which trades a one-second-per-day discrepancy
-     * for a control that moves while being pressed.
+     * repaints the grid immediately after, so what the player is looking at a second later
+     * agrees with what they were paid. The alternative is a card that re-raises itself under
+     * the player's thumb at midnight, which now trades a once-a-month discrepancy -- worse
+     * odds for the trade than when the gap was nightly -- for a control that moves while
+     * being pressed.
      *
      * The dot has a milder version of the same: nothing repaints it while the lobby sits
      * open, so a player who crosses midnight without leaving the screen does not see it
@@ -2520,10 +2533,10 @@ export class GameController extends Component {
      *
      * THE WALLET GOES WITH IT, and `clearWalletText` is where that reasoning lives: coins are
      * derived from the progress, so a wipe that spared them would make "clear -> wipe -> clear
-     * again" an unlimited mint. THE CHECK-IN STREAK GOES WITH IT for the same reason and
-     * one of its own: it pays in coins, and its seventh day pays 100, so a streak that
-     * survived a wipe would put the table's one week-long figure two taps away. All three
-     * saves, all three in-memory copies, the readout and the bar's dot.
+     * again" an unlimited mint. THE CHECK-IN CALENDAR GOES WITH IT for the same reason and
+     * one of its own: it pays in coins, and every seventh check-in pays 100, so a record that
+     * survived a wipe would put the table's top figure two taps away. All three saves, all
+     * three in-memory copies, the readout and the bar's dot.
      *
      * THE PANEL COMES DOWN FIRST, because the confirmation is two things the panel is standing
      * in front of: the rail repaints fully locked, which is evidence rather than a claim, and a
