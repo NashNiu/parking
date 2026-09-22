@@ -489,12 +489,14 @@ export class GameController extends Component {
      */
     private settings: Settings = defaultSettings();
     /**
-     * The coin balance, in memory, held exactly the way `progress` is: read once on boot,
-     * written only when it changes, never read back off the device again.
+     * The coin ledger, in memory, held exactly the way `progress` is: read once on boot,
+     * written only when it changes, never read back off the device again. The balance is not
+     * stored here -- `balance(this.wallet)` derives it fresh every time it is read, for the
+     * reason `core/wallet`'s own docblock argues. Coins now leave as well as arrive (a parking
+     * stall costs some), which is exactly what `backfillWallet` below is guarding against.
      *
      * It is a SECOND save under a second key, but not a second lifetime -- wiping the progress
      * wipes this too (`clearWalletText` says why, and it is the opposite call from settings).
-     * Nothing spends coins yet; the lobby's top bar is the only thing that reads the number.
      */
     private wallet: Wallet = emptyWallet();
 
