@@ -2891,7 +2891,9 @@ export class GameController extends Component {
      *
      * `clear` is how long the spot outside the mouth stays occupied by the car that just
      * left it -- the time it needs to drive its own length, handed over by `playDriveToSlot`.
-     * The arrival waits exactly that long and no longer.
+     * The arrival waits exactly that long and no longer: a body is 2.2 to 4.1 node units
+     * against a base speed of 14, so 0.16s for a small car and 0.29s for a big one, which
+     * is the same order as the growth it delays.
      *
      * IT USED TO START AT THE SAME MOMENT the departing car pulled away, on the argument that
      * a mouth standing visibly empty reads as a jam. The argument holds; the timing did not.
@@ -2917,15 +2919,20 @@ export class GameController extends Component {
             // Grown in place, not slid out of the tunnel: the arch is solid now and a slide
             // would pass through its front wall. See EMERGE_SCALE for why there is no position
             // left to animate.
-            // Hidden rather than merely small for the wait: at EMERGE_SCALE it is 55% of a
-            // car and plainly visible under the one still driving off, which is the whole
-            // defect. `active` also keeps it out of the raycast, which `activateCar` below
-            // would otherwise have to undo.
-            node.active = false;
-            node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE);
+            // Zero scale for the wait, NOT `active = false`. Deactivating the node was the
+            // first attempt and it never came back: the engine's ActionManager pauses the
+            // actions of a node that leaves the hierarchy, and the only thing that would
+            // have reactivated this one was the tween it had just paused. Reported as
+            // 停车场里后续的车没有显示出来 -- the count badge sitting over an empty mouth.
+            //
+            // Zero and not EMERGE_SCALE because 55% of a car is plainly visible under the
+            // one still driving off, which is the defect this delay exists for. A node at
+            // zero scale draws nothing and has no body to be picked, and `activateCar`
+            // below is about tappability rather than visibility either way.
+            node.setScale(0, 0, 0);
             tween(node)
                 .delay(clear / this.speed)
-                .call(() => { if (node.isValid) node.active = true; })
+                .call(() => { if (node.isValid) node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE); })
                 // A fresh Vec3, not `Vec3.ONE`: handing a shared engine constant to a tween
                 // as its target value is one in-place lerp away from corrupting it globally.
                 .to(EMERGE_TIME / this.speed, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
