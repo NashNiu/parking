@@ -1249,16 +1249,15 @@ test('the check-in claim button is gated on being claimable, not just repainted'
 });
 
 /**
- * The card and the payout read the landing count from the SAME function.
+ * The card's price and the payout's price come from the SAME function.
  *
- * `claim` records it, `nextReward` prices it, and `paintCheckin` highlights it; all three go
- * through `nextCount`. The failure this prevents is silent and slow: a card that computed the
- * running count itself -- from `days.length`, say -- would agree with the payout right up until
- * the two computations drifted, and would then highlight a cell the payout does not pay.
- * Inferring it from `nextReward` fails sooner and even more quietly -- the first two check-ins
- * of a month both pay 20.
+ * `claim` pays it and `nextReward` shows it in advance; both go through `nextCount`, so the two
+ * cannot silently disagree about which check-in of the month this is. The failure this prevents
+ * is a card that priced itself some other way -- from `c.days.length + 1`, say -- which would
+ * agree with the payout right up until a day got claimed twice in the same tick or a month
+ * rolled over, and would then show the player a figure `claim` does not pay.
  */
-test('claim, nextReward and the card all read the landing count from nextCount', () => {
+test('claim and nextReward both price through nextCount, and the card shows nextReward', () => {
   const core = readCore('checkin.ts');
   for (const fn of ['claim', 'nextReward']) {
     const at = core.indexOf('export function ' + fn + '(');
@@ -1268,28 +1267,34 @@ test('claim, nextReward and the card all read the landing count from nextCount',
     const body = next === -1 ? core.slice(at) : core.slice(at, next);
     expect(body).toContain('nextCount(c, today)');
   }
-  expect(readSrc('hud-view.ts')).toContain('const landing = nextDay(c, today);');
+  expect(readSrc('hud-view.ts')).toContain('nextReward(c, today)');
 });
 
 /**
- * The check-in card reads `c.day` for the day already claimed, NOT `nextDay`.
+ * The calendar's claimed mark on each cell comes from `isClaimed`, NOT from a count or a
+ * derivation of the view's own -- the v2 shape of the branch's one player-visible defect.
  *
- * THIS IS THE BRANCH'S ONE PLAYER-VISIBLE DEFECT, guarded because nothing else can see it. The
- * card ticked day 1 and nothing else after every claim, whatever day the streak had reached --
- * `nextDay` continues a streak only when `last` is yesterday, and after a claim `last` is today,
- * so it fell through to "start again" and answered 1. Six days in seven the card contradicted
- * the payout; on the seventh it showed a day that had just paid 100 as still to come.
+ * WHAT SHIPPED ONCE: the seven-cell card derived "claimed" from a streak position it computed
+ * itself, `c.day` once today had been claimed -- and that field answered wrong for the day just
+ * paid, because the surrounding expression fell into the branch meant for a broken streak. Six
+ * days in seven the card contradicted the payout; on the seventh it showed a day that had just
+ * paid 100 coins as still to come, and stayed wrong until the next midnight because nothing
+ * between then and now recomputed it.
  *
- * `logic/tests/checkin.test.ts` pins the core half -- that `nextDay` really does answer 1 in
- * that state -- but the defect was in the VIEW, in the expression wrapped around the call, and
- * `hud-view.ts` imports `cc` so no test in this repo can execute it. Reverting the fix would
- * leave every other check-in assertion green.
+ * THE CALENDAR HAS NO STREAK POSITION TO GET WRONG, but it has the same SHAPE of risk: a cell's
+ * claimed mark could be recomputed from `c.days.length`, or by reading `c.days` directly in the
+ * view instead of asking core's `isClaimed` -- either is a second copy of "was this day claimed",
+ * free to drift from the one `claim` actually recorded, which is exactly the failure mode that
+ * shipped. `logic/tests/checkin.test.ts` pins the core half, that `isClaimed` itself answers
+ * correctly; this guards that the view actually calls it, per cell, rather than deriving the
+ * answer some other way. `hud-view.ts` imports `cc` so no test in this repo can execute it.
  */
-test('the check-in card reads c.day, not nextDay, for the day already claimed', () => {
+test('the check-in card reads isClaimed per cell for the claimed mark, not a derived count', () => {
   const src = stripComments(readSrc('hud-view.ts'));
-  expect(src).toContain('const claimedThrough = live ? landing - 1 : c.day;');
-  // And the trap itself must not come back under any spelling.
-  expect(src).not.toContain('live ? landing - 1 : landing');
+  expect(src).toContain('const done = isClaimed(c, month, d);');
+  // And the trap itself -- a claimed mark the view worked out from `c.days` rather than asking
+  // core -- must not come back under any spelling, including `c.day` from the v1 card.
+  expect(src).not.toContain('c.day');
 });
 
 /**

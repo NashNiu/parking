@@ -2485,7 +2485,9 @@ export class GameController extends Component {
         if (!canClaim(this.checkin, today)) return;
         const { checkin, coins } = claimCheckin(this.checkin, today);
         this.checkin = checkin;
-        this.wallet = earn(this.wallet, 'checkin', coins, this.checkin.day, Date.now());
+        // `ref` is which check-in of the month this was, which is what the ledger panel prints.
+        // Read off the NEW save, so it counts the claim just recorded.
+        this.wallet = earn(this.wallet, 'checkin', coins, this.checkin.days.length, Date.now());
         saveCheckinText(serializeCheckin(this.checkin));
         saveWalletText(serializeWallet(this.wallet));
         this.home?.setCoins(balance(this.wallet));
@@ -2493,7 +2495,7 @@ export class GameController extends Component {
         this.paintCheckinDot();
         this.sfx?.play('tap');
         vibrate('light');
-        console.log(`[Game] check-in day ${this.checkin.day} paid ${coins} coins`);
+        console.log(`[Game] check-in day ${this.checkin.days.length} paid ${coins} coins`);
     }
 
     /** The unread dot on the bar's check-in entry: on exactly while a claim is waiting. */
