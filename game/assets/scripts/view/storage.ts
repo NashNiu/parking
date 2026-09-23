@@ -107,10 +107,10 @@ export function saveWalletText(text: string): void {
  *
  * The settings survive a wipe because their lifetime has nothing to do with the save's: a
  * player who clears their progress has not asked for the sound back on. Coins are the opposite
- * case, because they are DERIVED from the progress rather than independent of it -- clearing a
- * level is the only way one is ever earned. Keep them across a wipe and "clear -> wipe -> clear
- * again" is an unlimited mint, and the wipe is now two taps away on the settings card rather
- * than a three-second hold nobody ever found.
+ * case, because every one of them is PRODUCED BY playing -- clearing a level, claiming a
+ * check-in -- rather than held independently of it. Keep them across a wipe and "clear -> wipe
+ * -> clear again" is an unlimited mint, and the wipe is now two taps away on the settings card
+ * rather than a three-second hold nobody ever found.
  *
  * So the test is not "is this a different key" -- both of these are -- but "does this outlive
  * the thing that produced it". Settings do; coins cannot.
@@ -124,14 +124,21 @@ export function clearWalletText(): void {
 }
 
 /**
- * The check-in streak's key, and its lifetime is the WALLET's, not the settings'.
+ * The check-in calendar's key, and its lifetime is the WALLET's, not the settings'.
  *
  * `clearWalletText` above draws the line: a save outlives a wipe when its lifetime has nothing
  * to do with the player's progress, and does not when it is produced BY playing. Settings pass
- * that test -- clearing a save is not a request to turn the sound back on. A streak fails it
- * the same way coins do: it is a record of turning up to play, it pays out in coins, and coins
- * are wiped. Keeping a seven-day streak across a wipe would also hand a fresh save the 100-coin
- * day, which is the one figure in the table that is meant to take a week to reach.
+ * that test -- clearing a save is not a request to turn the sound back on. A check-in fails it
+ * the same way coins do: it is a record of turning up to play, and it pays out in coins, so it
+ * goes when they do.
+ *
+ * THE EXPLOIT SURVIVED THE STREAK-TO-CALENDAR REWRITE, only re-indexed. Under the old seven-day
+ * streak, a save sitting at day 6 was one wipe away from the 100-coin day -- clear the save,
+ * claim the jackpot, two taps apart. `days` replaced the streak position with a running count of
+ * the month's claims, but the reward table still pays 100 on the 7th, 14th, 21st and 28th
+ * check-in, so a save sitting at a count of 6, 13, 20 or 27 is exactly as close to that payout as
+ * the old save at day 6 was. Keeping `days` across a wipe would hand a fresh save that count for
+ * free; wiping it with the wallet is what keeps the jackpot a week away rather than a wipe away.
  */
 const CHECKIN_KEY = 'parking.checkin';
 
