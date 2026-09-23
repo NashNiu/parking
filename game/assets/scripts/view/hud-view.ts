@@ -531,14 +531,20 @@ const PROMPT_SHADOW_DROP = 10;
 const CAL_COLS = 7;
 const CAL_ROWS = 6;
 /**
- * The cell and its gap are DERIVED from the page they have to fill, not picked. `CARD_PAGE_W`
+ * The cell's WIDTH is DERIVED from the page it has to fill, not picked. `CARD_PAGE_W`
  * (1036) is the usable width; seven cells at 124 with six 12-unit gaps come to
  * `7 * 124 + 6 * 12 = 940`, which is 940 / 1036 = 91% of the page and leaves 48 either side --
  * a real margin rather than the 470-wide grid (45% of the page) the old 62/6 pair drew.
+ *
+ * The cell's HEIGHT is a SEPARATE number, and has to be: a square cell cannot satisfy both the
+ * page's width and a sane card height at once (`CHK_H` below spells out the budget that forces
+ * this). So the grid is slightly wide rather than square -- which is what a month calendar
+ * normally looks like anyway.
  */
-const CAL_CELL = 124;
+const CAL_CELL_W = 124;
+const CAL_CELL_H = 104;
 const CAL_GAP = 12;
-/** A two-digit day in a 124 cell, in line with the file's 50-54 body-text range (see
+/** A two-digit day in a 124x104 cell, in line with the file's 50-54 body-text range (see
  *  `WIN_TALLY_SIZE` / `PROMPT_COST_SIZE`) rather than the 24 that undercut all of it. */
 const CAL_DAY_SIZE = 52;
 /** The weekday header row, above the grid. */
@@ -546,18 +552,36 @@ const CAL_HEAD = ['日', '一', '二', '三', '四', '五', '六'];
 /** A step below the day numbers, the way every secondary label in this file sits under its
  *  primary. */
 const CAL_HEAD_SIZE = 44;
-/** How far the header text sits from the grid. This has to grow with the text it spaces --
- *  26 was sized for a 20pt header, not the 44pt one above it. */
-const CAL_HEAD_DY = 56;
 
 /**
- * The card's height: the head row twice (weekday header and month label), the grid, and the
- * button's own clearance below it -- see CAL_ROWS for why the grid is always sized for six.
+ * The card's height, built from the same terms `buildCard` will later subtract back out --
+ * see its `pageH = h - CARD_HEAD - CARD_RIM`. A page-content total that does not visibly reduce
+ * to that subtraction is exactly how this went wrong the first time (a bare `+ 190` that nobody
+ * could check).
  *
- * `56 * 2 + 6 * 124 + 5 * 12 + 190 = 1106`, which sits just under `WIN_H` (1132) -- a card
- * height this canvas already handles.
+ * The PAGE holds, top to bottom: `CAL_PAD` clearance, the month label's line box, the gap to
+ * the weekday header, the header's own line box, the gap to the grid, the grid itself, and
+ * `CAL_PAD` clearance again at the bottom.
+ *
+ *     CAL_PAD       = 24   -- page padding, top and bottom
+ *     CAL_LINE      = 56   -- line box for a CAL_HEAD_SIZE (44pt) label, 1.2x rounded up
+ *     CAL_MONTH_GAP = 12   -- between the month label and the weekday row
+ *     CAL_HEAD_GAP  = 16   -- between the weekday row and the grid
+ *
+ *     CAL_GRID_H = CAL_ROWS * CAL_CELL_H + (CAL_ROWS - 1) * CAL_GAP        = 6*104 + 5*12 = 684
+ *     CHK_PAGE_H = CAL_PAD*2 + CAL_LINE*2 + CAL_MONTH_GAP + CAL_HEAD_GAP + CAL_GRID_H
+ *                = 48 + 112 + 12 + 16 + 684 = 872
+ *     CHK_H      = CHK_PAGE_H + CARD_HEAD + CARD_RIM = 872 + 210 + 42 = 1124
+ *
+ * 1124 sits under `WIN_H` (1132) -- a card height this canvas already handles.
  */
-const CHK_H = CAL_HEAD_DY * 2 + CAL_ROWS * CAL_CELL + (CAL_ROWS - 1) * CAL_GAP + 190;
+const CAL_PAD = 24;
+const CAL_LINE = 56;
+const CAL_MONTH_GAP = 12;
+const CAL_HEAD_GAP = 16;
+const CAL_GRID_H = CAL_ROWS * CAL_CELL_H + (CAL_ROWS - 1) * CAL_GAP;
+const CHK_PAGE_H = CAL_PAD * 2 + CAL_LINE * 2 + CAL_MONTH_GAP + CAL_HEAD_GAP + CAL_GRID_H;
+const CHK_H = CHK_PAGE_H + CARD_HEAD + CARD_RIM;
 const CHK_CELL_R = 28;
 
 /**
@@ -589,8 +613,10 @@ const CHK_DAY_INK = new Color(122, 112, 92, 255);
  * face. Lengths and angles follow from those three points and are written out as literals below
  * rather than derived, because the shape is a drawing and not a calculation.
  *
- * `CHK_TICK_W` has no user outside this cell, so it carries the same doubling `CAL_CELL` did
- * (62 -> 124) rather than a second constant sitting beside it: 12 -> 24.
+ * `CHK_TICK_W` has no user outside this cell, so it carries the same doubling `CAL_CELL_W` did
+ * (62 -> 124) rather than a second constant sitting beside it: 12 -> 24. The cell's height has
+ * since split off to 104 (see `CAL_CELL_H`), but the tick was sized off the width and still
+ * reads fine on the shorter axis.
  */
 const CHK_TICK_W = 24;
 const CHK_TICK_INK = new Color(72, 150, 76, 255);
@@ -636,7 +662,7 @@ const LED_SUM_SIZE = 50;
  *  file, which is the right register for the one number this whole card exists to show. */
 const LED_BAL_SIZE = 90;
 /** Margin from the page edge for the date and amount columns -- a real inset, the same margin
- *  the calendar grid leaves either side of itself (see `CAL_CELL`), not the 18 units
+ *  the calendar grid leaves either side of itself (see `CAL_CELL_W`), not the 18 units
  *  `-CARD_W / 2 + 60` left once `CARD_W` stood in for `CARD_PAGE_W`. */
 const LED_INSET = 48;
 /** Width budgeted for the fixed `MM-DD` date column before `why` starts -- see the derivation
@@ -1691,15 +1717,23 @@ export class HudView {
         const { page, close } = this.buildCard(panel, 'ChkCard', CHK_H, '签到');
         this.chkClose = close;
 
+        // Positioned DOWNWARD FROM THE PAGE'S OWN TOP EDGE, not up from the grid's centre --
+        // see CHK_H's docblock for why the grid's own half-height is not the page's. `pageTop`
+        // is that top edge in the page's local coordinates, where everything below is placed.
+        const pageTop = CHK_PAGE_H / 2;
+        const monthY = pageTop - CAL_PAD - CAL_LINE / 2;
+        const headY = monthY - CAL_LINE / 2 - CAL_MONTH_GAP - CAL_LINE / 2;
+        const gridTop = headY - CAL_LINE / 2 - CAL_HEAD_GAP;
+
+        const gridW = CAL_COLS * CAL_CELL_W + (CAL_COLS - 1) * CAL_GAP;
+
         // The weekday header, once. It never changes, so it is built here and never repainted.
-        const gridW = CAL_COLS * CAL_CELL + (CAL_COLS - 1) * CAL_GAP;
-        const headY = (CAL_ROWS * CAL_CELL + (CAL_ROWS - 1) * CAL_GAP) / 2 + CAL_HEAD_DY;
         for (let i = 0; i < CAL_COLS; i++) {
             const l = makeLabel(page, `wd${i}`, CAL_HEAD_SIZE, headY);
             l.color = CHK_DAY_INK;
             l.string = CAL_HEAD[i];
             l.node.setPosition(
-                -gridW / 2 + CAL_CELL / 2 + i * (CAL_CELL + CAL_GAP), headY, 0);
+                -gridW / 2 + CAL_CELL_W / 2 + i * (CAL_CELL_W + CAL_GAP), headY, 0);
         }
 
         // ALL 42 cells are built, and `paintCheckin` hides the ones this month does not reach.
@@ -1710,13 +1744,14 @@ export class HudView {
         for (let i = 0; i < CAL_COLS * CAL_ROWS; i++) {
             const col = i % CAL_COLS;
             const row = Math.floor(i / CAL_COLS);
-            const x = -gridW / 2 + CAL_CELL / 2 + col * (CAL_CELL + CAL_GAP);
-            const y = headY - CAL_HEAD_DY - CAL_CELL / 2 - row * (CAL_CELL + CAL_GAP);
+            const x = -gridW / 2 + CAL_CELL_W / 2 + col * (CAL_CELL_W + CAL_GAP);
+            const y = gridTop - CAL_CELL_H / 2 - row * (CAL_CELL_H + CAL_GAP);
             this.chkCells.push(this.buildCheckinCell(page, i, x, y));
         }
 
-        // The month, under the title. Repainted, because it changes.
-        this.chkMonthLabel = makeLabel(page, 'month', CAL_HEAD_SIZE, headY + CAL_HEAD_DY);
+        // The month, above the weekday header, under the page's own top padding. Repainted,
+        // because it changes.
+        this.chkMonthLabel = makeLabel(page, 'month', CAL_HEAD_SIZE, monthY);
         this.chkMonthLabel.color = CHK_DAY_INK;
 
         this.chkClaim = this.buildCardBtn(panel, {
@@ -1736,18 +1771,18 @@ export class HudView {
     ): { face: Node; rim: Node; tick: Node; day: Label; node: Node } {
         const cell = new Node(`cal${i}`);
         cell.layer = Layers.Enum.UI_2D;
-        cell.addComponent(UITransform).setContentSize(CAL_CELL, CAL_CELL);
+        cell.addComponent(UITransform).setContentSize(CAL_CELL_W, CAL_CELL_H);
         page.addChild(cell);
         cell.setPosition(x, y, 0);
 
         // The rim is a slightly larger plate BEHIND the face, which is how every raised thing in
         // this project gets an edge -- there is no stroke primitive and this needs none.
         const rim = roundedSprite(
-            'rim', CAL_CELL + CHK_NEXT_RIM_W * 2, CAL_CELL + CHK_NEXT_RIM_W * 2,
+            'rim', CAL_CELL_W + CHK_NEXT_RIM_W * 2, CAL_CELL_H + CHK_NEXT_RIM_W * 2,
             CHK_NEXT_RIM, CHK_CELL_R + CHK_NEXT_RIM_W,
         );
         cell.addChild(rim);
-        const face = roundedSprite('face', CAL_CELL, CAL_CELL, CHK_SOON_FACE, CHK_CELL_R);
+        const face = roundedSprite('face', CAL_CELL_W, CAL_CELL_H, CHK_SOON_FACE, CHK_CELL_R);
         cell.addChild(face);
 
         const day = makeLabel(face, 'day', CAL_DAY_SIZE, 0);
