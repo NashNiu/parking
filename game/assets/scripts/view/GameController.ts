@@ -2257,6 +2257,8 @@ export class GameController extends Component {
                 passengers: this.levelPassengers,
                 unlocks: this.core!.parking.unlocksUsed(),
                 stars: rating,
+                earned,
+                spent: this.spentThisLevel,
             }, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.

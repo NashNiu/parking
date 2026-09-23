@@ -27,6 +27,13 @@ export interface WinStats {
     unlocks: number;
     /** The rating, 1 to STAR_MAX. */
     stars: number;
+    /**
+     * Coins this clear paid. 0 for a replay that beat nothing -- see `showWin`'s tally, which
+     * is where that 0 has to be explained rather than merely shown.
+     */
+    earned: number;
+    /** Coins spent opening stalls during this run. */
+    spent: number;
 }
 
 /**
@@ -2766,12 +2773,29 @@ export class HudView {
         }
 
         this.winTally[0].string = `送达乘客 ${stats.passengers} 人`;
-        // Named as a cost, and only when there was one. "解锁车位 0 个" is a line about
-        // something that did not happen, and the star row above has already said as much.
+        // THE REPLAY CASE IS WHY THIS LINE CHANGED. The payout is a difference against the
+        // level's previous best, so re-clearing a level already three-starred pays nothing --
+        // correct, and the only thing stopping this being a coin farm, but baffling on a card
+        // that says nothing about it. The player's attention is here, seconds after the clear.
+        //
+        // MERGED INTO THIS LINE RATHER THAN GIVEN ITS OWN. See WIN_H's layout arithmetic: line
+        // two's box ends at -186 and the answers begin at -200, so a third line at the tally's
+        // own pitch would sit on top of the buttons. This line already means "what this run
+        // cost"; coins are part of that.
+        //
+        // Every branch below fits CARD_PAGE_W (1036) at WIN_TALLY_SIZE (54) -- about 19 full-
+        // width characters. Re-measure before rewording.
         const lost = STAR_MAX - stats.stars;
-        this.winTally[1].string = stats.unlocks === 0
-            ? '没有解锁车位'
-            : `解锁车位 ${stats.unlocks} 个 · 少 ${lost} 颗星`;
+        this.winTally[1].string = stats.unlocks > 0
+            // Opening stalls is the expensive case and already needs three clauses, so the
+            // payout is left to the ledger here -- a fourth clause runs past the line. A replay
+            // that also bought stalls is the rarest combination on this card.
+            ? `开 ${stats.unlocks} 个车位 · 少 ${lost} 星 · ${stats.spent} 币`
+            : stats.earned > 0
+                ? `没有解锁车位 · 金币 +${stats.earned}`
+                // THE ONE BRANCH THIS WHOLE CHANGE IS FOR. A 0 payout with no explanation reads
+                // as a bug; naming the reason turns it into a rule the player can play around.
+                : '已是最好成绩 · 无金币奖励';
 
         scrim.active = true;
         // Past every seat chip: chips are appended as cars park, so they are later siblings
