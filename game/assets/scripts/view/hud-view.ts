@@ -2915,7 +2915,7 @@ export class HudView {
             // that also bought stalls is the rarest combination on this card.
             ? `开 ${stats.unlocks} 个车位 · 少 ${lost} 星 · ${stats.spent} 币`
             : stats.earned > 0
-                ? `没有解锁车位 · 金币 +${stats.earned}`
+                ? `金币 +${stats.earned}`
                 // THE ONE BRANCH THIS WHOLE CHANGE IS FOR. A 0 payout with no explanation reads
                 // as a bug; naming the reason turns it into a rule the player can play around.
                 : '已是最好成绩 · 无金币奖励';
