@@ -326,8 +326,14 @@ export class ParkingView {
 
     /**
      * Whether `local` (parkingRoot-local, which is board-local: the root sits at the
-     * origin) is inside the next locked stall. Only that one is a target -- see
-     * `drawStall`.
+     * origin) is inside the next locked stall.
+     *
+     * NOTHING CALLS THIS NOW. It backed a direct-purchase path -- tap the locked stall on
+     * the board, open it on the spot -- that was removed once a stall stopped being free:
+     * the bay is drawn in merged meshes with no surface to show a price, grey out an
+     * unaffordable one, or explain a shortfall. The unlock prompt is where buying a stall
+     * happens today (see GameController's `hitsUnlockPrompt` / `unlockNextSlot`). Left here,
+     * unreferenced, rather than deleted -- see `nextLocked` just above.
      */
     hitsNextLocked(local: Vec3): boolean {
         const i = this.nextLocked();
@@ -339,7 +345,7 @@ export class ParkingView {
     }
 
     /**
-     * Redraw stall `index` as open, and move the play triangle to the next locked one.
+     * Redraw stall `index` as open, and the stall after it if one is still locked.
      * `index` is what ParkingSystem.unlock returned, so the two counts cannot drift.
      */
     openSlot(index: number): void {

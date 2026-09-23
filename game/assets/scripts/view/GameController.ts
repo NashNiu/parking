@@ -2996,7 +2996,8 @@ export class GameController extends Component {
     }
 
     /**
-     * Open the next locked stall, on a tap on it.
+     * Open the next locked stall, in answer to the unlock prompt's own button -- the only
+     * caller left now that the board itself has no way to sell one.
      *
      * CHARGED NOW, and the charge comes FIRST. `spend` returns null when the balance will not
      * cover it, and this returns on that -- so a refused payment cannot open a stall. Doing it
