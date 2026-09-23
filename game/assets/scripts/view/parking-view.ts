@@ -111,15 +111,30 @@ const LOCK_KEY_Z = 0.15;
  * is what fixes `LOCK_BODY_Y`. The old lock placed body and shackle at fixed offsets and
  * came out sitting high on the pad.
  *
- * The shackle's outer diameter (2 * (R + TUBE) = 0.35) is kept clearly narrower than the
- * body's 0.44, or the arch springs from the body's very corners and stops reading as a
- * shackle.
+ * TUBE went 0.04 -> 0.065 and R went 0.135 -> 0.15 in the pass that also bolded the
+ * keyhole (see below): at GLYPH_SCALE 1.25 in a ~30px-wide stall, a 0.04 tube is a 3px
+ * stroke, and the shackle -- the one feature whose silhouette actually says "padlock" --
+ * was reading as a smudge, not an arch. Thickening the tube alone would have filled the
+ * arch's own opening solid (a filled arch reads as a lump, not a lock), so R grew with
+ * it: the inner opening `2 * (R - TUBE)` only drops from 0.19 to 0.17, still a clearly
+ * open hole rather than a disc.
+ *
+ * The shackle's outer diameter (2 * (R + TUBE) = 0.43) is kept narrower than the body's
+ * 0.44 -- barely, now, at a 0.01 margin -- or the arch springs from the body's very
+ * corners and stops reading as a shackle. There is no room left in this margin: a future
+ * pass that wants the shackle bolder still has to widen the body too.
  */
 const LOCK_BODY_W = 0.44;
 const LOCK_BODY_H = 0.36;
-const LOCK_BODY_R = 0.10;
-const LOCK_SHACKLE_R = 0.135;
-const LOCK_SHACKLE_TUBE = 0.04;
+/**
+ * 0.10 on this 0.44 x 0.36 body read as a pill at small size -- round enough that the
+ * body blurred into the arch above it instead of separating from it. 0.07 keeps the
+ * corners rounded (a padlock body, not a box) but square enough to hold its own shape
+ * next to the shackle.
+ */
+const LOCK_BODY_R = 0.07;
+const LOCK_SHACKLE_R = 0.15;
+const LOCK_SHACKLE_TUBE = 0.065;
 const LOCK_BODY_Y = -(LOCK_SHACKLE_R + LOCK_SHACKLE_TUBE) / 2;
 const LOCK_SHACKLE_Y = LOCK_BODY_Y + LOCK_BODY_H / 2;
 
@@ -344,9 +359,18 @@ export class ParkingView {
         // Keyhole: a disc over a tapering slot, in the PAD's own colour so it reads as
         // punched through the body rather than painted on it. One merged mesh -- the two
         // parts share a colour and a depth, so they share a draw call.
+        //
+        // The disc grew from 0.09 to 0.16 (20% -> 36% of LOCK_BODY_W) and the slot from
+        // 0.035 x 0.075 to 0.06 x 0.12: at 30px on screen the old sizes were a detail
+        // nobody could resolve, and the keyhole is the one shape left that still says
+        // "lock" once the shackle and body are too small to read as anything but bold
+        // mass. Both offsets are the old ones scaled by the disc's own growth (16/9), so
+        // the slot still hangs from the disc rather than floating clear of it or
+        // swallowing it -- the combined shape runs from -0.14 to 0.1067 against the
+        // body's own half-height of 0.18, clearing it with margin on both ends.
         const key: MeshPart[] = [
-            roundedSlabPart(0.09, 0.09, 0.06, 0.045, 0, 0.015),
-            boxPart(0.035, 0.075, 0.06, 0, -0.045),
+            roundedSlabPart(0.16, 0.16, 0.06, 0.08, 0, 0.0267),
+            boxPart(0.06, 0.12, 0.06, 0, -0.08),
         ];
         const keyhole = makeMerged('lockkey', key, PAD_LOCKED);
         keyhole.setPosition(0, LOCK_BODY_Y, LOCK_KEY_Z);
