@@ -297,30 +297,17 @@ const PROMPT_BTN_LIFT = 13;
  * A dark scrim rather than a light one: the board underneath is pale and the card is pale.
  */
 /**
- * 902: CARD_HEAD 210 + a 650-tall page + CARD_RIM 42. The title is not part of this stack --
- * it sits on the rim -- so the page holds four things where it held five.
- *
- * Laid out in PAGE coordinates, the page spanning y -325..325, each line's box being 1.2x
- * its font size (`makeLabel`):
- *
- *   sub    y  230 +/- 35  ->  195..265   (60 off the page's top edge)
- *   button y   30 +/- 100 -> -70..130    (65 clear of the sub)
- *   cost   y -125 +/- 30  -> -155..-95   (25 clear of the button)
- *   replay y -240 +/- 35  -> -275..-205  (60 clear of the cost, 50 off the bottom)
- *
- * The replay's HIT BOX is TEXT_BTN_H 130 rather than its 70-tall line box, so it reaches
- * -305..-175 -- 20 clear of the cost's box above it and 20 off the page's bottom edge.
- *
- * The close button hangs off the CARD's corner, well above the page, so nothing in this stack
- * shares a band with it -- which is most of why it moved.
+ * PROMPT_H and the page's three y's (button, cost line, replay) are declared further down,
+ * beside TEXT_BTN_H and PROMPT_COST_SIZE -- the terms they are built from -- rather than here.
+ * See the block just above `buildUnlockPrompt` for the arithmetic, in CHK_H's style.
  */
-const PROMPT_H = 902;
-/** Where each line sits, in page coordinates. The arithmetic is under PROMPT_H. */
-const PROMPT_SUB_Y = 230;
+/**
+ * 58pt, the same size the unlock prompt's own sub line used to carry before it was folded into
+ * the title (see `buildUnlockPrompt`). LoseSub is the only line left at this size, so this
+ * constant now styles one card instead of two -- kept rather than renamed, since a rename here
+ * is a diff `git blame` on LoseSub would have to walk through for no behaviour change.
+ */
 const PROMPT_SUB_SIZE = 58;
-const PROMPT_BTN_Y = 30;
-const PROMPT_COST_Y = -125;
-const PROMPT_REPLAY_Y = -240;
 
 /**
  * The settings panel: the same card, with its three answers BELOW it rather than on it.
@@ -856,6 +843,50 @@ const WIN_TALLY_SIZE = 54;
 const TEXT_BTN_SIZE = 58;
 const TEXT_BTN_W = 440;
 const TEXT_BTN_H = 130;
+
+/**
+ * PROMPT_H, built the way CHK_H is a few hundred lines up: named parts of the PAGE, plus the
+ * chrome `buildCard` subtracts back off (`pageH = h - CARD_HEAD - CARD_RIM`, 210 + 42 = 252).
+ * It has to be re-derived here rather than left as a total someone chose to look right, because
+ * that is exactly how the check-in card shipped broken twice before a handset caught it.
+ *
+ * The page now holds, top to bottom: PROMPT_PAD clearance, the button (PROMPT_BTN_H), a gap,
+ * the cost line (a PROMPT_COST_SIZE label's line box), a gap, the replay text button's tap
+ * target (TEXT_BTN_H, around a TEXT_BTN_SIZE label), and PROMPT_PAD again. There is no sub
+ * line any more -- the state it used to name is the card's title now (see `buildUnlockPrompt`).
+ *
+ *     PROMPT_PAD       = 40   -- page padding, top and bottom
+ *     PROMPT_BTN_GAP   = 24   -- between the button and the cost line
+ *     PROMPT_COST_LINE = 60   -- line box for a PROMPT_COST_SIZE (50pt) label, 1.2x exactly
+ *     PROMPT_COST_GAP  = 20   -- between the cost line and the replay button
+ *
+ *     PROMPT_PAGE_H = PROMPT_PAD*2 + PROMPT_BTN_H + PROMPT_BTN_GAP + PROMPT_COST_LINE
+ *                     + PROMPT_COST_GAP + TEXT_BTN_H
+ *                   = 80 + 200 + 24 + 60 + 20 + 130 = 514
+ *     PROMPT_H      = PROMPT_PAGE_H + CARD_HEAD + CARD_RIM = 514 + 210 + 42 = 766
+ *
+ * Laid out in PAGE coordinates, the page spanning y -257..257:
+ *
+ *   button y  117 +/- 100 ->  217..17     (40 off the page's top edge)
+ *   cost   y  -37 +/-  30 ->   -7..-67    (24 clear of the button)
+ *   replay y -152 +/-  65 ->  -87..-217   (20 clear of the cost, 40 off the page's bottom edge)
+ *
+ * The replay's HIT BOX is TEXT_BTN_H rather than its own line box, same as before.
+ *
+ * The close button hangs off the CARD's corner, well above the page, so nothing in this stack
+ * shares a band with it.
+ */
+const PROMPT_PAD = 40;
+const PROMPT_BTN_GAP = 24;
+const PROMPT_COST_LINE = 60;
+const PROMPT_COST_GAP = 20;
+const PROMPT_PAGE_H = PROMPT_PAD * 2 + PROMPT_BTN_H + PROMPT_BTN_GAP + PROMPT_COST_LINE
+    + PROMPT_COST_GAP + TEXT_BTN_H;
+const PROMPT_H = PROMPT_PAGE_H + CARD_HEAD + CARD_RIM;
+/** Where each line sits, in page coordinates, derived from PROMPT_PAGE_H above. */
+const PROMPT_BTN_Y = PROMPT_PAGE_H / 2 - PROMPT_PAD - PROMPT_BTN_H / 2;
+const PROMPT_COST_Y = PROMPT_BTN_Y - PROMPT_BTN_H / 2 - PROMPT_BTN_GAP - PROMPT_COST_LINE / 2;
+const PROMPT_REPLAY_Y = PROMPT_COST_Y - PROMPT_COST_LINE / 2 - PROMPT_COST_GAP - TEXT_BTN_H / 2;
 
 /**
  * The carousel-speed button: a round plate that sits in the CAROUSEL's bottom-left corner,
@@ -1610,17 +1641,12 @@ export class HudView {
         // later siblings than anything built in the constructor. Same reason as the banner.
         scrim.setSiblingIndex(this.canvas.children.length - 1);
         this.syncGear();
-        // Three facts, because any two of them read as a smaller decision than it is: what this
-        // costs, how many are left, and what it takes off the rating. At one star the rating has
-        // bottomed out and there is nothing left to lose, so saying so is more honest than
-        // repeating a threat that no longer applies.
-        //
-        // When it cannot be afforded the price line becomes the SHORTFALL instead. A greyed
-        // button with the ordinary price above it says what is on offer but not why it is out of
-        // reach, and the player is one tap from concluding the game is broken.
-        const tail = cost.losesStar ? ' · 少一颗星' : ' · 星级已到底';
+        // This line carries the price when the offer stands, and it has to carry the SHORTFALL
+        // instead when it does not: a greyed button with no reason beside it is a player one tap
+        // from concluding the game is broken, so the label survives the row it used to share
+        // with the star warning and the remaining-stalls count specifically to keep saying why.
         this.promptCost!.string = cost.affordable
-            ? `还能开 ${cost.left} 个 · ${cost.price} 币${tail}`
+            ? `消耗 ${cost.price} 金币`
             : `金币不足 · 还差 ${cost.price - this.promptBalance}`;
         const btn = this.promptBtn!;
         btn.getChildByName('face')!.getComponent(Sprite)!.color =
@@ -2161,15 +2187,14 @@ export class HudView {
         //
         // The title NAMES THE STATE, and it is on the card's rim. "车位堵住了" was wrong twice
         // over: the stalls are not blocked, they are full, and a player who reads it goes
-        // looking for something to unblock. What has actually happened is that no car on the
-        // bay can take a passenger any more, and the sub line says what to do about it.
+        // looking for something to unblock. "没有车能上客了" fixed that but described the
+        // CONSEQUENCE (no car can board) rather than the state itself, and needed a sub line
+        // underneath to say what was actually true -- that every stall was taken. "车位已满"
+        // says the state directly, in four characters, which is what let the sub line go: the
+        // button below it is self-explanatory once the title names the problem it answers.
         const { page, close } = this.buildCard(
-            scrim, 'UnlockPanel', PROMPT_H, '没有车能上客了',
+            scrim, 'UnlockPanel', PROMPT_H, '车位已满',
         );
-
-        const sub = makeLabel(page, 'PromptSub', PROMPT_SUB_SIZE, PROMPT_SUB_Y);
-        sub.color = CARD_INK;
-        sub.string = '开一个车位，让新的车进来';
 
         const btn = this.buildCardBtn(page, {
             x: 0, y: PROMPT_BTN_Y, w: PROMPT_BTN_W, text: '解锁车位',
