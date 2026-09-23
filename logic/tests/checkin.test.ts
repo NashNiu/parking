@@ -104,6 +104,19 @@ test('claim does not mutate the save it is given', () => {
     expect(before).toEqual(at('2026-09', [1]));
 });
 
+/**
+ * 已经签过的这天再 claim 一次,付的是 0,存档也原样退回。nextCount 在这天上报的是
+ * days.length(供卡片说"刚领的是第几天"用),但 claim 本身绝不能把它当新奖励发——
+ * 存档不变而硬币照付,循环调用就是一台不设防的印钞机。canClaim 是今天唯一挡在
+ * 这条路前面的检查,这个用例钉住的是 claim 自己在被绕过时也不会漏钱。
+ */
+test('claim on an already-claimed day pays nothing and leaves the save unchanged', () => {
+    const before = at('2026-09', [1, 2, 3]);
+    const r = claim(before, '2026-09-03');
+    expect(r.coins).toBe(0);
+    expect(r.checkin).toEqual(before);
+});
+
 test('the month rolls over on the 31st without overflowing', () => {
     const r = claim(at('2026-01', [30]), '2026-01-31');
     expect(r.checkin.days).toEqual([30, 31]);

@@ -1,7 +1,7 @@
 import { Node, Color, Vec3, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
 import { flatMaterial } from './materials';
 import {
-    makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, triPart, MeshPart,
+    makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, MeshPart,
 } from './slabs';
 import { SHADOW_Z } from './scene-stage';
 import { LIFT, shadowThrow } from './shadow';
@@ -176,20 +176,6 @@ const LOCK_SHACKLE = new Color(150, 162, 194);
 /** Warning tint for `pulse`: amber, not red -- a full bay is a wait, not a mistake. */
 const PULSE = new Color(255, 176, 64);
 
-/**
- * The play triangle under the padlock on the next stall a tap would open. Sized and placed
- * in the same reference units as the padlock (see GLYPH_REF_W), so it scales with it.
- *
- * A triangle rather than a word because the board draws meshes, not text -- everything up
- * here is procedural geometry. It is the same shape the reference art puts on its unlock
- * button, which is what makes it read as "tap this" rather than as decoration.
- */
-const CUE_W = 0.19;
-const CUE_H = 0.20;
-const CUE_Y = -0.30;
-const CUE = new Color(255, 255, 255, 255);
-
-
 export class ParkingView {
     private positions: Vec3[] = [];
     /** The bay panel, kept so `pulse` can draw the eye to it. */
@@ -256,10 +242,14 @@ export class ParkingView {
      * first -- redrawing over the old slabs would leave two rims fighting for the same
      * depth.
      *
-     * The NEXT stall to open is the only locked one that gets the play triangle. Unlocking
-     * runs in order (see ParkingSystem.unlock: `parked.length` is the unlocked count, so
-     * the stall that opens is always the leftmost locked one), and putting the affordance
-     * on any other stall would promise something the tap does not do.
+     * The padlock draws on every locked stall -- a stall must still read as locked -- but
+     * there is no "tap this" cue on top of it any more. There used to be one (a play
+     * triangle on the next stall in line), back when opening a stall was free. A stall now
+     * costs coins and rising, so opening one needs a price shown, a greyed-out state when
+     * it is unaffordable, and a shortfall message -- all things the bay's merged meshes
+     * have no room for. That surface is the unlock prompt (see GameController.unlockNextSlot
+     * and its caller), not the board, so the board no longer advertises a tap it cannot
+     * itself answer.
      */
     private drawStall(i: number): void {
         const { w: slotW, h: slotH } = this.box;
@@ -323,13 +313,6 @@ export class ParkingView {
         const keyhole = makeMerged('lockkey', key, PAD_LOCKED);
         keyhole.setPosition(0, LOCK_BODY_Y, LOCK_KEY_Z);
         lock.addChild(keyhole);
-
-        if (i !== this.open) return;
-        // Play triangle under the padlock: this is the one a tap opens. Three points and a
-        // merged mesh rather than a sprite, like everything else on the board.
-        const cue = makeMerged(`unlock-cue-${i}`, [triPart(CUE_W, CUE_H, 0.06, 0, CUE_Y)], CUE);
-        cue.setPosition(pos.x, pos.y, LOCK_KEY_Z);
-        root.addChild(cue);
     }
 
     /**

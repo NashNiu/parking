@@ -144,6 +144,14 @@ export function isClaimed(c: Checkin, month: string, day: number): boolean {
  * corrupt on the next boot, costing the player the whole month's record over a call that
  * should have been a no-op.
  *
+ * And a no-op PAYS NOTHING. `nextCount` reports `days.length` for a day already claimed --
+ * correct for the card, which needs to say which day was paid after the fact -- but `claim`
+ * itself must not treat that as a fresh reward: with the save unchanged, a caller that skipped
+ * `canClaim` and called this in a loop would mint coins for free, forever. There is exactly one
+ * caller today (`GameController.claimCheckinToday`) and it does gate on `canClaim`, but that is
+ * exactly the kind of rule this file has learned not to lean on a single caller for -- see
+ * `canClaim`'s own callers for the same argument made about the duplicate-day check above.
+ *
  * The days are kept SORTED rather than appended in claim order. The calendar draws from this
  * array, and a clock wound backwards or a hand-edited save can otherwise leave it out of order.
  */
@@ -151,7 +159,10 @@ export function claim(c: Checkin, today: string): { checkin: Checkin; coins: num
     const month = monthOf(today);
     const d = dayOf(today);
     const kept = month === c.month ? c.days : [];
-    const days = kept.includes(d) ? kept.slice() : kept.concat(d).sort((a, b) => a - b);
+    if (kept.includes(d)) {
+        return { checkin: { version: CHECKIN_VERSION, month, days: kept.slice() }, coins: 0 };
+    }
+    const days = kept.concat(d).sort((a, b) => a - b);
     return {
         checkin: { version: CHECKIN_VERSION, month, days },
         coins: CHECKIN_REWARDS[(nextCount(c, today) - 1) % CHECKIN_REWARDS.length],

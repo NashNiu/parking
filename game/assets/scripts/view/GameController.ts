@@ -2806,22 +2806,14 @@ export class GameController extends Component {
         const localHit = new Vec3();
         Vec3.transformMat4(localHit, worldHit, inv);
 
-        // The parking bay comes first, and not just for tidiness: it sits ABOVE the lot, so
-        // a tap that lands on a stall cannot be a tap on a car, and answering it here means
-        // `pickCar` never sees it. The hit has to be re-expressed in the BOARD's frame --
-        // `localHit` is gridRoot-local and gridRoot is offset down by the lot's half-height,
-        // while the bay's stalls are positioned in parkingRoot, which sits at the board's
-        // origin.
-        if (this.boardRoot) {
-            const bInv = new Mat4();
-            Mat4.invert(bInv, this.boardRoot.worldMatrix);
-            const boardHit = new Vec3();
-            Vec3.transformMat4(boardHit, worldHit, bInv);
-            if (this.parkingView.hitsNextLocked(boardHit)) {
-                this.unlockNextSlot();
-                return;
-            }
-        }
+        // There used to be a direct-purchase path here: a tap on the locked stall itself,
+        // re-expressed in the board's frame and tested with `hitsNextLocked`, opened it on
+        // the spot. That went once a stall stopped being free. The bay is drawn in merged
+        // meshes -- there is nowhere on a stall to put a price, grey it out, or explain a
+        // shortfall -- and the unlock prompt is the one surface that does all three. So the
+        // only way to open a stall now is through the prompt (`hitsUnlockPrompt` ->
+        // `unlockNextSlot`), and a tap on the locked stall itself falls through to here and
+        // is read as a (missed) tap on a car, same as any other empty tap on the board.
 
         // The car is drawn ROOF_RISE up-screen of its footprint, because the tilt makes its
         // height visible (see BOARD_TILT). The player aims at the roof, so the tap has to come

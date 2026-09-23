@@ -50,11 +50,15 @@ export type CoinReason = 'clear' | 'checkin' | 'unlock' | 'carryover';
 export const WALLET_VERSION = 2;
 
 /**
- * How many rows the ledger keeps. Older ones are folded into `opening` and dropped -- the
+ * How many rows the SAVE keeps. Older ones are folded into `opening` and dropped -- the
  * DETAIL is lost, never the money, which is what keeps `balance` exact for the life of a save.
  *
  * A cap at all, because writing is a synchronous call on the device and the whole array is
  * re-serialised on every write; an uncapped log makes each save slower than the last.
+ *
+ * This is history DEPTH, not what the player sees at once: the ledger panel (`hud-view.ts`,
+ * `LED_ROWS`) has no scrolling yet, so today it surfaces only the most recent handful of these
+ * rows, not all 100.
  */
 export const LEDGER_MAX = 100;
 
@@ -144,6 +148,16 @@ export function earn(
  * caller that ignored it would open the stall anyway and never find out, which is the exact
  * failure this whole subsystem exists to make impossible. `null` cannot be used as a wallet,
  * so the compiler makes the caller answer for it.
+ *
+ * EXCEPT for `n` itself: an amount that is zero, negative, fractional or NaN returns the
+ * wallet unchanged too, same as `earn`. That is not a hole in the argument above -- an
+ * unusable amount is not a payment for this function to refuse, it is a caller asking for
+ * something that is not a purchase at all, and the identity return is what lets a caller
+ * mirror `earn`'s `===` trick to skip a pointless device write. It is tolerable only because
+ * the one live caller's price comes from `unlockPrice`, which always returns a positive
+ * integer drawn from `UNLOCK_PRICES`. A caller that could hand this a zero, negative or
+ * fractional cost would open the stall for free, and neither this function nor its caller
+ * would notice.
  *
  * `n` is POSITIVE -- this function applies the sign. See `amount`.
  */

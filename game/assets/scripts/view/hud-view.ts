@@ -595,9 +595,11 @@ const CHK_BTN_DONE_BASE = new Color(110, 118, 132, 255);
 const SCRIM = new Color(10, 14, 26, 178);
 
 /**
- * THE LEDGER CARD, the coin pill's one job now that it has one. `LED_ROWS` is a screenful, not
- * a limit -- `core`'s `LEDGER_MAX` is the real cap on how much history exists at all, and this
- * card only ever shows the most recent slice of it.
+ * THE LEDGER CARD, the coin pill's one job now that it has one. `LED_ROWS` is how many of the
+ * most recent entries the card draws, full stop -- there is no scrolling, so anything older
+ * than the `LED_ROWS`-th row is not reachable from this panel today, even though `core`'s
+ * `LEDGER_MAX` (100) keeps it in the save. Making the rest of that history visible here would be
+ * a scrolling panel, which is not what this card is.
  */
 const LED_ROWS = 8;
 const LED_ROW_H = 46;
@@ -1611,8 +1613,11 @@ export class HudView {
         const b = this.promptBtn!.worldPosition;
         if (Math.abs(ui.x - b.x) <= PROMPT_BTN_W / 2 + 8
             && Math.abs(ui.y - b.y) <= PROMPT_BTN_H / 2 + 8) {
-            // Swallowed, not passed through: the tap landed on a control, it just cannot be
-            // taken. Returning null here would let it fall to whatever is behind the scrim.
+            // `null` here is safe, not "fall through": while the prompt is open, GameController's
+            // `promptOpen()` branch returns unconditionally on WHATEVER `hitsUnlockPrompt` hands
+            // back, so a `null` for an unaffordable button is still swallowed by the caller, not
+            // passed through to the board behind the scrim. This function has no way to swallow a
+            // tap itself -- it only reports what was hit.
             return this.promptAffordable ? 'unlock' : null;
         }
         const p = this.promptReplay!.worldPosition;
