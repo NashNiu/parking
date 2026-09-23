@@ -1164,30 +1164,30 @@ test('the scroll hint fades with the same ramp as the badges, and hides with the
 
 
 /**
- * The merged coin/free-coins pill is drawn and has NO handler, and that is on instruction.
+ * The merged coin/free-coins pill has a real handler now: tapping it opens the ledger.
  *
- * 「免费金币暂时只能看，点击无反应」 -- it fronts a rewarded video and there is no ad unit to point
- * it at yet. The free-coins entry used to be a separate reserved place with its own `onTap:
- * null`; it merged into `TopBar`'s own coin pill (see task 7's brief), and the null handler moved
- * with it into `coinTap`. The risk this guards is not that someone deletes the pill; it is that
- * someone reads `coinTap`'s `null` as an oversight and "fixes" it with a toast, a disabled state,
- * or an empty function. Any of those changes what the player gets, and none of them would fail
- * anything else in this suite.
+ * IT USED TO DO NOTHING, on purpose -- 「免费金币暂时只能看，点击无反应」, because it fronted a
+ * rewarded-video slot with no ad unit to point it at. The free-coins entry used to be a separate
+ * reserved place with its own `onTap: null`; it merged into `TopBar`'s own coin pill, and the null
+ * handler that moved with it into `coinTap` is superseded now that the coin system has a ledger to
+ * open -- the balance is the one thing on screen a ledger explains, so tapping the figure to ask
+ * where it came from needs no new icon.
  *
- * It pins the NULL FIELD rather than the absence of a handler, because those differ in what they
- * say: an omitted field would also mean inert, and would read as forgotten. It also pins that
- * `tapCoins` reaches it through `?.`, not a direct call -- a direct call on a `null` field would
- * throw the moment anyone tapped the pill.
+ * This pins that `coinTap` is SETTABLE (`setCoinTap`, not a permanent `readonly null`) and that
+ * `tapCoins` still reaches it through `?.`, not a direct call -- a direct call on the field would
+ * throw on any tap that lands before `GameController` has called `setCoinTap`. It also keeps the
+ * half of the old guard that still matters: the old two-slot machinery is actually gone, not
+ * merely unused -- a stray `setSlot` or `SLOT_FREE_COINS` left behind would mean the merge was
+ * cosmetic rather than real. Comments are stripped first: this file's own docblocks are allowed to
+ * name what used to be here (the same allowance `stripComments`'s own header gives the halo guard
+ * below), and only CODE reappearing is the defect this checks for.
  */
-test('the lobby merges free-coins into the coin pill, with a null handler, deliberately', () => {
+test('the lobby coin pill has a real handler now, wired through setCoinTap', () => {
   const src = readSrc('top-bar.ts');
-  expect(src).toContain('private readonly coinTap: (() => void) | null = null;');
+  expect(src).toContain('setCoinTap(fn: () => void): void {');
+  expect(src).toContain('this.coinTap = fn;');
   expect(src).toContain('this.coinTap?.();');
-  // And the old two-slot machinery is actually gone, not merely unused -- a stray `setSlot` or
-  // `SLOT_FREE_COINS` left behind would mean the merge was cosmetic rather than real. Comments
-  // are stripped first: this file's own docblocks are allowed to name what used to be here (the
-  // same allowance `stripComments`'s own header gives the halo guard below), and only CODE
-  // reappearing is the defect this checks for.
+  expect(src).not.toContain('private readonly coinTap');
   const home = stripComments(readSrc('home-view.ts'));
   expect(home).not.toContain('SLOT_FREE_COINS');
   expect(home).not.toContain('buildFreeCoinsIcon()');
