@@ -124,6 +124,31 @@ const LOCK_BODY_Y = -(LOCK_SHACKLE_R + LOCK_SHACKLE_TUBE) / 2;
 const LOCK_SHACKLE_Y = LOCK_BODY_Y + LOCK_BODY_H / 2;
 
 /**
+ * A multiplier on the whole glyph, on top of `g`, and the primary fix for the three locked
+ * stalls not reading as locked: a padlock means shut in a way no amount of colour does, and
+ * unlike a pad or rim shade it cannot be mistaken for lighting or a rendering quirk. Colour
+ * carries the state, the rim carries the row, but the lock is the one mark a player reads as
+ * "closed" at a glance -- so when the row didn't read, growing the one unambiguous glyph is
+ * the lever that matters most.
+ *
+ * It scales the lock node only (`lock.setScale(g * GLYPH_SCALE, ...)`), never the individual
+ * part constants above, so every measured relationship they encode (`LOCK_BODY_Y`,
+ * `LOCK_SHACKLE_Y`, the keyhole's offset) stays exactly as derived.
+ *
+ * 1.45 was the opening guess, but it doesn't clear its own margin: at scale 1 a stall is
+ * 0.697 wide by 1.831 deep (`CAP_BOX.big.wid * CAR_SCALE * STALL_AIR_WID` and the `.len`/
+ * `STALL_AIR_LEN` equivalent), and the glyph's own width -- `LOCK_BODY_W`, the widest part --
+ * is `LOCK_BODY_W / GLYPH_REF_W` of that, 56.4% of the stall's width at multiplier 1. At 1.45
+ * that is 81.8%, leaving only ~0.064 board units clear of the stall's own edge on each side --
+ * under the 0.1 this file treats as a safe margin, and tighter still (~0.023) against the
+ * RIM's inner boundary. 1.25 is the number that actually clears: 70.5% of the stall's width,
+ * ~0.103 clear of the stall edge. The depth axis never binds -- even at 1.45 the glyph only
+ * reaches a third of the stall's depth -- so width is the only constraint this was solved
+ * against.
+ */
+const GLYPH_SCALE = 1.25;
+
+/**
  * The raised tray. It held +12 luminance over GROUND for as long as there was one ground; the
  * split into light pavement and dark asphalt (see scene-stage) left it at -10 instead, and the
  * VALUE is deliberately unchanged through that.
@@ -150,7 +175,19 @@ const PANEL = new Color(186, 189, 197);
  */
 const PANEL_PLINTH = new Color(148, 153, 166);
 const PAD = new Color(76, 87, 115);
-const PAD_LOCKED = new Color(57, 66, 90);
+/**
+ * Deeper than the old (57, 66, 90) and pulled slightly toward neutral: a delta of ~20 on an
+ * already-dark blue-grey read as barely another shade of the same pad, not as "off". This
+ * takes the delta from `PAD` to ~32 on every channel and drops the blue cast, which is what
+ * makes a locked stall read as unlit rather than as a slightly different blue.
+ *
+ * Going darker here is exactly what `RIM_LOCKED`'s own docblock warns against doing to the
+ * point of losing the rim -- see that comment. It still applies: it is the RIM, not this
+ * pad, that keeps a locked stall reading as a bordered slot of the row rather than a hole
+ * punched in the bay, and darkening the pad further without touching the rim is the one
+ * knob that would eventually recreate that hole.
+ */
+const PAD_LOCKED = new Color(44, 50, 66);
 const PAD_RIM = new Color(147, 160, 192);
 /**
  * A dimmed `PAD_RIM`. A locked stall used to have no rim at all, which made the three of
@@ -278,12 +315,13 @@ export class ParkingView {
         root.addChild(pad);
         if (!locked) return;
 
-        // The whole glyph goes under one node scaled by `g`, so the pieces keep their
-        // measured relationship to each other (see LOCK_BODY_Y) at any board scale, and
-        // their z order with it.
+        // The whole glyph goes under one node scaled by `g` (board scale) times
+        // `GLYPH_SCALE` (the glyph's own size), so the pieces keep their measured
+        // relationship to each other (see LOCK_BODY_Y) at any board scale, and their z
+        // order with it.
         const lock = new Node(`lock-${i}`);
         lock.setPosition(pos.x, pos.y, 0);
-        lock.setScale(g, g, g);
+        lock.setScale(g * GLYPH_SCALE, g * GLYPH_SCALE, g * GLYPH_SCALE);
         root.addChild(lock);
 
         const sh = new Node('shackle');
