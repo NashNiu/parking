@@ -191,23 +191,27 @@ export class TopBar {
     /** The merged coin/free-coins pill's own node, for hit-testing. See `coinTap`. */
     private coin: Node;
     /**
-     * `null`, PERMANENTLY, until a rewarded-video ad unit exists to point it at.
+     * What tapping the coin pill does.
      *
-     * THIS IS THE MERGE. The row used to carry two coin-shaped things: a plain readout on the
-     * left showing the balance, and a reserved place on the right that also drew a coin (with a
-     * plus struck into it) and did nothing when tapped -- 「免费金币暂时只能看，点击无反应」. Two
-     * coins on one bar reading as one thing twice was the reason to fold them: this pill IS the
-     * readout, and it is also the one place a rewarded video will eventually hang off, so it
-     * gets the same drawn-but-inert treatment the old reserved place had, on the same instruction
-     * and for the same reason -- there is still no ad unit to point it at.
+     * IT USED TO DO NOTHING, on purpose -- the pill was both the balance readout and a
+     * drawn-but-inert control held for a rewarded-video slot that does not exist. THIS IS THE
+     * MERGE that made it one pill: the row used to carry two coin-shaped things, a plain readout
+     * on the left and a reserved place on the right that also drew a coin and did nothing when
+     * tapped -- 「免费金币暂时只能看，点击无反应」. Two coins on one bar reading as one thing twice
+     * was the reason to fold them, and the fold left the merged pill with the same inert handler
+     * the old reserved place had, for the same reason: there was still no ad unit to point it at.
      *
-     * `null` is load-bearing here the way it was on the old slot's `onTap`, not a convenience: it
-     * is the honest way to say "this is meant to do something and does not, yet" rather than
-     * writing a `() => {}` that reads, to whoever meets it later, as a handler somebody forgot to
-     * fill in. `tapCoins`'s `?.` already handles it, and there is no setter for it here -- when an
-     * ad unit exists, the field gains one and this comment is the one to update, not to delete.
+     * IT HAS A JOB NOW. The balance is the one thing on screen that a ledger explains, so tapping
+     * the figure to ask where it came from needs no new icon and no new place on the bar --
+     * `setCoinTap` is how `GameController` hands it that job, and `null` is still the state before
+     * that call runs (there is no other caller yet), not a permanent one.
      */
-    private readonly coinTap: (() => void) | null = null;
+    private coinTap: (() => void) | null = null;
+
+    /** Give the coin pill a job. See `coinTap`. */
+    setCoinTap(fn: () => void): void {
+        this.coinTap = fn;
+    }
 
     /**
      * `barBottom` IS HANDED IN, NOT COMPUTED HERE, and that is the one thing about this
@@ -450,9 +454,8 @@ export class TopBar {
     }
 
     /**
-     * Whether `ui` landed on the coin pill. Always tested, and always answered by `tapCoins`
-     * with nothing -- see `coinTap`. Measured against the PILL's box, not a disc: this control
-     * is a 240x96 plate, the same shape `hitsStart` measures for the button below.
+     * Whether `ui` landed on the coin pill. Measured against the PILL's box, not a disc: this
+     * control is a 240x96 plate, the same shape `hitsStart` measures for the button below.
      */
     hitsCoins(ui: Vec3): boolean {
         if (!this.root.activeInHierarchy) return false;
@@ -461,7 +464,11 @@ export class TopBar {
             && Math.abs(ui.y - p.y) <= COIN_H / 2 + TAP_PAD;
     }
 
-    /** Fire the coin pill's handler. See `coinTap` for why this is always a no-op today. */
+    /**
+     * Fire the coin pill's handler -- see `coinTap`. Separate from `hitsCoins` for the same
+     * reason `tapCheckin` is separate from `hitsCheckin`: the hit test stays a pure question, and
+     * the caller decides whether a press that landed here was a tap or the end of a drag.
+     */
     tapCoins(): void {
         this.coinTap?.();
     }

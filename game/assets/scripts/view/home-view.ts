@@ -1505,10 +1505,10 @@ export class HomeView {
      * hit tests do -- the gear, the check-in place and the coin pill mean the same thing while
      * the barrier is down as they do after it lifts.
      *
-     * ALL SIX OF THEM, and that is not tidiness. `hitsCheckin` can only ever answer true once
+     * ALL SEVEN OF THEM, and that is not tidiness. `hitsCheckin` can only ever answer true once
      * `setCheckin` has populated the place, and the handler it was given is only reachable
-     * through `tapCheckin`; `hitsCoins` answers unconditionally but `tapCoins` is a no-op until
-     * an ad unit exists (see `TopBar.coinTap`) -- forwarding a subset would leave a caller
+     * through `tapCheckin`; `hitsCoins` answers unconditionally and `tapCoins` now fires whatever
+     * `setCoinTap` was given (see `TopBar.coinTap`) -- forwarding a subset would leave a caller
      * holding one end of a protocol with no way to reach the other end.
      */
     setCoins(n: number): void {
@@ -1527,13 +1527,18 @@ export class HomeView {
         this.topBar.tapCheckin();
     }
 
-    /** The merged coin/free-coins pill. See `TopBar.coinTap` for why tapping it does nothing. */
+    /** The merged coin/free-coins pill. See `TopBar.coinTap` for what tapping it does. */
     hitsCoins(ui: Vec3): boolean {
         return this.topBar.hitsCoins(ui);
     }
 
     tapCoins(): void {
         this.topBar.tapCoins();
+    }
+
+    /** Give the coin pill a job (the ledger). See `TopBar.coinTap`. */
+    setCoinTap(fn: () => void): void {
+        this.topBar.setCoinTap(fn);
     }
 
     /** Show or hide the check-in place's unread dot. */

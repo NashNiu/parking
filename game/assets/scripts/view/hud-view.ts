@@ -7,7 +7,8 @@ import {
 import { canvasSize, makeLabel, rimLabel, safeInsets } from './ui-layout';
 import { CONTROL_BASE, CONTROL_FACE } from './palette';
 import {
-    canClaim, Checkin, dayOf, daysInMonth, firstWeekday, isClaimed, monthOf, nextReward, STAR_MAX,
+    balance, canClaim, Checkin, dayOf, daysInMonth, firstWeekday, isClaimed, LedgerEntry, monthOf,
+    nextReward, STAR_MAX, Wallet,
 } from '../core/index';
 
 /**
@@ -587,6 +588,46 @@ const CHK_BTN_DONE_BASE = new Color(110, 118, 132, 255);
 const SCRIM = new Color(10, 14, 26, 178);
 
 /**
+ * THE LEDGER CARD, the coin pill's one job now that it has one. `LED_ROWS` is a screenful, not
+ * a limit -- `core`'s `LEDGER_MAX` is the real cap on how much history exists at all, and this
+ * card only ever shows the most recent slice of it.
+ */
+const LED_ROWS = 8;
+const LED_ROW_H = 46;
+const LED_H = LED_ROWS * LED_ROW_H + 200;
+const LED_DATE_SIZE = 20;
+const LED_WHY_SIZE = 22;
+const LED_SUM_SIZE = 24;
+const LED_BAL_SIZE = 44;
+const LED_IN = new Color(64, 160, 96, 255);
+const LED_OUT = new Color(200, 96, 88, 255);
+const LED_EMPTY = '还没有任何金币记录';
+
+/**
+ * One row's wording, from a ledger entry.
+ *
+ * A PURE FUNCTION OF THE ENTRY, deliberately -- nothing here reads the wallet, the level, or a
+ * clock, so the row text for a given entry is the same whenever it is drawn. The star rating
+ * comes from `extra` and not from `n`, because `n` is a DIFFERENCE: a `+15` is two stars
+ * becoming three on one level and something else on another.
+ */
+function ledgerWhy(e: LedgerEntry): string {
+    const stars = ['', '一星', '二星', '三星'];
+    switch (e.why) {
+        case 'clear': return `第 ${e.ref} 关 ${stars[e.extra ?? 0] ?? ''}`.trim();
+        case 'checkin': return `签到 第 ${e.ref} 天`;
+        case 'unlock': return `第 ${e.ref} 关 开车位`;
+        case 'carryover': return '往期结转';
+    }
+}
+
+/** `'09-22'` from a timestamp. Local, for the reason `core/checkin`'s `todayKey` is. */
+function ledgerDate(t: number): string {
+    const d = new Date(t);
+    return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
  * The win panel, which is the one piece of CELEBRATION on this HUD.
  *
  * It replaces two bare Labels floating over the board -- big outlined type plus three star
@@ -1069,6 +1110,13 @@ export class HudView {
     private chkMonthLabel: Label | null = null;
     /** Whether 领取 is live. `hitsCheckin` reads it; see `paintCheckin` for why it is a field. */
     private chkClaimable = false;
+    /** The ledger card's scrim, its close button, and the balance/empty/row labels on it. */
+    private ledger: Node | null = null;
+    private ledClose: Node | null = null;
+    private ledBalance: Label | null = null;
+    private ledEmpty: Label | null = null;
+    /** `LED_ROWS` rows, built once and rewritten on every raise. See `paintLedger`. */
+    private ledRows: { node: Node; date: Label; why: Label; sum: Label }[] = [];
     /** The balance last handed to `showUnlockPrompt`, for the shortfall line. */
     private promptBalance = 0;
     /**
@@ -1289,7 +1337,8 @@ export class HudView {
      */
     private syncGear(): void {
         const modal = !!(this.win?.active) || !!(this.prompt?.active)
-            || !!(this.settings?.active) || !!(this.lose?.active) || !!(this.checkin?.active);
+            || !!(this.settings?.active) || !!(this.lose?.active) || !!(this.checkin?.active)
+            || !!(this.ledger?.active);
         this.gearBtn.active = this.play && !modal;
     }
 
@@ -1775,6 +1824,130 @@ export class HudView {
         if (this.chkClaimable && this.inBox(ui, this.chkClaim!, CHK_BTN_W, PROMPT_BTN_H)) {
             return 'claim';
         }
+        return null;
+    }
+
+    /**
+     * Build the ledger card once. A balance, `LED_ROWS` blank rows, and a close button.
+     *
+     * Same build/paint split as the check-in card: nothing about the wallet is read here, and
+     * `paintLedger` writes every row on every raise. A row this month's wallet does not reach is
+     * switched off rather than left holding the previous raise's text.
+     */
+    private buildLedger(): void {
+        const { w, h } = canvasSize(this.canvas);
+        const scrim = roundedSprite('LedScrim', w * 2, h * 2, SCRIM, 2);
+        this.canvas.addChild(scrim);
+        scrim.setPosition(0, 0, 0);
+
+        const panel = new Node('LedPanel');
+        panel.layer = Layers.Enum.UI_2D;
+        panel.addComponent(UITransform);
+        scrim.addChild(panel);
+        panel.setPosition(0, CHK_RAISE, 0);
+
+        const { page, close } = this.buildCard(panel, 'LedCard', LED_H, '金币明细');
+        this.ledClose = close;
+
+        const top = LED_H / 2 - 120;
+        this.ledBalance = makeLabel(page, 'bal', LED_BAL_SIZE, top);
+        this.ledBalance.color = CARD_INK;
+        this.ledBalance.isBold = true;
+
+        this.ledEmpty = makeLabel(page, 'empty', LED_WHY_SIZE, top - LED_ROW_H * 2);
+        this.ledEmpty.color = CHK_DAY_INK;
+        this.ledEmpty.string = LED_EMPTY;
+
+        this.ledRows = [];
+        for (let i = 0; i < LED_ROWS; i++) {
+            const row = new Node(`row${i}`);
+            row.layer = Layers.Enum.UI_2D;
+            row.addComponent(UITransform);
+            page.addChild(row);
+            row.setPosition(0, top - 70 - i * LED_ROW_H, 0);
+
+            const date = makeLabel(row, 'date', LED_DATE_SIZE, 0);
+            date.color = CHK_DAY_INK;
+            date.node.setPosition(-CARD_W / 2 + 60, 0, 0);
+
+            const why = makeLabel(row, 'why', LED_WHY_SIZE, 0);
+            why.color = CARD_INK;
+            why.node.setPosition(-CARD_W / 2 + 190, 0, 0);
+
+            const sum = makeLabel(row, 'sum', LED_SUM_SIZE, 0);
+            sum.isBold = true;
+            sum.node.setPosition(CARD_W / 2 - 70, 0, 0);
+
+            this.ledRows.push({ node: row, date, why, sum });
+        }
+
+        scrim.active = false;
+        this.ledger = scrim;
+    }
+
+    /**
+     * Raise the ledger and write the wallet into it.
+     *
+     * NEWEST FIRST, which is the reverse of how the log is stored. The log is append-ordered
+     * because that is what makes the rolling cap a shift from the front; a reader wants the most
+     * recent movement at the top, so the reversal happens here rather than in the save.
+     */
+    showLedger(w: Wallet): void {
+        if (!this.ledger) this.buildLedger();
+        const scrim = this.ledger!;
+        this.paintLedger(w);
+        if (scrim.active) return;
+        scrim.active = true;
+        scrim.setSiblingIndex(this.canvas.children.length - 1);
+        this.syncGear();
+        const panel = scrim.getChildByName('LedPanel')!;
+        Tween.stopAllByTarget(panel);
+        panel.setScale(0.86, 0.86, 1);
+        tween(panel)
+            .to(0.14, { scale: new Vec3(1.03, 1.03, 1) }, { easing: 'backOut' })
+            .to(0.08, { scale: Vec3.ONE })
+            .start();
+    }
+
+    private paintLedger(w: Wallet): void {
+        if (!this.ledger) return;
+        this.ledBalance!.string = `${balance(w)}`;
+        const recent = w.log.slice(-LED_ROWS).reverse();
+        this.ledEmpty!.node.active = recent.length === 0;
+        for (let i = 0; i < LED_ROWS; i++) {
+            const row = this.ledRows[i];
+            const e = recent[i];
+            if (!e) {
+                row.node.active = false;
+                continue;
+            }
+            row.node.active = true;
+            row.date.string = ledgerDate(e.t);
+            row.why.string = ledgerWhy(e);
+            row.sum.string = e.n > 0 ? `+${e.n}` : `${e.n}`;
+            row.sum.color = e.n > 0 ? LED_IN : LED_OUT;
+        }
+    }
+
+    hideLedger(): void {
+        if (this.ledger) this.ledger.active = false;
+        this.syncGear();
+    }
+
+    /** Whether the ledger is up, i.e. whether it owns the next tap. */
+    ledgerOpen(): boolean {
+        return !!this.ledger && this.ledger.active;
+    }
+
+    /**
+     * Where `ui` landed on the ledger. A tap that hits neither the close button nor outside the
+     * card is SWALLOWED -- same rule as every other card here.
+     */
+    hitsLedger(ui: Vec3): 'close' | null {
+        if (!this.ledgerOpen()) return null;
+        const c = this.ledClose!.worldPosition;
+        const r = CARD_X_D / 2 + 12;
+        if ((ui.x - c.x) ** 2 + (ui.y - c.y) ** 2 <= r * r) return 'close';
         return null;
     }
 

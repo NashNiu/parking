@@ -908,6 +908,7 @@ export class GameController extends Component {
             // Once, with the view -- the bar is standing furniture and its one reserved
             // entry does not change. The dot on top of it does, so it is repainted below.
             this.home.fillCheckin(() => this.openCheckin());
+            this.home.setCoinTap(() => this.hud?.showLedger(this.wallet));
         }
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
@@ -2594,6 +2595,14 @@ export class GameController extends Component {
                 else if (hit === 'wipe' && this.hud.confirmWipe()) this.wipeProgress();
                 return;   // anything else on this screen is swallowed
             }
+            // The ledger is asked on the same terms, and at the same priority, as the settings
+            // card above -- it can never be raised over the check-in card (the two are mutually
+            // exclusive, both opened only from this screen), so where exactly it sits relative to
+            // the check-in branch below does not matter, only that it comes before it.
+            if (this.hud?.ledgerOpen()) {
+                if (this.hud.hitsLedger(ui) === 'close') this.hud.hideLedger();
+                return;   // anything else on this screen is swallowed
+            }
             // The check-in card is asked on the same terms as the settings card above, and
             // for the same reason: while it is up it is the topmost thing on this screen.
             if (this.hud?.checkinOpen()) {
@@ -2615,9 +2624,8 @@ export class GameController extends Component {
                 this.home.tapCheckin();
                 return;
             }
-            // The merged coin pill, below check-in. It is drawn and answers a tap like its two
-            // neighbours -- `tapCoins` is a no-op until there is an ad unit to point it at, which
-            // is the whole of what 「点击无反应」 asks for; see `TopBar.coinTap`.
+            // The merged coin pill, below check-in. `tapCoins` opens the ledger -- see
+            // `TopBar.coinTap` and `setCoinTap`'s wiring in `showHome`.
             if (this.home.hitsCoins(ui)) {
                 this.sfx?.play('tap');
                 this.home.tapCoins();
