@@ -3,7 +3,7 @@ import { Node, AudioSource, AudioClip, resources } from 'cc';
 /**
  * How loud the track sits. The WAV is normalised to a 0.86 peak by `tools/gen-music.js`, so
  * this is the only place the mix is decided -- and it is a number rather than a render
- * setting precisely so that making the music quieter does not mean regenerating 345KB.
+ * setting precisely so that making the music quieter does not mean regenerating 431KB.
  *
  * WELL UNDER THE EFFECTS, which play at 1.0. Background music that competes with the tap is
  * not background music; a player has to be able to hear that the car refused to move.
