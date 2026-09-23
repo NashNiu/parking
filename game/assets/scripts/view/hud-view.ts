@@ -530,16 +530,33 @@ const PROMPT_SHADOW_DROP = 10;
  */
 const CAL_COLS = 7;
 const CAL_ROWS = 6;
-const CAL_CELL = 62;
-const CAL_GAP = 6;
-const CAL_DAY_SIZE = 24;
+/**
+ * The cell and its gap are DERIVED from the page they have to fill, not picked. `CARD_PAGE_W`
+ * (1036) is the usable width; seven cells at 124 with six 12-unit gaps come to
+ * `7 * 124 + 6 * 12 = 940`, which is 940 / 1036 = 91% of the page and leaves 48 either side --
+ * a real margin rather than the 470-wide grid (45% of the page) the old 62/6 pair drew.
+ */
+const CAL_CELL = 124;
+const CAL_GAP = 12;
+/** A two-digit day in a 124 cell, in line with the file's 50-54 body-text range (see
+ *  `WIN_TALLY_SIZE` / `PROMPT_COST_SIZE`) rather than the 24 that undercut all of it. */
+const CAL_DAY_SIZE = 52;
 /** The weekday header row, above the grid. */
 const CAL_HEAD = ['日', '一', '二', '三', '四', '五', '六'];
-const CAL_HEAD_SIZE = 20;
-const CAL_HEAD_DY = 26;
+/** A step below the day numbers, the way every secondary label in this file sits under its
+ *  primary. */
+const CAL_HEAD_SIZE = 44;
+/** How far the header text sits from the grid. This has to grow with the text it spaces --
+ *  26 was sized for a 20pt header, not the 44pt one above it. */
+const CAL_HEAD_DY = 56;
 
-/** The card's height: the head row twice (weekday header and month label), the grid, and the
- *  button's own clearance below it -- see CAL_ROWS for why the grid is always sized for six. */
+/**
+ * The card's height: the head row twice (weekday header and month label), the grid, and the
+ * button's own clearance below it -- see CAL_ROWS for why the grid is always sized for six.
+ *
+ * `56 * 2 + 6 * 124 + 5 * 12 + 190 = 1106`, which sits just under `WIN_H` (1132) -- a card
+ * height this canvas already handles.
+ */
 const CHK_H = CAL_HEAD_DY * 2 + CAL_ROWS * CAL_CELL + (CAL_ROWS - 1) * CAL_GAP + 190;
 const CHK_CELL_R = 28;
 
@@ -571,8 +588,11 @@ const CHK_DAY_INK = new Color(122, 112, 92, 255);
  * to (15, 11) -- the same capsule shape as before, scaled down for the calendar cell's smaller
  * face. Lengths and angles follow from those three points and are written out as literals below
  * rather than derived, because the shape is a drawing and not a calculation.
+ *
+ * `CHK_TICK_W` has no user outside this cell, so it carries the same doubling `CAL_CELL` did
+ * (62 -> 124) rather than a second constant sitting beside it: 12 -> 24.
  */
-const CHK_TICK_W = 12;
+const CHK_TICK_W = 24;
 const CHK_TICK_INK = new Color(72, 150, 76, 255);
 
 /** The 领取 button, hung under the card exactly as the settings card hangs 继续游戏. */
@@ -602,12 +622,26 @@ const SCRIM = new Color(10, 14, 26, 178);
  * a scrolling panel, which is not what this card is.
  */
 const LED_ROWS = 8;
-const LED_ROW_H = 46;
-const LED_H = LED_ROWS * LED_ROW_H + 200;
-const LED_DATE_SIZE = 20;
-const LED_WHY_SIZE = 22;
-const LED_SUM_SIZE = 24;
-const LED_BAL_SIZE = 44;
+/** Tall enough to hold the ~48pt row text below without crowding (was 46, sized for 20-24pt). */
+const LED_ROW_H = 92;
+/** `LED_ROWS` rows plus head-room for the balance line above them and a close button's worth
+ *  of margin below -- 260, up from 200, to fit the taller balance line (`LED_BAL_SIZE` 44 -> 90)
+ *  and the wider vertical spacing that goes with it (see `top` / the first row's offset in
+ *  `buildLedger`). */
+const LED_H = LED_ROWS * LED_ROW_H + 260;
+const LED_DATE_SIZE = 42;
+const LED_WHY_SIZE = 48;
+const LED_SUM_SIZE = 50;
+/** The panel's headline figure -- just under `CARD_TITLE_SIZE` (96), the largest type in the
+ *  file, which is the right register for the one number this whole card exists to show. */
+const LED_BAL_SIZE = 90;
+/** Margin from the page edge for the date and amount columns -- a real inset, the same margin
+ *  the calendar grid leaves either side of itself (see `CAL_CELL`), not the 18 units
+ *  `-CARD_W / 2 + 60` left once `CARD_W` stood in for `CARD_PAGE_W`. */
+const LED_INSET = 48;
+/** Width budgeted for the fixed `MM-DD` date column before `why` starts -- see the derivation
+ *  at its call site in `buildLedger`. */
+const LED_DATE_COL_W = 146;
 const LED_IN = new Color(64, 160, 96, 255);
 const LED_OUT = new Color(200, 96, 88, 255);
 const LED_EMPTY = '还没有任何金币记录';
@@ -1720,17 +1754,19 @@ export class HudView {
         day.color = CHK_DAY_INK;
 
         // Last, so it draws over the number it marks off. See CHK_TICK_W for the three points.
+        // Both bars and both offsets are doubled from the 62-cell drawing (20/28 wide at
+        // (-10, -4) / (6, 0)) to match the 124 cell they are drawn on.
         const tick = new Node('tick');
         tick.layer = Layers.Enum.UI_2D;
         tick.addComponent(UITransform);
         cell.addChild(tick);
-        const short = roundedSprite('a', 20, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
+        const short = roundedSprite('a', 40, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
         tick.addChild(short);
-        short.setPosition(-10, -4, 0);
+        short.setPosition(-20, -8, 0);
         short.angle = -45;
-        const long = roundedSprite('b', 28, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
+        const long = roundedSprite('b', 56, CHK_TICK_W, CHK_TICK_INK, CHK_TICK_W / 2);
         tick.addChild(long);
-        long.setPosition(6, 0, 0);
+        long.setPosition(12, 0, 0);
         long.angle = 49;
 
         return { face, rim, tick, day, node: cell };
@@ -1861,7 +1897,11 @@ export class HudView {
         const { page, close } = this.buildCard(panel, 'LedCard', LED_H, '金币明细');
         this.ledClose = close;
 
-        const top = LED_H / 2 - 120;
+        // `top` is the balance line's own y: LED_H/2 (the page's top edge) less 150. At
+        // LED_BAL_SIZE 90 the line's half-height is 54 (lineHeight round(90*1.2)/2), so 150
+        // leaves 96 units of clearance above it -- up from 120 (which left 93.5 above the old
+        // 44pt line), because the line itself is almost twice as tall.
+        const top = LED_H / 2 - 150;
         this.ledBalance = makeLabel(page, 'bal', LED_BAL_SIZE, top);
         this.ledBalance.color = CARD_INK;
         this.ledBalance.isBold = true;
@@ -1876,19 +1916,37 @@ export class HudView {
             row.layer = Layers.Enum.UI_2D;
             row.addComponent(UITransform);
             page.addChild(row);
-            row.setPosition(0, top - 70 - i * LED_ROW_H, 0);
+            // The first row sits 120 below the balance line: balance half-height 54, plus the
+            // row's own tallest text (LED_SUM_SIZE 50, bold) half-height ~30, plus a 36-unit
+            // clearance -- 54 + 30 + 36 = 120, up from 70 (26.5 + 14.5 + 29 for the old sizes).
+            row.setPosition(0, top - 120 - i * LED_ROW_H, 0);
 
+            // `makeLabel` centre-anchors every label it makes (see `buildRow`, which overrides
+            // the anchor explicitly when it wants left-aligned text) -- so each column below
+            // sets its own anchor rather than assuming one, and every x is measured from
+            // `CARD_PAGE_W` (the page's own width) rather than `CARD_W` (the card's, 84 units
+            // wider), which is what jammed the date column against the rim before.
             const date = makeLabel(row, 'date', LED_DATE_SIZE, 0);
             date.color = CHK_DAY_INK;
-            date.node.setPosition(-CARD_W / 2 + 60, 0, 0);
+            date.node.setPosition(-CARD_PAGE_W / 2 + LED_INSET, 0, 0);
+            date.node.getComponent(UITransform)!.setAnchorPoint(0, 0.5);
 
+            // `why` starts clear of the fixed `MM-DD` date column: at LED_DATE_SIZE 42, five
+            // glyphs (two digits, a dash, two digits) at roughly 0.55em each come to about
+            // 42 * 0.55 * 5 ~= 116, so LED_DATE_COL_W (146) leaves a 30-unit gap before the
+            // reason text starts. Left-anchored, because the reason is Chinese text of varying
+            // length and should grow rightward from a fixed start rather than recentre itself.
             const why = makeLabel(row, 'why', LED_WHY_SIZE, 0);
             why.color = CARD_INK;
-            why.node.setPosition(-CARD_W / 2 + 190, 0, 0);
+            why.node.setPosition(-CARD_PAGE_W / 2 + LED_INSET + LED_DATE_COL_W, 0, 0);
+            why.node.getComponent(UITransform)!.setAnchorPoint(0, 0.5);
 
+            // Right-anchored and inset from the page's right edge, so a short amount stays
+            // pinned to that edge regardless of how many digits or which sign it carries.
             const sum = makeLabel(row, 'sum', LED_SUM_SIZE, 0);
             sum.isBold = true;
-            sum.node.setPosition(CARD_W / 2 - 70, 0, 0);
+            sum.node.setPosition(CARD_PAGE_W / 2 - LED_INSET, 0, 0);
+            sum.node.getComponent(UITransform)!.setAnchorPoint(1, 0.5);
 
             this.ledRows.push({ node: row, date, why, sum });
         }
