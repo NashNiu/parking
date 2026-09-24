@@ -3,7 +3,7 @@ import * as path from 'path';
 import { generateLevel, levelParams, inwardCars, levelMask, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
-import { judge, exitCars, demandPressure } from '../../game/assets/scripts/core/play-sim';
+import { exitCars, demandPressure } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
 import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
 import { inShape, SkeletonShape, skeletonShape } from '../../game/assets/scripts/core/lot-skeleton';
@@ -482,41 +482,6 @@ test('a later level is harder although it is SMALLER', () => {
   expect(last.blocked / onBoard(lastLvl))
     .toBeGreaterThan(first.blocked / onBoard(firstLvl) - 1 / onBoard(lastLvl));
 });
-
-test('three stars are reachable on the bay every level ships with', () => {
-  // 人类伙伴给这条曲线定的规则,逐字:在每步都不能错的情况下,可以拿到 3 星。
-  // 三星就是一个车位都没买(`GameCore.stars`),所以这条等价于"开局那几个车位就够"。
-  //
-  // 它同时是"把选择压窄"这个方向的刹车:窄下去车位需求就上来,窄过头关卡就没法打了,
-  // 而这一条从另一头顶住。`dead` 挡的是更糟的那一端 —— 七个车位全开还卡死。
-  //
-  // 四色以下不断言:车位盖得住全部颜色的关卡不可能卡住,不管怎么生成(见 play-sim 的
-  // 模块开头那条法则)。那些是教学关。
-  for (const id of IDS) {
-    if (levelParams(id).colors <= 4) continue;
-    const lvl = levelFor(id);
-    const v = judge(lvl);
-    expect({ id, dead: v.dead, over: v.demand > lvl.parking.unlocked })
-      .toEqual({ id, dead: false, over: false });
-  }
-}, 900000);
-
-test('every packed level asks for the whole bay', () => {
-  // 整条改动的验收条件,单位是**开局车位里最少要用几个**。人类伙伴一直在报的就是这个
-  // 数:只用了三个车位,感觉甚至两个车位都可以。
-  //
-  // 在它之前的三版难度列都量不出这件事。最近那一版量"被迫买下几个车位",而把第 4 关的
-  // 上色压窄时,它需要的车位从 1 涨到 3,那个数却全程在 0.0 到 0.4 之间抖 —— 于是按它
-  // 排的搜索挑了个两个车位就能过的,还报告说命中目标。
-  //
-  // 这条原来问的是"后段比前段要得多",而 2026-09-22 起**每一关都顶满**,前后段一样高,
-  // 那条断言自己就失效了。改成问平线本身,因为平线是人类伙伴要的:只有第一个关是教学关。
-  // 改版前实测九关是 1、2、2、2、4、4、2、4、4,五关最多只用到一半车位。
-  for (const id of PACKED) {
-    const lvl = levelFor(id);
-    expect({ id, demand: judge(lvl).demand }).toEqual({ id, demand: lvl.parking.unlocked });
-  }
-}, 900000);
 
 test('no level puts more than a handful of cars on the table at once', () => {
   // 人类伙伴点名的那个旋钮,原话两条:同一时间,能驶出停车场的不同颜色的车辆数量越少,
@@ -1206,3 +1171,45 @@ test('每种形状在出货的车数下都打得出包', () => {
   }
 });
 
+
+import { selectPainting, ACCEPT, GAME_BUDGET, PaintingCandidate } from '../../game/assets/scripts/core/level-gen';
+
+/** Candidates whose only identity is their index, so a fake judge can script each one. */
+function fakes(widths: number[]): PaintingCandidate[] {
+  return widths.map((width, i) => ({ painted: [{ id: i, x: 0, y: 0, angle: 0, color: 'red', cap: 'small' }], width }));
+}
+const idOf = (p: CarSpec[] | null) => (p === null ? null : p[0].id);
+
+test('selectPainting stops at the first candidate that meets the target, narrow end first', () => {
+  const played: number[] = [];
+  const pick = selectPainting(fakes([1.0, 1.1, 1.2, 1.3]), 4, {
+    certify: (_p, i, b) => { b.games--; played.push(i); return true; },
+    demand: (_p, i) => [2, 4, 4, 1][i],
+  });
+  expect(idOf(pick)).toBe(1);
+  expect(played).toEqual([0, 1]);   // nothing past the winner is played
+});
+
+test('selectPainting takes the nearest demand, then the narrowest, and skips what it cannot certify', () => {
+  const pick = selectPainting(fakes([1.0, 1.1, 1.2, 1.3]), 4, {
+    certify: (_p, i) => i !== 0,          // the narrowest cannot be shown three-star
+    demand: (_p, i) => [4, 2, 3, 3][i],
+  });
+  expect(idOf(pick)).toBe(2);           // 3 beats 2; of the two 3s, 1.2 is narrower
+});
+
+test('selectPainting returns null when nothing is certified, so the generator tries another packing', () => {
+  const pick = selectPainting(fakes([1.0, 1.1]), 4, { certify: () => false, demand: () => 4 });
+  expect(pick).toBeNull();
+});
+
+test('selectPainting spends at most GAME_BUDGET games and keeps at most ACCEPT candidates', () => {
+  let certified = 0;
+  let spent = 0;
+  selectPainting(fakes(Array.from({ length: 400 }, (_, i) => 1 + i / 1000)), 4, {
+    certify: (_p, _i, b) => { b.games -= 1; spent++; certified++; return true; },
+    demand: () => 2,
+  });
+  expect(certified).toBeLessThanOrEqual(ACCEPT);
+  expect(spent).toBeLessThanOrEqual(GAME_BUDGET);
+});

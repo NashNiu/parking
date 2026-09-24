@@ -4,7 +4,8 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { judge, mistakeCost, exitFrontiers, frontierWidth, exitCars } from './play-sim';
+import { exitFrontiers, frontierWidth, exitCars } from './play-sim';
+import { Budget, certifyThreeStar, strongDemand } from './search-player';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -800,8 +801,10 @@ export function bandParams(id: number): { offset: number; interleave: number } {
  *
  * 4 就是这个设计的天花板,而且是算出来的不是调出来的:开局给 `UNLOCKED` 个车位,又要求
  * 三星拿得到(也就是不买车位就能通关),那么"最少需要几个"最多只能等于 `UNLOCKED`。
- * 而这里量的是**参考玩家**的需求,人比它强,所以人需要的只会更少 —— 顶满这一档之后,
- * 再想更紧就只剩一条路:开局少给几个车位。
+ *
+ * 2026-09-24 起,这个数由 `search-player.ts` 的强玩家来量,不再由 play-sim 的三个机器人。
+ * 机器人只看颜色、不看停车场结构,在出货的九关上一律报"要 4 个",而强玩家在其中六关只用
+ * 2 个就过 —— 人类伙伴报的正是这个。强玩家的数是真实需求的**上界**(见 `strongDemand`)。
  */
 const DEMAND_CURVE = [1, 4, 4, 4, 4, 4, 4, 4, 4, 4];
 
@@ -1742,19 +1745,56 @@ const PAINTINGS = 400;
 const PACKINGS = 6;
 
 /**
- * 真正下场跑模拟的配色个数。
+ * 第二遍的上限,按局数计,不按时间计。
  *
- * 看是看四百个,跑只跑这四十个。`frontierWidth` 不用跑任何一局(见 `exitFrontiers`:
- * 谁能开出去只跟车停在哪有关,跟它是什么颜色无关,所以一个打包的 frontier 只算一次),
- * 于是第一遍可以把四百个候选全部按"同时能开出去几种颜色"排一遍,第二遍只对取样出来
- * 的这四十个花模拟。一个候选要跑 6 局(1 局完美 + 5 局手滑),40 × 6 = 240 局。
+ * 第二遍现在由 `search-player.ts` 的强玩家来判,一局 5 秒到 5 分钟不等,所以必须有上限;
+ * 而上限只能是计数:同一个 id 必须永远生成同一关(`the generator takes no input but its
+ * id`),按秒截断会让结果跟着机器快慢变。
  *
- * **取样是跨整个宽度区间等距取的,不是取最窄的四十个**,而这不是讲究是必须的:窄就是
- * 贵,而 `COST_CURVE` 的前几关要的是**便宜**,它们需要的宽候选全都排在列表末尾。只取
- * 最窄的那一批,第 2 关会永远够不到自己的目标,而且是静默地够不到 —— 它只会挑到一个
- * 远超目标的候选,看上去还挺正常。
+ * 一个候选最多要 12 局(三星认证 3 局,三档车位需求各 3 局),所以难的关上通常是
+ * GAME_BUDGET 先用完、攒不满 ACCEPT 个;简单的候选赢得早,只花一两局。
  */
-const SIM_BUDGET = 40;
+export const ACCEPT = 16;
+export const GAME_BUDGET = 120;
+
+export interface PaintingCandidate { painted: CarSpec[]; width: number }
+
+/** The two measures `selectPainting` asks of a candidate. Injected so it can be tested fast. */
+export interface PaintingJudge {
+    certify(painted: CarSpec[], index: number, budget: Budget): boolean;
+    demand(painted: CarSpec[], index: number, budget: Budget): number;
+}
+
+/**
+ * Walk `sorted` from the narrow end and keep what a player that looks ahead can clear on the
+ * bay the level ships with, buying nothing. The first one whose stall demand meets `target`
+ * wins outright -- it is as hungry as the curve asks and narrower than anything after it.
+ * Otherwise the kept one nearest the target wins, the narrowest on a tie.
+ *
+ * WHY NOT THE BOTS ANY MORE. Measured 2026-09-24: of 400 candidates on level 10, the bots
+ * called 180 dead, and every one of the six narrowest re-played by the lookahead player was
+ * clearable. On level 3 all six were three-star. The bots were throwing away exactly the
+ * narrow paintings this search exists to find, and their stall figure agreed with the
+ * lookahead player's on almost nothing. See the 2026-09-24 spec.
+ *
+ * Returns null when nothing is certified, so `generateLevel` moves on to its next packing.
+ */
+export function selectPainting(
+    sorted: PaintingCandidate[], target: number, judge: PaintingJudge,
+): CarSpec[] | null {
+    const budget: Budget = { games: GAME_BUDGET };
+    const kept: { painted: CarSpec[]; width: number; demand: number }[] = [];
+    for (let i = 0; i < sorted.length && budget.games > 0 && kept.length < ACCEPT; i++) {
+        const c = sorted[i];
+        if (!judge.certify(c.painted, i, budget)) continue;
+        const demand = judge.demand(c.painted, i, budget);
+        if (demand === target) return c.painted;
+        kept.push({ painted: c.painted, width: c.width, demand });
+    }
+    if (kept.length === 0) return null;
+    kept.sort((a, b) => (Math.abs(a.demand - target) - Math.abs(b.demand - target)) || (a.width - b.width));
+    return kept[0].painted;
+}
 
 /**
  * Repaint `cars` until a mistake costs about what this level's place in the curve says it
@@ -1812,50 +1852,14 @@ function choosePainting(
         });
     }
     seen.sort((x, y) => x.width - y.width);
-
-    // Pass two plays a sample spanning the whole width range, narrow to wide, and takes the
-    // one whose price of a mistake fits the curve.
-    const step = Math.max(1, Math.floor(seen.length / SIM_BUDGET));
-    const probe: typeof seen = [];
-    for (let i = 0; i < seen.length && probe.length < SIM_BUDGET; i += step) probe.push(seen[i]);
-    let best: CarSpec[] | null = null;
-    let bestErr = Infinity;
-    for (const c of probe) {
-        const level = assemble(id, c.painted, tunnels);
-        const v = judge(level);
-        // Broken, not hard: every stall open and the board still frozen.
-        if (v.dead) continue;
-        // Three stars have to be reachable on the bay the level ships with. This is the
-        // human partner's own rule -- 在每步都不能错的情况下,可以拿到 3 星 -- and it is
-        // the gate that stops "narrow the choice" running away into levels nobody clears.
-        if (v.demand > UNLOCKED) continue;
-        // Whole stalls first, and only then the price of a mistake. Ranking them the other
-        // way round is what shipped a level 4 that yields to two stalls: `cost` reads the
-        // same 0.0 to 0.4 whether the level needs one stall or three.
-        // Three terms, in strict order of authority, and the order is the whole point.
-        //
-        //  - whole stalls, because that is what my human partner reports playing;
-        //  - then WIDTH, because that is the dial they named -- 同一时间,能驶出停车场的
-        //    不同颜色的车辆数量越少,难度越大 -- and narrower is simply better inside a
-        //    demand bucket, so it needs no curve of its own;
-        //  - then the price of a mistake, which is too flat to lead but does break ties.
-        //
-        // Width used to be a FILTER here and nothing more: it chose which candidates got
-        // played, and the ranking was demand then cost. Demand is four integers, so it
-        // could not tell a painting of width 3.96 from one of width 3.06, and the cost
-        // tie-break then sent level 4 to the SCATTERED one -- the very thing the dial was
-        // named to avoid. The shipped level 4 opened `g y r p b r r y g b p b ...`.
-        const whole = Math.abs(v.demand - target) * 100 + v.width * 10;
-        // `mistakeCost` is five playthroughs, and its term is bounded by 9, so a candidate
-        // already this far behind cannot win no matter what it costs.
-        if (whole >= bestErr) continue;
-        const err = whole + Math.min(Math.abs(mistakeCost(level) - costTarget(id)), 9);
-        if (err < bestErr) {
-            bestErr = err;
-            best = c.painted;
-        }
-    }
-    return best;
+    // Pass two: the lookahead player, narrow end first. Seeds come from the id and the
+    // candidate's place in the sorted list, so the same id always walks the same games.
+    return selectPainting(seen, target, {
+        certify: (painted, i, budget) =>
+            certifyThreeStar(assemble(id, painted, tunnels), id * 104729 + i * 17, budget),
+        demand: (painted, i, budget) =>
+            strongDemand(assemble(id, painted, tunnels), id * 104729 + i * 17, budget),
+    });
 }
 
 /**

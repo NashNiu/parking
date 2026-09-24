@@ -157,8 +157,9 @@ for (const id of ids) {
     // `stalls` 那样在 4 就饱和:配色和队列顺序顶到头时,每关都已经是 4/4,而他还是
     // 两个车位就过。见 `exitCars` 和 `better`。
     const exits = v.width === 0 ? '  -  ' : exitCars(level).toFixed(1).padStart(5);
-    // 开局给四个车位,这一关最少用几个就能过 —— 人类伙伴一直在报的那个数。四个里只要
-    // 两个,另外两个就是摆设。这是**难度列**;`cost` 是同一档里的平手判据。
+    // 开局给四个车位,**机器人**最少用几个就能过。表头叫 bot 而不是 stalls:它是 play-sim
+    // 那三个只看颜色的机器人的数,2026-09-24 起已经不是生成器挑配色的依据(见
+    // `selectPainting`)。强玩家的数由 `npm run check` 报告。
     const stalls = want.colors <= 4 ? '  -  '
         : `${v.demand}/${demandTarget(id)}`.padStart(5);
     const slip = want.colors <= 4 ? '  -  '
@@ -174,7 +175,7 @@ for (const id of ids) {
 }
 
 console.log(`\nwrote ${ids.length - failed} level(s) to ${outDir}\n`);
-console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width exits stalls    slip  packing       play');
+console.log(' id  cars  colors  blocked/want  rounds/min  score   pax   tun   holes inward   gap width exits    bot    slip  packing       play');
 console.log(rows.join('\n'));
 console.log('');
 
