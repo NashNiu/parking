@@ -14,5 +14,6 @@
     "types": ["node"]
   },
   "include": ["../tools/gen-levels.ts", "../tools/band-sweep.ts", "../tools/patch-splash.ts",
+              "../tools/check-difficulty.ts",
               "../game/assets/scripts/core/**/*.ts"]
 }
