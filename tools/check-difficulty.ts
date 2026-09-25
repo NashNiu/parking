@@ -20,6 +20,9 @@ const dir = path.resolve(process.cwd(), '..', 'game', 'assets', 'resources', 'le
 const flag = process.argv.indexOf('--only');
 const ids = flag >= 0 ? [Number(process.argv[flag + 1])] : [2, 3, 4, 5, 6, 7, 8, 9, 10];
 
+/** Salts tried per level before it is reported as not shown three-star. */
+const SALTS = 8;
+
 let failed = 0;
 console.log(' id  三星认证  强玩家车位  机器人车位  width   用时');
 for (const id of ids) {
@@ -30,8 +33,15 @@ for (const id of ids) {
     continue;
   }
   const t0 = process.hrtime.bigint();
-  const ok = certifyThreeStar(level, id);
-  const strong = ok ? String(strongDemand(level, id)) : '-';
+  // Up to SALTS salts (three seeds each) before calling a level unshown. A win is proof and
+  // a loss is not, so a checker that gives up after three seeds reports levels the
+  // generator already certified as broken: on 2026-09-24 level 10 lost seeds 30-32 here,
+  // and seed 3 cleared it without buying a stall. The demand is measured from the salt
+  // that won, so the two numbers describe the same line of search.
+  let salt = -1;
+  for (let s = 0; s < SALTS && salt < 0; s++) if (certifyThreeStar(level, id * 101 + s)) salt = id * 101 + s;
+  const ok = salt >= 0;
+  const strong = ok ? String(strongDemand(level, salt)) : '-';
   const bot = judge(level).demand;
   const secs = Number(process.hrtime.bigint() - t0) / 1e9;
   if (!ok) failed++;

@@ -117,7 +117,13 @@ test('it clears a shipped level on fewer stalls than every bot can', () => {
   // Chosen as the cheapest such witness measured 2026-09-24 -- about 9 s under plain node
   // (level 4 on three stalls, the plan's first choice, ran 437 s under ts-jest). Seeds
   // 1, 2, 3 and 7 all won it.
-  const lvl = shipped(6);
+  //
+  // The PINNED copy, not the shipped file: the regeneration that followed made level 6
+  // harder, and this test went from 136 s to 918 s on it. What it witnesses is the player's
+  // strength, which a fixed level measures and a moving one does not.
+  const lvl = JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'level-6-2026-09-24.json'), 'utf8',
+  )) as LevelData;
   lvl.parking.unlocked = 2;
   lvl.parking.slots = 2;
   for (const pol of [decisive, careful, keepDistinct]) expect(simulate(lvl, pol, 1)).toBe(false);

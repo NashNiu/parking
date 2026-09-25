@@ -287,7 +287,15 @@ describe('judge', () => {
 
 describe('demandPressure', () => {
   // 已提交的第 6 关:环上平均有颜色,车位盖不住其中一部分。
-  const level = (): LevelData => JSON.parse(JSON.stringify(shipped(6)));
+  // A PINNED copy of level 6, not the shipped file. These two ask whether `demandPressure`
+  // reads the bay's coverage at all, which is a property of the metric -- and the shipped
+  // level 6 is regenerated whenever the painting search improves. The 2026-09-24 regeneration
+  // narrowed it from 3.22 to 2.17, and on that painting seven stalls barely move the gap
+  // (1.02 -> 0.97): the same effect the paragraph below records one step earlier, taken
+  // further. The level this assertion was calibrated on is kept as a fixture instead.
+  const level = (): LevelData => JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'level-6-2026-09-24.json'), 'utf8',
+  )) as LevelData;
 
   test('环上有需求,而且车位盖不住其中一部分', () => {
     const r = demandPressure(level());
