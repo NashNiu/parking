@@ -1213,3 +1213,13 @@ test('selectPainting spends at most GAME_BUDGET games and keeps at most ACCEPT c
   expect(certified).toBeLessThanOrEqual(ACCEPT);
   expect(spent).toBeLessThanOrEqual(GAME_BUDGET);
 });
+
+test('selectPainting never takes a demand nobody finished measuring', () => {
+  // `demand` answers null when the budget cut the measurement short. That candidate must not
+  // count as a hit on the target, and must not beat one that was measured.
+  const pick = selectPainting(fakes([1.0, 1.1]), 4, {
+    certify: () => true,
+    demand: (_p, i) => [null, 3][i],
+  });
+  expect(idOf(pick)).toBe(1);
+});

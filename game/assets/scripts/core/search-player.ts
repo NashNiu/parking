@@ -180,15 +180,16 @@ export interface Budget { games: number }
 
 const TRIES = 3;
 
-function tryWin(level: LevelData, salt: number, budget: Budget | undefined): boolean {
+/** 'out' is the budget running dry before a game could be played -- neither a win nor a loss. */
+function tryWin(level: LevelData, salt: number, budget: Budget | undefined): 'won' | 'lost' | 'out' {
   for (let s = 0; s < TRIES; s++) {
     if (budget) {
-      if (budget.games <= 0) return false;
+      if (budget.games <= 0) return 'out';
       budget.games--;
     }
-    if (searchPlay(level, { buy: false, seed: salt * TRIES + s }).won) return true;
+    if (searchPlay(level, { buy: false, seed: salt * TRIES + s }).won) return 'won';
   }
-  return false;
+  return 'lost';
 }
 
 /**
@@ -199,7 +200,7 @@ function tryWin(level: LevelData, salt: number, budget: Budget | undefined): boo
  * the same four stalls by another seed. So `true` is certain and `false` means "not shown".
  */
 export function certifyThreeStar(level: LevelData, salt: number, budget?: Budget): boolean {
-  return tryWin(level, salt, budget);
+  return tryWin(level, salt, budget) === 'won';
 }
 
 /**
@@ -211,12 +212,28 @@ export function certifyThreeStar(level: LevelData, salt: number, budget?: Budget
  * When the budget runs out the bound it has is what it returns.
  */
 export function strongDemand(level: LevelData, salt: number, budget?: Budget): number {
+  return strongDemandMeasured(level, salt, budget).need;
+}
+
+/**
+ * `strongDemand`, saying whether the measurement FINISHED. `exact` is false when the budget
+ * ran out before a tier could be settled; `need` is then only the bound reached so far.
+ *
+ * The generator needs the difference. Its target on every packed level is `unlocked`, which
+ * is also what a measurement cut short at its first tier returns -- so without this, a
+ * candidate nobody finished measuring read as a perfect hit (found by the final review).
+ */
+export function strongDemandMeasured(
+  level: LevelData, salt: number, budget?: Budget,
+): { need: number; exact: boolean } {
   let need = level.parking.unlocked;
   for (let k = need - 1; k >= 1; k--) {
     const probe: LevelData = JSON.parse(JSON.stringify(level));
     probe.parking.unlocked = k;
-    if (!tryWin(probe, salt * 7 + k, budget)) break;
+    const r = tryWin(probe, salt * 7 + k, budget);
+    if (r === 'out') return { need, exact: false };
+    if (r === 'lost') break;
     need = k;
   }
-  return need;
+  return { need, exact: true };
 }

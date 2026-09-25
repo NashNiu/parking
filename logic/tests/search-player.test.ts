@@ -151,3 +151,15 @@ test('a budget that runs out stops the measuring deterministically', () => {
   expect(one.games).toBe(0);
   expect(strongDemand(soloLevel(), 1, one)).toBe(soloLevel().parking.unlocked);
 });
+
+import { strongDemandMeasured } from '../../game/assets/scripts/core/search-player';
+
+test('a demand the budget cut short says so, instead of passing for the full bay', () => {
+  // Found by the final review: with the budget gone, `strongDemand` returns `unlocked`, and
+  // `unlocked` is exactly the target on every packed level -- so a candidate nobody finished
+  // measuring read as a perfect hit and beat candidates that had been measured.
+  expect(strongDemandMeasured(soloLevel(), 1)).toEqual({ need: 1, exact: true });
+  expect(strongDemandMeasured(soloLevel(), 1, { games: 0 })).toEqual({ need: 4, exact: false });
+  // One game: tier 3 is won, tier 2 never gets played.
+  expect(strongDemandMeasured(soloLevel(), 1, { games: 1 })).toEqual({ need: 3, exact: false });
+});

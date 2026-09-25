@@ -5,7 +5,7 @@ import {
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
 import { exitFrontiers, frontierWidth, exitCars } from './play-sim';
-import { Budget, certifyThreeStar, strongDemand } from './search-player';
+import { Budget, certifyThreeStar, strongDemandMeasured } from './search-player';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
@@ -741,6 +741,11 @@ export function tunnelParams(id: number): TunnelParams {
  * So the ramp is made of what a mistake COSTS, in the only resource the game meters: stalls
  * opened, which is what `GameCore.stars` is spent from. See `COST_CURVE` and `judge`.
  *
+ * (Every stall figure in this table and its rows is a BOT reading. Since 2026-09-24 the
+ * painting is chosen by the lookahead player instead -- see `selectPainting` -- so these
+ * offsets were calibrated against a judge the generator no longer consults. Re-sweep with
+ * `npm run check` beside it, not on the bots' numbers alone.)
+ *
  * Ids 6 and 7 have EXACTLY ONE passing cell each in the whole 33-cell grid. They are not chosen,
  * they are forced, and a regeneration that moves their packing can take even that away.
  */
@@ -751,7 +756,9 @@ const BAND_CURVE: { offset: number; interleave: number }[] = [
     // 对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重搜配色"。
     //
     // 选法:`dead` 和"三星拿不到"之外的格子里,取扫描 demand 最接近目标的那个,同档再
-    // 比 cost —— 和 `choosePainting` 同一个目标函数,这是它们能复合的前提。
+    // 比 cost —— 这是当年 `choosePainting` 的目标函数。2026-09-24 起 `choosePainting`
+    // 改由强玩家挑(`selectPainting`),两者不再是同一个目标函数,这里的复合前提已经不
+    // 成立:这些 offset 是在旧判官下扫出来的。
     //
     // 2026-09-21 改判据前后的实测对照(这一列就是人类伙伴一直在报的那个数):
     //
@@ -783,7 +790,8 @@ export function bandParams(id: number): { offset: number; interleave: number } {
 }
 
 /**
- * 每一关最少该逼玩家用几个开局车位 —— `judge().demand` 的目标值。
+ * 每一关最少该逼玩家用几个开局车位 —— 强玩家车位需求(`strongDemand`)的目标值。
+ * 2026-09-24 之前它是机器人 `judge().demand` 的目标,下面几段历史说的都是那个时期。
  *
  * 这是人类伙伴一直在报的那个数,原话:只用了三个车位,感觉甚至两个车位都可以。开局给
  * 四个而只需要两个,那另外两个就是摆设,颜色怎么排都救不回来。
@@ -796,7 +804,8 @@ export function bandParams(id: number): { offset: number; interleave: number } {
  * 2026-09-21 实测,九关是 1、2、2、2、4、4、2、4、4:五关最多只用到一半车位,第 2 关
  * 八十九辆车一个车位就打完了。
  *
- * 只有 1 到 4 四档(`UNLOCKED` 是 4),细的部分交给 `COST_CURVE` 在同一档里做平手判据。
+ * 只有 1 到 4 四档(`UNLOCKED` 是 4),同一档里 width 窄的优先(`selectPainting`);
+ * `COST_CURVE` 已不参与排序。
  * 人类伙伴说过"即使从第二关开始难度就一直很高也可以",所以第 4 关起就顶满。
  *
  * 4 就是这个设计的天花板,而且是算出来的不是调出来的:开局给 `UNLOCKED` 个车位,又要求
@@ -815,10 +824,10 @@ export function demandTarget(id: number): number {
 }
 
 /**
- * 同一档车位需求下,再按"错一步要买几个车位"挑 —— `mistakeCost` 的目标值。
+ * 错一步要买几个车位 —— `mistakeCost` 的目标值。
  *
- * 平手判据,不是主判据。它自己太平,分辨不出关卡紧不紧;但在车位需求已经相同的候选之间,
- * 它分得出哪个更不容错。
+ * 2026-09-24 起**不参与选配色**:它是机器人的读数,而且此前已经证明太平、分辨不出关卡紧
+ * 不紧。现在只留给 `tools/gen-levels.ts` 的表格打印,当对照用。
  */
 const COST_CURVE = [0, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
 
@@ -1762,7 +1771,8 @@ export interface PaintingCandidate { painted: CarSpec[]; width: number }
 /** The two measures `selectPainting` asks of a candidate. Injected so it can be tested fast. */
 export interface PaintingJudge {
     certify(painted: CarSpec[], index: number, budget: Budget): boolean;
-    demand(painted: CarSpec[], index: number, budget: Budget): number;
+    /** Null when the budget cut the measurement short: not a figure, and never a hit. */
+    demand(painted: CarSpec[], index: number, budget: Budget): number | null;
 }
 
 /**
@@ -1788,6 +1798,7 @@ export function selectPainting(
         const c = sorted[i];
         if (!judge.certify(c.painted, i, budget)) continue;
         const demand = judge.demand(c.painted, i, budget);
+        if (demand === null) continue;
         if (demand === target) return c.painted;
         kept.push({ painted: c.painted, width: c.width, demand });
     }
@@ -1797,8 +1808,9 @@ export function selectPainting(
 }
 
 /**
- * Repaint `cars` until a mistake costs about what this level's place in the curve says it
- * should, or return null if the search runs out.
+ * Repaint `cars` with the narrowest painting the lookahead player can clear three-star on the
+ * bay the level ships with, preferring one that needs as many stalls as `DEMAND_CURVE` asks
+ * (see `selectPainting`), or return null if none is certified.
  *
  * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
  * cars (`bandedQueue`), so every painting is colour-balanced by construction and cannot fail
@@ -1817,8 +1829,8 @@ export function selectPainting(
  * in core/play-sim.ts), so the search would burn its whole budget to fail. Those ids are
  * teaching levels and take the round-robin.
  *
- * `tunnels` is carried through only so `assemble` builds the WHOLE level for `judge` to
- * play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
+ * `tunnels` is carried through only so `assemble` builds the WHOLE level for the lookahead
+ * player to play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
  * verdict reached without them is a verdict about a different level. The tunnel cars are not
  * themselves repainted: they are not in the leaving order (when they come out is the player's
  * choice, not `peel`'s) and `bandedQueue` derives the queue from whatever colours they carry, so
@@ -1857,8 +1869,10 @@ function choosePainting(
     return selectPainting(seen, target, {
         certify: (painted, i, budget) =>
             certifyThreeStar(assemble(id, painted, tunnels), id * 104729 + i * 17, budget),
-        demand: (painted, i, budget) =>
-            strongDemand(assemble(id, painted, tunnels), id * 104729 + i * 17, budget),
+        demand: (painted, i, budget) => {
+            const m = strongDemandMeasured(assemble(id, painted, tunnels), id * 104729 + i * 17, budget);
+            return m.exact ? m.need : null;
+        },
     });
 }
 
