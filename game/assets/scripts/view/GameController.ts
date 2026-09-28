@@ -8,9 +8,9 @@ import {
     DEFAULT_TRACK, TrackPath, TrackShape, TRACK_SHAPES, validateTrack, TUNNEL_BOX, tunnelBox,
     bestStars, emptyProgress, parseProgress, Progress, recordClear, serializeProgress,
     unlockedThrough, defaultSettings, parseSettings, serializeSettings, Settings,
-    addCoins, backfilledWallet, canClaim, Checkin, claim as claimCheckin, coinsForClear,
-    emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin, serializeWallet,
-    todayKey, Wallet,
+    backfilledWallet, balance, canClaim, Checkin, claim as claimCheckin, coinsForClear,
+    earn, emptyCheckin, emptyWallet, parseCheckin, parseWallet, serializeCheckin,
+    serializeWallet, spend, todayKey, unlockPrice, Wallet,
 } from '../core/index';
 import { BoardLayout, BOARD_TILT, TILT_COS, TILT_TAN } from './board-layout';
 import { buildFootprintOverlay } from './debug-overlay';
@@ -36,6 +36,7 @@ import { GROUND } from './palette';
 import { squash, flash, dustBurst, resetParticleBudget, stars, confetti } from './effects';
 import { CAR_HEIGHT } from './car-mesh';
 import { SfxManager } from './sfx';
+import { MusicManager } from './music';
 import { vibrate } from './haptics';
 
 const { ccclass, property } = _decorator;
@@ -488,17 +489,28 @@ export class GameController extends Component {
      */
     private settings: Settings = defaultSettings();
     /**
-     * The coin balance, in memory, held exactly the way `progress` is: read once on boot,
-     * written only when it changes, never read back off the device again.
+     * The coin ledger, in memory, held exactly the way `progress` is: read once on boot,
+     * written only when it changes, never read back off the device again. The balance is not
+     * stored here -- `balance(this.wallet)` derives it fresh every time it is read, for the
+     * reason `core/wallet`'s own docblock argues. Coins now leave as well as arrive (a parking
+     * stall costs some), which is exactly what `backfillWallet` below is guarding against.
      *
      * It is a SECOND save under a second key, but not a second lifetime -- wiping the progress
      * wipes this too (`clearWalletText` says why, and it is the opposite call from settings).
-     * Nothing spends coins yet; the lobby's top bar is the only thing that reads the number.
      */
     private wallet: Wallet = emptyWallet();
 
     /**
-     * The daily check-in streak, read once on the boot path beside the wallet.
+     * Whether the wallet came off the device as a v1 save.
+     *
+     * Kept as a field because the two halves of the migration happen at different times: the
+     * save is read in `start`, and the level count the backfill needs is not known until
+     * `finishLoading`. Nothing else reads it, and nothing sets it back to true.
+     */
+    private walletFromLegacy = false;
+
+    /**
+     * The daily check-in calendar, read once on the boot path beside the wallet.
      *
      * A SAVE OF ITS OWN rather than a field on the wallet, for the reason `core/checkin`
      * gives: coins are what it pays out, not what it is. It goes in the wipe with the
@@ -535,6 +547,14 @@ export class GameController extends Component {
      * -- so the card can report it as delivered without counting them one by one.
      */
     private levelPassengers = 0;
+    /**
+     * Coins spent on stalls in the level being played, for the win card's tally.
+     *
+     * Reset by `loadLevel`, not accumulated across a session: the card answers "was this run
+     * worth it", and a figure carried over from the previous level would answer a question
+     * nobody asked.
+     */
+    private spentThisLevel = 0;
     /**
      * The level's own id, from its JSON -- which is what the win card names and what the
      * progress bar counts to. Not parsed out of `levelName`: the id is the level's own
@@ -595,6 +615,7 @@ export class GameController extends Component {
     /** The footprint overlay while it is shown. See `toggleDebugOverlay`. */
     private debugOverlay: Node | null = null;
     private sfx: SfxManager | null = null;
+    private music: MusicManager | null = null;
     /** Lane centrelines of the ring road, rebuilt with the board (see buildBoard). */
     private ring: RingRoad = { left: -3, right: 3, top: ROAD_Y, bottom: -6 };
     /**
@@ -735,13 +756,16 @@ export class GameController extends Component {
         this.settings = parseSettings(loadSettingsText());
         // Beside the progress, and on the same terms: `parseWallet` cannot throw either, so a
         // corrupt balance costs the player their coins and not their game.
-        this.wallet = parseWallet(loadWalletText());
+        const loaded = parseWallet(loadWalletText());
+        this.wallet = loaded.wallet;
+        this.walletFromLegacy = loaded.fromLegacy;
         // Same contract and the same reason: `parseCheckin` cannot throw either, so a
-        // corrupt streak costs the player a day rather than the boot.
+        // corrupt save costs the player this month's check-in record rather than the boot.
         this.checkin = parseCheckin(loadCheckinText());
         console.log(`[Game] progress: cleared through`
             + ` ${unlockedThrough(this.progress) - 1}`);
         this.sfx = new SfxManager(this.node);
+        this.music = new MusicManager(this.node);
         this.applySettings();
         this.setupCamera();
         const canvas = find('Canvas');
@@ -884,13 +908,14 @@ export class GameController extends Component {
             // Once, with the view -- the bar is standing furniture and its one reserved
             // entry does not change. The dot on top of it does, so it is repainted below.
             this.home.fillCheckin(() => this.openCheckin());
+            this.home.setCoinTap(() => this.hud?.showLedger(this.wallet));
         }
         this.screen = 'home';
         this.hud?.setPlayVisible(false);
         this.home?.setProgress(this.progress);
         // Every return to the lobby repaints the balance, which is what makes a clear's payout
         // show up: the bar is standing and was drawn long before the coins were earned.
-        this.home?.setCoins(this.wallet.coins);
+        this.home?.setCoins(balance(this.wallet));
         // On every return, not only on the first build: a player who came back after
         // midnight has a claim waiting that was not there when the bar was drawn.
         this.paintCheckinDot();
@@ -914,43 +939,34 @@ export class GameController extends Component {
     }
 
     /**
-     * Catch the wallet up to a save whose stars predate it: a player who cleared levels
-     * before the wallet subsystem existed has a balance stuck at 0 (or wherever it was when
-     * the subsystem landed) even though `this.progress` already earned more than that.
-     * `coinsForClear` cannot pay that out itself -- it pays the difference at the moment of a
-     * clear, and there is no clear happening here to attach a payout to -- so `backfilledWallet`
-     * derives the total and this wires the result into storage and the coin pill.
+     * Pay a v1 save what its stars already earned, ONCE.
      *
-     * THE DECISION IS NOT MADE HERE, deliberately. Raising-but-never-lowering is the one
-     * property this feature rests on, and it used to be three lines in this method -- in the
-     * view layer, which has no test environment, so the safest-sounding half of the feature was
-     * the untested half. `core/wallet`'s `backfilledWallet` owns it and jest pins it. What is
-     * left here is wiring: ask, and if the answer is a different object, persist it.
+     * GATED ON `walletFromLegacy`, AND THAT GATE IS THE WHOLE POINT. This used to run on every
+     * boot, which was sound while coins could only come in: a balance below the derived figure
+     * could only mean the wallet had not existed yet. Now that a stall costs coins, a balance
+     * below the derived figure is the normal state of anyone who has bought one -- and running
+     * this would hand the money back. `core/wallet`'s `backfilledWallet` says the same thing
+     * from its end; neither note is safe to read alone.
      *
-     * This does not reopen the "clear -> wipe -> clear again" farm that kept coins out of
-     * `Progress` in the first place: `wipeProgress` clears the wallet and the progress
-     * TOGETHER (see `clearWalletText`'s call site), so the next load derives 0 from an empty
-     * save, not the balance the player wiped away. Nothing here runs a second time on the same
-     * clear either -- once raised, the stored balance is no longer below its own derived
-     * figure, so a later load is a no-op.
-     *
-     * Runs from `finishLoading`, not from `start`'s load path alongside `parseWallet`: it
-     * needs `countLevels()`, which needs the resources bundle index, and that index is not
-     * ready any earlier than this (see `finishLoading`'s own docblock). `showHome` already
-     * painted the pre-backfill balance on the very first frame, so a change here has to
-     * repaint the pill again, not just persist it.
+     * The flag is cleared before the write, not after, so a failing `saveWalletText` cannot
+     * leave this armed to run again on the next boot and pay twice.
      */
     private backfillWallet(levelCount: number): void {
-        // The raise-or-leave decision lives in `core/wallet`, not here, and the identity check
-        // below is why that is worth a function call: `backfilledWallet` hands back the SAME
-        // object when nothing is owed, so "did anything change" is one `===` rather than a
-        // second copy of the comparison it just made. This layer has no tests; that one does.
-        const next = backfilledWallet(this.wallet, this.progress, levelCount);
-        if (next === this.wallet) return;
+        if (!this.walletFromLegacy) return;
+        this.walletFromLegacy = false;
+        const next = backfilledWallet(this.wallet, this.progress, levelCount, Date.now());
+        // Same `===` contract as before: unchanged means nothing is owed, so nothing is written.
+        if (next === this.wallet) {
+            // Still write once, to replace the v1 payload on the device with a v2 one. Leave it
+            // and the next boot reads v1 again, sets the flag again, and re-derives forever --
+            // harmless while nothing has been spent, and a refund the moment something has.
+            saveWalletText(serializeWallet(this.wallet));
+            return;
+        }
         this.wallet = next;
         saveWalletText(serializeWallet(this.wallet));
-        this.home?.setCoins(this.wallet.coins);
-        console.log(`[Game] wallet backfilled to ${this.wallet.coins} coins`);
+        this.home?.setCoins(balance(this.wallet));
+        console.log(`[Game] wallet backfilled to ${balance(this.wallet)} coins`);
     }
 
     /** Leave the home screen for `name`. The inverse of `showHome`. */
@@ -1035,6 +1051,7 @@ export class GameController extends Component {
             resetParticleBudget();
             this.core = new GameCore(level);
             this.levelPassengers = level.loop.queue.reduce((sum, g) => sum + g.count, 0);
+            this.spentThisLevel = 0;
             this.levelIdNum = level.id;
             this.buildBoard(level);
             this.hud?.setLevel(level.id);
@@ -1761,12 +1778,16 @@ export class GameController extends Component {
      */
     private syncUnlockUrge(): void {
         if (!this.core?.needsUnlock() || this.busy || this.arriving > 0) return;
+        const price = unlockPrice(this.core.parking.unlocksUsed());
+        const coins = balance(this.wallet);
         this.hud?.showUnlockPrompt({
             left: this.core.parking.locked(),
             // At one star there is nothing left to lose, and a prompt that keeps threatening
             // a star it cannot take is a prompt the player learns to stop reading.
             losesStar: this.core.stars() > 1,
-        });
+            price,
+            affordable: coins >= price,
+        }, coins);
     }
 
     /**
@@ -2221,9 +2242,12 @@ export class GameController extends Component {
             // nothing to save. The balance is repainted by `showHome`, not here -- the bar is
             // not on screen while this card is up.
             if (earned > 0) {
-                this.wallet = addCoins(this.wallet, earned);
+                // `rating` goes in as `extra`: the ledger panel prints the star rating, and it
+                // cannot be recovered from `earned`, which is a DIFFERENCE.
+                this.wallet = earn(this.wallet, 'clear', earned, this.levelIdNum,
+                    Date.now(), rating);
                 saveWalletText(serializeWallet(this.wallet));
-                console.log(`[Game] earned ${earned} coins, balance ${this.wallet.coins}`);
+                console.log(`[Game] earned ${earned} coins, balance ${balance(this.wallet)}`);
             }
             // `hasNext` only picks the headline and the button's wording; the tap handler
             // re-resolves the next level, so the two can't disagree.
@@ -2233,6 +2257,8 @@ export class GameController extends Component {
                 passengers: this.levelPassengers,
                 unlocks: this.core!.parking.unlocksUsed(),
                 stars: rating,
+                earned,
+                spent: this.spentThisLevel,
             }, this.nextLevelName() !== null);
         } else {
             // Deadlock: highlight every remaining stuck car on the grid.
@@ -2335,6 +2361,13 @@ export class GameController extends Component {
      * the tap side closed: a control answering input it should not be able to hear.
      */
     private onPressStart(e: EventTouch | EventMouse): void {
+        // BEFORE the screen gate, and it is the only line in this method that runs on every
+        // screen. On web the browser will not let a page play audio until it has seen a
+        // gesture; this is the gesture, and `MusicManager.kick` is a boolean check unless the
+        // track is wanted and silent. Putting it after the `return` below would have meant the
+        // music only ever recovered on the lobby, which is not where a player who opened
+        // straight into a level is standing.
+        this.music?.kick();
         if (this.screen !== 'home' || !this.uiCam || !this.home) return;
         if (this.hud?.settingsOpen()) return;
         const p = e.getLocation();
@@ -2386,9 +2419,14 @@ export class GameController extends Component {
      *
      * The sound is gated at play time inside `SfxManager` and the buzz in `haptics`, so
      * neither has to be told twice and turning something back on is immediate.
+     *
+     * THE MUSIC IS THE ODD ONE OUT and `MusicManager.setEnabled` says why: a loop has no play
+     * time to be gated at, so its switch starts and stops the source itself. Same call shape
+     * here, different mechanism behind it -- which is the point of all three being setters.
      */
     private applySettings(): void {
         this.sfx?.setEnabled(this.settings.sfx);
+        this.music?.setEnabled(this.settings.music);
         setHaptics(this.settings.haptics);
     }
 
@@ -2399,10 +2437,12 @@ export class GameController extends Component {
      * the player sees is what the game is actually doing -- a panel that remembers its own
      * state is a second answer to the same question.
      */
-    private toggleSetting(which: 'sfx' | 'haptics'): void {
+    private toggleSetting(which: 'sfx' | 'music' | 'haptics'): void {
         this.settings = { ...this.settings, [which]: !this.settings[which] };
         this.applySettings();
-        this.hud?.paintSwitches(this.settings.sfx, this.settings.haptics);
+        this.hud?.paintSwitches(
+            this.settings.sfx, this.settings.music, this.settings.haptics,
+        );
         saveSettingsText(serializeSettings(this.settings));
         // AFTER applying, so switching the sound ON is confirmed by a sound and switching it
         // off is confirmed by silence -- the tap is the demonstration.
@@ -2413,19 +2453,32 @@ export class GameController extends Component {
     /**
      * Raise the check-in card. The bar's live entry does exactly this and nothing else.
      *
-     * `todayKey(new Date())` is read here and handed down, so the card and the row it draws
+     * `todayKey(new Date())` is read here and handed down, so the card and the grid it draws
      * agree with each other. THAT IS NOT A GUARANTEE ABOUT THE PAYOUT, and an earlier version
      * of this comment claimed it was. `claimCheckinToday` reads the clock again, so a card
-     * opened at 23:59:58 and claimed at 00:00:01 is TWO reads: the streak `last` was
-     * continuing is now the day before yesterday, the claim restarts at day 1, and the cell
-     * that lit up said 40 while the player is paid 20.
+     * opened before midnight and claimed after it is TWO reads -- but what that buys the
+     * player is a much smaller risk than it was under the streak, and a differently-shaped one.
+     *
+     * WITHIN A MONTH, crossing midnight between the two reads changes nothing: `nextCount`
+     * prices off `c.days.length + 1` on both sides, because neither yesterday's date nor
+     * today's is in `days` until a claim actually writes one of them. There is no streak to
+     * reset any more, so there is nothing for the two reads to disagree about.
+     *
+     * ACROSS A MONTH BOUNDARY the same shape of gap survives, roughly THIRTY TIMES RARER than
+     * the old nightly one: a card opened at 23:59 on a month's last day shows that month's
+     * running count and figure, and a claim landing at 00:00:01 is the NEW month's 1st,
+     * paying 20 regardless of what the old month's count had reached. There is also a version
+     * the streak card could never have had, because it had no dates: the cell that lit up is
+     * TODAY'S DATE cell, so a card left open across midnight highlights yesterday's square
+     * while a tap on it would claim today's.
      *
      * That is left as it is, deliberately. The PAYOUT is always right for the day it happens
      * on -- the clock the wallet is written from is the last one read -- and `paintCheckin`
-     * repaints the row immediately after, so what the player is looking at a second later
-     * agrees with what they were paid. The alternative is a card that re-raises itself
-     * under the player's thumb at midnight, which trades a one-second-per-day discrepancy
-     * for a control that moves while being pressed.
+     * repaints the grid immediately after, so what the player is looking at a second later
+     * agrees with what they were paid. The alternative is a card that re-raises itself under
+     * the player's thumb at midnight, which now trades a once-a-month discrepancy -- worse
+     * odds for the trade than when the gap was nightly -- for a control that moves while
+     * being pressed.
      *
      * The dot has a milder version of the same: nothing repaints it while the lobby sits
      * open, so a player who crosses midnight without leaving the screen does not see it
@@ -2448,15 +2501,17 @@ export class GameController extends Component {
         if (!canClaim(this.checkin, today)) return;
         const { checkin, coins } = claimCheckin(this.checkin, today);
         this.checkin = checkin;
-        this.wallet = addCoins(this.wallet, coins);
+        // `ref` is which check-in of the month this was, which is what the ledger panel prints.
+        // Read off the NEW save, so it counts the claim just recorded.
+        this.wallet = earn(this.wallet, 'checkin', coins, this.checkin.days.length, Date.now());
         saveCheckinText(serializeCheckin(this.checkin));
         saveWalletText(serializeWallet(this.wallet));
-        this.home?.setCoins(this.wallet.coins);
+        this.home?.setCoins(balance(this.wallet));
         this.hud?.paintCheckin(this.checkin, today);
         this.paintCheckinDot();
         this.sfx?.play('tap');
         vibrate('light');
-        console.log(`[Game] check-in day ${this.checkin.day} paid ${coins} coins`);
+        console.log(`[Game] check-in day ${this.checkin.days.length} paid ${coins} coins`);
     }
 
     /** The unread dot on the bar's check-in entry: on exactly while a claim is waiting. */
@@ -2481,10 +2536,10 @@ export class GameController extends Component {
      *
      * THE WALLET GOES WITH IT, and `clearWalletText` is where that reasoning lives: coins are
      * derived from the progress, so a wipe that spared them would make "clear -> wipe -> clear
-     * again" an unlimited mint. THE CHECK-IN STREAK GOES WITH IT for the same reason and
-     * one of its own: it pays in coins, and its seventh day pays 100, so a streak that
-     * survived a wipe would put the table's one week-long figure two taps away. All three
-     * saves, all three in-memory copies, the readout and the bar's dot.
+     * again" an unlimited mint. THE CHECK-IN CALENDAR GOES WITH IT for the same reason and
+     * one of its own: it pays in coins, and every seventh check-in pays 100, so a record that
+     * survived a wipe would put the table's top figure two taps away. All three saves, all
+     * three in-memory copies, the readout and the bar's dot.
      *
      * THE PANEL COMES DOWN FIRST, because the confirmation is two things the panel is standing
      * in front of: the rail repaints fully locked, which is evidence rather than a claim, and a
@@ -2532,12 +2587,22 @@ export class GameController extends Component {
                 // something else on the same card is a trap.
                 if (hit !== null && hit !== 'wipe') this.hud.disarmWipe();
                 if (hit === 'close') this.hud.hideSettings();
-                else if (hit === 'sfx' || hit === 'haptics') this.toggleSetting(hit);
+                else if (hit === 'sfx' || hit === 'music' || hit === 'haptics') {
+                    this.toggleSetting(hit);
+                }
                 // Two taps, and `confirmWipe` counts them: the first one only changes the
                 // button's label into a question. 'home' and 'replay' cannot arrive here --
                 // `hitsSettings` gates them on the lobby flag, because the nodes are switched
                 // off and `inBox` would otherwise still answer for where they used to be.
                 else if (hit === 'wipe' && this.hud.confirmWipe()) this.wipeProgress();
+                return;   // anything else on this screen is swallowed
+            }
+            // The ledger is asked on the same terms, and at the same priority, as the settings
+            // card above -- it can never be raised over the check-in card (the two are mutually
+            // exclusive, both opened only from this screen), so where exactly it sits relative to
+            // the check-in branch below does not matter, only that it comes before it.
+            if (this.hud?.ledgerOpen()) {
+                if (this.hud.hitsLedger(ui) === 'close') this.hud.hideLedger();
                 return;   // anything else on this screen is swallowed
             }
             // The check-in card is asked on the same terms as the settings card above, and
@@ -2550,7 +2615,9 @@ export class GameController extends Component {
             }
             if (this.home.hitsGear(ui)) {
                 this.sfx?.play('tap');
-                this.hud?.showSettings(this.settings.sfx, this.settings.haptics, true);
+                this.hud?.showSettings(
+                    this.settings.sfx, this.settings.music, this.settings.haptics, true,
+                );
                 return;
             }
             // The check-in place, below the gear and answering on the same terms.
@@ -2559,9 +2626,8 @@ export class GameController extends Component {
                 this.home.tapCheckin();
                 return;
             }
-            // The merged coin pill, below check-in. It is drawn and answers a tap like its two
-            // neighbours -- `tapCoins` is a no-op until there is an ad unit to point it at, which
-            // is the whole of what 「点击无反应」 asks for; see `TopBar.coinTap`.
+            // The merged coin pill, below check-in. `tapCoins` opens the ledger -- see
+            // `TopBar.coinTap` and `setCoinTap`'s wiring in `showHome`.
             if (this.home.hitsCoins(ui)) {
                 this.sfx?.play('tap');
                 this.home.tapCoins();
@@ -2597,9 +2663,17 @@ export class GameController extends Component {
             return;
         }
         // The settings panel owns every tap while it is up, and it is asked FIRST because
-        // when it is up it is the topmost thing on screen. It cannot currently be raised
-        // over the blocked-stall prompt or the win card -- the gear goes dead under both
-        // (`HudView.syncGear`) -- so this branch and those never contend.
+        // when it is up it is the topmost thing on screen. Nothing else can be on screen with
+        // it, and that is now true in BOTH directions: the gear goes dead under the win card,
+        // the lose card and the blocked-stall prompt (`HudView.syncGear`), so the panel cannot
+        // be raised under one of them -- and each of those three takes the panel down as it
+        // rises (`HudView.supersedeSettings`), so none of them can be raised over it either.
+        //
+        // THE SECOND HALF IS NOT HYPOTHETICAL. `update` keeps stepping the loop while the panel
+        // stands, so a level that finishes under it used to put the win card on top of a panel
+        // that still owned the tap -- and this branch swallowed the card's own answers, X
+        // included. That is why the rule is kept at the raise: this branch's `return` makes any
+        // second modal dead by construction, so a new one must never be able to rise here.
         if (this.uiCam && this.hud?.settingsOpen()) {
             const ui = this.uiCam.screenToWorld(new Vec3(screenX, screenY, 0), new Vec3());
             const hit = this.hud.hitsSettings(ui);
@@ -2610,7 +2684,7 @@ export class GameController extends Component {
             } else if (hit === 'replay') {
                 this.hud.hideSettings();
                 this.switchTo(this.levelName);
-            } else if (hit === 'sfx' || hit === 'haptics') {
+            } else if (hit === 'sfx' || hit === 'music' || hit === 'haptics') {
                 this.toggleSetting(hit);
             }
             return;   // anything else on this screen is swallowed
@@ -2665,7 +2739,9 @@ export class GameController extends Component {
                 this.sfx?.play('tap');
                 // `false`: this is the in-game card, which keeps its 主页 and 重玩 answers
                 // and has no clear-save button on it.
-                this.hud.showSettings(this.settings.sfx, this.settings.haptics, false);
+                this.hud.showSettings(
+                    this.settings.sfx, this.settings.music, this.settings.haptics, false,
+                );
                 return;
             }
         }
@@ -2730,22 +2806,14 @@ export class GameController extends Component {
         const localHit = new Vec3();
         Vec3.transformMat4(localHit, worldHit, inv);
 
-        // The parking bay comes first, and not just for tidiness: it sits ABOVE the lot, so
-        // a tap that lands on a stall cannot be a tap on a car, and answering it here means
-        // `pickCar` never sees it. The hit has to be re-expressed in the BOARD's frame --
-        // `localHit` is gridRoot-local and gridRoot is offset down by the lot's half-height,
-        // while the bay's stalls are positioned in parkingRoot, which sits at the board's
-        // origin.
-        if (this.boardRoot) {
-            const bInv = new Mat4();
-            Mat4.invert(bInv, this.boardRoot.worldMatrix);
-            const boardHit = new Vec3();
-            Vec3.transformMat4(boardHit, worldHit, bInv);
-            if (this.parkingView.hitsNextLocked(boardHit)) {
-                this.unlockNextSlot();
-                return;
-            }
-        }
+        // There used to be a direct-purchase path here: a tap on the locked stall itself,
+        // re-expressed in the board's frame and tested with `hitsNextLocked`, opened it on
+        // the spot. That went once a stall stopped being free. The bay is drawn in merged
+        // meshes -- there is nowhere on a stall to put a price, grey it out, or explain a
+        // shortfall -- and the unlock prompt is the one surface that does all three. So the
+        // only way to open a stall now is through the prompt (`hitsUnlockPrompt` ->
+        // `unlockNextSlot`), and a tap on the locked stall itself falls through to here and
+        // is read as a (missed) tap on a car, same as any other empty tap on the board.
 
         // The car is drawn ROOF_RISE up-screen of its footprint, because the tilt makes its
         // height visible (see BOARD_TILT). The player aims at the roof, so the tap has to come
@@ -2767,8 +2835,8 @@ export class GameController extends Component {
         // runtime, and a diagnostic you switched on that stays silent is worse than none.
         if (this.debugOverlay) this.logTap(id, angle, res.ok ? 'ok' : (res.reason ?? 'refused'));
         if (res.ok) {
-            this.playDriveToSlot(id, angle, res.slotIndex);
-            this.syncTunnels();
+            // The emergence waits for the mouth to be clear; see `syncTunnels`.
+            this.syncTunnels(this.playDriveToSlot(id, angle, res.slotIndex));
         } else if (res.reason === 'full') {
             this.playLotFull(id);
         } else {
@@ -2776,10 +2844,21 @@ export class GameController extends Component {
         }
     }
 
-    private playDriveToSlot(id: number, angle: number, slotIndex: number): void {
-        const parkScale = this.stallScale(id); // before detachCar drops the car's size
+    /**
+     * Drive a tapped car out of the lot and into its stall, and report HOW LONG THE SPOT
+     * IT LEAVES STAYS OCCUPIED -- the time it needs to travel its own length.
+     *
+     * That number is only interesting for a car that came out of a tunnel, and it is
+     * returned rather than used because this method does not know whether it did. See
+     * `syncTunnels`, which does.
+     */
+    private playDriveToSlot(id: number, angle: number, slotIndex: number): number {
+        const body = this.gridView!.getCarSize(id); // before detachCar drops the car's size
+        const parkScale = this.stallScale(id);
         const node = this.gridView!.detachCar(id);
-        if (!node) return;
+        // No node, no drive, so nothing is standing in the mouth either: zero, not a
+        // wait the arrival would sit through for a car that is not there.
+        if (!node) return 0;
         node.setParent(this.boardRoot!, true); // keep world position
 
         const start = node.position.clone();
@@ -2835,6 +2914,7 @@ export class GameController extends Component {
                 this.syncSeatCounts();
             },
         });
+        return body && speed > 0 ? body.len / speed : 0;
     }
 
     /**
@@ -2846,11 +2926,21 @@ export class GameController extends Component {
      * tunnel the departing car came from, which means the view keeping its own copy of a
      * mapping core already has.
      *
-     * The arrival starts at the same moment the departing car pulls away, not after it. `busy`
-     * is already holding taps off for the drive, and a mouth that stays visibly empty for a
-     * second and a half reads as the tunnel having jammed.
+     * `clear` is how long the spot outside the mouth stays occupied by the car that just
+     * left it -- the time it needs to drive its own length, handed over by `playDriveToSlot`.
+     * The arrival waits exactly that long and no longer: a body is 2.2 to 4.1 node units
+     * against a base speed of 14, so 0.16s for a small car and 0.29s for a big one, which
+     * is the same order as the growth it delays.
+     *
+     * IT USED TO START AT THE SAME MOMENT the departing car pulled away, on the argument that
+     * a mouth standing visibly empty reads as a jam. The argument holds; the timing did not.
+     * The new car is grown IN PLACE at the position core chose, which is the position the
+     * departing car is still standing on for the first stretch of its drive, so its colour
+     * came up underneath the car that was still leaving -- reported as 上一个车还没完全出去
+     * 的时候,后面的车身颜色已经出来了. Waiting for the whole drive would bring the jam back,
+     * so it waits for the only part of it that overlaps.
      */
-    private syncTunnels(): void {
+    private syncTunnels(clear: number = 0): void {
         if (!this.core || !this.gridView) return;
         for (const t of this.core.lot.tunnels) {
             this.hud?.setTunnelCount(t.id, this.core.lot.remainingIn(t.id));
@@ -2866,8 +2956,20 @@ export class GameController extends Component {
             // Grown in place, not slid out of the tunnel: the arch is solid now and a slide
             // would pass through its front wall. See EMERGE_SCALE for why there is no position
             // left to animate.
-            node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE);
+            // Zero scale for the wait, NOT `active = false`. Deactivating the node was the
+            // first attempt and it never came back: the engine's ActionManager pauses the
+            // actions of a node that leaves the hierarchy, and the only thing that would
+            // have reactivated this one was the tween it had just paused. Reported as
+            // 停车场里后续的车没有显示出来 -- the count badge sitting over an empty mouth.
+            //
+            // Zero and not EMERGE_SCALE because 55% of a car is plainly visible under the
+            // one still driving off, which is the defect this delay exists for. A node at
+            // zero scale draws nothing and has no body to be picked, and `activateCar`
+            // below is about tappability rather than visibility either way.
+            node.setScale(0, 0, 0);
             tween(node)
+                .delay(clear / this.speed)
+                .call(() => { if (node.isValid) node.setScale(EMERGE_SCALE, EMERGE_SCALE, EMERGE_SCALE); })
                 // A fresh Vec3, not `Vec3.ONE`: handing a shared engine constant to a tween
                 // as its target value is one in-place lerp away from corrupting it globally.
                 .to(EMERGE_TIME / this.speed, { scale: new Vec3(1, 1, 1) }, { easing: 'backOut' })
@@ -2894,21 +2996,35 @@ export class GameController extends Component {
     }
 
     /**
-     * Open the next locked stall, on a tap on it.
+     * Open the next locked stall, in answer to the unlock prompt's own button -- the only
+     * caller left now that the board itself has no way to sell one.
      *
-     * Free, for now: the button says "tap me" with a play triangle because that is where a
-     * rewarded video goes, but nothing is being asked for yet. When an ad is wired in, this
-     * is the one place that changes -- everything below it already treats an unlock as a
-     * thing that either happened or did not.
+     * CHARGED NOW, and the charge comes FIRST. `spend` returns null when the balance will not
+     * cover it, and this returns on that -- so a refused payment cannot open a stall. Doing it
+     * the other way round (open, then try to pay) would leave the two able to disagree, and the
+     * one that shows on screen is the stall.
      *
-     * Core decides WHICH stall opens (always the leftmost locked one, see
-     * ParkingSystem.unlock) and the view is told the index, so the two counts cannot drift.
-     * A refusal is silent: the only way to get one is to tap a stall that no longer exists,
-     * which the hit test already rules out.
+     * The write to the device is immediate rather than deferred to the end of the level. It is
+     * a synchronous call, but this is a deliberate tap with a full-screen prompt already up, at
+     * most three times a level -- nowhere near a per-frame path. Deferring it would mean a
+     * player who kills the app mid-level keeps the stall and the coins both.
+     *
+     * Core decides WHICH stall opens (always the leftmost locked one, see ParkingSystem.unlock)
+     * and the view is told the index, so the two counts cannot drift.
      */
     private unlockNextSlot(): void {
+        if (!this.core!.parking.canUnlock()) return;
+        const price = unlockPrice(this.core!.parking.unlocksUsed());
+        const paid = spend(this.wallet, 'unlock', price, this.levelIdNum, Date.now());
+        if (paid === null) return;
         const slot = this.core!.unlockSlot();
+        // Belt and braces against a future caller: `canUnlock` was checked above, so this cannot
+        // fire -- but if it ever did, returning here leaves the coins unspent because `paid` has
+        // not been committed to `this.wallet` yet.
         if (slot < 0) return;
+        this.wallet = paid;
+        saveWalletText(serializeWallet(this.wallet));
+        this.spentThisLevel += price;
         this.sfx?.play('tap');
         vibrate('light');
         this.parkingView!.openSlot(slot);

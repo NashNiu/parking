@@ -2,6 +2,7 @@ import { Node, Color, Material, MeshRenderer, primitives } from 'cc';
 import { litMaterial, alphaMaterial, flatMaterial } from './materials';
 import { mergeParts, placed, roundedSlabPart, MeshPart } from './slabs';
 import { LIFT, shadowThrow, SHADOW_INK, SHADOW_ALPHA } from './shadow';
+import { TREE_CROWN, TREE_TRUNK } from './palette';
 
 /**
  * Static scene dressing: the trees and street lamps that stand beside the parking bay.
@@ -78,18 +79,8 @@ const GLASS_R = 0.070;
 const TREE_SEGMENTS = 8;
 const POLE_SIDES = 6;
 
-/**
- * A green no car and no passenger can be. The play palette's green is (55, 219, 101) -- bright
- * and high-chroma, because it has to be told apart from five other play colours at a glance.
- * Scenery that shared that green would read as a game object, and the one thing a tree must not
- * do is look like something to tap.
- *
- * Lifted from (62, 122, 74), which was dark enough that the crown read as a hole in the
- * pavement rather than as foliage. It still sits 41 luminance units off the play green, which
- * is the separation that matters, and 84 off the pavement it stands on.
- */
-const PROP_GREEN = new Color(74, 142, 86);
-const PROP_TRUNK = new Color(116, 88, 66);
+// The crown and the trunk are in `palette` now, because the lobby's flat tree wears them too --
+// see `TREE_CROWN` there for the argument that used to live here.
 /**
  * Lamp metalwork: DARK, where this used to take the scene's concrete at 145 luminance. A lamp
  * is a thin object on a pale floor, and thin objects read by contrast alone -- 104 units of it
@@ -228,8 +219,8 @@ export function setupProps(parent: Node, spots: PropSpot[]): void {
         mr.shadowCastingMode = MeshRenderer.ShadowCastingMode.OFF;
         holder.addChild(n);
     };
-    group('prop-trunks', trunks, PROP_TRUNK);
-    group('prop-crowns', crowns, PROP_GREEN);
+    group('prop-trunks', trunks, TREE_TRUNK);
+    group('prop-crowns', crowns, TREE_CROWN);
     group('prop-poles', poles, PROP_POLE);
     group('prop-heads', heads, PROP_LAMP);
 

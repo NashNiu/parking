@@ -1,7 +1,7 @@
 import { Node, Color, Vec3, MeshRenderer, utils, primitives, tween, Tween } from 'cc';
 import { flatMaterial } from './materials';
 import {
-    makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, triPart, MeshPart,
+    makeSlab, makeShadowSlab, makeMerged, roundedSlabPart, boxPart, MeshPart,
 } from './slabs';
 import { SHADOW_Z } from './scene-stage';
 import { LIFT, shadowThrow } from './shadow';
@@ -111,17 +111,57 @@ const LOCK_KEY_Z = 0.15;
  * is what fixes `LOCK_BODY_Y`. The old lock placed body and shackle at fixed offsets and
  * came out sitting high on the pad.
  *
- * The shackle's outer diameter (2 * (R + TUBE) = 0.35) is kept clearly narrower than the
- * body's 0.44, or the arch springs from the body's very corners and stops reading as a
- * shackle.
+ * TUBE went 0.04 -> 0.065 and R went 0.135 -> 0.15 in the pass that also bolded the
+ * keyhole (see below): at GLYPH_SCALE 1.25 in a ~30px-wide stall, a 0.04 tube is a 3px
+ * stroke, and the shackle -- the one feature whose silhouette actually says "padlock" --
+ * was reading as a smudge, not an arch. Thickening the tube alone would have filled the
+ * arch's own opening solid (a filled arch reads as a lump, not a lock), so R grew with
+ * it: the inner opening `2 * (R - TUBE)` only drops from 0.19 to 0.17, still a clearly
+ * open hole rather than a disc.
+ *
+ * The shackle's outer diameter (2 * (R + TUBE) = 0.43) is kept narrower than the body's
+ * 0.44 -- barely, now, at a 0.01 margin -- or the arch springs from the body's very
+ * corners and stops reading as a shackle. There is no room left in this margin: a future
+ * pass that wants the shackle bolder still has to widen the body too.
  */
 const LOCK_BODY_W = 0.44;
 const LOCK_BODY_H = 0.36;
-const LOCK_BODY_R = 0.10;
-const LOCK_SHACKLE_R = 0.135;
-const LOCK_SHACKLE_TUBE = 0.04;
+/**
+ * 0.10 on this 0.44 x 0.36 body read as a pill at small size -- round enough that the
+ * body blurred into the arch above it instead of separating from it. 0.07 keeps the
+ * corners rounded (a padlock body, not a box) but square enough to hold its own shape
+ * next to the shackle.
+ */
+const LOCK_BODY_R = 0.07;
+const LOCK_SHACKLE_R = 0.15;
+const LOCK_SHACKLE_TUBE = 0.065;
 const LOCK_BODY_Y = -(LOCK_SHACKLE_R + LOCK_SHACKLE_TUBE) / 2;
 const LOCK_SHACKLE_Y = LOCK_BODY_Y + LOCK_BODY_H / 2;
+
+/**
+ * A multiplier on the whole glyph, on top of `g`, and the primary fix for the three locked
+ * stalls not reading as locked: a padlock means shut in a way no amount of colour does, and
+ * unlike a pad or rim shade it cannot be mistaken for lighting or a rendering quirk. Colour
+ * carries the state, the rim carries the row, but the lock is the one mark a player reads as
+ * "closed" at a glance -- so when the row didn't read, growing the one unambiguous glyph is
+ * the lever that matters most.
+ *
+ * It scales the lock node only (`lock.setScale(g * GLYPH_SCALE, ...)`), never the individual
+ * part constants above, so every measured relationship they encode (`LOCK_BODY_Y`,
+ * `LOCK_SHACKLE_Y`, the keyhole's offset) stays exactly as derived.
+ *
+ * 1.45 was the opening guess, but it doesn't clear its own margin: at scale 1 a stall is
+ * 0.697 wide by 1.831 deep (`CAP_BOX.big.wid * CAR_SCALE * STALL_AIR_WID` and the `.len`/
+ * `STALL_AIR_LEN` equivalent), and the glyph's own width -- `LOCK_BODY_W`, the widest part --
+ * is `LOCK_BODY_W / GLYPH_REF_W` of that, 56.4% of the stall's width at multiplier 1. At 1.45
+ * that is 81.8%, leaving only ~0.064 board units clear of the stall's own edge on each side --
+ * under the 0.1 this file treats as a safe margin, and tighter still (~0.023) against the
+ * RIM's inner boundary. 1.25 is the number that actually clears: 70.5% of the stall's width,
+ * ~0.103 clear of the stall edge. The depth axis never binds -- even at 1.45 the glyph only
+ * reaches a third of the stall's depth -- so width is the only constraint this was solved
+ * against.
+ */
+const GLYPH_SCALE = 1.25;
 
 /**
  * The raised tray. It held +12 luminance over GROUND for as long as there was one ground; the
@@ -150,7 +190,19 @@ const PANEL = new Color(186, 189, 197);
  */
 const PANEL_PLINTH = new Color(148, 153, 166);
 const PAD = new Color(76, 87, 115);
-const PAD_LOCKED = new Color(57, 66, 90);
+/**
+ * Deeper than the old (57, 66, 90) and pulled slightly toward neutral: a delta of ~20 on an
+ * already-dark blue-grey read as barely another shade of the same pad, not as "off". This
+ * takes the delta from `PAD` to ~32 on every channel and drops the blue cast, which is what
+ * makes a locked stall read as unlit rather than as a slightly different blue.
+ *
+ * Going darker here is exactly what `RIM_LOCKED`'s own docblock warns against doing to the
+ * point of losing the rim -- see that comment. It still applies: it is the RIM, not this
+ * pad, that keeps a locked stall reading as a bordered slot of the row rather than a hole
+ * punched in the bay, and darkening the pad further without touching the rim is the one
+ * knob that would eventually recreate that hole.
+ */
+const PAD_LOCKED = new Color(44, 50, 66);
 const PAD_RIM = new Color(147, 160, 192);
 /**
  * A dimmed `PAD_RIM`. A locked stall used to have no rim at all, which made the three of
@@ -175,20 +227,6 @@ const LOCK_SHACKLE = new Color(150, 162, 194);
  */
 /** Warning tint for `pulse`: amber, not red -- a full bay is a wait, not a mistake. */
 const PULSE = new Color(255, 176, 64);
-
-/**
- * The play triangle under the padlock on the next stall a tap would open. Sized and placed
- * in the same reference units as the padlock (see GLYPH_REF_W), so it scales with it.
- *
- * A triangle rather than a word because the board draws meshes, not text -- everything up
- * here is procedural geometry. It is the same shape the reference art puts on its unlock
- * button, which is what makes it read as "tap this" rather than as decoration.
- */
-const CUE_W = 0.19;
-const CUE_H = 0.20;
-const CUE_Y = -0.30;
-const CUE = new Color(255, 255, 255, 255);
-
 
 export class ParkingView {
     private positions: Vec3[] = [];
@@ -256,10 +294,14 @@ export class ParkingView {
      * first -- redrawing over the old slabs would leave two rims fighting for the same
      * depth.
      *
-     * The NEXT stall to open is the only locked one that gets the play triangle. Unlocking
-     * runs in order (see ParkingSystem.unlock: `parked.length` is the unlocked count, so
-     * the stall that opens is always the leftmost locked one), and putting the affordance
-     * on any other stall would promise something the tap does not do.
+     * The padlock draws on every locked stall -- a stall must still read as locked -- but
+     * there is no "tap this" cue on top of it any more. There used to be one (a play
+     * triangle on the next stall in line), back when opening a stall was free. A stall now
+     * costs coins and rising, so opening one needs a price shown, a greyed-out state when
+     * it is unaffordable, and a shortfall message -- all things the bay's merged meshes
+     * have no room for. That surface is the unlock prompt (see GameController.unlockNextSlot
+     * and its caller), not the board, so the board no longer advertises a tap it cannot
+     * itself answer.
      */
     private drawStall(i: number): void {
         const { w: slotW, h: slotH } = this.box;
@@ -288,12 +330,13 @@ export class ParkingView {
         root.addChild(pad);
         if (!locked) return;
 
-        // The whole glyph goes under one node scaled by `g`, so the pieces keep their
-        // measured relationship to each other (see LOCK_BODY_Y) at any board scale, and
-        // their z order with it.
+        // The whole glyph goes under one node scaled by `g` (board scale) times
+        // `GLYPH_SCALE` (the glyph's own size), so the pieces keep their measured
+        // relationship to each other (see LOCK_BODY_Y) at any board scale, and their z
+        // order with it.
         const lock = new Node(`lock-${i}`);
         lock.setPosition(pos.x, pos.y, 0);
-        lock.setScale(g, g, g);
+        lock.setScale(g * GLYPH_SCALE, g * GLYPH_SCALE, g * GLYPH_SCALE);
         root.addChild(lock);
 
         const sh = new Node('shackle');
@@ -316,20 +359,22 @@ export class ParkingView {
         // Keyhole: a disc over a tapering slot, in the PAD's own colour so it reads as
         // punched through the body rather than painted on it. One merged mesh -- the two
         // parts share a colour and a depth, so they share a draw call.
+        //
+        // The disc grew from 0.09 to 0.16 (20% -> 36% of LOCK_BODY_W) and the slot from
+        // 0.035 x 0.075 to 0.06 x 0.12: at 30px on screen the old sizes were a detail
+        // nobody could resolve, and the keyhole is the one shape left that still says
+        // "lock" once the shackle and body are too small to read as anything but bold
+        // mass. Both offsets are the old ones scaled by the disc's own growth (16/9), so
+        // the slot still hangs from the disc rather than floating clear of it or
+        // swallowing it -- the combined shape runs from -0.14 to 0.1067 against the
+        // body's own half-height of 0.18, clearing it with margin on both ends.
         const key: MeshPart[] = [
-            roundedSlabPart(0.09, 0.09, 0.06, 0.045, 0, 0.015),
-            boxPart(0.035, 0.075, 0.06, 0, -0.045),
+            roundedSlabPart(0.16, 0.16, 0.06, 0.08, 0, 0.0267),
+            boxPart(0.06, 0.12, 0.06, 0, -0.08),
         ];
         const keyhole = makeMerged('lockkey', key, PAD_LOCKED);
         keyhole.setPosition(0, LOCK_BODY_Y, LOCK_KEY_Z);
         lock.addChild(keyhole);
-
-        if (i !== this.open) return;
-        // Play triangle under the padlock: this is the one a tap opens. Three points and a
-        // merged mesh rather than a sprite, like everything else on the board.
-        const cue = makeMerged(`unlock-cue-${i}`, [triPart(CUE_W, CUE_H, 0.06, 0, CUE_Y)], CUE);
-        cue.setPosition(pos.x, pos.y, LOCK_KEY_Z);
-        root.addChild(cue);
     }
 
     /**
@@ -343,8 +388,14 @@ export class ParkingView {
 
     /**
      * Whether `local` (parkingRoot-local, which is board-local: the root sits at the
-     * origin) is inside the next locked stall. Only that one is a target -- see
-     * `drawStall`.
+     * origin) is inside the next locked stall.
+     *
+     * NOTHING CALLS THIS NOW. It backed a direct-purchase path -- tap the locked stall on
+     * the board, open it on the spot -- that was removed once a stall stopped being free:
+     * the bay is drawn in merged meshes with no surface to show a price, grey out an
+     * unaffordable one, or explain a shortfall. The unlock prompt is where buying a stall
+     * happens today (see GameController's `hitsUnlockPrompt` / `unlockNextSlot`). Left here,
+     * unreferenced, rather than deleted -- see `nextLocked` just above.
      */
     hitsNextLocked(local: Vec3): boolean {
         const i = this.nextLocked();
@@ -356,7 +407,7 @@ export class ParkingView {
     }
 
     /**
-     * Redraw stall `index` as open, and move the play triangle to the next locked one.
+     * Redraw stall `index` as open, and the stall after it if one is still locked.
      * `index` is what ParkingSystem.unlock returned, so the two counts cannot drift.
      */
     openSlot(index: number): void {

@@ -7,9 +7,27 @@
  * offsets and report `isHardButFair` for each. Prints one row per (id, offset).
  *
  * Why re-band a generated level rather than regenerate per offset: `choosePainting` runs
- * seven simulations per painting and up to 400 paintings, so a generation is minutes. The
+ * up to eleven simulations per painting and up to 400 paintings, so a generation is minutes. The
  * level's cars are in leaving order (`scatter` numbers them along `peel`), so this tool can
  * author any offset's queue from the level file itself for the price of one simulation set.
+ *
+ * WHAT TO PICK, and this changed again on 2026-09-21: among the cells that are hard, take the
+ * one whose `forgive` is closest to this id's `forgiveTarget`. That is the same objective
+ * `choosePainting` now minimises, and the two composing is the whole point -- back when the
+ * sweep optimised one thing and the painting search optimised another, every moved offset
+ * landed at 0.6 to 0.8 of what the sweep had predicted.
+ *
+ * The two rules this replaces were both wrong, in the same direction. "Take a passing offset"
+ * left most of the dial unused because `hard` saturates. "Take the largest `gap`" used a
+ * metric only weakly related to whether a person loses: on the levels shipped under it, id 7
+ * carried the largest gap of the ten (2.04) and was the most forgiving level in the game,
+ * winning every clumsy playthrough, while id 3 carried nearly the smallest (1.09) and lost
+ * more than half. `gap` says WHY a level bites; `forgive` says WHETHER it does.
+ *
+ * A cell that is hard but NOT fair is not out: my human partner has said a level or two may
+ * require buying a stall to finish. `choosePainting` prices those at `UNFAIR_COST` rather
+ * than rejecting them, so rank them here the same way -- admissible, for two or three ids,
+ * and chosen rather than drifted into.
  *
  * The consequence, and it matters: a row says "which offsets suit THIS packing and painting",
  * not "which offset the generator would settle on". The loop is therefore -- sweep, put the
@@ -19,7 +37,7 @@
  * offset the curve is asking too much of, and the answer is a smaller one.
  */
 import { generateLevel, bandedQueue, bandParams } from '../game/assets/scripts/core/level-gen';
-import { isHardButFair } from '../game/assets/scripts/core/play-sim';
+import { demandPressure, judge, mistakeCost } from '../game/assets/scripts/core/play-sim';
 import { LevelData } from '../game/assets/scripts/core/types';
 
 /** Offsets to try, in rows. 0 is included because it is the measured free end. */
@@ -49,12 +67,17 @@ for (const id of idsToSweep(process.argv.slice(2))) {
         for (const interleave of INTERLEAVES) {
             const probe: LevelData = JSON.parse(JSON.stringify(level));
             probe.loop.queue = bandedQueue(level.lot.cars, tunnels, offset, interleave);
-            const v = isHardButFair(probe);
+            const v = judge(probe);
+            const g = demandPressure(probe);
             const mark = offset === curve.offset && interleave === curve.interleave ? ' <- curve' : '';
             process.stdout.write(
                 `L${id} offset=${String(offset).padStart(3)} il=${interleave} `
-                + `hard=${v.hard ? 'Y' : 'n'} fair=${v.fair ? 'Y' : 'n'} `
-                + `careless=${v.carelessLoss.toFixed(1)}${mark}\n`,
+                // 三星拿不拿得到(完美打买了几个车位),以及错一步值多少钱。`dead` 是
+                // 七个车位全开还卡死 —— 那是关卡坏了,不是难。见 `judge`。
+                + `${v.dead ? 'DEAD ' : v.demand > probe.parking.unlocked ? 'no3★' : '3★ ok'} `
+                + `stalls=${v.demand} cost=${mistakeCost(probe).toFixed(1)} `
+                + `width=${v.width.toFixed(2)} `
+                + `gap=${g.gap.toFixed(2)} ring=${g.ring.toFixed(1)} stuck=${g.starved.toFixed(2)}${mark}\n`,
             );
         }
     }

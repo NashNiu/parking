@@ -1,55 +1,187 @@
 /**
- * The daily check-in streak: a save that tracks which day of a 7-day reward cycle the player
- * last claimed, and when.
+ * The daily check-in: which days of THE CURRENT MONTH have been claimed.
+ *
+ * A CALENDAR, NOT A STREAK, and the difference is what the save shape is for. The old model
+ * stored "which day of a 7-day cycle was last claimed" plus the date of that claim, and a
+ * missed day reset it to day 1. A calendar has no notion of "day 3, but late": a miss is just a
+ * day that was not claimed, the run continues from wherever it got to, and the month is the
+ * only thing that resets it.
+ *
+ * The reward still walks the same seven figures, now indexed by the RUNNING COUNT within the
+ * month rather than by a streak position -- so the 7th, 14th, 21st and 28th day a player turns
+ * up in a month each pay the jackpot, whichever dates those happen to be.
  *
  * A SEPARATE KEY from `Progress` and `Wallet`, sharing the WALLET'S LIFETIME. Its own key
- * because a streak is not a level result and has no business inside a save about levels; the
- * wallet's lifetime because a streak is a record of turning up to play and it pays out in
- * coins, and coins go in the wipe. `storage.clearCheckinText` argues that end of it and is
- * where the rule is enforced.
+ * because a check-in record is not a level result; the wallet's lifetime because it is a record
+ * of turning up to play and it pays out in coins, and coins go in the wipe.
+ * `storage.clearCheckinText` argues that end of it.
  *
- * AN EARLIER VERSION OF THIS PARAGRAPH SAID THE OPPOSITE -- that the streak survives a wipe --
- * and it was wrong in a way worth recording, because the reasoning sounds right: a player who
- * clears their progress has not asked to lose six days of turning up. What settles it is the
- * seventh day. Keep the streak and "clear the save, claim 100" is two taps apart, and the one
- * figure in the table meant to take a week to reach is the one a wipe hands out for free.
- *
- * Same failure policy as `wallet.ts` and for the same reason: this is read off the device on
- * the boot path, so anything unexpected comes back as `emptyCheckin()` and nothing throws.
- * Losing a streak costs the player a bonus; throwing on the boot path costs them the game.
+ * Same failure policy as `wallet.ts`: this is read off the device on the boot path, so anything
+ * unexpected comes back as `emptyCheckin()` and nothing throws.
  */
 export interface Checkin {
     version: number;
-    /** 0 before anything is ever claimed; 1..7 is the day of the cycle already claimed. */
-    day: number;
-    /** The `todayKey` of the most recent claim, or '' if there has never been one. */
-    last: string;
+    /** `'YYYY-MM'` of the days below, or `''` when nothing has ever been claimed. */
+    month: string;
+    /** Days of `month` already claimed. ASCENDING and without duplicates -- the card draws them. */
+    days: number[];
 }
 
-export const CHECKIN_VERSION = 1;
+export const CHECKIN_VERSION = 2;
 
 /**
- * What each day of the 7-day cycle pays, indexed by day-1 (so index 0 is day 1's reward).
+ * What the Nth check-in OF A MONTH pays, indexed by `(N - 1) % 7`.
  *
- * Two short days, two medium days, two more short-ish days, then a jackpot on day 7 -- the
- * shape is deliberately front-loaded-then-a-payoff rather than a smooth ramp, so a player who
- * breaks the streak on day 2 or 3 has not given up much, and the one who makes it to day 7 gets
- * something worth the six days it took. The exact numbers are a design call, not a derived one;
- * they live here, in the one place both the state machine and its tests read them from.
+ * Two short days, two medium, two more short-ish, then a jackpot -- front-loaded-then-a-payoff
+ * rather than a smooth ramp, so a player who misses a day early has not given up much and the
+ * one who reaches the seventh gets something worth the week. The figures are a design call, not
+ * a derived one; they live here, in the one place the state machine and its tests both read.
  */
 export const CHECKIN_REWARDS: readonly number[] = [20, 20, 30, 30, 40, 40, 100];
 
 export function emptyCheckin(): Checkin {
-    return { version: CHECKIN_VERSION, day: 0, last: '' };
+    return { version: CHECKIN_VERSION, month: '', days: [] };
 }
+
+/**
+ * `now` as a `'YYYY-MM-DD'` key, in the DEVICE'S LOCAL time zone -- deliberately not UTC.
+ *
+ * A single-player game with no server has no clock more authoritative than the device it runs
+ * on, so there is no "correct" time zone to convert to; UTC would just be a different wrong one,
+ * and for a player in China it would flip the day at 08:00 local, in the middle of a normal
+ * session. Local time is the only choice that makes "a new day" mean what a player standing in
+ * front of the device would call a new day.
+ *
+ * The cost is accepted, not overlooked: a player who winds their system clock forward claims
+ * early, and one who winds it back can claim the same day twice. Both grant a few extra coins in
+ * a game with no economy to protect and no other player to affect -- cheap enough that any
+ * defense would cost more than the exploit is worth.
+ */
+export function todayKey(now: Date): string {
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
+
+/** The `'YYYY-MM'` half of a day key. */
+export function monthOf(today: string): string {
+    return today.slice(0, 7);
+}
+
+/** The day-of-month half of a day key, as a number. */
+export function dayOf(today: string): number {
+    return Number(today.slice(8, 10));
+}
+
+/**
+ * How many days `month` has. Built by asking `Date` for "day 0 of the NEXT month", which is the
+ * last day of this one -- rather than by a table with a leap-year rule beside it, which would be
+ * a worse copy of something `Date` already gets right.
+ */
+export function daysInMonth(month: string): number {
+    const y = Number(month.slice(0, 4));
+    const m = Number(month.slice(5, 7));
+    return new Date(y, m, 0).getDate();
+}
+
+/** Which weekday `month` starts on, 0 = Sunday. The calendar grid's left offset. */
+export function firstWeekday(month: string): number {
+    const y = Number(month.slice(0, 4));
+    const m = Number(month.slice(5, 7));
+    return new Date(y, m - 1, 1).getDay();
+}
+
+/** Whether `today`'s reward has not already been claimed. */
+export function canClaim(c: Checkin, today: string): boolean {
+    if (monthOf(today) !== c.month) return true;
+    return !c.days.includes(dayOf(today));
+}
+
+/**
+ * Which check-in of the month a claim made `today` would be -- 1 for the first.
+ *
+ * ON A DAY ALREADY CLAIMED it reports the count AS IT STANDS, not a day that does not exist.
+ * The card needs that: after claiming it still has to say which day was paid, and inventing
+ * `days.length + 1` there would show a reward nobody received.
+ *
+ * Exported because `claim`, `nextReward` and the card all need it and all have to agree. A view
+ * that worked it out for itself would be a second copy of this rule, free to drift from the one
+ * that pays out.
+ */
+export function nextCount(c: Checkin, today: string): number {
+    if (monthOf(today) !== c.month) return 1;
+    if (c.days.includes(dayOf(today))) return c.days.length;
+    return c.days.length + 1;
+}
+
+/** What `claim(c, today)` would pay right now, for showing the reward before it is claimed. */
+export function nextReward(c: Checkin, today: string): number {
+    return CHECKIN_REWARDS[(nextCount(c, today) - 1) % CHECKIN_REWARDS.length];
+}
+
+/** Whether the cell for `day` of `month` should be drawn as claimed. */
+export function isClaimed(c: Checkin, month: string, day: number): boolean {
+    return c.month === month && c.days.includes(day);
+}
+
+/**
+ * Record a claim for `today`, returning the new save and the coins it pays.
+ *
+ * The save passed in is never mutated -- the caller holds it as the current state, same as
+ * `earn` in `wallet.ts`. This does not check `canClaim` itself: the caller already has to, to
+ * decide whether to show a claimable button at all, and a second silent check here would be a
+ * second place that rule could drift.
+ *
+ * PRICED THROUGH `nextCount`, not from `days.length` after appending. `nextCount` is the one
+ * function that decides which check-in of the month this is -- the card highlights that same
+ * count -- so pricing any other way would be a second, silently different answer to "which day
+ * is this" free to drift from the one the card shows.
+ *
+ * A day already in `days` is KEPT AS-IS rather than appended again. The caller is supposed to
+ * gate on `canClaim` first, but this has no way to enforce that, and `parseCheckin` rejects a
+ * duplicate day outright -- so appending one here would write a save that reads back as
+ * corrupt on the next boot, costing the player the whole month's record over a call that
+ * should have been a no-op.
+ *
+ * And a no-op PAYS NOTHING. `nextCount` reports `days.length` for a day already claimed --
+ * correct for the card, which needs to say which day was paid after the fact -- but `claim`
+ * itself must not treat that as a fresh reward: with the save unchanged, a caller that skipped
+ * `canClaim` and called this in a loop would mint coins for free, forever. There is exactly one
+ * caller today (`GameController.claimCheckinToday`) and it does gate on `canClaim`, but that is
+ * exactly the kind of rule this file has learned not to lean on a single caller for -- see
+ * `canClaim`'s own callers for the same argument made about the duplicate-day check above.
+ *
+ * The days are kept SORTED rather than appended in claim order. The calendar draws from this
+ * array, and a clock wound backwards or a hand-edited save can otherwise leave it out of order.
+ */
+export function claim(c: Checkin, today: string): { checkin: Checkin; coins: number } {
+    const month = monthOf(today);
+    const d = dayOf(today);
+    const kept = month === c.month ? c.days : [];
+    if (kept.includes(d)) {
+        return { checkin: { version: CHECKIN_VERSION, month, days: kept.slice() }, coins: 0 };
+    }
+    const days = kept.concat(d).sort((a, b) => a - b);
+    return {
+        checkin: { version: CHECKIN_VERSION, month, days },
+        coins: CHECKIN_REWARDS[(nextCount(c, today) - 1) % CHECKIN_REWARDS.length],
+    };
+}
+
+const MONTH_RE = /^\d{4}-\d{2}$/;
 
 /**
  * Read a save. ANY unexpected input yields a fresh one, and nothing here throws.
  *
- * Same contract as `parseWallet`: `''` is treated as a missing key rather than a corrupt one,
- * because that is what WeChat's `getStorageSync` returns for a key that was never written,
- * where a browser's `getItem` returns null. `day` is bounds-checked to 0..7 -- anything outside
- * that range cannot have come from `claim`, so it is not trusted enough to keep any part of.
+ * Same contract as `parseWallet`: `''` is a missing key rather than a corrupt one, because that
+ * is what WeChat's `getStorageSync` returns for a key never written, where a browser's `getItem`
+ * returns null.
+ *
+ * `days` must be ascending, unique, and within 1..31. That is stricter than it needs to be to
+ * avoid a crash, and deliberately so: those are properties `claim` always produces, so a save
+ * without them has been edited, and the calendar it would draw is not one this card owes a
+ * correct picture of.
  */
 export function parseCheckin(raw: string | null): Checkin {
     if (!raw || !raw.trim()) return emptyCheckin();
@@ -60,100 +192,45 @@ export function parseCheckin(raw: string | null): Checkin {
         return emptyCheckin();
     }
     if (typeof data !== 'object' || data === null || Array.isArray(data)) return emptyCheckin();
-    const obj = data as { version?: unknown; day?: unknown; last?: unknown };
+    const obj = data as { version?: unknown; month?: unknown; days?: unknown; last?: unknown };
+
+    if (obj.version === 1) return fromV1(obj.last);
     if (obj.version !== CHECKIN_VERSION) return emptyCheckin();
-    const day = obj.day;
-    if (typeof day !== 'number' || !Number.isInteger(day) || day < 0 || day > 7) return emptyCheckin();
-    const last = obj.last;
-    if (typeof last !== 'string') return emptyCheckin();
-    return { version: CHECKIN_VERSION, day, last };
+
+    const month = obj.month;
+    if (typeof month !== 'string' || !MONTH_RE.test(month)) return emptyCheckin();
+    if (!Array.isArray(obj.days)) return emptyCheckin();
+    const days: number[] = [];
+    let prev = 0;
+    for (const d of obj.days) {
+        if (typeof d !== 'number' || !Number.isInteger(d) || d < 1 || d > 31) return emptyCheckin();
+        if (d <= prev) return emptyCheckin();
+        prev = d;
+        days.push(d);
+    }
+    return { version: CHECKIN_VERSION, month, days };
+}
+
+/**
+ * Carry a v1 save forward. Only `last` survives.
+ *
+ * `day` was a position in a 7-day streak, and a calendar has nowhere to put it -- there is no
+ * "the run is at 5" independent of which days were actually claimed. Seeding the one day it does
+ * know about buys the only thing worth keeping across the update: a player who already claimed
+ * today cannot claim it again after installing this build.
+ *
+ * Seeded UNCONDITIONALLY, without asking whether `last` is in the current month, because this
+ * function has no clock and should not need one. If `last` turns out to be last month's, the
+ * stored month simply differs from today's and `canClaim` lets the claim through -- which is
+ * exactly what an empty save would have done.
+ */
+function fromV1(last: unknown): Checkin {
+    if (typeof last !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(last)) return emptyCheckin();
+    const d = dayOf(last);
+    if (!Number.isInteger(d) || d < 1 || d > 31) return emptyCheckin();
+    return { version: CHECKIN_VERSION, month: monthOf(last), days: [d] };
 }
 
 export function serializeCheckin(c: Checkin): string {
     return JSON.stringify(c);
-}
-
-/**
- * `now` as a `'YYYY-MM-DD'` key, in the DEVICE'S LOCAL time zone -- deliberately not UTC.
- *
- * A single-player game with no server has no clock more authoritative than the device it is
- * running on, so there is no "correct" time zone to convert to; UTC would just be a different
- * wrong one, and for a player in China it would flip the day at 08:00 local, in the middle of a
- * normal play session. Local time is the only choice that makes "a new day" mean what a player
- * standing in front of the device would call a new day.
- *
- * The cost is accepted, not overlooked: a player who winds their system clock forward claims
- * early, and one who winds it back can claim the same day twice. Both grant a few extra coins
- * in a game with no economy to protect and no other player to affect. That is cheap enough that
- * building any defense against it -- a server clock, a monotonic counter -- would spend more
- * effort than the exploit is worth.
- */
-export function todayKey(now: Date): string {
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-}
-
-/** Whether today's reward has not already been claimed. */
-export function canClaim(c: Checkin, today: string): boolean {
-    return c.last !== today;
-}
-
-/**
- * The day of the cycle a claim made `today` would land on, WITHOUT recording it.
- *
- * `claim`, `nextReward` and the card that draws the seven cells all need this, and they need to
- * agree, so it is computed once here rather than duplicated. THE CARD IS WHY IT IS EXPORTED: the
- * cell it highlights has to be the cell `claim` will actually pay, and a view that worked that
- * out for itself -- or inferred it from `nextReward`, which cannot tell day 1 from day 2 because
- * both pay 20 -- would be a second copy of this rule free to drift from the one that pays out.
- *
- * A streak continues (day + 1, wrapping 7 back to 1) only when `last`
- * is literally the calendar day before `today`; anything else -- never claimed, or a gap of any
- * size -- restarts at day 1. A missed day is not a partial streak; the cycle does not have a
- * notion of "day 3, but late," so there is nothing to preserve.
- */
-export function nextDay(c: Checkin, today: string): number {
-    if (c.last === yesterdayOf(today)) {
-        return c.day === 7 ? 1 : c.day + 1;
-    }
-    return 1;
-}
-
-/**
- * The `todayKey` of the calendar day before `today`.
- *
- * Built by constructing a local `Date` at midnight on `today` and stepping it back one day,
- * rather than by string arithmetic on the `'YYYY-MM-DD'` text -- `Date` already knows that
- * January 1st is preceded by December 31st of the PREVIOUS year, and that the last day of a
- * month varies. Re-deriving that with substring math would just be a worse copy of what `Date`
- * already does correctly, with none of the edge cases actually removed.
- */
-function yesterdayOf(today: string): string {
-    const [y, m, d] = today.split('-').map(Number);
-    const date = new Date(y, m - 1, d);
-    date.setDate(date.getDate() - 1);
-    return todayKey(date);
-}
-
-/**
- * Record a claim for `today`, returning the new save and the coins it pays.
- *
- * The save passed in is never mutated: the caller holds it as the current state, same as
- * `addCoins` in `wallet.ts`. This does not check `canClaim` itself -- the caller already has to,
- * to decide whether to show a claimable button at all, and a second silent check here would
- * just be a second place that rule could drift out of sync with the first.
- */
-export function claim(c: Checkin, today: string): { checkin: Checkin; coins: number } {
-    const day = nextDay(c, today);
-    return {
-        checkin: { version: CHECKIN_VERSION, day, last: today },
-        coins: CHECKIN_REWARDS[day - 1],
-    };
-}
-
-/** What `claim(c, today)` would pay right now, for showing the reward before it is claimed. */
-export function nextReward(c: Checkin, today: string): number {
-    return CHECKIN_REWARDS[nextDay(c, today) - 1];
 }

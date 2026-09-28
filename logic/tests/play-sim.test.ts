@@ -1,8 +1,20 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
-  careful, careless, keepDistinct, isHardButFair, simulate,
+  careful, careless, keepDistinct, decisive, judge, stallDemand, mistakeCost,
+  simulate, demandPressure, playOut,
+  exitWidth, exitFrontiers, frontierWidth,
+  slip, forgiveness, SLIP_RATE, Policy,
 } from '../../game/assets/scripts/core/play-sim';
+import { bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
 import { GameCore } from '../../game/assets/scripts/core/game-core';
 import { LevelData } from '../../game/assets/scripts/core/types';
+
+/** 发出去的那一关,逐字节 —— 设备读的就是这些字节。 */
+function shipped(id: number): LevelData {
+  const p = path.join(__dirname, '../../game/assets/resources/levels', `level-${id}.json`);
+  return JSON.parse(fs.readFileSync(p, 'utf8')) as LevelData;
+}
 
 // One small red car (cap 16) and 16 red passengers: nothing to get wrong.
 function soloLevel(): LevelData {
@@ -109,12 +121,225 @@ test('careful cannot see past a channel lookahead', () => {
   expect(careful(a, [1, 2, 3], () => 0)).toBe(careful(b, [1, 2, 3], () => 0));
 });
 
-test('isHardButFair rejects a level everybody wins', () => {
-  expect(isHardButFair(soloLevel()).hard).toBe(false);
+
+describe('forgiveness', () => {
+  test('the dial really is the share of taps the policy does not make', () => {
+    // 两端都钉死,而且钉的是"有没有问过策略",不是最终胜负 —— 胜负在简单关卡上两边
+    // 都一样,测不出实现是否真的在两支之间切换。
+    const never: Policy = () => { throw new Error('policy consulted'); };
+    expect(() => simulate(soloLevel(), slip(never, 1), 1)).not.toThrow();
+    expect(() => simulate(soloLevel(), slip(never, 0), 1)).toThrow('policy consulted');
+  });
+
+  test('at zero slip it is the policy, on a level where that decides the game', () => {
+    for (const seed of [1, 977, 1954]) {
+      expect(simulate(shipped(6), slip(careful, 0), seed))
+        .toBe(simulate(shipped(6), careful, seed));
+    }
+  });
+
+  test('a level with no way through forgives nothing', () => {
+    expect(forgiveness(hopelessLevel())).toBe(0);
+  });
+
+  test('a level that plays itself forgives everything', () => {
+    expect(forgiveness(soloLevel())).toBe(1);
+  });
+
+  test('it is a rate, and it is measured at the documented slip', () => {
+    expect(SLIP_RATE).toBeGreaterThan(0);
+    expect(SLIP_RATE).toBeLessThan(1);
+    const f = forgiveness(shipped(6));
+    expect(f).toBeGreaterThanOrEqual(0);
+    expect(f).toBeLessThanOrEqual(1);
+    expect(forgiveness(shipped(6), SLIP_RATE)).toBe(f);
+  });
+
+  test('it tells the shipped levels apart, which hard and fair do not', () => {
+    // 这条测的是**判据本身有没有分辨力**,不是某一关的具体数值。旧判据 hard/fair 是两
+    // 个 bit,在发出去的九关上全部相同 —— 于是"勉强能过"和"闭着眼也能过"读数一样,
+    // 难度曲线就是这么被压平的。新判据必须至少把这九关分成三档以上,否则换它没有意义。
+    const seen = new Set<number>();
+    for (let id = 2; id <= 10; id++) seen.add(forgiveness(shipped(id)));
+    expect(seen.size).toBeGreaterThanOrEqual(3);
+  }, 300000);
 });
 
-test('isHardButFair rejects a level nobody wins', () => {
-  const v = isHardButFair(hopelessLevel());
-  expect(v.hard).toBe(true);
-  expect(v.fair).toBe(false);
+describe('playOut', () => {
+  test('a jam is a bill, not an ending', () => {
+    // hopelessLevel 有一个锁着的车位。`simulate` 把它夹死,于是判为输;真机上卡住会
+    // 提示开那个车位,关卡继续 —— 这一条钉的就是两者的区别,因为整条难度曲线量错了
+    // 一年就是错在这里。开完仍然赢不了(三辆绿车对一队红乘客),但它是**买过之后**
+    // 才结束的,而且账单记了下来。
+    expect(simulate(hopelessLevel(), decisive, 1)).toBe(false);
+    const r = playOut(hopelessLevel(), decisive, 1);
+    expect(r.bought).toBe(hopelessLevel().parking.slots - hopelessLevel().parking.unlocked);
+    expect(r.won).toBe(false);
+    expect(r.dead).toBe(true);
+  });
+
+  test('a level that plays itself costs nothing', () => {
+    expect(playOut(soloLevel(), decisive, 1)).toEqual({ won: true, bought: 0, dead: false });
+  });
+
+  test('the reference player does not sit on an empty stall for ever', () => {
+    // `careful` 在没有匹配颜色时永远不点,于是车位永远不满,于是游戏那个"开个车位吧"
+    // 的提示永远不触发 —— 一局既不赢也不卡死,空转到上限。判据要量的是"卡住值多少钱",
+    // 而这种局在账面上是 0。`decisive` 只在环上还有空位时才等。
+    const idle = playOut(hopelessLevel(), careful, 1);
+    expect(idle).toEqual({ won: false, bought: 0, dead: false });
+    expect(playOut(hopelessLevel(), decisive, 1).dead).toBe(true);
+  });
+
+  test('it does not mutate the level it is handed', () => {
+    const level = shipped(6);
+    const before = JSON.stringify(level);
+    playOut(level, careful, 1);
+    expect(JSON.stringify(level)).toBe(before);
+  });
+});
+
+describe('exitWidth', () => {
+  test('one colour everywhere is a width of one, however many cars can leave', () => {
+    const level = shipped(6);
+    const flat: LevelData = JSON.parse(JSON.stringify(level));
+    for (const c of flat.lot.cars) c.color = 'red';
+    expect(exitWidth(flat)).toBeCloseTo(1, 6);
+    // 而真正发出去的那一关必须明显更宽 —— 否则这个指标根本没在看颜色。
+    expect(exitWidth(level)).toBeGreaterThan(2);
+  });
+
+  test('it never claims more colours than the frontier holds cars', () => {
+    const level = shipped(6);
+    const frontiers = exitFrontiers(level);
+    expect(frontiers.length).toBeGreaterThan(20);
+    const color = new Map(level.lot.cars.map((c) => [c.id, c.color]));
+    for (const ids of frontiers) {
+      const seen = new Set(ids.map((id) => color.get(id)));
+      expect(seen.size).toBeLessThanOrEqual(ids.length);
+    }
+    expect(frontierWidth(frontiers, color)).toBeCloseTo(exitWidth(level), 6);
+  });
+
+  test('the frontiers belong to the packing, not to the painting', () => {
+    // 这是配色搜索省下四百次重建的那条性质:谁能开出去只跟车停在哪有关。它一旦不成立,
+    // 第一遍筛出来的"最窄的候选"就是用别人的 frontier 算的,整个搜索静默地看错东西。
+    const level = shipped(6);
+    const repainted: LevelData = JSON.parse(JSON.stringify(level));
+    repainted.lot.cars.forEach((c, i) => { c.color = i % 2 === 0 ? 'red' : 'blue'; });
+    expect(exitFrontiers(repainted)).toEqual(exitFrontiers(level));
+  });
+});
+
+describe('judge', () => {
+  test('a level that plays itself asks for one stall and costs nothing', () => {
+    const v = judge(soloLevel());
+    expect(v.demand).toBe(1);
+    expect(v.dead).toBe(false);
+    expect(mistakeCost(soloLevel())).toBe(0);
+  });
+
+  test('stall demand counts up, and says so when the whole bay is not enough', () => {
+    // soloLevel 是一辆车四个车位 —— 一个就够。hopelessLevel 四个也不够,报 unlocked + 1,
+    // 那是 `choosePainting` 用来判"这一关三星拿不到"的哨兵,不是一个可比的车位数。
+    expect(stallDemand(soloLevel())).toBe(1);
+    expect(stallDemand(hopelessLevel())).toBe(hopelessLevel().parking.unlocked + 1);
+  });
+
+  test('demand sees what cost cannot', () => {
+    // 这一条钉的是换指标的理由本身,两半一起钉:同一关的两种配色,车位需求差两个,而
+    // `mistakeCost` 读数**完全相同**。按 cost 排的搜索于是挑了个松的还报告命中目标。
+    //
+    // 量之前先把车位放开到 slots。`stallDemand` 最多数到 unlocked,而 2026-09-22 之后
+    // 每一关都顶到 4 —— 截顶之后两种配色读数一样,这条就只能量到"都是 4",什么也证明
+    // 不了。放开之后散配色掉到 2,差别是真的。
+    const palette = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
+    const wide = (id: number, roundRobin: boolean): LevelData => {
+      const l: LevelData = JSON.parse(JSON.stringify(shipped(id)));
+      l.parking.unlocked = l.parking.slots;
+      if (roundRobin) {
+        const colors = new Set(l.lot.cars.map((c) => c.color)).size;
+        l.lot.cars.forEach((c, i) => { c.color = palette[i % colors]; });
+        const b = bandParams(id);
+        l.loop.queue = bandedQueue(l.lot.cars, l.lot.tunnels ?? [], b.offset, b.interleave);
+      }
+      return l;
+    };
+    // 第 2 关,不是第 4 关:第 4 关的形状已经把活干完了,两种配色都要四个车位,拿它当
+    // 例子会把"配色无关"错读成"指标无效"。
+    expect(stallDemand(wide(2, true))).toBeLessThan(stallDemand(wide(2, false)));
+    expect(mistakeCost(wide(2, true))).toBe(mistakeCost(wide(2, false)));
+  }, 600000);
+
+  test('a level with no way through is dead, and dead is not the same as expensive', () => {
+    // hopelessLevel 是三辆绿车对一队红乘客:车位全开也接不上。这必须读成 `dead`,
+    // 因为 `choosePainting` 靠它把"窄过头"的配色挡回去 —— 而在账面上它同时还是车位
+    // 需求最高的,所以只看 `demand` 的搜索会把它当成最好的候选。
+    const v = judge(hopelessLevel());
+    expect(v.dead).toBe(true);
+  });
+
+  test('width comes straight off exitWidth', () => {
+    const level = shipped(6);
+    expect(judge(level).width).toBeCloseTo(exitWidth(level), 6);
+  });
+});
+
+describe('demandPressure', () => {
+  // 已提交的第 6 关:环上平均有颜色,车位盖不住其中一部分。
+  // A PINNED copy of level 6, not the shipped file. These two ask whether `demandPressure`
+  // reads the bay's coverage at all, which is a property of the metric -- and the shipped
+  // level 6 is regenerated whenever the painting search improves. The 2026-09-24 regeneration
+  // narrowed it from 3.22 to 2.17, and on that painting seven stalls barely move the gap
+  // (1.02 -> 0.97): the same effect the paragraph below records one step earlier, taken
+  // further. The level this assertion was calibrated on is kept as a fixture instead.
+  const level = (): LevelData => JSON.parse(fs.readFileSync(
+    path.join(__dirname, 'fixtures', 'level-6-2026-09-24.json'), 'utf8',
+  )) as LevelData;
+
+  test('环上有需求,而且车位盖不住其中一部分', () => {
+    const r = demandPressure(level());
+    expect(r.ring).toBeGreaterThan(1);
+    expect(r.gap).toBeGreaterThan(0);
+    // 盖不住的颜色不可能比环上有的颜色还多。
+    expect(r.gap).toBeLessThanOrEqual(r.ring);
+  });
+
+  // 这条是防空操作的那一条:把车位开到七个,缺口必须明显变小。如果 `demandPressure`
+  // 压根没看 `covered`,gap 会等于 ring,加车位也不动,这里就会失败;反过来如果它永远
+  // 返回 0,上面那条 `gap > 0` 会失败 —— 两条一起才咬得住。
+  //
+  // 断言从"掉四成"放宽到"确实在掉",而**放宽的理由本身是一个结论**:2026-09-21 起配色
+  // 按 `exitWidth` 搜索,同一时间能开出去的颜色被压到三种上下,于是能不能盖住环上的需求
+  // 不再由车位数决定,而由**能开出去几种颜色**决定。第 6 关七个车位下实测只从 3.58 掉到
+  // 2.16,四成掉不下来了 —— 这不是指标坏了,是关卡终于不再是"车位够多就无脑通关"。
+  test('车位多到盖得住一切时,缺口变小', () => {
+    const tight = demandPressure(level());
+    const wide = level();
+    wide.parking.unlocked = wide.parking.slots;
+    const loose = demandPressure(wide);
+    expect(loose.gap).toBeLessThan(tight.gap * 0.9);
+  });
+
+  test('offset 抬得动缺口,而 hard 对同一批改动没有反应', () => {
+    const at = (off: number) => {
+      const lvl = level();
+      lvl.loop.queue = bandedQueue(lvl.lot.cars, lvl.lot.tunnels ?? [], off, 1);
+      return demandPressure(lvl).gap;
+    };
+    // 断言的是**整条 offset 轴上的落差**,不是某两档的比值。哪一档最高取决于这一关的
+    // 打包,而打包会变:上一版钉死 offset 16 与 32,第 6 关一改成沿轮廓铺就红了,红得
+    // 毫无道理 —— 那不是 offset 失效,是我把一个随打包漂移的量当成了常数。
+    //
+    // 实测已提交的第 6 关(2026-09-20,沿轮廓铺):
+    //     off0 0.57   off8 1.33   off16 1.67   off24 1.43   off32 1.14   off40 1.39
+    // 最高 1.67 是最低 0.57 的 2.9 倍。断言 1.8 倍,留足余量;而 offset 若真的不起作用,
+    // 这六档会挤在一起,比值奔向 1.0。
+    const spread = [0, 8, 16, 24, 32, 40].map(at);
+    // 1.5,从 1.8 放宽,而放宽的量是实测的:2026-09-22 的形状曲线把第 6 关换成了十字
+    // 形、场地也矮了一行,同一组 offset 量到 1.24/1.38/1.67/1.24/1.39/1.99,比值 1.61。
+    // offset 仍然抬得动缺口,只是这个更紧的打包上余地小了 —— 1.5 留在 1.61 下面一点,
+    // 旋钮真失效时(比值奔向 1.0)仍然会红。
+    expect(Math.max(...spread)).toBeGreaterThan(Math.min(...spread) * 1.5);
+  });
 });

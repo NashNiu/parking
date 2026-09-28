@@ -303,10 +303,16 @@ test('the lobby column is sized from one scale step', () => {
  * put an irreversible action under a 588-wide strip of card. The asymmetry is deliberate and is
  * asserted here so that deleting it fails.
  *
- * THE CARD GREW BY EXACTLY ONE ROW PITCH for the third row, and the two-row case is placed by
- * the same `rowY` rather than by a second pair of constants -- a page that centres two rows and
- * a page that centres three are one piece of arithmetic, and the version with constants for
- * each is the version where one of them is retuned and the other is not.
+ * THE CARD GREW BY EXACTLY ONE ROW PITCH for the third row, and by one more when 音乐 arrived
+ * -- see SET_H. The short case is placed by the same `rowY` rather than by a second set of
+ * constants: a page that centres three rows and a page that centres four are one piece of
+ * arithmetic, and the version with constants for each is the version where one of them is
+ * retuned and the other is not.
+ *
+ * THE NUMBERS BELOW WERE RE-STATED WHEN 音乐 BECAME A ROW, not relaxed. This guard's job is to
+ * fail when the page's shape changes, so a change to that shape has to come back here and say
+ * what the shape is now -- the failure is the feature. Four rows on the lobby's card, three in
+ * play, the clear-save row last at rowY(3, 4).
  */
 test('clear-save is a row on the settings page, and only its button answers', () => {
   const src = stripComments(readSrc('hud-view.ts'));
@@ -317,16 +323,56 @@ test('clear-save is a row on the settings page, and only its button answers', ()
   expect(src).not.toContain('SET_WIPE_W');
   expect(src).not.toContain('SET_WIPE_Y');
   // One page height, one raise, one row-placing rule.
-  expect(src).toMatch(/^const SET_H = 1060;$/m);
+  expect(src).toMatch(/^const SET_H = 1292;$/m);
   expect(src).toMatch(/^const SET_ROW_PITCH = 232;$/m);
   expect(src).not.toContain('SET_RAISE_WIPE');
   expect(src).toContain('panel.setPosition(0, SET_RAISE, 0);');
-  expect(src).toContain('const rows = lobby ? 3 : 2;');
+  expect(src).toContain('const rows = lobby ? 4 : 3;');
   expect(src).toContain('this.sfxSwitch!.row.setPosition(0, rowY(0, rows), 0);');
-  expect(src).toContain('this.setWipeRow!.setPosition(0, rowY(2, 3), 0);');
+  expect(src).toContain('this.setWipeRow!.setPosition(0, rowY(3, 4), 0);');
   // The row is what hides on the in-game card -- hiding the button alone would leave an icon
   // and a label naming an action with nothing to press.
   expect(src).toContain('this.setWipeRow!.active = lobby;');
+});
+
+/**
+ * The music switch STARTS AND STOPS the loop, and the browser's autoplay gate is answered
+ * before the screen gate.
+ *
+ * TWO THINGS THAT FAIL SILENTLY, which is the only reason they are pinned here.
+ *
+ * The first: `SfxManager` gates at PLAY time -- it keeps a boolean and checks it inside
+ * `play` -- and copying that shape into `MusicManager` would leave a loop running with its
+ * switch off, because a loop has no play time to be gated at. The tidy-up that makes the two
+ * classes look alike is the bug, so the guard names the calls that must be there.
+ *
+ * The second: `onPressStart` returns early on every screen but the lobby. `kick` exists to
+ * catch the case where the browser refused the first `play()` until a gesture, and a player
+ * who opened straight into a level never touches the lobby -- so a `kick` placed after that
+ * return is a `kick` that never runs for them, and the symptom is silence nobody can
+ * reproduce. It has to sit above the gate, and it is asserted as the FIRST statement in the
+ * method rather than merely present somewhere in the file.
+ */
+test('music starts and stops on the switch, and the autoplay kick clears the screen gate', () => {
+  const music = stripComments(readSrc('music.ts'));
+  // The switch acts on the source itself, both ways.
+  expect(music).toContain('this.src.stop();');
+  expect(music).toContain('this.src.play();');
+  // And `play()` restarts a running source, so every start is guarded by `playing`.
+  expect(music).toContain('if (!this.clip || this.src.playing) return;');
+  expect(music).toContain('if (!this.wanted || this.src.playing) return;');
+  // It loops, which is the one property a background track cannot be missing.
+  expect(music).toContain('this.src.loop = true;');
+
+  const ctrl = stripComments(readSrc('GameController.ts'));
+  const opens = ctrl.indexOf('private onPressStart(e: EventTouch | EventMouse): void {');
+  const kick = ctrl.indexOf('this.music?.kick();', opens);
+  const gate = ctrl.indexOf(
+    "if (this.screen !== 'home' || !this.uiCam || !this.home) return;", opens,
+  );
+  expect(opens).toBeGreaterThanOrEqual(0);
+  expect(kick).toBeGreaterThan(opens);
+  expect(kick).toBeLessThan(gate);
 });
 
 /**
@@ -650,6 +696,141 @@ test('every scene prop stays inside the parking band, top and bottom', () => {
       expect(gap).toBeGreaterThan(span * (lane[i].size + lane[i + 1].size));
     }
   }
+});
+
+/**
+ * The lobby's tree IS the board's tree, and two trees on one verge cannot grow into each other.
+ *
+ * 「树的样式再调整一下，现在看不出来是棵树」. The lobby drew one flat green disc; `props.ts` had
+ * already worked out why that fails, in a docblock that says it in one line -- 「THE CROWN IS
+ * THREE BALLS, NOT ONE, and one was the whole of what was wrong with it」 -- and the lobby was
+ * drawing a different, worse tree a few hundred lines away, in a green it dimmed by hand.
+ *
+ * SO THE FIGURES ARE RE-DERIVED HERE RATHER THAN COPIED. The lobby's lobes are the board's balls
+ * scaled once, by mapping `CROWN_SPAN` onto `TREE_D / 2`, and this test does that arithmetic from
+ * both sources and compares. Written-down numbers that "came from" another file are how the two
+ * trees drifted apart the first time; a retune of either side now has to move both or fail here.
+ * The rounding is allowed for deliberately -- a disc asked for at 45.47 units is a disc the
+ * engine resamples, which is the blur this whole pass was opened for.
+ *
+ * AND THE BAND THAT KEEPS TREES APART. The tree grew from a 48-unit disc to something 112 tall,
+ * and `dressLeg` puts trees on the SAME side for two legs at a time, so the old 0.2..0.8
+ * placement band would have let consecutive trees touch (a gap of -0.4). The clearance is
+ * re-derived here from `RAIL_PITCH` and the tree's own reach rather than trusting either number
+ * as written -- it is the kind of overlap that looks like a drawing fault in a screenshot and
+ * has nothing in the scene to complain about it.
+ */
+test('the lobby tree is the board tree scaled, and trees clear each other', () => {
+  const num = (src: string, name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*(-?[0-9.]+)\\s*;`).exec(src);
+    if (!m) throw new Error(`${name} not found -- renamed?`);
+    return Number(m[1]);
+  };
+  const props = readSrc('props.ts');
+  const scene = readSrc('home-scene.ts');
+
+  // The board's three balls, and the lobby's three lobes.
+  const balls = [...props.matchAll(
+    /\{\s*r:\s*([0-9.]+),\s*x:\s*(-?[0-9.]+),\s*y:\s*([0-9.]+),\s*z:/g,
+  )].map((m) => ({ r: Number(m[1]), x: Number(m[2]), y: Number(m[3]) }));
+  const lobes = [...scene.matchAll(
+    /\{\s*d:\s*([0-9.]+),\s*x:\s*(-?[0-9.]+),\s*y:\s*([0-9.]+)\s*\}/g,
+  )].map((m) => ({ d: Number(m[1]), x: Number(m[2]), y: Number(m[3]) }));
+  expect(balls.length).toBe(3);
+  expect(lobes.length).toBe(3);
+
+  const treeD = num(scene, 'TREE_D');
+  const scale = treeD / (2 * num(props, 'CROWN_SPAN'));
+  balls.forEach((b, i) => {
+    expect(lobes[i].d).toBe(Math.round(2 * b.r * scale));
+    expect(lobes[i].x).toBe(Math.round(b.x * scale));
+    expect(lobes[i].y).toBe(Math.round(b.y * scale));
+  });
+
+  // The trunk, from the board's tapered cylinder: the mean of its two radii, its height, and a
+  // centre at half that height -- which is what puts the tree's FOOT on its own node.
+  const meanR = (num(props, 'TRUNK_R_TOP') + num(props, 'TRUNK_R_BOTTOM')) / 2;
+  const trunkH = num(scene, 'TRUNK_H');
+  expect(num(scene, 'TRUNK_W')).toBe(Math.round(2 * meanR * scale));
+  expect(trunkH).toBe(Math.round(num(props, 'TRUNK_H') * scale));
+  expect(num(scene, 'TRUNK_Y')).toBe(trunkH / 2);
+
+  // The crown may not reach wider than the bound `buildTree` passes to `vergeX`, which is what
+  // keeps a tree off the badges and off the paving.
+  const pad = num(scene, 'OUTLINE_PAD');
+  const reachX = Math.max(...lobes.map((l) => Math.abs(l.x) + l.d / 2));
+  expect(reachX).toBeLessThanOrEqual(treeD / 2);
+
+  // Two same-side trees on consecutive legs. The gap does not depend on where the band starts,
+  // only on how wide it is -- shifting the band moves both ends together.
+  const up = Math.max(...lobes.map((l) => l.y + l.d / 2)) + pad / 2;
+  const down = pad / 2;
+  const pitch = num(readCore('home-path.ts'), 'RAIL_PITCH');
+  const gap = pitch * (1 - num(scene, 'TREE_BAND_SPAN')) - up - down;
+  expect(gap).toBeGreaterThan(30);
+  // And the band that shipped before this tree would NOT clear that floor, so the check is
+  // live rather than vacuously true. It comes to exactly 0 -- rim to rim, no margin at all --
+  // which is why the floor is a positive number and not "greater than zero".
+  expect(pitch * (1 - 0.6) - up - down).toBeLessThan(30);
+});
+
+/**
+ * The lobby's tree wears the BOARD's two colours, not a hand-dimmed copy of the play green.
+ *
+ * The old crown was `COLORS.green` multiplied by 0.7 at build time -- a second tree colour with
+ * no argument behind it, a few hundred lines from one that has a whole docblock. Both colours
+ * live in `palette` now and both files read them, which is the resolution `CONTROL_FACE` got
+ * when the lobby needed the HUD's gear.
+ *
+ * The trunk is the half that makes the shape read: it is the only brown on either screen, and a
+ * crown without one is a bush.
+ */
+test('both trees read their crown and trunk from the shared palette', () => {
+  const pal = stripComments(readSrc('palette.ts'));
+  expect(pal).toContain('export const TREE_CROWN = new Color(74, 142, 86);');
+  expect(pal).toContain('export const TREE_TRUNK = new Color(116, 88, 66);');
+  for (const file of ['props.ts', 'home-scene.ts']) {
+    const src = stripComments(readSrc(file));
+    expect(src).toMatch(/import \{[^}]*TREE_CROWN[^}]*\} from '\.\/palette';/);
+    expect(src).toContain('TREE_TRUNK');
+  }
+  // No local copy of either, and no hand-dimming of the play green.
+  const scene = stripComments(readSrc('home-scene.ts'));
+  expect(scene).not.toContain('TREE_DIM');
+  expect(scene).not.toContain('COLORS.green');
+  expect(stripComments(readSrc('props.ts'))).not.toContain('PROP_GREEN');
+});
+
+/**
+ * The primary button's type size is a NAMED constant, and the longest label still fits.
+ *
+ * 「开始第六关 这个按钮再放大一些」. The size that had to change was written as a bare `46` at the
+ * `makeLabel` call, which is how it got left behind the previous time this button was resized --
+ * every other figure on the button had a name and that one did not, so the docblock arguing the
+ * arithmetic had nothing to refer to.
+ *
+ * THE FIT CHECK IS AN APPROXIMATION AND IS MEANT TO BE. Measuring real glyph advances needs the
+ * font, which this suite cannot load; a CJK glyph at about one em, a digit at a half and a space
+ * at a quarter is close enough to catch the failure that matters -- type running into the rounded
+ * corners after someone grows the label or narrows the button. It is a smoke alarm, not a ruler,
+ * so it asserts clearance against `START_R` rather than a tight margin.
+ */
+test('the start button names its type size, and the longest label clears the corners', () => {
+  const num = (src: string, name: string): number => {
+    const m = new RegExp(`const ${name}\\s*=\\s*(-?[0-9.]+)\\s*;`).exec(src);
+    if (!m) throw new Error(`${name} not found -- renamed?`);
+    return Number(m[1]);
+  };
+  const src = readSrc('home-view.ts');
+  expect(stripComments(src)).toContain(
+    "makeLabel(face, 'HomeStartLabel', START_LABEL_SIZE, 0, START_LABEL_X)");
+
+  const size = num(src, 'START_LABEL_SIZE');
+  // The widest string this button can hold: 重玩 第 10 关 -- four CJK, two digits, three spaces.
+  const widest = size * (4 * 1.0 + 2 * 0.5 + 3 * 0.25);
+  const block = num(src, 'START_ICON_D') + num(src, 'START_ICON_GAP') + widest;
+  const sideRoom = (num(src, 'START_W') - block) / 2;
+  expect(sideRoom).toBeGreaterThan(num(src, 'START_R'));
 });
 
 /**
@@ -983,30 +1164,30 @@ test('the scroll hint fades with the same ramp as the badges, and hides with the
 
 
 /**
- * The merged coin/free-coins pill is drawn and has NO handler, and that is on instruction.
+ * The merged coin/free-coins pill has a real handler now: tapping it opens the ledger.
  *
- * 「免费金币暂时只能看，点击无反应」 -- it fronts a rewarded video and there is no ad unit to point
- * it at yet. The free-coins entry used to be a separate reserved place with its own `onTap:
- * null`; it merged into `TopBar`'s own coin pill (see task 7's brief), and the null handler moved
- * with it into `coinTap`. The risk this guards is not that someone deletes the pill; it is that
- * someone reads `coinTap`'s `null` as an oversight and "fixes" it with a toast, a disabled state,
- * or an empty function. Any of those changes what the player gets, and none of them would fail
- * anything else in this suite.
+ * IT USED TO DO NOTHING, on purpose -- 「免费金币暂时只能看，点击无反应」, because it fronted a
+ * rewarded-video slot with no ad unit to point it at. The free-coins entry used to be a separate
+ * reserved place with its own `onTap: null`; it merged into `TopBar`'s own coin pill, and the null
+ * handler that moved with it into `coinTap` is superseded now that the coin system has a ledger to
+ * open -- the balance is the one thing on screen a ledger explains, so tapping the figure to ask
+ * where it came from needs no new icon.
  *
- * It pins the NULL FIELD rather than the absence of a handler, because those differ in what they
- * say: an omitted field would also mean inert, and would read as forgotten. It also pins that
- * `tapCoins` reaches it through `?.`, not a direct call -- a direct call on a `null` field would
- * throw the moment anyone tapped the pill.
+ * This pins that `coinTap` is SETTABLE (`setCoinTap`, not a permanent `readonly null`) and that
+ * `tapCoins` still reaches it through `?.`, not a direct call -- a direct call on the field would
+ * throw on any tap that lands before `GameController` has called `setCoinTap`. It also keeps the
+ * half of the old guard that still matters: the old two-slot machinery is actually gone, not
+ * merely unused -- a stray `setSlot` or `SLOT_FREE_COINS` left behind would mean the merge was
+ * cosmetic rather than real. Comments are stripped first: this file's own docblocks are allowed to
+ * name what used to be here (the same allowance `stripComments`'s own header gives the halo guard
+ * below), and only CODE reappearing is the defect this checks for.
  */
-test('the lobby merges free-coins into the coin pill, with a null handler, deliberately', () => {
+test('the lobby coin pill has a real handler now, wired through setCoinTap', () => {
   const src = readSrc('top-bar.ts');
-  expect(src).toContain('private readonly coinTap: (() => void) | null = null;');
+  expect(src).toContain('setCoinTap(fn: () => void): void {');
+  expect(src).toContain('this.coinTap = fn;');
   expect(src).toContain('this.coinTap?.();');
-  // And the old two-slot machinery is actually gone, not merely unused -- a stray `setSlot` or
-  // `SLOT_FREE_COINS` left behind would mean the merge was cosmetic rather than real. Comments
-  // are stripped first: this file's own docblocks are allowed to name what used to be here (the
-  // same allowance `stripComments`'s own header gives the halo guard below), and only CODE
-  // reappearing is the defect this checks for.
+  expect(src).not.toContain('private readonly coinTap');
   const home = stripComments(readSrc('home-view.ts'));
   expect(home).not.toContain('SLOT_FREE_COINS');
   expect(home).not.toContain('buildFreeCoinsIcon()');
@@ -1068,15 +1249,15 @@ test('the check-in claim button is gated on being claimable, not just repainted'
 });
 
 /**
- * The card and the payout read the landing day from the SAME function.
+ * The card's price and the payout's price come from the SAME function.
  *
- * `claim` records it, `nextReward` prices it, and `paintCheckin` highlights it; all three go
- * through `nextDay`. The failure this prevents is silent and slow: a card that computed the cell
- * as `day + 1` would be right until the first broken streak and would then highlight a day the
- * payout does not pay. Inferring it from `nextReward` fails sooner and even more quietly -- days
- * 1 and 2 both pay 20.
+ * `claim` pays it and `nextReward` shows it in advance; both go through `nextCount`, so the two
+ * cannot silently disagree about which check-in of the month this is. The failure this prevents
+ * is a card that priced itself some other way -- from `c.days.length + 1`, say -- which would
+ * agree with the payout right up until a day got claimed twice in the same tick or a month
+ * rolled over, and would then show the player a figure `claim` does not pay.
  */
-test('claim, nextReward and the card all read the landing day from nextDay', () => {
+test('claim and nextReward both price through nextCount, and the card shows nextReward', () => {
   const core = readCore('checkin.ts');
   for (const fn of ['claim', 'nextReward']) {
     const at = core.indexOf('export function ' + fn + '(');
@@ -1084,30 +1265,36 @@ test('claim, nextReward and the card all read the landing day from nextDay', () 
     // The function's own body, up to the next top-level export.
     const next = core.indexOf('\nexport ', at + 1);
     const body = next === -1 ? core.slice(at) : core.slice(at, next);
-    expect(body).toContain('nextDay(c, today)');
+    expect(body).toContain('nextCount(c, today)');
   }
-  expect(readSrc('hud-view.ts')).toContain('const landing = nextDay(c, today);');
+  expect(readSrc('hud-view.ts')).toContain('nextReward(c, today)');
 });
 
 /**
- * The check-in card reads `c.day` for the day already claimed, NOT `nextDay`.
+ * The calendar's claimed mark on each cell comes from `isClaimed`, NOT from a count or a
+ * derivation of the view's own -- the v2 shape of the branch's one player-visible defect.
  *
- * THIS IS THE BRANCH'S ONE PLAYER-VISIBLE DEFECT, guarded because nothing else can see it. The
- * card ticked day 1 and nothing else after every claim, whatever day the streak had reached --
- * `nextDay` continues a streak only when `last` is yesterday, and after a claim `last` is today,
- * so it fell through to "start again" and answered 1. Six days in seven the card contradicted
- * the payout; on the seventh it showed a day that had just paid 100 as still to come.
+ * WHAT SHIPPED ONCE: the seven-cell card derived "claimed" from a streak position it computed
+ * itself, `c.day` once today had been claimed -- and that field answered wrong for the day just
+ * paid, because the surrounding expression fell into the branch meant for a broken streak. Six
+ * days in seven the card contradicted the payout; on the seventh it showed a day that had just
+ * paid 100 coins as still to come, and stayed wrong until the next midnight because nothing
+ * between then and now recomputed it.
  *
- * `logic/tests/checkin.test.ts` pins the core half -- that `nextDay` really does answer 1 in
- * that state -- but the defect was in the VIEW, in the expression wrapped around the call, and
- * `hud-view.ts` imports `cc` so no test in this repo can execute it. Reverting the fix would
- * leave every other check-in assertion green.
+ * THE CALENDAR HAS NO STREAK POSITION TO GET WRONG, but it has the same SHAPE of risk: a cell's
+ * claimed mark could be recomputed from `c.days.length`, or by reading `c.days` directly in the
+ * view instead of asking core's `isClaimed` -- either is a second copy of "was this day claimed",
+ * free to drift from the one `claim` actually recorded, which is exactly the failure mode that
+ * shipped. `logic/tests/checkin.test.ts` pins the core half, that `isClaimed` itself answers
+ * correctly; this guards that the view actually calls it, per cell, rather than deriving the
+ * answer some other way. `hud-view.ts` imports `cc` so no test in this repo can execute it.
  */
-test('the check-in card reads c.day, not nextDay, for the day already claimed', () => {
+test('the check-in card reads isClaimed per cell for the claimed mark, not a derived count', () => {
   const src = stripComments(readSrc('hud-view.ts'));
-  expect(src).toContain('const claimedThrough = live ? landing - 1 : c.day;');
-  // And the trap itself must not come back under any spelling.
-  expect(src).not.toContain('live ? landing - 1 : landing');
+  expect(src).toContain('const done = isClaimed(c, month, d);');
+  // And the trap itself -- a claimed mark the view worked out from `c.days` rather than asking
+  // core -- must not come back under any spelling, including `c.day` from the v1 card.
+  expect(src).not.toContain('c.day');
 });
 
 /**
@@ -1399,4 +1586,47 @@ test('the badge highlight is sized off the edge and shares its offset', () => {
   // Concentric with the edge: both carry the base's lift, or the ring comes out lopsided.
   expect(src).toContain('hi.setPosition(0, -NODE_LIFT, 0);');
   expect(src).toContain('outline.setPosition(0, -NODE_LIFT, 0);');
+});
+
+/**
+ * EVERY MODAL THAT RISES IN PLAY TAKES THE SETTINGS PANEL DOWN FIRST.
+ *
+ * The stacking rule this HUD relies on was enforced from ONE SIDE ONLY. `syncGear` kills the
+ * gear under the win card, the lose card and the unlock prompt, so the panel cannot be opened
+ * UNDER one of them -- and `handleTap`'s settings branch says as much in prose: "It cannot
+ * currently be raised over the blocked-stall prompt or the win card ... so this branch and
+ * those never contend." The other direction was never closed. The level keeps running while the
+ * panel is up (`update` has no settings gate, deliberately -- a car already pulling out still
+ * lands), so the last passengers board, `onEnd` calls `showWin`, and the card goes up OVER an
+ * open panel.
+ *
+ * What that costs is the whole card. `handleTap` asks `settingsOpen()` first and swallows
+ * everything it does not claim, so `hitsWin` is never reached: the X, 重玩 and 下一关 all answer
+ * nothing, and the only live control on screen is the panel's own X, half-hidden behind the card
+ * that has stopped working. Reported as 「这时候点击关闭按钮，无法关闭」.
+ *
+ * So the invariant is pinned at the RAISE, where it can be enforced once, rather than at the tap,
+ * where every future branch would have to remember the order. All three raisers call
+ * `supersedeSettings` before they touch their own scrim.
+ */
+test('a modal raised in play takes the settings panel down first', () => {
+  const src = stripComments(readSrc('hud-view.ts'));
+  // One helper, so the rule has one statement and one place to change.
+  expect(src).toContain('private supersedeSettings(): void {');
+  expect(src).toContain('this.hideSettings();');
+  // All three raisers, and BEFORE each one raises its own scrim: a call after `active = true`
+  // would still work today and would be the line someone moves while tidying.
+  for (const fn of ['showWin(', 'showLose(', 'showUnlockPrompt(']) {
+    const at = src.indexOf(`    ${fn}`);
+    expect(at).toBeGreaterThanOrEqual(0);
+    const call = src.indexOf('this.supersedeSettings();', at);
+    const raise = src.indexOf('scrim.active = true;', at);
+    expect(call).toBeGreaterThan(at);
+    expect(raise).toBeGreaterThan(call);
+  }
+  // `showUnlockPrompt` returns early when it is already up, and the panel must come down
+  // anyway -- otherwise a prompt that is re-asked over a freshly opened panel keeps the trap.
+  const prompt = src.indexOf('    showUnlockPrompt(');
+  expect(src.indexOf('this.supersedeSettings();', prompt))
+    .toBeLessThan(src.indexOf('if (scrim.active) return;', prompt));
 });

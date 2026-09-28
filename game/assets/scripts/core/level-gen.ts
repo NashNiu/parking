@@ -4,12 +4,14 @@ import {
     TunnelSpec,
 } from './types';
 import { isSolvable, estimateDifficulty } from './solvability';
-import { isHardButFair } from './play-sim';
+import { exitFrontiers, frontierWidth, exitCars } from './play-sim';
+import { Budget, certifyThreeStar, strongDemandMeasured } from './search-player';
 import { carBox, pathClear } from './move-solver';
 import { TRACK_SHAPES, TrackShape } from './track-shapes';
 import { capacityOptions, entryIndex } from './track-path';
 import { mouthCar, tunnelBox, tunnelReservation } from './tunnel';
 import { LotSystem } from './lot-system';
+import { inShape, seatsFor, shuffled, SkeletonShape, skeletonShape } from './lot-skeleton';
 
 /**
  * Fixed across levels: seven parking stalls, four unlocked at the start. The circuit
@@ -92,8 +94,21 @@ const PALETTE = ['red', 'blue', 'green', 'yellow', 'purple', 'cyan'];
  * get a bigger cell than they do today despite carrying two more rows -- the frame fix hands
  * them more than the rows take, because the old formula was under-sizing them for exactly the
  * same reason it was leaving the band under the lot. Only the 4:3 tablet pays, at -17.4%.
+ *
+ * 8 BY 10, DOWN FROM 8 BY 12, and the reason is difficulty rather than layout. A car leaves
+ * by driving to an edge, so how many cars can leave at once is set by how much RIM the block
+ * of cars has -- measured across the shipped ten, the levels with a big solid silhouette put
+ * 8 to 11 cars on the table at a time against four stalls, and the ones with a small or
+ * hollow silhouette put 4. My human partner cleared level 4 on two stalls four times running
+ * while every other dial was already at its ceiling, and asked for this one: 可以把高度降低
+ * 一些.
+ *
+ * Two rows is the change the screen-fit table above can absorb without being redone: short
+ * screens were the height-bound end of it, and they get a bigger cell here, not a smaller
+ * one. The view reads `level.lot.h` rather than this constant, so nothing in it is pinned to
+ * the old number.
  */
-export const LOT: Lot = { w: 8, h: 12 };
+export const LOT: Lot = { w: 8, h: 11 };
 
 /** Share of each capacity in a level's car mix. Small cars dominate; they read fastest. */
 const CAP_MIX: { cap: Cap; weight: number }[] = [
@@ -160,14 +175,17 @@ const RELAX_ITERS = 60;
  * and the four diagonals here keep every bit of that. What goes away is only the
  * distinction between 37 and 41 degrees, which no player can see and no lane cares about.
  *
- * Quantising the AXIS is enough to quantise the heading: `peel` hands a piece its own axis
- * or that axis plus 180, and 45 divides 180.
+ * THAT LAST SENTENCE DOES NOT EXTEND TO SHAPED SEATS, and this constant no longer reaches
+ * them. It quantises the random FALLBACK seeding only; the seats come from `lot-skeleton`,
+ * and `contourSeats` lays a ring of cars ALONG the contour, each one tangent to the ellipse
+ * it sits on. There the distinction between 37 and 41 degrees is exactly what makes a ring
+ * read as a ring rather than as a pile -- quantise those headings and the tangency, which is
+ * the whole content of the layout, is gone. Free angles cost the pipeline nothing: `peel`
+ * hands a piece its own axis or that axis plus 180, so any axis works, and quantising the
+ * AXIS is all this constant ever needed to do for the eight compass points it still serves.
  */
 const HEADING_STEP = 45;
 const HEADINGS = 360 / HEADING_STEP;
-
-/** Draws a piece gets at finding a seat clear of the tunnel reservations. See `pack`. */
-const SEED_TRIES = 8;
 
 /**
  * Below this, a residual `overlapMTV` reading is floating-point noise from a pair the
@@ -299,6 +317,92 @@ export interface GenParams {
  *    car on the board is a carful of passengers that has to come round the ring.
  */
 export const CARS_PER_LEVEL = 89;
+
+/**
+ * 点阵的缝宽,本设计唯一的密度旋钮。
+ *
+ * "间距再大一些"调的就是这个数。`CARS_PER_LEVEL` 因此从目标变成了结果——点阵间距
+ * 和车道面积一起决定能坐下多少车,保留两个互相矛盾的旋钮只会让它们打架。它仍然是
+ * 一个上限,以便乘客预算有硬边界。
+ *
+ * 0.20 是扫出来的。第 2 关(无骨架,量的是点阵本身)每档跑一次真实生成:
+ *
+ *     GAP   cars  blocked/want  rounds  score   pax   holes   play
+ *     0.10   89      71/71       14     278   1904  3/2/3   FREE
+ *     0.15   89      71/71       12     272   1888  1/1/7   FREE
+ *     0.20   89      70/71       12     270   1880  0/1/6   hard (careless 100%)
+ *     0.25   78      63/62       11     242   1696  2/3/4   hard (careless 100%)
+ *     0.30   77      62/62       16     254   1648  2/0/8   hard (careless 80%)
+ *     0.35   72      59/58       15     240   1512  3/2/5   hard (careless 60%)
+ *
+ * **洞的数量对 `GAP` 不是单调的**,这一条反直觉,写在这里免得下一个人照着直觉调。
+ * 缝小不等于洞少:行距和行内步长要恰好铺满 8 x 12,0.20 那一档 89 辆车正好填满,
+ * 两边都有边角剩下来,剩下的边角就是洞。所以这个数是扫出来的不是推出来的,改它之前
+ * 请重扫,别在表上插值。
+ *
+ * 0.20 是表里唯一 `big === 0` 的一档(这是"不要留下明显的大块空白"的量化形式),
+ * 而且它还 `hard`、还保住了 89 辆车 —— 在每个轴上都优于初值 0.25。
+ */
+export const GAP = 0.20;
+
+/**
+ * 点阵里横过来的车所占的比例,本设计的第二个旋钮。
+ *
+ * 难度来自车互相挡道,而互相挡道需要朝向不一致。全场同向的停车场整齐,但它没有谜题
+ * ——真实生成量到了:第 2 关没有车道,唯一的变量就是点阵加统一朝向,`blocked` 从 72
+ * 掉到 69,`rounds` 从 17 塌到 8(89 辆车 8 个回合等于每轮走十一辆,一整排一起离场),
+ * `play` 从 hard 变成 FREE——一行策略就能赢。
+ *
+ * (这几个数取自下表的"0,不洗牌"行。更早的一次跑动报的是 68 和 10;那次跑在给
+ * `latticeSeats` 加无条件 `cross` 抽签之前,那一抽把 rng 流整体推移了,所以整张表在
+ * 新代码上重新量过一遍。旧数字已经作废,别拿它们和下表混着读。)
+ *
+ * 横过来的车会把邻座挤开,局部破坏点阵的均匀间距,那正是难度要的不规则。0 到 1 之间
+ * 连续地从"整齐"走到"混乱"。
+ *
+ * 0.35 是第 2 关上扫出来的档位。第 2 关的骨架是 `none`,所以这几跑与车道无关,量的
+ * 纯粹是播种;要动这个数的人需要先看见其他档是什么样子:
+ *
+ *            cars colors blocked/want rounds/min score  pax   holes  inward  packing       play
+ *   旧打包器   89     5      72/71       17/2      289  1896  2/0/0    39%   on target     hard (careless 100%)
+ *   0,不洗牌  89     5      69/71        8/2      256  1968  2/0/5    35%   NEAREST MISS  FREE
+ *   0,洗牌    89     5      69/71        8/2      256  1832  0/1/2    27%   NEAREST MISS  FREE
+ *   0.2,洗牌  89     5      72/71       10/2      268  1888  0/0/13   28%   on target     FREE
+ *   0.35,洗牌 89     5      70/71       11/2      267  1928  1/0/5    22%   on target     hard (careless 100%)
+ *
+ * 三件事各归各。洗牌治的是洞:`holes` 从 2/0/5 到 0/1/2。这一格不是对照实验——
+ * `shuffled` 从同一个 `rng` 里抽掉约 98 个数,两跑在 `peel` 处就分叉了,用的也是 99
+ * 个座位里不同的 89 个,几何本来就不一样(`holes`、`inward`、`pax` 三列都动了)。
+ * `blocked`、`rounds`、`score` 三列跨这条分叉还逐位相同,惹眼,但那是巧合,不是控住了
+ * 变量。留着洗牌是因为洞确实少了,不是因为这一格证明了什么。
+ *
+ * `cross` 那三格才是单变量比较:座位位置与 `cross` 无关,逐点重合。0.2 就把 `blocked`
+ * 拉回目标了,但 `play` 还是 FREE;到 0.35 才真的赢回 `hard`。
+ *
+ * 取的是**扫到的最小能 hard 的值**,不是连续意义上的最小——0.2 与 0.35 之间没有扫,
+ * 门槛可能更低。
+ *
+ * **上面那张表是在旧点阵上扫的,已经作废。** 旧点阵行内步长写死 1.25,而大车含留白
+ * 1.758,同一行两辆大车一出生就重叠 0.508(见 Task 4b 与 `latticeSeats`)。那三档的
+ * 分数因此全都是"一大堆互相压着的车被关系放松推开之后"量出来的,布局已经不是现在
+ * 这个布局,数也不再能拿来互相比较。留着它是为了记住这一档当初是怎么选出来的,不是
+ * 为了照着读数。
+ *
+ * Task 4b 在新点阵上重新确认了这一档——同一关(第 2 关,骨架 `none`)、同一个旋钮:
+ *
+ *            cars colors blocked/want rounds/min score  pax   holes  inward  packing    play
+ *   0.35,新  89     5      70/71       14/2      276  1840  1/1/0    24%   on target  hard (careless 80%)
+ *
+ * 仍然是 `hard`,所以 0.35 留着,不必再往上提(Task 4b 的止损规则:是 `FREE` 才提到
+ * 0.5 重跑)。`rounds` 从 11 涨到 14、`score` 从 267 涨到 276 都是往好的方向走,但那
+ * 不是 `CROSS` 的功劳——是播种不再自带重叠。
+ *
+ * **这一档仍然没有通过 spec §4.5 的验收条件 #1**(`fillableHoles.big === 0`):旧点阵
+ * 上是 1/0/5,新点阵上是 1/1/0。spec §4.1 不许拿一个条件换另一个,所以现在这个状态
+ * 还是中间态,不是终态:`GAP` 还钉在未标定的 0.25 上,而那个 big 洞该由 `GAP` 去关,
+ * 不是靠把 `CROSS` 降回打不出 hard 的档位。这是 Task 5 的活。
+ */
+export const CROSS = 0.2;
 
 /**
  * How far off the blocked-car target a level may land and still count as on target.
@@ -477,7 +581,21 @@ export function levelParams(id: number): GenParams {
         //
         // 6 is the ceiling because PALETTE has six entries and the view has exactly those six
         // in `colors.ts`. A seventh would draw grey (see `colorOf`).
-        colors: Math.min(6, 4 + Math.ceil((id - 1) / 3)),
+        //
+        // FULL PALETTE FROM ID 2. There is no colour ramp any more, and that is a decision
+        // my human partner made in one line: 只有第一个关是教学关. Id 1 is authored, never
+        // packed, and keeps four; everything else opens on all six.
+        //
+        // What the ramp was buying is not worth its cost here. Five colours against four
+        // open stalls is a bay covering four fifths of what is in play, which is the
+        // slackest the game gets -- and ids 2, 3 and 4 were exactly the levels being
+        // cleared on two stalls. A column that reaches its ceiling on the first packed
+        // level is not much of a curve, but it is the honest shape of this one: the
+        // palette has six entries and the difficulty has to come from elsewhere.
+        //
+        // The pairwise test that asked for `last.colors > first.colors` went with this;
+        // see level-gen.test.ts, where the ramp it was guarding now rides on `exitCars`.
+        colors: id <= 1 ? 4 : 6,
         blockedRatio: BLOCKED_FIRST + (BLOCKED_LAST - BLOCKED_FIRST) * t,
         minRounds: Math.min(9, 2 + Math.floor((id - 1) / 3)),
     };
@@ -580,11 +698,13 @@ export function tunnelParams(id: number): TunnelParams {
  * already at or above 12, so requiring id 5 >= id 4 excludes no option it would otherwise have
  * taken.
  *
- * ZERO ON THE TEACHING LEVELS, deliberately. Measured over the ten shipped levels: at offset
- * 0 every one of them falls to `keepDistinct`, the one-line rule ("keep the stalls all
- * different colours") the whole difficulty apparatus exists to defeat. Perfect correspondence
- * is the free end of this dial -- which is exactly what levels 1 and 2 want and what nothing
- * after them may have.
+ * ZERO ONLY ON LEVEL 1 now. At offset 0 a level falls to `keepDistinct`, the one-line rule
+ * ("keep the stalls all different colours") this whole apparatus exists to defeat -- perfect
+ * correspondence is the free end of the dial. Level 1 is the authored teaching level and no
+ * offset makes it hard anyway, by construction. Level 2 used to sit here too, on the argument
+ * that the second level should still be free; my human partner has since said the opposite in
+ * so many words -- 即使从第二关开始难度就一直很高,也可以 -- and level 2 at offset 16 is
+ * hard, winnable, and carries a demand gap of 1.08 against 0.03 at offset 0.
  *
  * `interleave` was swept alongside offset over ids 5-8, the full OFFSETS grid, depths {1, 2, 3}
  * (`tools/band-sweep.ts`, sweep-interleave.txt). It is not inert: comparing each offset's
@@ -596,29 +716,71 @@ export function tunnelParams(id: number): TunnelParams {
  * 6's offset 20 goes hard=Y to hard=n at il=2, then back to hard=Y at il=3, which is
  * non-monotone rather than a trend worth following. So the knob does move difficulty -- it holds
  * a car's stall occupied across several laps instead of releasing its whole band at once -- but
- * it moves no verdict that BAND_CURVE currently depends on. It stays pinned at 1: giving any id
- * a nonzero depth would mean re-searching that id's painting at the new depth and re-running
- * the regeneration this task is explicitly scoped not to trigger, to chase a change that is
- * inconsistent in direction and measured on 4 of the 10 ids. What would make it earn a place on
- * the curve is a bay sized for the longer occupancy it creates, and that is named out of scope
- * in the plan.
+ * it moved no verdict that BAND_CURVE depended on, and it was pinned at 1 on that evidence.
  *
- * Of the ten shipped offsets, id 6's 20 is the one sensitive to this knob: it passes at depth
- * 1, fails at depth 2, and passes again at depth 3 (the non-monotone flip named above). Whoever
- * turns `interleave` on for real should re-sweep id 6 first, before any other id, on exactly
- * that account.
+ * THAT EVIDENCE WAS THE WRONG MEASUREMENT, and the 2026-09-20 sweep says so. hard/fair is one
+ * bit, and at four open stalls it is saturated: many offsets read hard on every level, so a
+ * knob that changes how hard without flipping the bit is indistinguishable from an inert one.
+ * Ranked by `demandPressure` instead, `interleave` takes the best cell on three of the ten ids
+ * -- 7 at il=2, 8 at il=2, 10 at il=3 -- and it is no longer pinned.
+ *
+ * WHAT THE RAMP IS MADE OF, AFTER THREE WRONG ANSWERS. It is not `offset`: that is a way of
+ * reaching difficulty, not difficulty itself, and the relation is not monotone -- id 8's best
+ * cell is offset 4 and id 3's is offset 32. It is not the demand gap either: that is a
+ * structural property of the bay, and on the levels shipped 2026-09-21 it ran 1.56, 1.27,
+ * 0.78, 1.20, 2.02, 1.85, 1.63, 1.42, 1.80 across ids 2-10, in no order at all. And it is not
+ * the share of clumsy playthroughs won, which was the next answer and reads well until you
+ * notice what it was counting: a loss in a game that cannot be lost.
+ *
+ * All three were measured against a bay clamped to `unlocked`, where a jam is a loss. A
+ * device never shows that state -- `GameCore.declineUnlock` is called by nothing -- so a jam
+ * is a bill and the level goes on. Played that way, all ten levels shipped under the third
+ * answer came back CLEARED BY A WEAK BOT HAVING BOUGHT NOTHING, full marks, level 10
+ * included, which is what my human partner found by playing level 4 with two stalls.
+ *
+ * So the ramp is made of what a mistake COSTS, in the only resource the game meters: stalls
+ * opened, which is what `GameCore.stars` is spent from. See `COST_CURVE` and `judge`.
+ *
+ * (Every stall figure in this table and its rows is a BOT reading. Since 2026-09-24 the
+ * painting is chosen by the lookahead player instead -- see `selectPainting` -- so these
+ * offsets were calibrated against a judge the generator no longer consults. Re-sweep with
+ * `npm run check` beside it, not on the bots' numbers alone.)
+ *
+ * Ids 6 and 7 have EXACTLY ONE passing cell each in the whole 33-cell grid. They are not chosen,
+ * they are forced, and a regeneration that moves their packing can take even that away.
  */
 const BAND_CURVE: { offset: number; interleave: number }[] = [
-    { offset: 0, interleave: 1 },    // 1  teaching level; no offset passes for it, by construction
-    { offset: 0, interleave: 1 },    // 2  teaching level; 0 and 4 both pass
-    { offset: 8, interleave: 1 },    // 3  8, 28-36 pass; 8 is an ISLAND (12-24 fail) -- taken over the run to stay non-decreasing into level 4's fixed 12
-    { offset: 12, interleave: 1 },   // 4  the only offset in the grid that passes at all
-    { offset: 16, interleave: 1 },   // 5  12, 16 pass; 16 is taken over 12 so the ramp keeps climbing past level 4
-    { offset: 20, interleave: 1 },   // 6  20-40 pass; 20 is the low edge, keeping the +4 step from level 5's 16
-    { offset: 24, interleave: 1 },   // 7  0, 4, 12, 20, 24, 28, 32 pass; 24 is near the middle of the 20-32 run, above the low outliers
-    { offset: 28, interleave: 1 },   // 8  8, 12, 28 pass; 28 is an ISLAND -- 24 and 32 fail
-    { offset: 32, interleave: 1 },   // 9  16, 28-36 pass; 32 is the middle of the 28-36 run
-    { offset: 36, interleave: 1 },   // 10 8, 12, 36 pass; 36 is an ISLAND -- 32 and 40 fail
+    // 每行末尾的 stalls 是**发出去的那一关实测**的 `judge().demand` —— 开局四个车位里
+    // 最少要用几个才能不买车位通关;括号里是 `DEMAND_CURVE` 要的目标,后面是错一步要
+    // 买几个(`mistakeCost`)。扫描读数和实得是两个量,混用会让人拿一个从不成立的数去
+    // 对账:扫描是"在一个固定配色上换队列",而生成是"在新 offset 上重搜配色"。
+    //
+    // 选法:`dead` 和"三星拿不到"之外的格子里,取扫描 demand 最接近目标的那个,同档再
+    // 比 cost —— 这是当年 `choosePainting` 的目标函数。2026-09-24 起 `choosePainting`
+    // 改由强玩家挑(`selectPainting`),两者不再是同一个目标函数,这里的复合前提已经不
+    // 成立:这些 offset 是在旧判官下扫出来的。
+    //
+    // 2026-09-21 改判据前后的实测对照(这一列就是人类伙伴一直在报的那个数):
+    //
+    //     关卡            2   3   4   5   6   7   8   9   10
+    //     换判据前        1   2   2   2   4   4   2   4   4
+    //     换判据后        2   3   3   4   4   4   3   4   4
+    //     再扫 offset 后  2   3   4   4   4   4   4   4   4
+    //
+    // 最早那一版第 2 关八十九辆车一个车位就打完了,九关里五关最多只用到一半车位。
+    // 最后那一步只动了第 4、8 两关的 offset —— 三个旋钮里它最有力,而且是最后才发现的:
+    // 同一个打包上,offset 能把车位需求从 1 推到 4,比配色本身的影响还大。
+    { offset: 0, interleave: 1 },    // 1  authored teaching level; nothing is searched here
+    { offset: 16, interleave: 1 },   // 2  stalls 2 (2), slip 0.2
+    { offset: 32, interleave: 1 },   // 3  stalls 3 (3), slip 0.4
+    { offset: 36, interleave: 1 },   // 4  stalls 4 (4), slip 0.4; offset 12 could only reach 3
+    { offset: 16, interleave: 1 },   // 5  stalls 4 (4), slip 0.2
+    { offset: 20, interleave: 1 },   // 6  stalls 4 (4), slip 1.0
+    { offset: 24, interleave: 1 },   // 7  stalls 4 (4), slip 1.4
+    { offset: 28, interleave: 2 },   // 8  stalls 4 (4), slip 0.2; the sweep said no cell reached 4, and was wrong -- it
+                                     //    re-bands ONE painting, and moving the offset re-searches the painting
+    { offset: 32, interleave: 1 },   // 9  stalls 4 (4), slip 1.2
+    { offset: 28, interleave: 3 },   // 10 stalls 4 (4), slip 1.6
 ];
 
 /** This level's band parameters, clamped past both ends of BAND_CURVE. */
@@ -626,6 +788,108 @@ export function bandParams(id: number): { offset: number; interleave: number } {
     const i = Math.min(Math.max(1, Math.trunc(id)), BAND_CURVE.length) - 1;
     return BAND_CURVE[i];
 }
+
+/**
+ * 每一关最少该逼玩家用几个开局车位 —— 强玩家车位需求(`strongDemand`)的目标值。
+ * 2026-09-24 之前它是机器人 `judge().demand` 的目标,下面几段历史说的都是那个时期。
+ *
+ * 这是人类伙伴一直在报的那个数,原话:只用了三个车位,感觉甚至两个车位都可以。开局给
+ * 四个而只需要两个,那另外两个就是摆设,颜色怎么排都救不回来。
+ *
+ * 它取代 `COST_CURVE`(被迫买下的车位数),而后者取代的是胜率、再往前是需求缺口。前三
+ * 个都量不出这件事:把第 4 关的上色压窄,它需要的车位从 1 个涨到 3 个,而同一批候选的
+ * cost 全程在 0.0 到 0.4 之间抖 —— 纯噪声。按 cost 排的搜索于是挑了个两个车位就能过的,
+ * 还报告说命中目标。
+ *
+ * 2026-09-21 实测,九关是 1、2、2、2、4、4、2、4、4:五关最多只用到一半车位,第 2 关
+ * 八十九辆车一个车位就打完了。
+ *
+ * 只有 1 到 4 四档(`UNLOCKED` 是 4),同一档里 width 窄的优先(`selectPainting`);
+ * `COST_CURVE` 已不参与排序。
+ * 人类伙伴说过"即使从第二关开始难度就一直很高也可以",所以第 4 关起就顶满。
+ *
+ * 4 就是这个设计的天花板,而且是算出来的不是调出来的:开局给 `UNLOCKED` 个车位,又要求
+ * 三星拿得到(也就是不买车位就能通关),那么"最少需要几个"最多只能等于 `UNLOCKED`。
+ *
+ * 2026-09-24 起,这个数由 `search-player.ts` 的强玩家来量,不再由 play-sim 的三个机器人。
+ * 机器人只看颜色、不看停车场结构,在出货的九关上一律报"要 4 个",而强玩家在其中六关只用
+ * 2 个就过 —— 人类伙伴报的正是这个。强玩家的数是真实需求的**上界**(见 `strongDemand`)。
+ */
+const DEMAND_CURVE = [1, 4, 4, 4, 4, 4, 4, 4, 4, 4];
+
+/** This level's target stall demand, clamped past both ends of DEMAND_CURVE. */
+export function demandTarget(id: number): number {
+    const i = Math.min(Math.max(1, Math.trunc(id)), DEMAND_CURVE.length) - 1;
+    return DEMAND_CURVE[i];
+}
+
+/**
+ * 错一步要买几个车位 —— `mistakeCost` 的目标值。
+ *
+ * 2026-09-24 起**不参与选配色**:它是机器人的读数,而且此前已经证明太平、分辨不出关卡紧
+ * 不紧。现在只留给 `tools/gen-levels.ts` 的表格打印,当对照用。
+ */
+const COST_CURVE = [0, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0];
+
+/** This level's target price for a mistake, clamped past both ends of COST_CURVE. */
+export function costTarget(id: number): number {
+    const i = Math.min(Math.max(1, Math.trunc(id)), COST_CURVE.length) - 1;
+    return COST_CURVE[i];
+}
+
+/**
+ * The most cars an attempt may put on the table at once and still count as on target.
+ *
+ * A FILTER, not a ranking term -- `better` already prefers the tighter of two candidates,
+ * and that is worth nothing when every candidate in the pool is loose. Level 6 shipped at
+ * 6.5 the first time the tunnels drew mixed bodies, for no reason worse than a different
+ * random stream, and the ceiling was a line in a test rather than a thing the generator
+ * maintained.
+ *
+ * 6.5 is where the two silhouette families separate: the solid ones (`full`, `ellipse`) put
+ * 8.3 to 10.7 cars in reach at once against four stalls, the hollow and narrow ones 2.8 to
+ * 5.8. Anything above this is a lot that plays like the ones my human partner was clearing
+ * on two stalls.
+ *
+ * It has to be in BOTH the gate and the miss metric, and the first version was only in the
+ * gate. Level 6 came back byte-identical: the gate did reject every candidate, `onTarget`
+ * emptied, and the level fell through to the nearest miss -- which ranked on blocked cars
+ * alone and handed back the very packing the gate had just refused. A ceiling that only the
+ * front door checks is not a ceiling.
+ */
+const EXIT_CEILING = 6.5;
+
+/**
+ * The fewest cars a packing attempt may hold and still be a candidate.
+ *
+ * THIS IS THE EMPTY-LOT GUARD, and it was missing. `blockedTarget` is computed from the
+ * attempt's OWN car count, so a lot with no cars in it asks for one blocked car, delivers
+ * zero, lands inside `BLOCKED_TOLERANCE`, and is accepted as on target. Nothing downstream
+ * notices: `isSolvable` is trivially true of an empty board and `weldedMouths` finds no
+ * welded mouth where there is no car.
+ *
+ * What it cost was not one bad level, it was the SEARCH. Measured on level 6: of 173
+ * attempts that got as far as being scored, seven passed the gate and SIX OF THEM WERE
+ * EMPTY. Those six filled `PACKINGS`, so the loop stopped at attempt 173 of an allowed
+ * 4000, and the one real candidate it had found shipped unopposed -- which is why neither
+ * the exit ceiling nor the miss penalty could move that level. There was nothing to move it
+ * to.
+ *
+ * 20 is well under the smallest shape's real supply on this lot -- the shipped ten seat 37
+ * to 54 -- and far above the degenerate case. It is a guard, not a target; the count is
+ * still a result (see `blockedTarget`).
+ */
+const MIN_CARS = 20;
+
+/**
+ * What one car per tick over `EXIT_CEILING` costs in the nearest-miss metric, in units of
+ * blocked cars.
+ *
+ * 4, so half a car of overshoot outweighs two blocked cars off target. The two are not
+ * commensurable and no weight makes them so; what this has to do is stop a level settling on
+ * a loose lot to buy a blocked count it could have missed by one.
+ */
+const EXIT_PENALTY = 4;
 
 /** Placement draws before a tunnel is written off and the whole attempt with it. */
 const PLACE_TRIES = 200;
@@ -645,6 +909,17 @@ const PLACE_TRIES = 200;
  * Colours are drawn flat from the level's palette. There is no cleverness to add: the queue
  * is derived from the cars (`bandedQueue`), so any draw is colour-balanced by construction, and
  * "mixed, and you only see the one at the mouth" is the mechanic rather than a compromise.
+ *
+ * BODIES ARE DRAWN FROM `CAP_MIX` TOO, where they used to all be `small`. My human partner
+ * asked for it having noticed: 现在隧道出车好像都是小车，可以通过小车和大车的长度不同，来挡住
+ * 或者放开车辆通行. A car that comes out of a tunnel is an ordinary lot car from the moment it
+ * stands at the mouth -- it blocks its neighbours by its own length like any other -- so a
+ * tunnel that only ever produced the shortest body was spending its whole run on the piece
+ * least able to change the board.
+ *
+ * It costs room rather than correctness: `tunnelReservation` is sized off the LONGEST car the
+ * tunnel holds, so a draw with a big body reserves more lot and is likelier to fail to place.
+ * That failure is already handled -- the attempt returns nothing and the caller retries.
  *
  * Unlike the cars, `x`/`y`/`angle` here never pass through `round4` -- verified harmless
  * (JSON round-trips a float bit-exactly, and angle stays inside [0, 360) unrounded), but
@@ -668,7 +943,7 @@ function placeTunnels(rng: () => number, colors: number, tp: TunnelParams): Tunn
                 angle: (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP,
                 cars: Array.from({ length: tp.cars }, () => ({
                     color: PALETTE[Math.floor(rng() * colors)],
-                    cap: 'small' as Cap,
+                    cap: pickCap(rng),
                 })),
             };
             const box = inflate(tunnelReservation(t), pad);
@@ -779,7 +1054,8 @@ export function trackParams(id: number): TrackParams {
 }
 
 /** mulberry32: a small deterministic PRNG, so a level id always yields the same level. */
-function mulberry32(seed: number): () => number {
+// Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
+export function mulberry32(seed: number): () => number {
     let a = seed >>> 0;
     return () => {
         a = (a + 0x6d2b79f5) | 0;
@@ -813,7 +1089,8 @@ function pieceBox(p: Piece): OBB {
  * settled pieces owe each other the full CLEARANCE -- the same arithmetic
  * `validateLevel` uses, so the packer cannot settle on something the check rejects.
  */
-function packBox(p: Piece): OBB {
+// Exported for the lane-packing regression test in logic/tests/level-gen.test.ts.
+export function packBox(p: Piece): OBB {
     return inflate(pieceBox(p), CLEARANCE / 2 + ROUND_MARGIN);
 }
 
@@ -1000,13 +1277,33 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * overlapping pairs apart along their minimum translation vector is about thirty
  * lines and is the difference between seating 36 and seating 28.
  *
- * Big bodies come first in the list, which is NOT the head start it looks like: every
- * piece is scattered before any relaxation runs, so nobody gets an emptier board than
- * anybody else. What the sort actually decides is which rng draws map to which capacity,
- * and the `i < j` order the separation sweep walks pairs in -- which biases who gets
- * clamped against a wall when a chain of pushes reaches one. The head-start reading is a
- * leftover from the reject-sampling version this replaced, where placement order was
- * load-bearing.
+ * THE RETURNED PIECES ARE IN `order`, NOT LONGEST FIRST, and that changes the order the
+ * relaxation sweeps pairs in. It has to: `latticeSeats` lays the bodies down one at a
+ * time and returns the i-th seat FOR the i-th body, so the sequence handed to it is the
+ * sequence that comes back, and the shuffle that keeps big cars from stacking up at one
+ * end of the lot is a shuffle of that sequence.
+ *
+ * Which is acceptable now in a way it would not have been before. The note below on
+ * over-correcting the separation push is written about a uniform scatter where almost
+ * every pair overlaps something at iteration zero; in that regime sweep order is a real
+ * bias, because whoever is walked first gets shoved into a crowd that has not moved yet.
+ * Lattice seeding with a per-body step does not hand the relaxation a pile of mutually
+ * overlapping cars at all -- the seats it returns are already clear of each other, of the
+ * reservations and of the walls, and what is left for the sweep is jitter, the walls, and
+ * the few cars that found no seat. Sweep order biases much less when there is much less
+ * to sweep.
+ *
+ * The sort by length that still runs before the shuffle no longer buys a head start --
+ * seats are not a contested pool any more, they are bound one-to-one to bodies. It is
+ * kept because it fixes which rng draws map to which capacity, and re-deriving that would
+ * move every shipped level for no reason.
+ *
+ * SPEC DIVERGENCE, recorded rather than hidden. Spec 2.3 says the overflow should be
+ * DROPPED, with `CARS_PER_LEVEL` acting as a cap. This code falls back to random seeding
+ * and keeps the car instead. Both are defensible -- dropping cars fights the `blocked`
+ * target, which is counted over the cars that are actually there -- but the spec says one
+ * thing and this does the other, and the next person should not have to diff them to find
+ * that out.
  *
  * Every angle is one of the eight compass points -- see HEADING_STEP for why that is the
  * whole set rather than a tidy minority of it.
@@ -1025,37 +1322,72 @@ function assemble(id: number, cars: CarSpec[], tunnels: TunnelSpec[] = []): Leve
  * pairs for the next sweep to chase, which is why it is also faster, not just
  * capable: measured success at RELAX_ITERS=60 went from 0/30 to 20/30.
  */
-function pack(rng: () => number, want: number, tunnels: TunnelSpec[]): Piece[] {
+// Exported for the skeleton-packing regression test in logic/tests/level-gen.test.ts.
+export function pack(
+    rng: () => number, want: number, tunnels: TunnelSpec[], shape: SkeletonShape,
+): Piece[] {
     // The same half-clearance-plus-rounding-slack `packBox` gives a car, applied to the
-    // reservation instead: a settled piece and a tunnel then owe each other the full
+    // reservation instead: a settled piece and a reservation then owe each other the full
     // CLEARANCE, which is exactly what `validateLevel` measures between the two.
     const pad = CLEARANCE / 2 + ROUND_MARGIN;
+    // 只有隧道。骨架从前也在这张表里(车道是"车不能进的地方"),而正掩码下的骨架不是
+    // 一块区域,是一个判据 —— 它沿着 `shape` 传给 `latticeSeats`,不进碰撞表。
     const reserved = tunnels.map((t) => inflate(tunnelReservation(t), pad));
     const caps: Cap[] = [];
     for (let i = 0; i < want; i++) caps.push(pickCap(rng));
     caps.sort((a, b) => CAP_BOX[b].len - CAP_BOX[a].len);
 
-    // Seeded OFF the reservations where a draw or two can manage it. A piece dropped on top
-    // of a tunnel starts the relaxation with a shove it cannot negotiate -- the tunnel will
-    // not move, so the piece has to walk out through whatever is packed around it, dragging
-    // the neighbours it displaces along. Measured on level 7: seeding blind, the packer
-    // settled 7 attempts in 200; resampling here, 42. Eight draws is where it stops paying
-    // (thirty gave the identical run), and a piece that never finds a clear seat is kept
-    // anyway rather than dropped -- the relaxation is still allowed to solve it.
+    // 点阵播种,取代原本的均匀随机。见 `latticeSeats` 的注释:随机撒点的空隙尺寸也
+    // 是随机的,所以必然留下车形大洞,而排名造不出一个从未出现过的整齐打包。
     //
-    // With no tunnels the test is false on the first draw, so the rng sequence, and every
-    // level before the fourth, is unchanged.
-    const pieces: Piece[] = caps.map((cap) => {
-        let p: Piece;
-        for (let k = 0; ; k++) {
-            const angle = (Math.floor(rng() * HEADINGS) % HEADINGS) * HEADING_STEP;
-            p = { x: (rng() - 0.5) * LOT.w, y: (rng() - 0.5) * LOT.h, angle, cap };
-            clampInside(p);
-            if (k + 1 >= SEED_TRIES) break;
-            if (!reserved.some((r) => overlapMTV(packBox(p), r))) break;
-        }
-        return p;
-    });
+    // 尺寸要打散:`caps` 按车长排过序,而行是一行一行铺的,顺着铺会把大车全堆在场
+    // 地的一头,分层到可以一层一层剥掉。打散的是**铺车的顺序**,不是座位——新契约
+    // 下座位和车是绑定的(第 i 个座位就是第 i 辆车的),再去洗座位就把这个对应关系
+    // 洗掉了。
+    const order = shuffled(caps, rng);
+    const bodies = order.map((c) => ({
+        len: CAP_BOX[c].len * CAR_SCALE, wid: CAP_BOX[c].wid * CAR_SCALE,
+    }));
+    // `latticeBlocked` 挡车身,而它比 `reserved` 又厚了一个 pad —— 这一层是实测出来
+    // 的,不是保险起见:
+    //
+    // `latticeSeats` 拿的是**裸车身**,而关系放松拿的是 `packBox`,也就是车身再膨胀
+    // 一个 pad;它对的又是已经膨胀过 pad 的 `reserved`。两边各膨胀一次,所以车身对
+    // 保留区欠的是 **2 x pad**,不是 pad。只传 `reserved` 的话,贴着保留区停下的每一
+    // 辆车都恰好差一个 pad,放松去推它、它推邻居,整片连锁,`pack` 在 RELAX_ITERS 内
+    // 收敛不了,返回 [] —— 整关生成出零辆车。
+    const latticeBlocked = reserved.map((r) => inflate(r, pad));
+    // 再给每条隧道留一条**出去的走廊**。`tunnelReservation` 只包到"车能探出车头"为止,
+    // 而 `canExit` 要的是一路开出场地 —— 从前随机撒点会随机留缝,点阵是密排的,于是
+    // 隧道口被封成了系统性结果:实测第 4、5 关的 mouth 车第一下就动不了(`welded`)。
+    //
+    // 这条走廊只加进**点阵的避让表**,不进 `reserved`:后者是碰撞与 `validateLevel` 的
+    // 依据,往里塞一块并不真的禁止停车的区域会让那两件事说谎。点阵绕开它,关系放松仍
+    // 然可以把车推进来 —— 要的是"别一开始就堵死",不是"永远空着"。
+    //
+    // 沿隧道轴向取场地对角线的长度,所以两端都够得着边界;宽度就是隧道自己的宽度。
+    const corridor = Math.hypot(LOT.w, LOT.h);
+    for (const t of tunnels) {
+        const r = tunnelReservation(t);
+        latticeBlocked.push(inflate({ ...r, len: corridor }, pad));
+    }
+    // `seatsFor` 而不是 `latticeSeats`:哪种形状用哪种铺法是**形状自己的事**,分派写在
+    // `lot-skeleton.ts` 里(那里有为什么不写在这一行、也不写进 `latticeSeats` 的理由)。
+    // 这里只负责问它要座位。目前 `donut` 走等高线铺法,其余四种仍是矩形点阵。
+    const seats = seatsFor(
+        shape, latticeBlocked, LOT.w, LOT.h, GAP, rng, CROSS, bodies,
+    );
+    // 铺不下的车就不存在 —— `CARS_PER_LEVEL` 是上限不是目标,这是 spec §2.3 一开始
+    // 就写下的,只是直到这里才真的执行。正掩码下这句话是每一关的常态而不是例外:形状
+    // 越瘦,铺得下的越少,而那是形状本身,不是这次尝试没发挥好。
+    //
+    // 从前这里把溢出的车退回随机播种,而那正是骨架关卡一辆车都生成不出来的原因:几十
+    // 辆车撒进一个已经满了的场地,关系放松在 RELAX_ITERS 内永远收不了,`pack` 返回 [],
+    // 两百次尝试全废。实测每种形状铺得下多少(GAP 0.20,8 个种子):full 93,ellipse
+    // 79,donut 62,plus 58,diamond 51。
+    const pieces: Piece[] = seats.map((seat, i) => (
+        { x: seat.x, y: seat.y, angle: seat.angle, cap: order[i] }
+    ));
 
     for (let iter = 0; iter < RELAX_ITERS; iter++) {
         let moved = false;
@@ -1320,11 +1652,11 @@ function round4(n: number): number {
  * measured against is only 0.04.
  */
 function scatter(
-    rng: () => number, p: GenParams, tp: TunnelParams,
+    rng: () => number, id: number, p: GenParams, tp: TunnelParams,
 ): { cars: CarSpec[]; tunnels: TunnelSpec[] } {
     const tunnels = placeTunnels(rng, p.colors, tp);
     if (tunnels.length < tp.count) return { cars: [], tunnels: [] };
-    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels);
+    const pieces = pack(rng, p.cars - tp.count * tp.cars, tunnels, skeletonShape(id));
     const aimed = aimTunnels(tunnels, pieces);
     const order = peel(rng, pieces, aimed.map(tunnelBox));
     const cars = order.map(({ piece, angle }, i) => ({
@@ -1373,14 +1705,24 @@ function repaint(cars: CarSpec[], assign: string[]): CarSpec[] {
  * colours are within reach at each moment, not which corner they sit in.
  *
  * Runs first, shortest to longest: a run of `k` means the outermost layer holds one colour
- * for `k` cars at a time, and run 1 is exactly the round-robin. Runs alone are a cliff
- * rather than a dial (measured: at six colours a run of 4 beats the one-line rule and a
- * careful player still wins, while a run of 6 is unwinnable for every policy tried), which
- * is why they are only the opening moves and the rest are seeded shuffles. Every painting
- * uses each colour a near-equal number of times, so no colour can starve.
+ * for `k` cars at a time, and run 1 is exactly the round-robin. THE RUN IS THE DIAL that
+ * sets how many colours can leave at once -- measured on level 10's packing, run 1 gives an
+ * `exitWidth` of 3.98 and run 12 gives 1.98, walking down smoothly through 2.90 at run 5.
+ *
+ * It used to stop at 6, on a measurement that said a run of 6 was "unwinnable for every
+ * policy tried". That was read under the old gate, where a level you cannot clear WITHOUT
+ * OPENING A STALL counted as unwinnable and was thrown away. On a device those levels are
+ * the ones that cost you a star, which is the whole thing the curve is now made of, so the
+ * cliff the old range was avoiding is where the range now has to reach. `judge().dead`
+ * catches the paintings that are genuinely unclearable, and it is exact: every stall open
+ * and the board still frozen.
+ *
+ * The shuffles that follow are the diversity the runs cannot give -- a run paints the
+ * leaving order in blocks, and nothing else does. Every painting uses each colour a
+ * near-equal number of times, so no colour can starve.
  */
 function* paintings(n: number, colors: number, rand: () => number): Generator<string[]> {
-    for (let run = 1; run <= 6; run++) {
+    for (let run = 1; run <= 16; run++) {
         yield Array.from({ length: n }, (_, i) => PALETTE[Math.floor(i / run) % colors]);
     }
     for (;;) {
@@ -1412,20 +1754,83 @@ const PAINTINGS = 400;
 const PACKINGS = 6;
 
 /**
- * Repaint `cars` until the level is hard but fair, or return null if the search runs out.
+ * 第二遍的上限,按局数计,不按时间计。
+ *
+ * 第二遍现在由 `search-player.ts` 的强玩家来判,一局 5 秒到 5 分钟不等,所以必须有上限;
+ * 而上限只能是计数:同一个 id 必须永远生成同一关(`the generator takes no input but its
+ * id`),按秒截断会让结果跟着机器快慢变。
+ *
+ * 一个候选最多要 12 局(三星认证 3 局,三档车位需求各 3 局),所以难的关上通常是
+ * GAME_BUDGET 先用完、攒不满 ACCEPT 个;简单的候选赢得早,只花一两局。
+ */
+export const ACCEPT = 16;
+export const GAME_BUDGET = 120;
+
+export interface PaintingCandidate { painted: CarSpec[]; width: number }
+
+/** The two measures `selectPainting` asks of a candidate. Injected so it can be tested fast. */
+export interface PaintingJudge {
+    certify(painted: CarSpec[], index: number, budget: Budget): boolean;
+    /** Null when the budget cut the measurement short: not a figure, and never a hit. */
+    demand(painted: CarSpec[], index: number, budget: Budget): number | null;
+}
+
+/**
+ * Walk `sorted` from the narrow end and keep what a player that looks ahead can clear on the
+ * bay the level ships with, buying nothing. The first one whose stall demand meets `target`
+ * wins outright -- it is as hungry as the curve asks and narrower than anything after it.
+ * Otherwise the kept one nearest the target wins, the narrowest on a tie.
+ *
+ * WHY NOT THE BOTS ANY MORE. Measured 2026-09-24: of 400 candidates on level 10, the bots
+ * called 180 dead, and every one of the six narrowest re-played by the lookahead player was
+ * clearable. On level 3 all six were three-star. The bots were throwing away exactly the
+ * narrow paintings this search exists to find, and their stall figure agreed with the
+ * lookahead player's on almost nothing. See the 2026-09-24 spec.
+ *
+ * Returns null when nothing is certified, so `generateLevel` moves on to its next packing.
+ */
+export function selectPainting(
+    sorted: PaintingCandidate[], target: number, judge: PaintingJudge,
+): CarSpec[] | null {
+    const budget: Budget = { games: GAME_BUDGET };
+    const kept: { painted: CarSpec[]; width: number; demand: number }[] = [];
+    for (let i = 0; i < sorted.length && budget.games > 0 && kept.length < ACCEPT; i++) {
+        const c = sorted[i];
+        if (!judge.certify(c.painted, i, budget)) continue;
+        const demand = judge.demand(c.painted, i, budget);
+        if (demand === null) continue;
+        if (demand === target) return c.painted;
+        kept.push({ painted: c.painted, width: c.width, demand });
+    }
+    if (kept.length === 0) return null;
+    kept.sort((a, b) => (Math.abs(a.demand - target) - Math.abs(b.demand - target)) || (a.width - b.width));
+    return kept[0].painted;
+}
+
+/**
+ * Repaint `cars` with the narrowest painting the lookahead player can clear three-star on the
+ * bay the level ships with, preferring one that needs as many stalls as `DEMAND_CURVE` asks
+ * (see `selectPainting`), or return null if none is certified.
  *
  * Repainting is free in a way repacking is not: the passenger queue is DERIVED from the
  * cars (`bandedQueue`), so every painting is colour-balanced by construction and cannot fail
  * `validateLevel`. The lot's geometry -- the blocked count and solver rounds the curve was
  * tuned against -- is untouched.
  *
- * Skipped outright below `UNLOCKED` colours, and that is not an optimisation: at four open
- * stalls a four-colour level cannot be beaten by any painting (see `levelParams`), so the
- * search would burn 400 simulations to fail. Those levels take the round-robin and are
- * teaching levels.
+ * WHAT A PAINTING CONTROLS is which colours can leave at the same moment, and my human
+ * partner named that as the dial: 同一时间，能驶出停车场的不同颜色的车辆数量越少，难度越大.
+ * On the levels shipped before this change that number sat at 3.1 to 4.3 against four open
+ * stalls, so something useful always fitted and there was no choice to get wrong. Painting
+ * the leaving order in long runs of one colour is what narrows it, and `paintings` opens
+ * with exactly those runs.
  *
- * `tunnels` is carried through only so `assemble` builds the WHOLE level for `isHardButFair`
- * to play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
+ * Skipped outright below `UNLOCKED` colours, and that is not an optimisation: at four open
+ * stalls a four-colour level cannot be made to cost anything (see `levelParams` and the law
+ * in core/play-sim.ts), so the search would burn its whole budget to fail. Those ids are
+ * teaching levels and take the round-robin.
+ *
+ * `tunnels` is carried through only so `assemble` builds the WHOLE level for the lookahead
+ * player to play -- the tunnel cars are passengers on the ring and obstacles on the board, and a
  * verdict reached without them is a verdict about a different level. The tunnel cars are not
  * themselves repainted: they are not in the leaving order (when they come out is the player's
  * choice, not `peel`'s) and `bandedQueue` derives the queue from whatever colours they carry, so
@@ -1435,15 +1840,40 @@ function choosePainting(
     id: number, cars: CarSpec[], tunnels: TunnelSpec[], p: GenParams,
 ): CarSpec[] | null {
     if (p.colors <= UNLOCKED) return null;
+    const target = demandTarget(id);
     const rand = mulberry32(id * 104729 + 17);
+
+    // Pass one costs no simulation at all. The frontiers belong to the packing, so they are
+    // computed once and every painting is scored by counting colours over them.
+    const frontiers = exitFrontiers(assemble(id, cars, tunnels));
+    const seen: { painted: CarSpec[]; width: number }[] = [];
     let tried = 0;
     for (const assign of paintings(cars.length, p.colors, rand)) {
-        if (tried++ >= PAINTINGS) return null;
+        if (tried++ >= PAINTINGS) break;
+        // A long run stops using the last colours outright once `n < run * colors`, and
+        // that ships a level with fewer colours than the curve asked for -- level 6 came
+        // out with five of its six this way, silently. The colour count is a contract the
+        // rest of the curve leans on (`levelParams`, and the law at the top of play-sim.ts
+        // that ties difficulty to colours against open stalls), so a painting that drops
+        // one is not a candidate.
+        if (new Set(assign).size < p.colors) continue;
         const painted = repaint(cars, assign);
-        const verdict = isHardButFair(assemble(id, painted, tunnels));
-        if (verdict.hard && verdict.fair) return painted;
+        seen.push({
+            painted,
+            width: frontierWidth(frontiers, new Map(painted.map((c) => [c.id, c.color]))),
+        });
     }
-    return null;
+    seen.sort((x, y) => x.width - y.width);
+    // Pass two: the lookahead player, narrow end first. Seeds come from the id and the
+    // candidate's place in the sorted list, so the same id always walks the same games.
+    return selectPainting(seen, target, {
+        certify: (painted, i, budget) =>
+            certifyThreeStar(assemble(id, painted, tunnels), id * 104729 + i * 17, budget),
+        demand: (painted, i, budget) => {
+            const m = strongDemandMeasured(assemble(id, painted, tunnels), id * 104729 + i * 17, budget);
+            return m.exact ? m.need : null;
+        },
+    });
 }
 
 /**
@@ -1508,10 +1938,27 @@ const HOLE_STEP = 0.1;
 /** Holes a lot has room for, counted by the largest car each one would take. */
 export interface Holes { big: number; medium: number; small: number }
 
-export function fillableHoles(level: LevelData): Holes {
+/**
+ * `within` 把扫描限制在**这一关的形状**里面,而这与 `exclude` 是同一条理由的另一半。
+ *
+ * 这个指标数的是"一辆车还塞得进去的空地"。正掩码下形状外面**整片**都是这样的空地,
+ * 照直数的话每一关都会报成一个巨大的洞,而菱形关的四个角是**故意**空着的 —— 那不是
+ * 打包器撞出来的,那就是这一关的样子。`exclude` 从前替车道讲的就是这句话(见下面那
+ * 段注释),形状只是把同一句话讲给一整片背景听。
+ *
+ * 不传就与从前逐位相同:`within` 缺省是"处处都算",扫描一个格子都不跳。
+ */
+export function fillableHoles(
+    level: LevelData, exclude: OBB[] = [], within?: (x: number, y: number) => boolean,
+): Holes {
     const pad = CLEARANCE / 2;
     const taken: OBB[] = level.lot.cars.map((c) => inflate(carBox(c), pad));
     for (const t of level.lot.tunnels ?? []) taken.push(inflate(tunnelReservation(t), pad));
+    // 排除区原样放进 `taken`,不 inflate:它不是一个实体,是一块"这里的空白是刻意的"
+    // 的声明。见 spec §4.1——任何能开车的车道都能顺着停下一辆车,所以不排除的话
+    // 车道本身会被整条数成一串 `big` 洞,而这个指标本来是用来回答"这块空白是撞出
+    // 来的吗"的。
+    for (const e of exclude) taken.push(e);
     const found: Holes = { big: 0, medium: 0, small: 0 };
     for (const cap of ['big', 'medium', 'small'] as Cap[]) {
         const box = CAP_BOX[cap];
@@ -1521,6 +1968,10 @@ export function fillableHoles(level: LevelData): Holes {
             seated = false;
             for (let x = -level.lot.w / 2; x <= level.lot.w / 2 && !seated; x += HOLE_STEP) {
                 for (let y = -level.lot.h / 2; y <= level.lot.h / 2 && !seated; y += HOLE_STEP) {
+                    // 形状外面的空地不是洞。判据跟着车的**中心点**走,与 `latticeSeats`
+                    // 收不收一个座位用的是同一条 —— 两边必须是同一个判据,否则这个指标
+                    // 会把打包器刻意不去坐的每一个位置都数成一个洞。
+                    if (within && !within(x, y)) continue;
                     for (const angle of [0, 45, 90, 135]) {
                         const cand = inflate(
                             { x, y, angle, len: box.len * CAR_SCALE, wid: box.wid * CAR_SCALE },
@@ -1540,14 +1991,56 @@ export function fillableHoles(level: LevelData): Holes {
     return found;
 }
 
-/** A candidate packing, with the two things `generateLevel` chooses between them on. */
-interface Ranked { cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward: number }
+/**
+ * 这一关的形状判据,按场地坐标问 —— `fillableHoles` 的 `within` 要的就是这个。
+ *
+ * 一个函数而不是三份 `(x, y) => inShape(skeletonShape(id), x, y, LOT.w, LOT.h)`:
+ * 候选排名、离线工具那一列、测试,三处问的必须是同一个判据,否则排名按一个形状选、
+ * 表格按另一个形状打印,而两者都不会报错。
+ */
+export function levelMask(id: number): (x: number, y: number) => boolean {
+    const shape = skeletonShape(id);
+    return (x, y) => inShape(shape, x, y, LOT.w, LOT.h);
+}
+
+/** A candidate packing, with the things `generateLevel` chooses between them on. */
+interface Ranked {
+    cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward: number; exits: number;
+}
 
 /**
- * Order for `generateLevel`'s candidates: fewest CAR-SHAPED holes, then most cars facing
- * inward, then fewest small holes.
+ * Order for `generateLevel`'s candidates: fewest CAR-SHAPED holes, then FEWEST CARS ABLE TO
+ * LEAVE AT ONCE, then most cars facing inward, then fewest small holes.
  *
- * Lexicographic, and the order of the three keys is the whole content of this function.
+ * Lexicographic, and the order of the four keys is the whole content of this function.
+ *
+ * EXITS IS THE NEW KEY. This used to rank on looks alone -- difficulty entered only as a
+ * filter, through the blocked-car target -- and the result is what my human partner kept
+ * running into: level 4 offered 8.3 cars at a time, thirteen of them on the opening position,
+ * against four stalls. With that much on the table something useful always fits, and no
+ * colouring or queue order can make the choice bite. They asked for it in one line: 可以调整
+ * 下车位,让更多的车辆被挡住.
+ *
+ * It is a property of the PACKING, so nothing else can supply it. Painting cannot -- the cars
+ * that can leave are the cars that can leave, whatever colour they are -- and the queue order
+ * cannot either. Both of those were pushed to their ceiling first, and neither moved the bay
+ * the level actually needed below four.
+ *
+ * IT IS WEIGHED AGAINST THE HOLES RATHER THAN ORDERED AGAINST THEM, and both orderings were
+ * tried first, on the whole ten, because neither failure is visible from the code.
+ *
+ * Exits first takes a shortcut: the cheapest way to have few cars able to leave is to have
+ * few cars. Level 7 came back with 37 cars where it had 52 and its big holes went from 1 to
+ * 19; level 8's went from 2 to 11. That is not more cars blocked, it is less car park.
+ *
+ * Holes first makes the key inert. Candidates almost never tie on holes, so the exit count is
+ * never reached -- the ten came back byte-identical to the ranking that had no such key.
+ *
+ * Summed, a sparse packing pays for its emptiness in the gaps it cannot help leaving, and the
+ * measured pair both resolve the right way:
+ *
+ *     level 7   dense 4.4 exits + 1 hole = 9.8    sparse 2.7 + 19 = 24.4   dense wins
+ *     level 5   old   6.2 exits + 7 holes = 19.4  new    3.7 + 10 = 17.4   new wins
  *
  * BIG AND MEDIUM TOGETHER FIRST, summed, because the failure being ranked out is a hole the
  * eye reads as a MISSING CAR rather than as space, and both sizes do that: a medium body is
@@ -1565,14 +2058,28 @@ interface Ranked { cars: CarSpec[]; tunnels: TunnelSpec[]; holes: Holes; inward:
  * SMALL HOLES LAST, where they belong -- worth breaking a tie on, not worth spending
  * anything else on.
  *
- * All three are free. Every candidate here already hits the difficulty target and cost a
+ * All four are free. Every candidate here already hits the blocked-car target and cost a
  * packing that was paid for; this only decides which of them ships.
  */
 function better(a: Ranked, b: Ranked): number {
-    return (a.holes.big + a.holes.medium) - (b.holes.big + b.holes.medium)
+    return tangle(a) - tangle(b)
         || b.inward - a.inward
         || a.holes.small - b.holes.small;
 }
+
+/** `better`'s first key: cars on the table, priced against the gaps they leave behind. */
+function tangle(r: Ranked): number {
+    return r.exits * HOLE_WEIGHT + r.holes.big + r.holes.medium;
+}
+
+/**
+ * How many car-shaped holes one more car on the table is worth.
+ *
+ * A judgement, and the only one in `better`. Two says a hole is half as bad as a car's worth
+ * of choice, which is what makes both of the measured failures come out right -- see the
+ * table in `better`'s docblock.
+ */
+const HOLE_WEIGHT = 2;
 
 /**
  * The blocked-car count the curve asks of `id`.
@@ -1591,10 +2098,15 @@ function better(a: Ranked, b: Ranked): number {
  * They were three copies of one expression before tunnels existed, and the copies agreed only
  * because the denominator happened to be the same.
  */
-export function blockedTarget(id: number): number {
+export function blockedTarget(id: number, cars?: number, tunnels?: number): number {
     const p = levelParams(id);
     const tp = tunnelParams(id);
-    return Math.round(p.blockedRatio * (p.cars - tp.count * tp.cars + tp.count));
+    // 不传就按曲线的名义车数算,与从前逐位相同 —— 钉曲线的测试要的是这个数。传了就按
+    // 场上实际的车算,因为车数成了结果(spec §2.3):点阵铺得下多少就是多少,而一个
+    // 按名义 89 辆算出来的绝对缠绕数,米字关永远够不到,每一关都会打成 NEAREST MISS。
+    const grid = cars ?? p.cars - tp.count * tp.cars;
+    const tun = tunnels ?? tp.count;
+    return Math.round(p.blockedRatio * (grid + tun));
 }
 
 /**
@@ -1679,10 +2191,7 @@ export function generateLevel(id: number): LevelData {
     if (authored) return authored;
     const p = levelParams(id);
     const tp = tunnelParams(id);
-    // The tunnels' cars come OUT of the level's budget, so the lot gets the remainder.
-    const gridCars = p.cars - tp.count * tp.cars;
     const attempts = tp.count > 0 ? TUNNEL_ATTEMPTS : ATTEMPTS;
-    const wantBlocked = blockedTarget(id);
     // Every candidate tied at the best miss so far, not just the first one seen. A level that
     // finds nothing on target still gets to pick a TIDY nearest miss -- level 9 shipped with
     // four big holes in it because this used to keep whichever equally-close attempt happened
@@ -1693,17 +2202,26 @@ export function generateLevel(id: number): LevelData {
 
     for (let attempt = 0; attempt < attempts && onTarget.length < PACKINGS; attempt++) {
         // Seeded from the id, so the same id walks the same attempts in the same order.
-        const { cars, tunnels } = scatter(mulberry32(id * 7919 + attempt), p, tp);
-        // Short on either count is short: an attempt that seated the tunnels but not the
-        // cars, or the cars but not the tunnels, is not this level.
-        if (cars.length < gridCars || tunnels.length < tp.count) continue;
+        const { cars, tunnels } = scatter(mulberry32(id * 7919 + attempt), id, p, tp);
+        // 车数不再是判据,隧道仍然是:一次没把隧道都坐下的尝试不是这一关。
+        //
+        // 这里没有车数下限,而那不是漏写。缠绕率自己就是下限 —— 目标按本次尝试的实际
+        // 车数算,而一个稀稀拉拉的场地缠绕率天然低(车有地方走),够不到 `blockedRatio`。
+        // 反过来,任何一个固定的分数下限都会把米字关整个判死:它本来就只铺得下八十一辆
+        // 里的三十几辆,而那是几何,不是这次尝试没发挥好。
+        if (tunnels.length < tp.count) continue;
+        const wantBlocked = blockedTarget(id, cars.length, tunnels.length);
+        // Before `isSolvable`, which is trivially true of an empty board and would let a
+        // degenerate attempt through to be scored. See MIN_CARS.
+        if (cars.length < MIN_CARS) continue;
         const level = assemble(id, cars, tunnels);
         if (!isSolvable(level)) continue;
         const welded = weldedMouths(level);
         const d = estimateDifficulty(level);
         if (welded === 0
             && Math.abs(d.blocked - wantBlocked) <= BLOCKED_TOLERANCE
-            && d.rounds >= p.minRounds) {
+            && d.rounds >= p.minRounds
+            && exitCars(level) <= EXIT_CEILING) {
             onTarget.push({ cars, tunnels });
             continue;
         }
@@ -1712,6 +2230,7 @@ export function generateLevel(id: number): LevelData {
         // strictly better miss clears the list, because difficulty outranks tidiness.
         const miss = Math.abs(d.blocked - wantBlocked)
             + Math.max(0, p.minRounds - d.rounds)
+            + Math.max(0, exitCars(level) - EXIT_CEILING) * EXIT_PENALTY
             + welded * WELDED_PENALTY;
         if (miss < bestMiss) {
             bestMiss = miss;
@@ -1736,10 +2255,19 @@ export function generateLevel(id: number): LevelData {
     // because best-of-three out of a spread running 1 to 8 holes was worth only about half
     // of the spread. What ranking cannot do is manufacture a tidy packing the attempts never
     // found; it can only decline the untidy ones it was going to take by arrival order.
+    const mask = levelMask(id);
     const rank = (cs: { cars: CarSpec[]; tunnels: TunnelSpec[] }[]): Ranked[] => cs
         .map((c) => {
             const level = assemble(id, c.cars, c.tunnels);
-            return { ...c, holes: fillableHoles(level), inward: inwardCars(level) };
+            // 形状外面的空地不算洞,见 `fillableHoles` 的 `within`。不传的话菱形关
+            // 的四个角会被数成一堆 big 洞,而每个候选的四个角都一样空 —— 排名于是
+            // 只剩噪声可比。
+            return {
+                ...c,
+                holes: fillableHoles(level, [], mask),
+                inward: inwardCars(level),
+                exits: exitCars(level),
+            };
         })
         .sort(better);
 
@@ -1772,6 +2300,6 @@ export function generateLevel(id: number): LevelData {
     }
     if (ranked.length > 0) return assemble(id, ranked[0].cars, ranked[0].tunnels);
     if (missed.length > 0) return assemble(id, missed[0].cars, missed[0].tunnels);
-    const fallback = scatter(mulberry32(id * 7919), p, tp);
+    const fallback = scatter(mulberry32(id * 7919), id, p, tp);
     return assemble(id, repair(id, fallback.cars, fallback.tunnels), fallback.tunnels);
 }

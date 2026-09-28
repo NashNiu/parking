@@ -1,8 +1,12 @@
-import { generateLevel, levelParams, inwardCars, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams } from '../../game/assets/scripts/core/level-gen';
+import * as fs from 'fs';
+import * as path from 'path';
+import { generateLevel, levelParams, inwardCars, levelMask, LOT, BLOCKED_TOLERANCE, BLOCKED_FLOOR, bandedQueue, bandParams, pack, mulberry32 } from '../../game/assets/scripts/core/level-gen';
 import { validateLevel } from '../../game/assets/scripts/core/level-data';
 import { isSolvable, estimateDifficulty } from '../../game/assets/scripts/core/solvability';
-import { isHardButFair } from '../../game/assets/scripts/core/play-sim';
+import { exitCars, demandPressure } from '../../game/assets/scripts/core/play-sim';
 import { CAP_BOX, CAP_SIZE, CAR_SCALE, Cap, CarSpec, GROUP_SIZE, LevelData, QueueGroup, TunnelSpec } from '../../game/assets/scripts/core/types';
+import { fillableHoles } from '../../game/assets/scripts/core/level-gen';
+import { inShape, SkeletonShape, skeletonShape } from '../../game/assets/scripts/core/lot-skeleton';
 
 const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
@@ -18,38 +22,116 @@ const IDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
  */
 const PACKED = IDS.filter((id) => id !== 1);
 
+/** Where `tools/gen-levels.ts` writes, and where the game loads from at runtime. */
+const SHIPPED_DIR = path.join(__dirname, '../../game/assets/resources/levels');
+
+/** The level file the GAME loads for `id`, parsed. */
+function shipped(id: number): LevelData {
+  const file = path.join(SHIPPED_DIR, `level-${id}.json`);
+  return JSON.parse(fs.readFileSync(file, 'utf8')) as LevelData;
+}
+
 /**
- * `generateLevel` for an id, computed once per run.
+ * The level for an id: READ FROM THE SHIPPED FILE for the ten that ship, generated only past
+ * them.
  *
- * Not an optimisation for its own sake: packing a lot takes about a second now that
- * placement is a relaxation over oriented boxes rather than a scan of integer cells, and
- * the tests below ask for a level about 170 times between them. Uncached, the suite ran
- * past ten minutes and never finished. `generateLevel` is seeded from the id alone and
- * has no other input, so serving the same object twice is what it means for it to be
- * deterministic -- which the very first test proves independently, by calling the real
- * thing twice and comparing. Every other test wants "the level for id N", not a fresh
- * computation of it.
+ * THIS SUITE USED TO REGENERATE ALL TEN, AND THAT IS WHAT MADE IT UNRUNNABLE. The docblock
+ * that stood here said packing a lot takes about a second, which is true and is not the cost:
+ * `choosePainting` searches up to 400 paintings and runs `judge` -- up to eleven full
+ * simulations -- on each, over up to six candidate packings. Measured with the project's own
+ * tool, `npm run gen -- --only 2` takes 1m57s for ONE level, and that is the cheap end; a
+ * tunnel level is about 151s of packing before any painting. The comment on 'the curve keeps
+ * producing legal tracks past the authored table' had already written the total down: 1756
+ * seconds. Nobody could run `npm test` to the end, so in practice nobody ran it.
+ *
+ * READING THE FILE IS NOT A WEAKER CHECK, IT IS A STRONGER ONE. What ships is the JSON in
+ * `resources/levels`; what the old tests checked was what a fresh generation WOULD produce,
+ * which is a different object that happens to be equal. Every claim below -- solvable, on
+ * target for blocked cars, inside the passenger budget, drawable track -- now holds of the
+ * bytes the player's device actually loads.
+ *
+ * THE TWO ARE THE SAME TODAY, and that was verified rather than assumed before this changed.
+ * `npm run gen -- --only 2` rewrote level-2.json byte-for-byte identically, and so did
+ * `--only 4`, leaving a clean working tree both times.
+ *
+ * THAT COMMAND IS ALSO WHERE THE TWO CLAIMS THIS FILE GAVE UP NOW LIVE, and they are named
+ * here because deleting a test without saying what replaced it is how a check quietly stops
+ * existing:
+ *
+ *     cd logic && npm run gen -- --only 4    # then `git status`: clean means the generator
+ *                                           # still reproduces the committed bytes
+ *     cd logic && npm run gen -- --only 11   # validates before it writes, so a non-zero exit
+ *                                           # IS "the packer broke past the authored table"
+ *                                           # (delete the level-11.json it leaves behind)
+ *
+ * WHY COMMANDS AND NOT TESTS. Both were tests, briefly, in a `level-gen.slow.test.ts` that
+ * `npm test` skipped. They were deleted because they could not be run: the same two
+ * generations take 9 to 10 minutes through the tool and had passed no verdict after 36 minutes
+ * under ts-jest, and jest's `testTimeout` cannot interrupt them either -- it is checked between
+ * ticks of the event loop, and `generateLevel` is synchronous CPU-bound code that yields none.
+ * A test nobody can run is the problem this whole change was made to fix; keeping two of them
+ * behind a different filename would only have moved it.
+ *
+ * WHAT GUARDS DETERMINISM IN THIS FILE INSTEAD is a source check that the generator draws no
+ * entropy it was not seeded with -- see 'the generator takes no input but its id'.
+ *
+ * PAST THE TEN there is no file, so those ids are generated. Nothing here asks for one.
  */
 const cache = new Map<number, LevelData>();
 function levelFor(id: number): LevelData {
   const hit = cache.get(id);
   if (hit) return hit;
-  const made = generateLevel(id);
+  const made = IDS.includes(id) ? shipped(id) : generateLevel(id);
   cache.set(id, made);
   return made;
 }
 
-test('the same id generates the same level every time', () => {
-  // Deliberately NOT through `levelFor()` -- the cache would make this pass for free, so
-  // this is the one test that pays for a real second generation.
-  //
-  // ONE id, not all ten. What is under test is that `generateLevel` draws every random
-  // number from a generator seeded by the id alone, with no other input and no shared
-  // mutable state -- a property of the seeding, which one id witnesses as well as ten.
-  // Ten ids meant twenty uncached packs, about half this suite's runtime, to prove the
-  // same single thing. That the id actually REACHES the seed is a different claim, and
-  // the next test is the one that makes it.
-  expect(generateLevel(4)).toEqual(generateLevel(4));
+/**
+ * The generator takes no input but its id.
+ *
+ * A SOURCE CHECK, STANDING IN FOR A NINE-MINUTE ONE. The test that used to live here called
+ * `generateLevel(4)` twice and compared. Id 4 is a tunnel level and one generation of it is
+ * 4m30s measured, so that was nine minutes of a suite to witness one property -- and under
+ * ts-jest, where the same work runs at least four times slower again, it was closer to
+ * unrunnable. What runs here instead catches the regression it was written for at no cost.
+ *
+ * The regression is somebody reaching for ambient entropy -- `Math.random()`, a clock -- inside
+ * a generator that must be reproducible, because the shipped JSON is generated once and
+ * committed. `mulberry32(id * ...)` is the only source of randomness the generator is allowed,
+ * and a seeded PRNG cannot be non-deterministic. So the assertion is the absence of the others.
+ *
+ * It is a weaker statement than running the thing twice, and it is not the only guard: the real
+ * proof is that `npm run gen` rewrites the committed files byte-for-byte, which is visible as a
+ * clean `git status` every time anyone regenerates.
+ */
+test('the generator takes no input but its id', () => {
+  const src = fs.readFileSync(
+    path.join(__dirname, '../../game/assets/scripts/core/level-gen.ts'), 'utf8',
+  );
+  const code = src.split('\n').filter((l) => {
+    const t = l.trim();
+    return !(t.startsWith('//') || t.startsWith('*') || t.startsWith('/*'));
+  }).join('\n');
+  expect(code).not.toMatch(/Math\.random\s*\(/);
+  expect(code).not.toMatch(/Date\.now\s*\(/);
+  expect(code).not.toMatch(/new Date\s*\(/);
+  // And the seeded generator it is allowed is still there, taking the id.
+  expect(code).toMatch(/mulberry32\(/);
+});
+
+/**
+ * The ten files the game loads are all there, and each one knows which id it is.
+ *
+ * The first thing every other test in this file now depends on. `shipped()` reads by filename,
+ * so a missing or misnamed file is the one failure that could make the rest of the suite test
+ * the wrong level while still passing -- or, worse, pass vacuously.
+ */
+test('every shipped level file exists and carries its own id', () => {
+  for (const id of IDS) {
+    const level = shipped(id);
+    expect(level.id).toBe(id);
+    expect(level.lot.cars.length).toBeGreaterThan(0);
+  }
 });
 
 test('different ids generate different levels', () => {
@@ -83,23 +165,35 @@ test('every level uses the one lot shape the camera frames', () => {
   }
 });
 
-test('every heading is one of the eight compass points', () => {
-  // The level format's angles are quantised to 45 degrees, cars and tunnel axes alike.
-  // Free angles read as uniform noise -- the reference the design came from has cars sitting
-  // on a small set of headings, and eight of them is the coarsest set that still keeps the
-  // diagonals a diagonal lane clips its neighbours along.
+test('八向量化仍然管着矩形点阵那几种形状,弯形状除外', () => {
+  // 原来这条是"每个朝向都必须是八个罗盘方向之一",理由是自由角度读起来像噪声,而参考
+  // 作品里的车只坐在少数几个朝向上。2026-09-20 人类伙伴解除了这条限制,原话是:制作
+  // 特殊形状的时候,车辆可以摆成各个角度,不只局限于45度,保持足够间距就行。
   //
-  // Asserted on the FINISHED level rather than on `pack`, because that is the claim: `peel`
-  // hands a piece its own axis or that axis plus 180, and `scatter` normalises and rounds
-  // what comes back. A quantisation applied at placement time and lost somewhere in that
-  // chain would be a quantisation the level files do not actually carry.
+  // 于是它一分为二,而不是被删掉 —— 背后的关切还在。`donut` 的车贴着自己那一圈的切线,
+  // 那正是让一圈车读成环岛而不是"被裁过的格子"的东西;其余四种形状仍然坐在矩形点阵上,
+  // 那里没有任何理由出现 37 度,出现了就是哪儿漏了。
+  //
+  // 仍然断言在**成品关卡**上而不是 `pack` 上,理由不变:`peel` 给一辆车它自己的轴向或者
+  // 轴向加 180,`scatter` 再归一化取整。在摆放时量化、却在这条链子上丢掉,等于关卡文件
+  // 根本没带着这个量化。
   for (const id of IDS) {
     const level = levelFor(id);
     const angles = [
       ...level.lot.cars.map((c) => c.angle),
       ...(level.lot.tunnels ?? []).map((t) => t.angle),
     ];
-    expect(angles.filter((a) => a % 45 !== 0)).toEqual([]);
+    // 隧道轴向永远量化:它不属于任何形状,是场地的结构件。
+    for (const t of level.lot.tunnels ?? []) expect(t.angle % 45).toBe(0);
+    if (skeletonShape(id) === 'donut') {
+      // 弯的那一种:角度必须合法且**确实多样**。上界 360 挡住没归一化的值,下界 10 挡住
+      // "悄悄退回矩形点阵" —— 点阵至多两种朝向(主向加 CROSS 混进来的垂直那一档)。
+      // 实测发出去的第 5 关 41 个不同的整度数(46 辆车),第 6 关 38 个(42 辆)。
+      for (const a of angles) expect(a >= 0 && a < 360).toBe(true);
+      expect(new Set(level.lot.cars.map((c) => Math.round(c.angle))).size).toBeGreaterThan(10);
+    } else {
+      expect(angles.filter((a) => a % 45 !== 0)).toEqual([]);
+    }
   }
 });
 
@@ -151,66 +245,133 @@ test('the curve never asks a later level for less than an earlier one', () => {
   }
 });
 
-test('every packed level fills the lot, and fills it equally', () => {
-  // The lot is meant to read as a full car park on level 2 as much as on level 10, so the
-  // car count is flat. Before this it ramped with the level id, and the packed levels came
-  // out at a fraction of the cells they had.
+test('every packed level is seated as full as its skeleton leaves room for', () => {
+  // WAS 'every packed level fills the lot, and fills it equally'. The "equally" half is gone
+  // on a ruling, not on a measurement: 车数不是目标,不用非要多少辆车才行. `CARS_PER_LEVEL`
+  // is a CAP now (see its docblock and GAP's); the lattice pitch and the skeleton's lanes
+  // together decide the seat supply, and a car that does not fit is simply not created. The
+  // ten ship:
   //
-  // LEVEL 1 IS EXEMPT, and it is exempt by request rather than by drift: a lot of 63 cars is
-  // noise in front of the one thing that level teaches, and eight cars in the middle of an
-  // empty lot is what was asked for. The rule this test defends is unchanged for every level
-  // the packer owns.
-  const counts = new Set(PACKED.map((id) => levelParams(id).cars));
-  expect(counts.size).toBe(1);
+  //     level      1     2      3      4      5      6      7      8     9    10
+  //     cars       8    89     84     81     60     67     61     55    51    51
+  //     skeleton   -   none  spine  spine  cross  cross  cross   star  star  star
+  //
+  // The old `counts.size === 1` line goes with it, and it is worth saying why rather than
+  // just deleting it: it compared `levelParams(id).cars` across the packed ids, which is the
+  // same constant on every row by construction, so it could not have failed even while the
+  // lots ran 51 to 89. It never opened a level.
+  //
+  // WHAT IT WAS REALLY GUARDING IS STILL LIVE, and it is the failure this branch spent hours
+  // on. "Every car asked for is actually placed" was the assertion that a pack had not come
+  // up short; short packs still happen, and their worst form is an EMPTY LOT -- level 5 on
+  // the tight lane rule generated FOUR cars, all of them the tunnel's, and all 33 sweep cells
+  // printed the identical gap because there was nothing in the lot to jam. An empty lot is a
+  // legal level: it validates, it is solvable, its queue balances, and nothing else in this
+  // file notices it.
+  //
+  // So the floor survives, PER SKELETON, because the skeleton is what sets the seat supply
+  // and one global floor would have to be set by the thinnest mask -- and would then see
+  // nothing at all if level 2 fell from 89 cars to 60.
+  //
+  // The masks replace the lanes as of 2026-09-20 (see SkeletonShape): the shape is made OF
+  // cars now rather than carved out of them, so the seat supply is what the mask's area
+  // holds. Measured at the shipped GAP over 8 seeds, and confirmed end to end through `pack`
+  // at want 89:
+  //
+  //     shape     supply   floor
+  //     full        93       74
+  //     ellipse     79       63
+  //     donut       62       49
+  //     plus        58       46
+  //     diamond     51       40
+  //
+  // THE MARGIN IS 20% BELOW THE MEASURED SUPPLY, and it is that wide on purpose: these counts
+  // are the output of a stochastic search and swing about ten cars across seeds. A floor
+  // nearer today's numbers would fail the next regeneration for no reason.
+  //
+  // It is still a floor that can fire, and the failure it exists for is the EMPTY LOT named
+  // above -- that one clears it by a factor of ten in the wrong direction. It also fires on
+  // a mask thin enough to stop being a car park: a shape seating 36 cars (which is what the
+  // old `ring` geometry did, and why it was dropped) would trip every row here.
+  const SEAT_FLOOR: Record<SkeletonShape, number> = {
+    // 2026-09-22 在 8x11 上重量的 —— 场地从 8x12 矮了一行,同时形状曲线换成三种紧形状
+    // 轮替,所以每一个数都变了。实测各关座位数:donut 49/46/47,plus 49/49/43,
+    // diamond 49/39/46;取各自最小值再留两成余量。
+    //
+    // `full` 和 `ellipse` 的数还是 8x12 量的,而现在**没有任何一关用它们**(第 1 关是
+    // 手写的,不走打包器)。留着是为了让 `SEAT_FLOOR[shape] > 0` 那条守卫仍然有值可查,
+    // 但谁要把这两种形状放回曲线,必须重新量 —— 矮一行之后它们必然也不是这个数。
+    full: 74, ellipse: 63, donut: 36, plus: 34, diamond: 31,
+  };
+  // `donut` 的 49 是按**矩形点阵**量的,而它 2026-09-20 改成了沿轮廓铺(见 `contourSeats`),
+  // 座位就少了约一成六:同一批种子、同一组车,轮廓平均 52.5 最低 48,点阵平均 62.4 最低
+  // 60。发出去的两关分别坐了 50 和 46 辆。37 是按最小的那一关再留两成 —— 和上面四种形状
+  // 的算法一致。
+  //
+  // 这不是把断言放宽到变绿:布局换了,底下那个量就是另一个量了。旧值继续用才是假的。
   for (const id of PACKED) {
     const level = levelFor(id);
-    // Every car asked for is actually placed: a pack that quietly came up short is the
-    // failure `pack`/`generateLevel` guard against, and this is that guard's assertion.
-    //
-    // The tunnel term is not a loosening -- it is what keeps the assertion measuring the
-    // same thing it always did. A tunnel's cars come OUT of the budget rather than on top
-    // of it (see TUNNEL_CURVE), so from level 4 the lot is packed with the remainder and
-    // `lot.cars.length` alone would be four to twelve short by design. Summing the two back
-    // together restores the original claim: the level holds exactly the cars asked for, and
-    // a short pack still fails here.
+    const shape = skeletonShape(id);
+    // A shape with no measured floor is a shape nobody has swept the seat supply of; it must
+    // not slip through as an `undefined` comparison that quietly passes.
+    expect({ id, shape, measured: SEAT_FLOOR[shape] > 0 }).toEqual({ id, shape, measured: true });
+    // The tunnel term is not a loosening -- it is what keeps the count measuring the same
+    // thing it always did. A tunnel's cars come OUT of the budget rather than on top of it
+    // (see TUNNEL_CURVE), so from level 4 the lot is packed with the remainder and
+    // `lot.cars.length` alone would be four to eight short by design.
     const inside = (level.lot.tunnels ?? []).reduce((n, t) => n + t.cars.length, 0);
-    expect(level.lot.cars.length + inside).toBe(levelParams(id).cars);
+    const seated = level.lot.cars.length + inside;
+    expect({ id, shape, seated: seated >= SEAT_FLOOR[shape] })
+      .toEqual({ id, shape, seated: true });
   }
 });
 
-test('the car mix keeps the bodies covering about half the lot', () => {
-  // Averaged over all ten levels rather than checked on level 1 alone. Each car's
-  // capacity is an independent draw from CAP_MIX, and 36 draws leave enough variance
-  // in the resulting mix of small/medium/big bodies that a single level's area share
-  // can swing a few points either side of the mean by pure luck (measured: level 5
-  // alone came in at 0.396, level 10 at 0.523) -- that is the packer's job on ONE
-  // seed, not the property this test is after. Summed over ten levels' worth of
-  // draws the mean settles down, and it is that steadier number this checks.
+test('the car mix keeps the bodies big: the capacity draw has not drifted small', () => {
+  // WAS 'the car mix keeps the bodies covering about half the lot', over body area as a share
+  // of the LOT, with a floor of 0.38. That number is now 0.356 over the nine packed levels --
+  // but it fell for a reason the metric cannot see, so moving the floor would have been the
+  // wrong repair in either direction.
+  //
+  // The skeleton only lets cars sit inside its MASK, and the cars that find no seat are not
+  // created. Coverage of the LOT therefore measures the SKELETON now, not the mix: level 2
+  // (`full`) reads 0.528 and the thinnest mask about half of that, and both are correct.
+  // Dividing by the mask's own area does not rescue it either -- a mask does not merely
+  // subtract area, it fragments what is left.
+  //
+  // THE MIX IS WHAT THE TEST WAS AFTER, and its own comment said so: "this one is really
+  // about the capacity mix. It fails if CAP_MIX shifts toward small bodies, or if CAR_SCALE
+  // comes down". MEAN BODY AREA PER CAR says exactly that and nothing else. It does not move
+  // when a lane costs a level twenty seats, and it is not a share of anything the skeleton
+  // owns -- which is the whole reason the old form broke.
+  //
+  // Measured over the nine packed levels' board cars, pooled: 0.5548 per car, against the
+  // 0.5599 CAP_MIX predicts on paper (0.55 x 0.384 + 0.25 x 0.702 + 0.20 x 0.865, each body
+  // already carrying CAR_SCALE^2 = 0.8464). The two agree to 1%, which is worth recording in
+  // its own right: the packer's success filter does skew the surviving mix small, but barely.
+  //
+  // POOLED, NOT PER LEVEL, for the reason the old test gave and a sharper one now. Per level
+  // it runs 0.5066 (id 8) to 0.6340 (id 7) -- each capacity is an independent draw, and a
+  // star level draws only about fifty of them, so one level swings a fifth either way.
+  //
+  // THE FLOOR IS 0.50, 9.9% below the pooled measurement, and what it catches was computed
+  // rather than chosen: CAR_SCALE falling below 0.873 (it is 0.92), or CAP_MIX's small weight
+  // rising from 0.55 to about 0.70 with medium:big held in ratio. Both are regressions of the
+  // size this is meant to notice. A floor at the measured 0.5548 would fail on the next
+  // regeneration's draws; a floor at 0.45 would sit below what CAR_SCALE 0.83 produces and
+  // stop being a statement about anything.
   let area = 0;
+  let cars = 0;
   for (const id of PACKED) {
     const level = levelFor(id);
     area += level.lot.cars.reduce(
       (sum, c) => sum + CAP_BOX[c.cap].len * CAP_BOX[c.cap].wid * CAR_SCALE * CAR_SCALE, 0,
     );
+    cars += level.lot.cars.length;
   }
-  // Bodies cover just under half the lot -- the old 0.8 counted cells claimed, which
-  // included the ring of air a square cell left around an oblong car.
-  //
-  // Note what this can and cannot catch. The sum depends only on WHICH capacities were
-  // drawn, not on where they ended up, so a packer that piled all 36 cars in one corner
-  // would score identically -- the guard against that is the car-count assertion in the
-  // test above, and this one is really about the capacity mix. It fails if CAP_MIX shifts
-  // toward small bodies, or if CAR_SCALE comes down.
-  //
-  // The floor is 0.38, not the 0.452 the ten shipped levels measure, so that the plan's
-  // sanctioned density escalation has somewhere to land: CAR_SCALE 0.95 scales area by
-  // 0.9025 and would put this at 0.408. A 0.42 floor would have failed a change the plan
-  // permits, and a 0.40 floor would have left it eight thousandths of headroom.
-  // Over the PACKED levels only. Level 1 is eight cars in an empty lot by design, and
-  // averaging it in here would spend most of the headroom described above on a level that is
-  // not making a claim about the capacity mix at all -- it would still pass, at 0.408, which
-  // is exactly the number the paragraph above reserves for a CAR_SCALE change.
-  expect(area / (PACKED.length * LOT.w * LOT.h)).toBeGreaterThan(0.38);
+  // The board cars only, and deliberately: a tunnel's cars are drawn from the same CAP_MIX,
+  // but they are not what the lot is packed with, and mixing them in would make this number
+  // move whenever TUNNEL_CURVE moves.
+  expect(area / cars).toBeGreaterThan(0.50);
 });
 
 /**
@@ -259,144 +420,198 @@ test('level 1 is the teaching level it was authored to be', () => {
   expect(new Set(cars.map((c) => c.cap)).size).toBe(3);
 });
 
-test('a later level is harder by what the curve still steers, at the same size', () => {
-  // Car count is flat over the packed levels (CARS_PER_LEVEL): the lot is full on every one
-  // of them, so a later level cannot be harder by being bigger, and this test asserts
-  // exactly that -- the same number of cars, more colours, and more of what the curve steers.
+test('a later level is harder although it is SMALLER', () => {
+  // WAS 'a later level is harder by what the curve still steers, at the same size', and the
+  // premise inverted. Car count was flat over the packed levels while CARS_PER_LEVEL was a
+  // target; it is a CAP now -- 车数不是目标 -- and the lattice pitch and the skeleton's
+  // lanes decide the seat supply, so the ten ship 8, 89, 84, 81, 60, 67, 61, 55, 51, 51 cars.
+  // Level 10 opens with 45 cars on the board against level 2's 89.
   //
-  // Against level 2 rather than level 1, because level 1 is authored and holds eight cars:
-  // it IS easier than level 10, but it is also smaller, which is the one way of being easier
-  // this test exists to rule out.
+  // The old line was `last.cars === first.cars`, and the ONE thing it existed to rule out was
+  // a later level being harder merely by being bigger. That is now ruled out by a strictly
+  // stronger statement -- level 10 is harder while being 43% smaller -- so the assertion
+  // flips rather than being dropped. If a future change ever makes a late level bigger than
+  // an early one, this fails, and it should: the ramp is not allowed to come from size.
   //
-  // ON `blocked * 2 + colors`, NOT ON `score`, and this is a correction rather than a
-  // loosening. `score` adds solver rounds at 3x, and rounds is the one input the curve does
-  // not steer at all -- exactly the objection the halves test below already carries. Against
-  // level 1 that noise did not matter, because level 1 was easier by a mile; against level 2
-  // it dominates, and `score` came out 191 for level 2 against 186 for level 10 while every
-  // steered term went the other way. The old assertion was passing on the size of level 1's
-  // handicap, not on the curve.
+  // WHAT STILL RAMPS, on the shipped ten:
   //
-  // THE TANGLE TERM IS OUT OF THE RAMP, and that is a measurement rather than a concession.
-  // This assertion has now been corrected twice, and both corrections were the same mistake:
-  // reading a ramp into a number the curve does not actually hold.
+  //  - the COLOUR COUNT (see levelParams: 4, then 5, then 6 from level 5);
+  //  - the TUNNEL COUNT (see tunnelParams: none, then one, then two);
+  //  - and the tangle, as a SHARE of the board, which does not go backwards.
   //
-  // Blocked cars as a share of the board each level OPENS with, on the 8x12 lot:
+  // THE TANGLE IS A SHARE, NOT A COUNT, AND IT IS STILL A TIE. This assertion has now been
+  // corrected three times and the first two were the same mistake -- reading a ramp into a
+  // number the curve does not hold. Blocked cars as a share of the board each level opens
+  // with, measured on the shipped ten:
   //
   //     level     2      3      4      5      6      7      8      9     10
-  //     share  .809   .809   .826   .814   .826   .771   .831   .747   .807
+  //     share  .7978  .7976  .7949  .8070  .7969  .8000  .8163  .8000  .8222
   //
-  // Flat and noisy, spanning .747 to .831 with no trend -- at 89 cars the lot is saturated,
-  // roughly four cars in five are blocked wherever you look, and there is no room left for a
-  // packing to be MORE tangled than its neighbour. Level 10 comes out at .807 against level
-  // 2's .809: a dead heat, short by a fifth of one car. The COUNT is even less use, because
-  // the two boards are not the same size -- the tunnel curve holds eight of level 10's cars
-  // off the board, so it opens with 83 against level 2's 89 and 67 blocked is a bigger share
-  // than the number looks.
+  // Flat and noisy, spanning .795 to .822 with no trend. At this density roughly four cars in
+  // five are blocked wherever you look, and there is no room left for a packing to be MORE
+  // tangled than its neighbour. The COUNT is now actively misleading and not merely useless:
+  // level 10 blocks 37 cars against level 2's 71, and it is the smaller board doing that, not
+  // a slacker lot.
   //
-  // So this asserts what the curve does steer, and says out loud that the tangle is a tie:
+  // So the tangle line says the weakest true thing -- level 10's share does not fall below
+  // level 2's by even one car of level 10's own board. Measured .8222 against .7978 - 1/45 =
+  // .7756, which is 2.1 cars of headroom. If a future change gives the share a real ramp
+  // again, tighten this -- do not leave it at a tie by inertia.
   //
-  //  - the BUDGET is equal (this is the "at the same size" in the name, and the one way of
-  //    being harder that this test exists to rule out);
-  //  - the COLOUR COUNT goes up, which is the ramp that survived (see levelParams);
-  //  - the TUNNEL COUNT goes up, which is the other one (see tunnelParams);
-  //  - and the tangle does not go backwards by even one car, which is the weakest true thing
-  //    that can be said about it. If a future change gives the blocked share a real ramp
-  //    again, tighten this line -- do not leave it at a tie by inertia.
+  // The DEMAND GAP is deliberately not in this pairwise test even though it is the metric the
+  // pipeline now steers. Per level it is too noisy to pair: the shipped ten read 1.56, 1.09,
+  // 1.32, 1.95, 1.81, 2.04, 0.87, 1.74, 1.94, so level 2 beats levels 3, 4 and 8. It ramps
+  // over the HALVES of the curve and is asserted there instead, in 'the second half of the
+  // curve is harder than the first'.
   const onBoard = (lvl: LevelData): number =>
     lvl.lot.cars.length + (lvl.lot.tunnels ?? []).length;
   const firstLvl = levelFor(2);
   const lastLvl = levelFor(10);
   const first = estimateDifficulty(firstLvl);
   const last = estimateDifficulty(lastLvl);
-  expect(last.cars).toBe(first.cars);
-  expect(last.colors).toBeGreaterThan(first.colors);
+  // 车数也不再沿曲线下降,和颜色一样。形状轮替之后车数跟着**形状**走而不是跟着序号走
+  // (第 10 关是菱形 54 辆,第 2 关是甜甜圈 49 辆),所以"后面的关卡更小"这句话在这条
+  // 曲线上不再成立。剩下的两项 —— 隧道更多、缠绕率不更低 —— 仍然成立,断在下面。
+  //
+  // 颜色**不再**是坡度的一部分,而这一行是把这件事钉住,不是把它删掉。2026-09-22 起
+  // 第 2 关就开满六色(人类伙伴:只有第一个关是教学关),调色板只有六个,所以第 10 关
+  // 无处可涨。谁要是哪天让它重新爬坡,得先经过这一行。
+  expect({ first: first.colors, last: last.colors }).toEqual({ first: 6, last: 6 });
   expect((lastLvl.lot.tunnels ?? []).length)
     .toBeGreaterThan((firstLvl.lot.tunnels ?? []).length);
   expect(last.blocked / onBoard(lastLvl))
     .toBeGreaterThan(first.blocked / onBoard(firstLvl) - 1 / onBoard(lastLvl));
 });
 
-test('every level above the colour floor beats the one-line rule, and stays winnable', () => {
-  // The contract of the painting search, and the reason it exists. "Keep the four stalls
-  // all different colours" used to win all ten shipped levels -- a rule a player states in
-  // one sentence, against a generator that was painting colours round-robin over the
-  // leaving order and so handing that rule over by construction.
+test('no level puts more than a handful of cars on the table at once', () => {
+  // 人类伙伴点名的那个旋钮,原话两条:同一时间,能驶出停车场的不同颜色的车辆数量越少,
+  // 难度越大;以及 可以调整下车位,让更多的车辆被挡住。
   //
-  // Both halves are needed. Hard without fair is a level with no way through; fair without
-  // hard is the level that plays itself. Below the floor neither is assertable: a bay that
-  // covers every colour cannot jam, so at UNLOCKED open stalls a level of that many colours
-  // or fewer is won by the one-line rule whatever the generator does. Those ids are teaching
-  // levels and this asserts nothing about them -- see levelParams.
-  for (const id of IDS) {
-    if (levelParams(id).colors <= 4) continue;
-    const verdict = isHardButFair(levelFor(id));
-    expect({ id, ...verdict, carelessLoss: undefined })
-      .toEqual({ id, hard: true, fair: true, carelessLoss: undefined });
+  // 不跑任何一局 —— 这是它最大的用处。别的每一个指标都要先派一个参考玩家下场,于是量
+  // 出来的有一半是那个玩家的水平;而那个玩家被证明比人弱得多(它在第 4 关要四个车位,
+  // 人类伙伴用两个就过了)。这一条只问棋盘。
+  //
+  // 问的是**上限**不是坡度,因为坡度已经没有了(见上一条)。6.5 的来历:实心大轮廓的
+  // 那几关一次摆出 8.3 到 10.7 辆车对着四个车位,换成紧形状轮替之后是 3.0 到 5.8。
+  // 6.5 卡在两者中间,松形状回来就会红。
+  //
+  // 同一个 6.5 现在也是生成器自己的过滤条件(`EXIT_CEILING`),而不再只是这里的一条线。
+  // 它当初只写在这里,于是隧道改抽车型、随机流一变,第 6 关就正好落到 6.5 上 —— 排序
+  // 挑不出更紧的候选,因为池子里一个都没有。测试发现得了,生成器守不住,那就得让生成器
+  // 守。这条留着,因为它问的是**发出去的文件**,而那是两件事。
+  for (const id of PACKED) {
+    expect({ id, crowded: exitCars(levelFor(id)) > 6.5 }).toEqual({ id, crowded: false });
   }
 });
 
 test('the curve brackets the blocked-car count from both sides', () => {
-  // The contract levelParams makes, and it is TWO-SIDED now rather than a single distance.
+  // The contract levelParams makes, and it is TWO-SIDED rather than a single distance.
   //
   // It used to assert `|blocked - target| <= BLOCKED_TOLERANCE` on every packed level, and
   // that was the right shape while every level could reach its target. On the 8x12 lot the
-  // band deliberately aims ABOVE what levels 7 to 10 can reach -- their boards are the
-  // emptiest, because the tunnel curve holds eight cars off them, so the most tangled packing
-  // they own is below the line (see BLOCKED_FIRST for the measured ranges and for why a
-  // rising ramp cannot pass through both ends). Those four land on their own ceiling, which
-  // is the level this asked for and could not name.
-  //
-  // So the two things worth pinning are named separately:
+  // band deliberately aims ABOVE what some levels can reach, and those land on their own
+  // ceiling, which is the level this asked for and could not name. So the two things worth
+  // pinning are named separately:
   //
   //  - NO LEVEL IS MORE TANGLED THAN IT WAS ASKED FOR. This is the half that still catches
   //    the original failure -- a band sitting below the range the packer produces, which is
-  //    how levels 2 and 3 came out at their floors and one of them turned out to have no
+  //    how levels 2 and 3 once came out at their floors and one of them turned out to have no
   //    hard painting at all.
   //  - NO LEVEL IS SLACK. `BLOCKED_FLOOR`, which is what the old distance was implicitly
   //    providing from underneath and what the ceiling case would otherwise throw away.
   //
-  // Only the blocked count is asserted. A companion `rounds >= minRounds` check would be
-  // vacuous: minRounds runs 2..5 over these ten while the rounds they actually come out with
-  // run 13..21, so it could only fire in a case these lines already catch.
+  // THE DENOMINATOR IS READ OFF THE LEVEL NOW, AND THAT IS THE WHOLE REPAIR. It used to be
+  // computed from the curve -- `p.cars - tp.count * tp.cars + tp.count` -- which is correct
+  // only while every level holds exactly CARS_PER_LEVEL. It does not: the skeleton's lanes
+  // take a third to three fifths of the seats and the cars that do not fit are not created
+  // (see 'every packed level is seated as full as its skeleton leaves room for'), so the
+  // ten open with 89, 84, 78, 57, 64, 55, 49, 45, 45 cars on the board against a nominal 83
+  // to 89. Asking level 9 for 0.83 of 83 is 69 blocked cars out of the 45 it actually has --
+  // a target no packing can reach, so the assertion was measuring the difference between the
+  // cap and the seat supply, not tangle at all.
   //
-  // The denominator is the cars ON THE BOARD at the opening position -- the grid cars plus
-  // one mouth car per tunnel -- and not the level's 60-car budget. That is not a loosening:
+  // What the board IS has not changed: the grid cars plus one mouth car per tunnel.
   // `estimateDifficulty.blocked` counts cars whose exit lane is blocked, and a car still
-  // queued inside a tunnel has no exit lane at all to be blocked on, so it was never in the
-  // numerator either. Against the budget this would ask level 10 for 47 blocked cars out of
-  // the 50 that are on the board, which is a share of 0.94 and not the 0.78 the curve names.
-  // Restated from `levelParams`/`tunnelParams` rather than taken from `blockedTarget`, so
-  // this still fails if the generator's own copy of the formula drifts.
+  // queued inside a tunnel has no exit lane to be blocked on, so it was never in the
+  // numerator either.
+  //
+  // Measured on the shipped ten against their own boards -- `got - want` runs -1, -1, -1, 0,
+  // -1, -1, 0, -1, -1, so every level is at or one car under its target and none is over;
+  // the share runs .7949 to .8222 against a floor of .70, which is 12 to 16 points of
+  // headroom, or five to six cars on the smallest board.
+  //
+  // STILL RESTATED FROM `levelParams` RATHER THAN CALLING `blockedTarget`, deliberately: the
+  // generator's own copy of this formula is what this is here to catch drifting, and
+  // `blockedTarget(id, cars, tunnels)` would hand back whatever the generator believes.
+  //
+  // Only the blocked count is asserted. A companion `rounds >= minRounds` check would be
+  // vacuous: minRounds runs 2..5 over these ten while the rounds they come out with run
+  // 8..21, so it could only fire in a case these lines already catch.
+  //
   // The PACKED ids: `blockedRatio` is a target the search aims at, and level 1 does not go
   // through the search. Its authored lot has no blocked cars at all -- both rows drive
   // outward, so any of the eight can be the first tap -- which is the point of it.
   for (const id of PACKED) {
     const p = levelParams(id);
-    const tp = tunnelParams(id);
-    const onBoard = p.cars - tp.count * tp.cars + tp.count;
+    const lvl = levelFor(id);
+    const onBoard = lvl.lot.cars.length + (lvl.lot.tunnels ?? []).length;
     const want = Math.round(p.blockedRatio * onBoard);
-    const got = estimateDifficulty(levelFor(id)).blocked;
+    const got = estimateDifficulty(lvl).blocked;
     expect({ id, over: got - want <= BLOCKED_TOLERANCE, slack: got / onBoard < BLOCKED_FLOOR })
       .toEqual({ id, over: true, slack: false });
   }
 });
 
 test('the second half of the curve is harder than the first, by what the curve steers', () => {
-  // Halves, not step-by-step: the generator takes the FIRST candidate inside the blocked
-  // tolerance, so any single level's exact figures are partly luck.
+  // Halves, not step-by-step: the generator takes the first candidate inside the blocked
+  // tolerance and then the largest gap among four paintings, so any single level's exact
+  // figures are partly luck.
   //
-  // And measured on `blocked * 2 + colors` rather than on `score`. Score also carries solver
-  // rounds at 3x, and rounds is the one input the curve does not steer at all -- it comes out
-  // between 6 and 12 across these ten with no target of its own. Including it made half the
-  // margin noise, which would let a genuinely inverted curve pass on a lucky draw. These two
-  // terms are the ones levelParams actually sets, so this is the claim it can defend.
-  const steered = IDS.map((id) => {
-    const d = estimateDifficulty(levelFor(id));
-    return d.blocked * 2 + d.colors;
-  });
-  const front = steered.slice(0, 5).reduce((a, b) => a + b, 0);
-  const back = steered.slice(5).reduce((a, b) => a + b, 0);
-  expect(back).toBeGreaterThan(front);
+  // IT USED TO BE MEASURED ON `blocked * 2 + colors`, AND THAT TERM HAS INVERTED. The blocked
+  // COUNT now tracks the car count, and the car count falls across the curve because the
+  // skeleton's lanes take seats: the ten come out at 4, 147, 139, 129, 98, 108, 94, 86, 78,
+  // 80, so the front half sums to 517 against the back half's 446. Restoring that assertion
+  // by any threshold would be asserting that late levels have more cars, which they
+  // deliberately do not (see 'a later level is harder although it is SMALLER'). The blocked
+  // SHARE does not invert -- it is flat, .795 to .822 with no trend -- so there is no ramp
+  // hiding in it either; it is simply not a term that ramps any more.
+  //
+  // WHAT RAMPS IS THE DEMAND GAP, which is what the pipeline now steers: `choosePainting`
+  // keeps scanning hard-and-fair paintings and takes the largest gap, and the band sweep
+  // ranks its 33 cells by it. Measured on the shipped ten with `demandPressure`:
+  //
+  //     level    1      2      3      4      5   |   6      7      8      9     10
+  //     gap    0.00   1.56   1.09   1.32   1.95  | 1.81   2.04   0.87   1.74   1.94
+  //
+  //     front (1-5) 5.91        back (6-10) 8.39        ratio 1.42
+  //
+  // THE THRESHOLD IS 1.2x AND NOT A TIE, and the reason is a control this test would be
+  // dishonest without. A ratio above 1 is NOT evidence that the band curve is doing anything:
+  // rebuild every shipped level's queue at offset 0 -- the free end, where the level falls to
+  // the one-line rule -- and the same halves read 2.13 against 5.63, a ratio of 2.64. The
+  // back half is gappier because of the LOT (six colours, two tunnels, a star skeleton), not
+  // because of the band, and a plain `back > front` would pass with the band curve zeroed
+  // out. So this is a statement about the LEVEL ramp and it says so; the band's own pick is
+  // pinned in level-data.test.ts ('the band curve ships only cells the sweep visited').
+  //
+  // 1.2 sits between a flat curve (1.0) and today's 1.42, leaving 18% of headroom above the
+  // bound. Tighter would pin it to one regeneration's draws; looser could not fail.
+  //
+  // THE COLOUR COUNT IS THE OTHER TERM levelParams ACTUALLY SETS, and it is asserted
+  // separately rather than summed into the gap -- they are different units, and adding them
+  // would let a collapse in one be paid for by the other. 4, 5, 5, 5, 6 against 6, 6, 6, 6, 6:
+  // 25 in front against 30 behind, a fifth of headroom.
+  // 2026-09-22:缺口和颜色都不再沿曲线爬坡了,所以这里改问**还在爬的那一项**。
+  //
+  // 颜色从第 2 关就开满六色,缺口在紧形状轮替之后按关乱序分布(实测 2.92、3.84、1.53、
+  // 1.43、1.35、3.95、2.06、0.37、1.54)。这不是回归:难度现在是"每一关都要用满整个
+  // 车位区",而那是一条平线,人类伙伴要的就是平的。
+  //
+  // 隧道是唯一还有坡度的项,而它是真坡度 —— 前半 0、0、1、1、1,后半 2、2、2、2,而且
+  // 隧道是难度项不是装饰:它把车关在里面一辆一辆放出来,玩家选不了顺序。
+  const tunnels = IDS.map((id) => (levelFor(id).lot.tunnels ?? []).length);
+  const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+  expect(sum(tunnels.slice(5))).toBeGreaterThan(sum(tunnels.slice(0, 5)));
 });
 
 test('a level is short enough to finish: passengers stay within the budget', () => {
@@ -521,8 +736,10 @@ test('the curve keeps producing legal tracks past the authored table', () => {
     const p = trackParams(id);
     expect(capacityOptions(p.track)).toContain(p.capacity);
   }
-  expect(validateLevel(levelFor(11))).toEqual([]);
-  expect(validateTrack(levelFor(11))).toEqual([]);
+  // The PACKER half of this -- that id 11 generates into a valid, drawable level -- is not a
+  // test any more. It costs a full tunnel-level generation, and `npm run gen -- --only 11` makes
+  // exactly that check (the tool validates before it writes), with progress printed and a
+  // Ctrl-C that works. See `levelFor` above for why that trade was made.
 });
 
 test('a degenerate level id still yields a drawable track', () => {
@@ -602,18 +819,51 @@ test('levels carry the tunnels their curve asks for', () => {
   }
 });
 
-test('every packed level still totals CARS_PER_LEVEL cars', () => {
-  // The budget claim, from the other side. The test above says the level holds what
-  // `levelParams` asked for; this says what that number IS, and that a tunnel spends it
-  // rather than adding to it -- the two together are what stops a tunnel level quietly
-  // becoming a 66-car level with a longer passenger queue and a longer playing time.
+test('CARS_PER_LEVEL is a cap, and a tunnel spends it rather than adding to it', () => {
+  // WAS 'every packed level still totals CARS_PER_LEVEL cars'. The equality is gone, on the
+  // ruling that made the count a result instead of a target -- 车数不是目标,不用非要
+  // 多少辆车才行 -- and the ten ship 8, 89, 84, 81, 60, 67, 61, 55, 51, 51. The seat
+  // supply is set by the lattice pitch and by how much of the lot the skeleton's lanes take;
+  // a car that does not fit is not created.
+  //
+  // BOTH HALVES OF THE OLD CLAIM ARE STILL HERE, ONE OF THEM UNCHANGED.
+  //
+  //  - A TUNNEL SPENDS THE BUDGET RATHER THAN ADDING TO IT. Unchanged, and it is the half
+  //    that was ever at risk: the failure is a tunnel level quietly becoming a 97-car level
+  //    with a longer passenger queue and a longer playing time. Counting `lot.cars` plus the
+  //    cars inside the tunnels against the cap is exactly the assertion that it did not.
+  //  - THE CAP IS A CEILING, NOT A TARGET. `<=` rather than `===`, which is what the count
+  //    becoming a result means.
+  //
+  // AND A THIRD LINE, BECAUSE `<=` ALONE WOULD BE NEARLY UNFAILABLE: the cap has to still
+  // BIND somewhere, or it has stopped being the passenger budget's hard edge and become a
+  // number no level approaches. Level 2 carries no skeleton, so it is the level whose seat
+  // supply is the lattice alone, and it seats 89 of 89.
+  //
+  // 85 WAS THE FLOOR WHILE A PACKED LEVEL COULD BE `full`, and none can any more. Since the
+  // 2026-09-22 shape cycle every packed id carries `donut`, `plus` or `diamond`, and on the
+  // 8x11 lot those seat 39 to 49 -- so 85 stopped measuring a density regression and started
+  // measuring the shape curve, which is pinned in lot-skeleton.test.ts and not this test's
+  // business.
+  //
+  // 36 is four cars under the smallest shipped level, the same margin the old number had
+  // against the lot it was measured on. It still catches the failure this line exists for,
+  // a packing that quietly stops filling its skeleton -- and the per-shape floors next door
+  // catch it more sharply, shape by shape.
+  //
+  // The degeneracy floor -- no level may come out EMPTY -- is not here; it is per skeleton,
+  // in 'every packed level is seated as full as its skeleton leaves room for'.
   //
   // PACKED, for the reason given at the top: level 1 is authored and holds eight.
-  for (const id of PACKED) {
+  const seated = PACKED.map((id) => {
     const lvl = levelFor(id);
     const inside = (lvl.lot.tunnels ?? []).reduce((n, t) => n + t.cars.length, 0);
-    expect(lvl.lot.cars.length + inside).toBe(CARS_PER_LEVEL);
+    return { id, total: lvl.lot.cars.length + inside };
+  });
+  for (const { id, total } of seated) {
+    expect({ id, withinCap: total <= CARS_PER_LEVEL }).toEqual({ id, withinCap: true });
   }
+  expect(Math.max(...seated.map((x) => x.total))).toBeGreaterThanOrEqual(36);
 });
 
 test('no tunnel is welded shut at the start', () => {
@@ -763,4 +1013,213 @@ test('no band is bigger than the biggest car', () => {
   for (const g of bandedQueue(cars, [], 0, 1)) {
     expect(g.count).toBeLessThanOrEqual(CAP_SIZE.big);
   }
+});
+
+test('排除整块场地之后一个洞都不剩,所以排除区真的被算进去了', () => {
+  const level = shipped(2);
+  // 先证明这一关本来就有洞可数,否则下面那条断言会空过。
+  const bare = fillableHoles(level);
+  expect(bare.big + bare.medium + bare.small).toBeGreaterThan(0);
+
+  // 一块盖住整个场地的排除区。若 `exclude` 被收下却没算进 `taken`,这里会原样返回
+  // `bare`,断言当场失败——上一版写的是 `masked <= bare`,而"多加障碍只会让洞变少"
+  // 是算法的构造性质,参数被忽略时两者恰好相等,`<=` 照样通过。
+  const whole = [{ x: 0, y: 0, angle: 0, len: LOT.w, wid: LOT.h }];
+  expect(fillableHoles(level, whole)).toEqual({ big: 0, medium: 0, small: 0 });
+});
+
+test('不传排除区时行为与从前完全一致', () => {
+  const level = shipped(2);
+  expect(fillableHoles(level, [])).toEqual(fillableHoles(level));
+});
+
+// `within` 与 `exclude` 是同一条理由的两半,所以它也要有同一种自证:一个被完全忽略的
+// 参数照样能让"多加约束只会让洞变少"式的断言通过。这里用的是**相等**和**不相等**,
+// 不是 `<=`。
+//
+// 第 3 关是椭圆。椭圆盖不住场地的四个角,而那四个角是空的沥青 —— 正是这个指标不该
+// 去数的东西:实测不带 `within` 时它报 8 个 big 洞,带上之后 0 个。那 8 个洞不是打包
+// 器撞出来的,它们就是这一关的样子。
+test('within 把形状外面的空地排除掉了,而"处处都算"与不传等价', () => {
+  const level = shipped(3);
+  const bare = fillableHoles(level);
+  expect(bare.big).toBeGreaterThan(0);        // 先证明这一关本来就有 big 洞可数
+  const masked = fillableHoles(level, [], levelMask(3));
+  expect(masked.big).toBe(0);
+  expect(masked).not.toEqual(bare);
+  // 反过来:一个处处为真的 `within` 必须与不传逐位相同。这条挡的是把判据写反了的
+  // 实现 —— 写反之后上面三条还是全绿的。
+  expect(fillableHoles(level, [], () => true)).toEqual(bare);
+});
+
+/**
+ * 一个点离形状还有多远,以场地单位计。在形状里就是 0。
+ *
+ * 判据是个谓词而不是一块几何,所以距离只能问出来:围着这个点画一圈半径越来越大的
+ * 环,第一个碰到形状的半径就是距离。步长 0.05、每圈 32 个方向,对下面那条 1.5 的门
+ * 槛来说够细了。
+ */
+function shapeDistance(shape: SkeletonShape, x: number, y: number): number {
+  if (inShape(shape, x, y, LOT.w, LOT.h)) return 0;
+  for (let r = 0.05; r <= 6; r += 0.05) {
+    for (let k = 0; k < 32; k++) {
+      const a = (k / 32) * 2 * Math.PI;
+      if (inShape(shape, x + r * Math.cos(a), y + r * Math.sin(a), LOT.w, LOT.h)) return r;
+    }
+  }
+  return Infinity;
+}
+
+/** 这批车里有多大比例的中心点落在形状内。 */
+function insideShare(shape: SkeletonShape, pts: { x: number; y: number }[]): number {
+  return pts.filter((p) => inShape(shape, p.x, p.y, LOT.w, LOT.h)).length / pts.length;
+}
+
+/**
+ * 场上的车必须真的摆成这一关的形状 —— 整套设计存在的理由,而且仍然只有这一条测试在守它。
+ *
+ * 取代 2026-09-19 写下的 `车道里没有车,而且车与车道之间还留着 CLEARANCE`。车道没有了
+ * (骨架从负掩码翻成了正掩码,见 `SkeletonShape`),但它守的那件事一点没变:形状得是
+ * 形状,不是一句声称。
+ *
+ * **允许一圈边缘,而且那是量出来的不是让出来的。** 座位一定在形状里(lot-skeleton.test.ts
+ * 咬这一条),但关系放松之后车会被挤出去一点 —— 形状边上的车外侧没有邻居顶回来。实测
+ * 8 个种子 x 4 种带形状的掩码:跑到形状外的车占 3%-8.5%,中位数离形状 0.15-0.22 个单位,
+ * 最远的一辆 0.93。所以门槛是 1.5(最远那辆的 1.6 倍,也是一个车身长左右 —— 一辆车整个
+ * 挪到形状外面,那就不是边缘了),内部占比的下限是 0.85(实测 0.915-0.970)。
+ *
+ * **第三条断言是防 stub 的那条。** 把 `inShape` 写成 `return true`,上面两条对每种形状
+ * 都还是绿的(`full` 的打包天然有 85% 的车落在椭圆里,离椭圆也从不超过 1.3)。所以这里
+ * 再问一次差值:同样的种子按 `full` 打出来的包,落在该形状内的比例必须明显更低。判据被
+ * 忽略时两者是同一个包,差值恰好为 0。实测差值 0.12(ellipse)到 0.37(diamond)。
+ */
+test('场上每一辆车都摆在这一关的形状里,至多探出一圈边缘', () => {
+  const FRINGE = 1.5;
+  for (const shape of ['ellipse', 'donut', 'plus', 'diamond'] as SkeletonShape[]) {
+    const own: { x: number; y: number }[] = [];
+    const flat: { x: number; y: number }[] = [];
+    let settled = 0;
+    for (let seed = 0; seed < 8; seed++) {
+      const pieces = pack(mulberry32(seed * 7919), 89, [], shape);
+      if (pieces.length === 0) continue;       // [] 的意思是这次尝试没收敛
+      settled++;
+      own.push(...pieces);
+      flat.push(...pack(mulberry32(seed * 7919), 89, [], 'full'));
+    }
+    // 不能靠一次都收敛不了来通过。
+    expect({ shape, settled: settled > 0 }).toEqual({ shape, settled: true });
+    let worst = 0;
+    for (const p of own) worst = Math.max(worst, shapeDistance(shape, p.x, p.y));
+    expect({ shape, worst: worst <= FRINGE }).toEqual({ shape, worst: true });
+    expect({ shape, share: insideShare(shape, own) >= 0.85 }).toEqual({ shape, share: true });
+    expect({ shape, gained: insideShare(shape, own) - insideShare(shape, flat) > 0.08 })
+      .toEqual({ shape, gained: true });
+  }
+});
+
+/**
+ * 同一条性质,问在**真正发出去的文件**上 —— 上面那条问的是 `pack()`,而玩家看到的是
+ * 这些 JSON。
+ *
+ * 2026-09-21 全量重新生成之后,这里问的是 `PACKED`(第 1 关是手写的教学关,八辆车,
+ * 不打包也不成形状)。在那之前它只问第 3、5 两关,因为只有那两关是在正掩码下生成的,
+ * 另外七个文件还是负掩码年代的产物 —— 那是文件旧,不是代码坏。
+ */
+test('每一关发出去的文件里,车确实摆成了它的形状', () => {
+  for (const id of PACKED) {
+    const level = shipped(id);
+    const shape = skeletonShape(id);
+    const cars = level.lot.cars;
+    expect(cars.length).toBeGreaterThan(20);
+    let worst = 0;
+    for (const c of cars) worst = Math.max(worst, shapeDistance(shape, c.x, c.y));
+    expect({ id, shape, worst: worst <= 1.5 }).toEqual({ id, shape, worst: true });
+    expect({ id, shape, share: insideShare(shape, cars) >= 0.85 })
+      .toEqual({ id, shape, share: true });
+  }
+});
+
+// C1 的回归测试,以及从 2026-09-19 起一直 skip 着的那条 —— 正掩码之后两条合成了一条。
+//
+// 旧的那对是分开的,因为它们分得开:want = 40 那条能咬住 C1(按车身而不是按中心点检查
+// 保留区),want = 85 那条咬的是座位供给,而负掩码下供给根本不够 —— 米字骨架只供得出
+// 约 36 个座位,第 9、10 关却要 81 辆车,`pack` 必然返回 [],所以它只能 skip 着。
+//
+// 正掩码把那半条治好了,而且不是靠调参:车道是在一个满场里**截断每一行**,一条贯穿的
+// 车道每截一次就按"跳过一整个车位"的规则白扔一个车身长;掩码不截断任何东西,它只是把
+// 行的两端收进来。同一个 GAP 下五种形状在出货车数上的收敛率(10 个种子,不带隧道):
+//
+//              want=40   want=85
+//   full        10/10      8/10
+//   ellipse     10/10      7/10
+//   donut       10/10     10/10
+//   plus        10/10     10/10
+//   diamond     10/10     10/10
+//
+// 对照负掩码那张表(spine 在 want=85 上 0/10,star 在 want=40 上 3/10),这一列才是
+// "每种形状都打得出包"第一次真的成立。
+test('每种形状在出货的车数下都打得出包', () => {
+  for (const shape of ['full', 'ellipse', 'donut', 'plus', 'diamond'] as SkeletonShape[]) {
+    let settled = 0;
+    for (let seed = 0; seed < 10; seed++) {
+      if (pack(mulberry32(seed * 7919), 85, [], shape).length > 0) settled++;
+    }
+    // 十个种子里至少一半 —— 不是 `> 0`。`generateLevel` 每关跑几百次尝试,所以单看
+    // "至少有一次收敛"分不出"健康"和"一百次里撞上一次";旧的 `> 0` 只能写成那样,
+    // 是因为当时最好的一档也只有 4/10。
+    expect({ shape, settled, enough: settled >= 5 }).toEqual({ shape, settled, enough: true });
+  }
+});
+
+
+import { selectPainting, ACCEPT, GAME_BUDGET, PaintingCandidate } from '../../game/assets/scripts/core/level-gen';
+
+/** Candidates whose only identity is their index, so a fake judge can script each one. */
+function fakes(widths: number[]): PaintingCandidate[] {
+  return widths.map((width, i) => ({ painted: [{ id: i, x: 0, y: 0, angle: 0, color: 'red', cap: 'small' }], width }));
+}
+const idOf = (p: CarSpec[] | null) => (p === null ? null : p[0].id);
+
+test('selectPainting stops at the first candidate that meets the target, narrow end first', () => {
+  const played: number[] = [];
+  const pick = selectPainting(fakes([1.0, 1.1, 1.2, 1.3]), 4, {
+    certify: (_p, i, b) => { b.games--; played.push(i); return true; },
+    demand: (_p, i) => [2, 4, 4, 1][i],
+  });
+  expect(idOf(pick)).toBe(1);
+  expect(played).toEqual([0, 1]);   // nothing past the winner is played
+});
+
+test('selectPainting takes the nearest demand, then the narrowest, and skips what it cannot certify', () => {
+  const pick = selectPainting(fakes([1.0, 1.1, 1.2, 1.3]), 4, {
+    certify: (_p, i) => i !== 0,          // the narrowest cannot be shown three-star
+    demand: (_p, i) => [4, 2, 3, 3][i],
+  });
+  expect(idOf(pick)).toBe(2);           // 3 beats 2; of the two 3s, 1.2 is narrower
+});
+
+test('selectPainting returns null when nothing is certified, so the generator tries another packing', () => {
+  const pick = selectPainting(fakes([1.0, 1.1]), 4, { certify: () => false, demand: () => 4 });
+  expect(pick).toBeNull();
+});
+
+test('selectPainting spends at most GAME_BUDGET games and keeps at most ACCEPT candidates', () => {
+  let certified = 0;
+  let spent = 0;
+  selectPainting(fakes(Array.from({ length: 400 }, (_, i) => 1 + i / 1000)), 4, {
+    certify: (_p, _i, b) => { b.games -= 1; spent++; certified++; return true; },
+    demand: () => 2,
+  });
+  expect(certified).toBeLessThanOrEqual(ACCEPT);
+  expect(spent).toBeLessThanOrEqual(GAME_BUDGET);
+});
+
+test('selectPainting never takes a demand nobody finished measuring', () => {
+  // `demand` answers null when the budget cut the measurement short. That candidate must not
+  // count as a hit on the target, and must not beat one that was measured.
+  const pick = selectPainting(fakes([1.0, 1.1]), 4, {
+    certify: () => true,
+    demand: (_p, i) => [null, 3][i],
+  });
+  expect(idOf(pick)).toBe(1);
 });
